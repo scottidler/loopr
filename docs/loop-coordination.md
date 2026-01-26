@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler, Claude
 **Date:** 2026-01-25
-**Status:** Ready
+**Status:** Implementation Spec
 **Parent Doc:** [loop-architecture.md](loop-architecture.md)
 
 ## Summary
@@ -134,11 +134,40 @@ When a child encounters an error the parent should know about:
   "signal": "stop" | "pause" | "resume" | "error" | "info",
   "source_loop": "1737800000",
   "target_loop": "1737802800",
-  "target_selector": "descendants:1737800000",  // alternative to target_loop
+  "target_selector": "descendants:1737800000",
   "reason": "Human-readable explanation",
   "payload": {},  // signal-specific data
   "acknowledged_at": null,  // set when target processes signal
   "created_at": 1737802800000
+}
+```
+
+#### Target Resolution
+
+**Use exactly one of `target_loop` or `target_selector`, not both.**
+
+| Field | Use Case | Example |
+|-------|----------|---------|
+| `target_loop` | Signal a specific loop by ID | `"target_loop": "1737802800"` |
+| `target_selector` | Signal multiple loops by pattern | `"target_selector": "descendants:1737800000"` |
+
+**Precedence if both specified:** `target_loop` takes precedence. However, this is a schema violation—validation should reject signals with both fields set.
+
+**Selector Patterns:**
+
+| Pattern | Matches |
+|---------|---------|
+| `descendants:<loop-id>` | All loops with parent chain including `<loop-id>` |
+| `type:<loop-type>` | All loops of the given type (e.g., `type:ralph`) |
+| `status:<status>` | All loops in the given status (e.g., `status:running`) |
+
+**Example: Stop all descendants when parent re-iterates:**
+```json
+{
+  "signal": "stop",
+  "source_loop": "plan-001",
+  "target_selector": "descendants:plan-001",
+  "reason": "Plan re-iterating, invalidating previous work"
 }
 ```
 

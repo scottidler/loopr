@@ -570,14 +570,128 @@ impl Tool for GrepTool {
 
         let search_path = ctx.validate_path(Path::new(path))?;
 
-        // Use ripgrep for performance
+        // Primary: Use grep crate for in-process search
+        match self.search_with_crate(pattern, &search_path, file_pattern, context_lines).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                tracing::warn!(error = %e, "grep crate failed, falling back to rg binary");
+            }
+        }
+
+        // Fallback: Shell out to ripgrep binary
+        self.search_with_rg_binary(pattern, &search_path, file_pattern, context_lines, ctx).await
+    }
+
+    /// Primary implementation using the grep crate (in-process, no shell)
+    async fn search_with_crate(
+        &self,
+        pattern: &str,
+        search_path: &Path,
+        file_pattern: Option<&str>,
+        context_lines: usize,
+    ) -> Result<ToolResult> {
+        use grep::regex::RegexMatcher;
+        use grep::searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
+        use ignore::WalkBuilder;
+
+        let matcher = RegexMatcher::new(pattern)?;
+
+        let mut results = Vec::new();
+        let mut match_count = 0;
+        const MAX_MATCHES: usize = 100;
+
+        // Build walker with optional glob filter
+        let mut walker = WalkBuilder::new(search_path);
+        walker.hidden(false).git_ignore(true);
+
+        if let Some(glob) = file_pattern {
+            walker.add_custom_ignore_filename(".ignore");
+            // Note: glob filtering handled via types or manual filter
+        }
+
+        for entry in walker.build() {
+            if match_count >= MAX_MATCHES {
+                break;
+            }
+
+            let entry = entry?;
+            if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                continue;
+            }
+
+            // Optional: filter by glob pattern
+            if let Some(glob) = file_pattern {
+                let pattern = glob::Pattern::new(glob)?;
+                if !pattern.matches_path(entry.path()) {
+                    continue;
+                }
+            }
+
+            let path_display = entry.path().display().to_string();
+            let mut searcher = SearcherBuilder::new()
+                .before_context(context_lines)
+                .after_context(context_lines)
+                .build();
+
+            struct MatchSink<'a> {
+                path: &'a str,
+                results: &'a mut Vec<String>,
+                match_count: &'a mut usize,
+                max_matches: usize,
+            }
+
+            impl<'a> Sink for MatchSink<'a> {
+                type Error = std::io::Error;
+
+                fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+                    if *self.match_count >= self.max_matches {
+                        return Ok(false);
+                    }
+                    *self.match_count += 1;
+                    let line = String::from_utf8_lossy(mat.bytes());
+                    self.results.push(format!(
+                        "{}:{}:{}",
+                        self.path,
+                        mat.line_number().unwrap_or(0),
+                        line.trim_end()
+                    ));
+                    Ok(true)
+                }
+            }
+
+            let mut sink = MatchSink {
+                path: &path_display,
+                results: &mut results,
+                match_count: &mut match_count,
+                max_matches: MAX_MATCHES,
+            };
+
+            let _ = searcher.search_path(&matcher, entry.path(), &mut sink);
+        }
+
+        if results.is_empty() {
+            Ok(ToolResult::success("No matches found"))
+        } else {
+            Ok(ToolResult::success(results.join("\n")))
+        }
+    }
+
+    /// Fallback implementation using ripgrep binary
+    async fn search_with_rg_binary(
+        &self,
+        pattern: &str,
+        search_path: &Path,
+        file_pattern: Option<&str>,
+        context_lines: usize,
+        ctx: &ToolContext,
+    ) -> Result<ToolResult> {
         let mut cmd = tokio::process::Command::new("rg");
         cmd.arg("--line-number")
             .arg("--no-heading")
             .arg(format!("--context={}", context_lines))
-            .arg("--max-count=100")  // Limit matches
+            .arg("--max-count=100")
             .arg(pattern)
-            .arg(&search_path)
+            .arg(search_path)
             .current_dir(&ctx.worktree);
 
         if let Some(fp) = file_pattern {
@@ -587,7 +701,6 @@ impl Tool for GrepTool {
         let output = cmd.output().await?;
 
         if output.status.success() || output.status.code() == Some(1) {
-            // 0 = matches found, 1 = no matches
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.is_empty() {
                 Ok(ToolResult::success("No matches found"))
@@ -872,6 +985,11 @@ tokio = { version = "1", features = ["process", "fs", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+
+# Grep crate for in-process search (primary implementation)
+# This is the library that powers ripgrep, maintained by BurntSushi
+grep = "0.3"    # Meta crate re-exporting grep-searcher, grep-regex, etc.
+ignore = "0.4"  # For respecting .gitignore during walks
 ```
 
 ---

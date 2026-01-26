@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-01-15 (updated 2026-01-25)
-**Status:** Ready for Implementation
+**Status:** Implementation Spec
 **Parent Doc:** [loop-architecture.md](loop-architecture.md)
 
 ---

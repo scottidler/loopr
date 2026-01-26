@@ -136,13 +136,14 @@ pub struct TokenUsage {
 }
 
 impl TokenUsage {
-    /// Calculate cost in USD (Sonnet pricing as baseline)
+    /// Calculate cost in USD
+    /// Opus 4.5: $15/$75 per 1M tokens (input/output)
+    /// Haiku 3.5: $0.80/$4 per 1M tokens (input/output)
     pub fn cost_usd(&self, model: &str) -> f64 {
         let (input_price, output_price) = match model {
             m if m.contains("opus") => (15.0, 75.0),
-            m if m.contains("sonnet") => (3.0, 15.0),
-            m if m.contains("haiku") => (0.25, 1.25),
-            _ => (3.0, 15.0), // Default to sonnet
+            m if m.contains("haiku") => (0.80, 4.0),
+            _ => (15.0, 75.0), // Default to opus pricing
         };
 
         let input_cost = (self.input_tokens as f64 / 1_000_000.0) * input_price;
@@ -427,6 +428,163 @@ impl LlmError {
 
 ---
 
+## Context Budget Management
+
+Each Claude model has a maximum context window. When prompt content approaches this limit, Loopr must truncate gracefully to avoid API errors.
+
+### Context Limits by Model
+
+| Model | Context Window | Safe Budget (90%) |
+|-------|----------------|-------------------|
+| claude-opus-4-5-20250514 | 200K tokens | 180K tokens |
+| claude-haiku-3-5-20250514 | 200K tokens | 180K tokens |
+
+### Token Estimation
+
+Approximate token count before sending:
+
+```rust
+/// Rough token estimation (actual tokenization varies)
+/// Claude uses ~4 characters per token on average for English text
+fn estimate_tokens(text: &str) -> usize {
+    text.len() / 4
+}
+
+/// Check if prompt fits within budget
+fn check_context_budget(
+    system_prompt: &str,
+    user_prompt: &str,
+    max_output_tokens: u32,
+    model_context_limit: usize,
+) -> Result<ContextBudget> {
+    let system_tokens = estimate_tokens(system_prompt);
+    let user_tokens = estimate_tokens(user_prompt);
+    let total_input = system_tokens + user_tokens;
+
+    // Reserve space for output + buffer
+    let available = model_context_limit
+        .saturating_sub(max_output_tokens as usize)
+        .saturating_sub(1000); // Safety buffer
+
+    if total_input > available {
+        Err(LlmError::ContextOverflow {
+            used: total_input,
+            limit: available,
+        })
+    } else {
+        Ok(ContextBudget {
+            system_tokens,
+            user_tokens,
+            available_for_output: available - total_input,
+        })
+    }
+}
+```
+
+### Truncation Strategy
+
+When context is exceeded, truncate in priority order:
+
+1. **Progress history** - Oldest iterations first (keep most recent 2-3)
+2. **Tool output** - Long file contents, command outputs
+3. **Artifact content** - Summarize instead of including full text
+4. **Base prompt** - Last resort, never truncate
+
+```rust
+fn fit_to_budget(
+    components: &mut PromptComponents,
+    budget: usize,
+) -> Result<()> {
+    let mut current_size = components.total_tokens();
+
+    // 1. Truncate progress history
+    while current_size > budget && components.progress.len() > 2 {
+        let removed = components.progress.remove(0); // Remove oldest
+        current_size -= estimate_tokens(&removed);
+        tracing::debug!("Truncated oldest progress entry to fit budget");
+    }
+
+    // 2. Summarize large artifacts
+    if current_size > budget {
+        for artifact in &mut components.artifacts {
+            if estimate_tokens(artifact) > 5000 {
+                *artifact = summarize_artifact(artifact)?;
+                current_size = components.total_tokens();
+            }
+        }
+    }
+
+    // 3. Truncate tool outputs
+    if current_size > budget {
+        for output in &mut components.tool_outputs {
+            if output.len() > 10000 {
+                *output = format!(
+                    "{}...\n[truncated, {} chars total]",
+                    &output[..8000],
+                    output.len()
+                );
+                current_size = components.total_tokens();
+            }
+        }
+    }
+
+    if current_size > budget {
+        return Err(eyre!(
+            "Cannot fit prompt within budget after truncation. \
+             Base prompt may be too large ({} tokens for {} budget)",
+            current_size,
+            budget
+        ));
+    }
+
+    Ok(())
+}
+```
+
+### Per-Loop-Type Budgets
+
+Different loop types have different content sizes:
+
+| Loop Type | Typical Input Size | Notes |
+|-----------|-------------------|-------|
+| Plan | 5-15K tokens | User request + conversation history |
+| Spec | 10-20K tokens | Plan content + requirements |
+| Phase | 15-30K tokens | Spec content + progress + file context |
+| Ralph | 20-50K tokens | Phase + code files + test output |
+
+### Handling Overflow
+
+When a prompt exceeds budget even after truncation:
+
+```rust
+async fn handle_context_overflow(
+    loop_id: &str,
+    overflow: &ContextOverflow,
+) -> Result<()> {
+    tracing::error!(
+        loop_id,
+        used = overflow.used,
+        limit = overflow.limit,
+        "Context budget exceeded"
+    );
+
+    // Options:
+    // 1. Split the task into smaller chunks
+    // 2. Use a model with larger context
+    // 3. Fail with actionable error message
+
+    Err(eyre!(
+        "Loop {} prompt too large ({} tokens, limit {}). \
+         Consider splitting the phase into smaller tasks.",
+        loop_id,
+        overflow.used,
+        overflow.limit
+    ))
+}
+```
+
+---
+
 ## Integration with Loop Engine
 
 The loop engine uses `LlmClient` for each iteration:
@@ -487,14 +645,17 @@ From [loop-config.md](loop-config.md):
 
 ```yaml
 llm:
-  default: anthropic/claude-sonnet-4-20250514
+  default: anthropic/claude-opus-4-5-20250514  # Prefer opus for complex tasks
+  simple: anthropic/claude-haiku-3-5-20250514  # Use haiku for simple/fast tasks
   timeout-ms: 300000
   providers:
     anthropic:
       api-key-env: ANTHROPIC_API_KEY
       base-url: https://api.anthropic.com
       models:
-        claude-sonnet-4-20250514:
+        claude-opus-4-5-20250514:
+          max-tokens: 16384
+        claude-haiku-3-5-20250514:
           max-tokens: 8192
 ```
 
@@ -547,9 +708,9 @@ mod tests {
             cache_creation_tokens: 0,
         };
 
-        // Sonnet: $3/M input, $15/M output, 90% discount on cache
-        let cost = usage.cost_usd("claude-sonnet-4");
-        assert!((cost - 4.65).abs() < 0.01); // $3 + $1.50 + $0.15
+        // Opus 4.5: $15/M input, $75/M output, 90% discount on cache
+        let cost = usage.cost_usd("claude-opus-4-5");
+        assert!((cost - 23.25).abs() < 0.01); // $15 + $7.50 + $0.75
     }
 }
 ```

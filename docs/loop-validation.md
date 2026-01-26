@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler, Claude
 **Date:** 2026-01-25
-**Status:** Ready
+**Status:** Implementation Spec
 **Parent Doc:** [loop-architecture.md](loop-architecture.md)
 
 ## Summary

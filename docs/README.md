@@ -1,8 +1,8 @@
 # Loopr: Design Documentation
 
-**Version:** 2.0 (Complete Rewrite)
+**Version:** 1.0
 **Date:** 2026-01-25
-**Status:** Ready for Implementation
+**Status:** Implementation Spec
 
 ---
 
@@ -16,6 +16,102 @@ Loopr is an autonomous coding agent that executes complex software engineering t
 4. Executes phases via **Ralph loops** (the actual coding work)
 
 Each level validates its output before spawning children, creating a self-correcting system that can handle multi-hour tasks autonomously.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+```bash
+# Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Required environment variable
+export ANTHROPIC_API_KEY="your-api-key"
+```
+
+### Installation
+
+```bash
+# Clone and build
+git clone https://github.com/scottidler/loopr
+cd loopr
+cargo build --release
+
+# Add to PATH
+export PATH="$PATH:$(pwd)/target/release"
+```
+
+### Quick Start
+
+```bash
+# Start Loopr (launches TUI)
+loopr
+
+# Or start with a specific project
+loopr --project ~/myproject
+```
+
+### Basic Workflow
+
+1. **Chat View** - Describe your task:
+   ```
+   > Build a REST API for user management with JWT authentication
+   ```
+
+2. **Create Plan** - Use the /plan command:
+   ```
+   > /plan Add user authentication to the API
+   ```
+
+3. **Switch to Loops View** - Press `Tab` to see the loop hierarchy:
+   ```
+   ▼ ● Plan: Add user authentication [1/5]
+     └── ○ Spec: Core auth (pending)
+   ```
+
+4. **Monitor Progress** - Watch loops execute:
+   ```
+   ▼ ● Plan: Add user authentication [5/5] ✓
+     ├── ● Spec: Core auth [2/3]
+     │   ├── ● Phase: User model (iter 3)
+     │   └── ○ Phase: JWT tokens
+     └── ○ Spec: Protected routes
+   ```
+
+5. **Review Results** - Code is committed to git as phases complete.
+
+### Key Commands
+
+| View | Key | Action |
+|------|-----|--------|
+| Both | `Tab` | Switch Chat/Loops view |
+| Both | `?` | Show help |
+| Both | `q` | Quit |
+| Chat | `Enter` | Send message |
+| Chat | `/plan <desc>` | Create a plan |
+| Loops | `j/k` | Navigate |
+| Loops | `s` | Start/pause loop |
+| Loops | `x` | Cancel loop |
+| Loops | `o` | View output |
+
+### Configuration
+
+Create `~/.config/loopr/loopr.yml`:
+
+```yaml
+llm:
+  default: anthropic/claude-opus-4-5-20250514
+  timeout-ms: 300000
+
+concurrency:
+  max-loops: 50
+  max-api-calls: 10
+
+validation:
+  command: "otto ci"  # or "cargo test", "npm test", etc.
+```
 
 ---
 
@@ -46,6 +142,153 @@ Each level validates its output before spawning children, creating a self-correc
 - **Polling over IPC** - Components read TaskStore, no message passing
 - **Git worktrees** - Each loop gets isolated workspace
 - **Artifacts as glue** - plan.md/spec.md/phase.md connect loop levels
+
+---
+
+## Sequence Diagrams
+
+### Complete Lifecycle: User Request to Merged Code
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant TUI
+    participant LM as LoopManager
+    participant Store as TaskStore
+    participant LLM as Claude API
+    participant Git
+
+    User->>TUI: Describe task
+    TUI->>LLM: Stream conversation
+    LLM-->>TUI: Response
+    User->>TUI: /plan "Add user auth"
+
+    Note over TUI,Store: Plan Creation
+
+    TUI->>Store: Create PlanLoop (pending)
+    TUI->>LM: Notify new loop
+    LM->>Store: Set status=running
+    LM->>Git: Create worktree (loop-001)
+
+    loop Rule of Five (5 passes)
+        LM->>LLM: Review plan
+        LLM-->>LM: Feedback/updates
+        LM->>Store: Save iteration
+    end
+
+    LM->>Store: PlanLoop complete, plan.md ready
+
+    Note over LM,Store: Spec Spawning
+
+    LM->>Store: Parse specs from plan.md
+    LM->>Store: Create SpecLoop for each spec
+
+    loop For each SpecLoop
+        LM->>LLM: Generate spec details
+        LM->>Store: spec.md ready
+        LM->>Store: Create PhaseLoops (3-7)
+    end
+
+    Note over LM,Git: Phase Execution (parallel)
+
+    par PhaseLoop-1
+        LM->>Store: Create RalphLoop
+        LM->>Git: Worktree for ralph
+        loop Until validation passes
+            LM->>LLM: Implement phase
+            LLM-->>LM: Code changes
+            LM->>Git: Write files
+            LM->>Store: Run validation
+        end
+        LM->>Git: Merge to main
+    and PhaseLoop-2
+        LM->>Store: Create RalphLoop
+        Note over LM: (parallel execution)
+    end
+
+    LM->>Store: All loops complete
+    TUI->>User: Task complete!
+```
+
+### Invalidation Cascade: Parent Re-iteration
+
+```mermaid
+sequenceDiagram
+    participant Spec as SpecLoop
+    participant Store as TaskStore
+    participant Phase1 as PhaseLoop-1
+    participant Phase2 as PhaseLoop-2
+    participant Ralph as RalphLoop
+
+    Note over Spec: Spec validation fails
+
+    Spec->>Store: Status=running, iteration++
+    Spec->>Store: Signal: stop descendants
+
+    Store-->>Phase1: Poll sees stop signal
+    Store-->>Phase2: Poll sees stop signal
+
+    Phase1->>Store: Status=invalidated
+    Phase1->>Store: Archive loop directory
+
+    Phase2->>Ralph: (Ralph is child)
+    Ralph->>Store: Status=invalidated
+    Ralph->>Store: Archive loop directory
+
+    Phase2->>Store: Status=invalidated
+    Phase2->>Store: Archive loop directory
+
+    Note over Spec: Spec produces new artifact
+
+    Spec->>Store: New spec.md (iteration 2)
+    Spec->>Store: Status=complete
+
+    Store->>Store: Create new PhaseLoops
+    Note over Store: Fresh start with new spec
+```
+
+### TUI-LoopManager-TaskStore Interaction
+
+```mermaid
+sequenceDiagram
+    participant TUI as TUI (render loop)
+    participant App as App State
+    participant LM as LoopManager
+    participant Store as TaskStore
+    participant Loops as Running Loops
+
+    Note over TUI,Store: Tick-based polling (250ms)
+
+    loop Every tick
+        TUI->>App: Render current state
+        App->>Store: Query loop records
+        Store-->>App: LoopRecord[]
+        App->>App: Update loops_tree
+
+        TUI->>LM: tick()
+        LM->>Store: Query pending loops
+        LM->>LM: Calculate priorities
+        LM->>Loops: Spawn selected loops
+
+        Loops->>Store: Update status/progress
+    end
+
+    Note over TUI: User presses 'x' (cancel)
+
+    TUI->>App: Cancel loop request
+    App->>Store: Create stop signal
+    Store-->>Loops: (next poll sees signal)
+    Loops->>Store: Status=invalidated
+    Loops->>Store: Cleanup worktree
+
+    Note over TUI: User types in Chat
+
+    TUI->>App: Chat input
+    App->>LM: Start streaming
+    LM->>Store: (no change yet)
+    LM-->>TUI: Stream chunks
+    TUI->>TUI: Update display
+```
 
 ---
 

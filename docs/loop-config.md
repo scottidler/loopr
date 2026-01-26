@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler, Claude
 **Date:** 2026-01-25
-**Status:** Ready
+**Status:** Implementation Spec
 **Parent Doc:** [loop-architecture.md](loop-architecture.md)
 
 ## Summary
@@ -80,17 +80,17 @@ File: `~/.config/loopr/loopr.yml` (or `.loopr.yml` in project root)
 ```yaml
 # LLM provider settings
 llm:
-  default: anthropic/claude-sonnet-4-20250514
+  default: anthropic/claude-opus-4-5-20250514
   timeout-ms: 300000  # 5 minutes per LLM call
   providers:
     anthropic:
       api-key-env: ANTHROPIC_API_KEY
       base-url: https://api.anthropic.com
       models:
-        claude-sonnet-4-20250514:
+        claude-opus-4-5-20250514:    # Default for complex tasks
+          max-tokens: 16384
+        claude-haiku-3-5-20250514:   # For simple/fast tasks
           max-tokens: 8192
-        claude-opus-4-20250514:
-          max-tokens: 4096
 
 # Concurrency limits
 concurrency:

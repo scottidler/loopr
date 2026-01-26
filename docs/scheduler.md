@@ -48,7 +48,24 @@ Higher number = higher priority = runs first.
 ### Priority Modifiers
 
 ```rust
-fn calculate_priority(loop_record: &LoopRecord) -> i32 {
+/// Calculate how deep a loop is in the hierarchy by traversing parent_loop chain.
+/// PlanLoop = 0, SpecLoop = 1, PhaseLoop = 2, RalphLoop = 3 (typically).
+fn calculate_depth(loop_record: &LoopRecord, store: &TaskStore) -> i32 {
+    let mut depth = 0;
+    let mut current_parent = loop_record.parent_loop.clone();
+
+    while let Some(parent_id) = current_parent {
+        depth += 1;
+        match store.get::<LoopRecord>(&parent_id) {
+            Ok(Some(parent)) => current_parent = parent.parent_loop,
+            _ => break, // Parent not found, stop traversing
+        }
+    }
+
+    depth
+}
+
+fn calculate_priority(loop_record: &LoopRecord, store: &TaskStore) -> i32 {
     let mut priority = match loop_record.loop_type {
         LoopType::Ralph => 100,
         LoopType::Phase => 80,
@@ -62,7 +79,7 @@ fn calculate_priority(loop_record: &LoopRecord) -> i32 {
     priority += age_boost;
 
     // Depth boost: +10 per level deep (encourages completing branches)
-    let depth = calculate_depth(loop_record);
+    let depth = calculate_depth(loop_record, store);
     priority += depth * 10;
 
     // Retry penalty: -5 per failed iteration (deprioritize struggling loops)
@@ -76,16 +93,95 @@ fn calculate_priority(loop_record: &LoopRecord) -> i32 {
 ### Example Priority Calculation
 
 ```
-Loop A: ralph, created 5 min ago, depth 3, iteration 1
+Loop A: ralph, created 5 min ago, depth 3 (plan→spec→phase→ralph), iteration 1
   Base: 100 + Age: 5 + Depth: 30 + Retry: 0 = 135
 
-Loop B: phase, created 30 min ago, depth 2, iteration 1
+Loop B: phase, created 30 min ago, depth 2 (plan→spec→phase), iteration 1
   Base: 80 + Age: 30 + Depth: 20 + Retry: 0 = 130
 
 Loop C: ralph, created 1 min ago, depth 3, iteration 5
   Base: 100 + Age: 1 + Depth: 30 + Retry: -20 = 111
 
 Order: A runs first (135), then B (130), then C (111)
+```
+
+### Depth Calculation Example
+
+```
+PlanLoop-001 (depth=0, no parent)
+├── SpecLoop-002 (depth=1, parent=001)
+│   ├── PhaseLoop-003 (depth=2, parent=002)
+│   │   └── RalphLoop-004 (depth=3, parent=003)
+│   └── PhaseLoop-005 (depth=2, parent=002)
+└── SpecLoop-006 (depth=1, parent=001)
+
+calculate_depth(RalphLoop-004):
+  → parent=003 (depth++)
+  → parent=002 (depth++)
+  → parent=001 (depth++)
+  → parent=None (stop)
+  → returns 3
+```
+
+### Age vs Depth: Worked Scenarios
+
+**Scenario 1: New leaf vs old branch**
+```
+Situation:
+- RalphLoop-X: created just now, depth 3
+- SpecLoop-Y: created 40 minutes ago, depth 1
+
+Calculation:
+  Ralph-X: 100 (base) + 0 (age) + 30 (depth) = 130
+  Spec-Y:   60 (base) + 40 (age) + 10 (depth) = 110
+
+Winner: Ralph-X (leaf node wins despite being newer)
+Why: Depth boost outweighs age; completing leaves unblocks parents.
+```
+
+**Scenario 2: Very old plan vs new ralph**
+```
+Situation:
+- PlanLoop-A: waiting 50+ minutes (max age boost)
+- RalphLoop-B: created just now, depth 3
+
+Calculation:
+  Plan-A:  40 (base) + 50 (max age) + 0 (depth) = 90
+  Ralph-B: 100 (base) + 0 (age) + 30 (depth) = 130
+
+Winner: Ralph-B still wins
+Why: Type priority + depth > max age boost. This is intentional.
+```
+
+**Scenario 3: Struggling loop gets deprioritized**
+```
+Situation:
+- RalphLoop-X: depth 3, iteration 7 (failing repeatedly)
+- RalphLoop-Y: depth 3, iteration 1 (fresh start)
+- Both created 10 minutes ago
+
+Calculation:
+  Ralph-X: 100 + 10 + 30 - 30 (6 retries × 5, capped) = 110
+  Ralph-Y: 100 + 10 + 30 - 0 = 140
+
+Winner: Ralph-Y (fresh loop gets priority)
+Why: Let healthy loops run; struggling ones may have deeper issues.
+```
+
+**Scenario 4: Completing a branch**
+```
+Situation: PhaseLoop-003 has two children:
+- RalphLoop-004: depth 3, created 5 min ago, iteration 1
+- RalphLoop-005: depth 3, created 2 min ago, iteration 1
+
+Both are runnable (parent complete).
+
+Calculation:
+  Ralph-004: 100 + 5 + 30 = 135
+  Ralph-005: 100 + 2 + 30 = 132
+
+Order: 004 runs first, then 005 (FIFO within same type/depth)
+Why: Older loops of same priority run first to prevent starvation.
 ```
 
 ---
@@ -160,8 +256,8 @@ impl Scheduler {
 
         // Sort by priority (descending)
         runnable.sort_by(|a, b| {
-            let pa = calculate_priority(a);
-            let pb = calculate_priority(b);
+            let pa = calculate_priority(a, store);
+            let pb = calculate_priority(b, store);
             pb.cmp(&pa)  // Higher priority first
         });
 
@@ -295,6 +391,137 @@ fn is_within_type_limit(
 
 ---
 
+## Rate Limit Coordination
+
+When the Anthropic API returns 429 (rate limited), the scheduler must back off globally to prevent all loops from hitting the limit simultaneously.
+
+### Shared Rate Limit State
+
+```rust
+/// Global rate limit state shared across all loops
+pub struct RateLimitState {
+    /// When we can resume API calls (None = no active limit)
+    pub backoff_until: Option<Instant>,
+    /// Number of consecutive rate limit hits
+    pub consecutive_hits: u32,
+    /// Last successful API call time
+    pub last_success: Instant,
+}
+
+impl RateLimitState {
+    pub fn is_rate_limited(&self) -> bool {
+        self.backoff_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false)
+    }
+
+    pub fn record_rate_limit(&mut self, retry_after: Duration) {
+        self.consecutive_hits += 1;
+
+        // Exponential backoff: use max of API's retry_after and our calculated delay
+        let exp_backoff = Duration::from_secs(2u64.pow(self.consecutive_hits.min(6)));
+        let delay = retry_after.max(exp_backoff);
+
+        self.backoff_until = Some(Instant::now() + delay);
+
+        tracing::warn!(
+            retry_after_secs = delay.as_secs(),
+            consecutive_hits = self.consecutive_hits,
+            "Rate limited, backing off globally"
+        );
+    }
+
+    pub fn record_success(&mut self) {
+        self.consecutive_hits = 0;
+        self.backoff_until = None;
+        self.last_success = Instant::now();
+    }
+}
+```
+
+### Scheduler Integration
+
+The scheduler checks rate limit state before selecting loops:
+
+```rust
+impl Scheduler {
+    pub fn select_runnable(
+        &self,
+        store: &TaskStore,
+        currently_running: usize,
+        rate_limit: &RateLimitState,  // <-- Added
+    ) -> Vec<LoopRecord> {
+        // Don't start new loops if rate limited
+        if rate_limit.is_rate_limited() {
+            tracing::debug!(
+                until = ?rate_limit.backoff_until,
+                "Rate limited, not selecting new loops"
+            );
+            return vec![];
+        }
+
+        // ... rest of selection logic ...
+    }
+}
+```
+
+### Loop-Level Rate Limit Handling
+
+When a loop encounters a rate limit, it reports to the global state:
+
+```rust
+async fn handle_llm_error(
+    error: &LlmError,
+    rate_limit: &Arc<RwLock<RateLimitState>>,
+) -> Result<()> {
+    if let LlmError::RateLimited { retry_after } = error {
+        let mut state = rate_limit.write().await;
+        state.record_rate_limit(*retry_after);
+
+        // Also notify other loops via signal
+        // They'll see the global backoff on their next iteration
+    }
+    Ok(())
+}
+```
+
+### Configuration
+
+```yaml
+# loopr.yml
+rate_limit:
+  # Initial backoff on first rate limit (seconds)
+  initial_backoff_secs: 5
+
+  # Maximum backoff (seconds)
+  max_backoff_secs: 120
+
+  # How long to wait after backoff before resuming full speed
+  recovery_period_secs: 30
+
+  # Max concurrent API calls (soft limit to prevent rate limits)
+  max_concurrent_api_calls: 10
+```
+
+### Graceful Degradation
+
+When rate limited, the scheduler can prioritize loops that don't need API calls:
+
+```rust
+fn select_during_rate_limit(
+    &self,
+    store: &TaskStore,
+) -> Vec<LoopRecord> {
+    // Select loops that are in "validation" state - they run tests, not API calls
+    store.query::<LoopRecord>(&[
+        Filter::eq("status", "running"),
+        Filter::eq("phase", "validating"),
+    ]).unwrap_or_default()
+}
+```
+
+---
+
 ## Edge Cases
 
 ### Orphaned Loops
@@ -368,7 +595,7 @@ for record in &selected {
     tracing::debug!(
         loop_id = %record.id,
         loop_type = ?record.loop_type,
-        priority = calculate_priority(record),
+        priority = calculate_priority(record, store),
         age_ms = now_ms() - record.created_at,
         "Selected loop for execution"
     );
@@ -429,11 +656,13 @@ mod tests {
 
     #[test]
     fn test_priority_calculation() {
+        let store = TaskStore::in_memory();
         let mut record = LoopRecord::new_ralph("test");
         record.created_at = now_ms() - 5 * 60 * 1000; // 5 minutes ago
+        store.create(&record)?;
 
-        let priority = calculate_priority(&record);
-        // Base 100 + age 5 + depth 0 = 105
+        let priority = calculate_priority(&record, &store);
+        // Base 100 + age 5 + depth 0 (no parent) = 105
         assert_eq!(priority, 105);
     }
 
@@ -465,19 +694,24 @@ mod tests {
 
     #[test]
     fn test_age_boost_prevents_starvation() {
-        let young_ralph = LoopRecord::new_ralph("young");
+        let store = TaskStore::in_memory();
+
+        let mut young_ralph = LoopRecord::new_ralph("young");
         young_ralph.created_at = now_ms();
+        store.create(&young_ralph)?;
 
         let mut old_plan = LoopRecord::new_plan("old");
         old_plan.created_at = now_ms() - 60 * 60 * 1000; // 1 hour ago
+        store.create(&old_plan)?;
 
         // Young ralph: 100
         // Old plan: 40 + 50 (max age boost) = 90
         // Ralph still wins, but barely
-        assert!(calculate_priority(&young_ralph) > calculate_priority(&old_plan));
+        assert!(calculate_priority(&young_ralph, &store) > calculate_priority(&old_plan, &store));
 
         // But very old plan beats young ralph
         old_plan.created_at = now_ms() - 120 * 60 * 1000; // 2 hours
+        store.update(&old_plan)?;
         // Still capped at 50, so: 40 + 50 = 90 < 100
         // This is intentional - ralphs should generally run first
     }

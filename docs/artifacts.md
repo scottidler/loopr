@@ -526,12 +526,54 @@ Children triggered by iterations/001/artifacts/plan.md are invalidated
 
 ## Artifact Validation
 
+### Empty Artifact Detection
+
+Artifacts must contain meaningful content to spawn children. Empty or near-empty artifacts are rejected.
+
+```rust
+/// Minimum content thresholds (characters, excluding whitespace and headers)
+const MIN_PLAN_CONTENT: usize = 200;   // Plans need substantial detail
+const MIN_SPEC_CONTENT: usize = 300;   // Specs need requirements + phases
+const MIN_PHASE_CONTENT: usize = 100;  // Phases need tasks + validation
+
+fn validate_artifact_not_empty(content: &str, artifact_type: &str) -> Result<()> {
+    // Remove markdown headers and whitespace to count actual content
+    let content_chars: usize = content
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map(|line| line.len())
+        .sum();
+
+    let min_chars = match artifact_type {
+        "plan" => MIN_PLAN_CONTENT,
+        "spec" => MIN_SPEC_CONTENT,
+        "phase" => MIN_PHASE_CONTENT,
+        _ => 50, // Default fallback
+    };
+
+    if content_chars < min_chars {
+        return Err(eyre!(
+            "Artifact too sparse: {} has {} content characters, minimum is {}. \
+             Add more detail to goals, requirements, or tasks.",
+            artifact_type,
+            content_chars,
+            min_chars
+        ));
+    }
+
+    Ok(())
+}
+```
+
 ### Format Validation
 
-Check that required sections exist:
+Check that required sections exist and contain content:
 
 ```rust
 fn validate_plan_format(content: &str) -> Result<()> {
+    // Check minimum content
+    validate_artifact_not_empty(content, "plan")?;
+
     let required = ["# Plan:", "## Summary", "## Goals", "## Specs"];
     for section in required {
         if !content.contains(section) {
@@ -545,10 +587,23 @@ fn validate_plan_format(content: &str) -> Result<()> {
         return Err(eyre!("Plan must define at least one spec"));
     }
 
+    // Validate each spec has meaningful content
+    for spec in &specs {
+        if spec.name.trim().is_empty() {
+            return Err(eyre!("Spec name cannot be empty"));
+        }
+        if spec.scope.is_empty() {
+            return Err(eyre!("Spec '{}' must have at least one scope item", spec.name));
+        }
+    }
+
     Ok(())
 }
 
 fn validate_spec_format(content: &str) -> Result<()> {
+    // Check minimum content
+    validate_artifact_not_empty(content, "spec")?;
+
     let required = ["# Spec:", "## Overview", "## Requirements", "## Phases"];
     for section in required {
         if !content.contains(section) {
@@ -565,16 +620,49 @@ fn validate_spec_format(content: &str) -> Result<()> {
         return Err(eyre!("Spec should have at most 7 phases, got {}", phases.len()));
     }
 
+    // Validate each phase has meaningful content
+    for phase in &phases {
+        if phase.name.trim().is_empty() {
+            return Err(eyre!("Phase {} name cannot be empty", phase.number));
+        }
+        if phase.goal.trim().is_empty() {
+            return Err(eyre!("Phase '{}' must have a goal", phase.name));
+        }
+        if phase.tasks.is_empty() {
+            return Err(eyre!("Phase '{}' must have at least one task", phase.name));
+        }
+    }
+
     Ok(())
 }
 
 fn validate_phase_format(content: &str) -> Result<()> {
+    // Check minimum content
+    validate_artifact_not_empty(content, "phase")?;
+
     let required = ["# Phase:", "## Goal", "## Tasks", "## Validation Command"];
     for section in required {
         if !content.contains(section) {
             return Err(eyre!("Missing required section: {}", section));
         }
     }
+
+    // Extract and validate tasks section has actual tasks
+    let tasks_section = content
+        .split("## Tasks")
+        .nth(1)
+        .and_then(|s| s.split("##").next())
+        .unwrap_or("");
+
+    let task_count = tasks_section
+        .lines()
+        .filter(|line| line.trim().starts_with("- ") || line.trim().starts_with("1."))
+        .count();
+
+    if task_count == 0 {
+        return Err(eyre!("Phase must have at least one task in Tasks section"));
+    }
+
     Ok(())
 }
 ```
