@@ -47,7 +47,7 @@ fi
 # Initialize progress file if it doesn't exist
 if [[ ! -f "$PROGRESS_FILE" ]]; then
     echo -e "${YELLOW}Initializing progress file...${NC}"
-    cat > "$PROGRESS_FILE" << 'EOF'
+    cat >"$PROGRESS_FILE" <<'EOF'
 # Loopr Progress File
 # This file tracks state between iterations (Ralph Wiggum pattern)
 # Claude reads this at start, updates it at end of each iteration
@@ -115,7 +115,8 @@ while true; do
     # PROMPT.md tells Claude to read .loopr-progress first thing
     claude --model "$MODEL" \
         --dangerously-skip-permissions \
-        < "$PROMPT_FILE"
+        --print \
+        <"$PROMPT_FILE"
 
     end_time=$(date +%s)
     duration=$((end_time - start_time))
