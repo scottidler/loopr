@@ -11,6 +11,8 @@ PROGRESS_FILE=${PROGRESS_FILE:-.loopr-progress}
 MODEL=${MODEL:-opus}
 SLEEP_BETWEEN=${SLEEP_BETWEEN:-2}
 VALIDATION_CMD=${VALIDATION_CMD:-"otto ci"}
+BRANCH_PREFIX=${BRANCH_PREFIX:-iter}
+BASE_BRANCH=${BASE_BRANCH:-main}
 
 # Colors for output
 RED='\033[0;31m'
@@ -32,6 +34,7 @@ echo "Progress:   $PROGRESS_FILE"
 echo "Model:      $MODEL"
 echo "Validation: $VALIDATION_CMD"
 echo "Max:        $MAX_ITERATIONS iterations"
+echo "Branching:  ${BRANCH_PREFIX}N from $BASE_BRANCH"
 echo ""
 
 # Check prompt file exists
@@ -74,6 +77,36 @@ while true; do
         echo -e "${YELLOW}Check $PROGRESS_FILE for current state.${NC}"
         exit 1
     fi
+
+    # Create new iteration branch (iter0, iter1, iterN, ...)
+    # Use 0-indexed branch names (iteration 1 = iter0)
+    branch_num=$((iteration - 1))
+    branch_name="${BRANCH_PREFIX}${branch_num}"
+    echo -e "${BLUE}Creating branch: $branch_name${NC}"
+
+    # Commit any uncommitted changes from previous iteration before creating new branch
+    if [[ -n "$(git status --porcelain)" ]]; then
+        prev_branch=$(git branch --show-current)
+        echo -e "${YELLOW}Auto-committing changes from previous iteration on $prev_branch...${NC}"
+        git add -A
+        git commit -m "loopr: auto-commit iteration changes on $prev_branch" || true
+    fi
+
+    # For first iteration, start from base branch; otherwise build on previous iteration
+    if [[ $iteration -eq 1 ]]; then
+        git checkout "$BASE_BRANCH" 2>/dev/null || true
+        git pull --ff-only 2>/dev/null || true
+    fi
+
+    # Delete the branch if it already exists (re-running same iteration)
+    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+        echo -e "${YELLOW}Branch $branch_name exists, deleting for fresh start...${NC}"
+        git branch -D "$branch_name"
+    fi
+
+    # Create new branch from current state (accumulates changes from previous iterations)
+    git checkout -b "$branch_name"
+    echo -e "${GREEN}Now on branch: $branch_name${NC}"
 
     # Record iteration start time
     start_time=$(date +%s)
@@ -125,6 +158,13 @@ while true; do
         echo -e "${GREEN}Validation passed.${NC}"
     else
         echo -e "${RED}Validation failed. Next iteration will address issues.${NC}"
+    fi
+
+    # Auto-commit any changes made during this iteration
+    if [[ -n "$(git status --porcelain)" ]]; then
+        echo -e "${YELLOW}Auto-committing iteration $iteration changes...${NC}"
+        git add -A
+        git commit -m "loopr: iteration $iteration complete on $branch_name" || true
     fi
 
     echo ""
