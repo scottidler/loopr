@@ -14,6 +14,7 @@ mod rule_of_five;
 mod scheduler;
 mod store;
 mod tui;
+mod validation;
 
 use cli::Cli;
 use config::Config;
