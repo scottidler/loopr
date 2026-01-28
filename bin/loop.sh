@@ -113,10 +113,12 @@ while true; do
 
     # Run Claude with fresh context
     # PROMPT.md tells Claude to read .loopr-progress first thing
+    log_file=".loopr-iter${branch_num}.log"
+    echo -e "${BLUE}Logging to: $log_file${NC}"
     claude --model "$MODEL" \
         --dangerously-skip-permissions \
         --print \
-        <"$PROMPT_FILE"
+        <"$PROMPT_FILE" 2>&1 | tee "$log_file"
 
     end_time=$(date +%s)
     duration=$((end_time - start_time))
