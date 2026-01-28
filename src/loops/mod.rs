@@ -44,4 +44,4 @@ pub use ralph::{IterationResult, LoopAction, LoopError, LoopRunner, RalphLoop, R
 pub use validation::{ValidationConfig, ValidationFeedback, ValidationResult, Validator};
 
 // Worktree management
-pub use worktree::{Worktree, WorktreeConfig, WorktreeError};
+pub use worktree::{Worktree, WorktreeConfig, WorktreeError, list_worktrees};

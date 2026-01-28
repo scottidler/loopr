@@ -10,6 +10,7 @@ mod cli;
 mod config;
 mod llm;
 mod loops;
+mod recovery;
 mod rule_of_five;
 mod scheduler;
 mod store;
