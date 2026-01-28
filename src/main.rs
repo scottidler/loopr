@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod cli;
 mod config;
+mod llm;
 mod store;
 
 use cli::Cli;
