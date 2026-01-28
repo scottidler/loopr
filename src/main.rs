@@ -10,6 +10,7 @@ mod cli;
 mod config;
 mod llm;
 mod loops;
+mod scheduler;
 mod store;
 mod tui;
 
