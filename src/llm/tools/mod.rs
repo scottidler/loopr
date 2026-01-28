@@ -3,8 +3,6 @@
 //! Tools provide file system access, command execution, and coordination capabilities
 //! to Ralph loops. Each loop gets a ToolContext scoped to its git worktree.
 
-#![allow(dead_code)]
-
 mod complete_task;
 mod context;
 mod edit_file;

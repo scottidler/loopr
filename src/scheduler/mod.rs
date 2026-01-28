@@ -1,5 +1,4 @@
 // TODO: Remove these allows once scheduler is integrated with TUI/main
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 //! Scheduler module for loop prioritization and execution management.

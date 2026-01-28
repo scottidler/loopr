@@ -1,3 +1,7 @@
+// Library modules contain components designed to be used together but not all
+// are wired through main.rs yet. This is expected for a phase-based build.
+#![allow(dead_code)]
+
 use clap::Parser;
 use eyre::{Context, Result};
 use log::info;

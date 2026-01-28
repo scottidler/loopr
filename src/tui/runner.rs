@@ -26,7 +26,6 @@ pub struct TuiRunner {
     store: Option<Arc<Mutex<TaskStore>>>,
 }
 
-#[allow(dead_code)]
 impl TuiRunner {
     /// Create a new TUI runner.
     pub fn new(terminal: Tui) -> Self {

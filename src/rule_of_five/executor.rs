@@ -3,8 +3,6 @@
 //! The executor manages the state of a plan through all five review passes,
 //! tracking progress and feedback between passes.
 
-#![allow(dead_code)]
-
 use crate::llm::{CompletionRequest, CompletionResponse, LlmClient, Message, MessageContent, Role, ToolDefinition};
 use crate::store::{LoopRecord, LoopStatus};
 

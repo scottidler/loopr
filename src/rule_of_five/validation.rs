@@ -3,8 +3,6 @@
 //! Each pass has specific validation criteria beyond the generic LLM response
 //! parsing. This module provides validators for each pass.
 
-#![allow(dead_code)]
-
 use super::passes::ReviewPass;
 
 /// Result of validating a pass.

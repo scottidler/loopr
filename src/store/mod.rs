@@ -1,5 +1,4 @@
 // TODO: Remove these allows once store is used by other modules
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 //! Storage layer for Loopr.

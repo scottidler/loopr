@@ -10,7 +10,6 @@ use std::time::Duration;
 
 /// Unified event type for the TUI.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum Event {
     /// Keyboard input event
     Key(KeyEvent),

@@ -12,7 +12,6 @@ use super::tree::LoopTree;
 /// Contains all mutable state for the TUI. This is owned by `App` and
 /// updated in response to events and TaskStore polling.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub struct AppState {
     // View state
     /// Currently active view (Chat or Loops)
@@ -206,7 +205,6 @@ pub enum ChatRole {
 
 /// Tool call display information.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ToolCallDisplay {
     /// Name of the tool
     pub name: String,
@@ -220,7 +218,6 @@ pub struct ToolCallDisplay {
 
 /// Pending actions on loops.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum PendingAction {
     /// Cancel a loop
     CancelLoop(String),

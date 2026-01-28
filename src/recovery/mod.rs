@@ -6,7 +6,6 @@
 //! - **Orphaned worktree cleanup**: Clean up worktrees that lost their loops
 //! - **Error recovery**: Graceful handling of failures
 
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 mod crash;

@@ -19,7 +19,6 @@ pub struct LoopTree {
     selected_id: Option<String>,
 }
 
-#[allow(dead_code)]
 impl LoopTree {
     /// Create an empty tree.
     pub fn new() -> Self {
@@ -238,7 +237,6 @@ pub struct TreeNode {
 
 /// Loop display data extracted from LoopRecord.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LoopItem {
     /// Loop ID
     pub id: String,
@@ -321,7 +319,6 @@ impl LoopItem {
     }
 
     /// Check if this is a draft (status = pending and iteration = 0).
-    #[allow(dead_code)]
     pub fn is_draft(&self) -> bool {
         self.status == "pending" && self.iteration.starts_with("0/")
     }

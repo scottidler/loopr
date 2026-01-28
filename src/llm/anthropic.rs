@@ -1,7 +1,5 @@
 //! Anthropic Claude API client implementation
 
-#![allow(dead_code)]
-
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;

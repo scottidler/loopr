@@ -9,7 +9,6 @@
 //! 4. **Architecture** - Does this fit the larger system?
 //! 5. **Clarity** - Is it implementable? Ambiguous sections?
 
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 mod executor;

@@ -6,7 +6,6 @@
 //! 3. Execution overrides (runtime per-loop)
 
 // Config APIs are public, will be used by other modules
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 use eyre::{Context, Result};

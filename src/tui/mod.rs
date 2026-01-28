@@ -55,7 +55,6 @@ pub fn restore_terminal() -> Result<()> {
 }
 
 /// Status colors inspired by k9s.
-#[allow(dead_code)]
 pub mod colors {
     use ratatui::style::Color;
 

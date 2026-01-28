@@ -3,8 +3,6 @@
 //! Each pass focuses on a single quality dimension, allowing for thorough
 //! and focused review of Plan documents.
 
-#![allow(dead_code)]
-
 use std::fmt;
 
 /// The five review passes.

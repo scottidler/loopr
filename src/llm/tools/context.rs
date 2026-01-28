@@ -1,7 +1,5 @@
 //! Tool execution context - scoped to a single loop's worktree
 
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

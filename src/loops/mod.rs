@@ -16,7 +16,6 @@
 //!       RalphLoop → produces code (leaf node)
 //! ```
 
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 mod artifacts;

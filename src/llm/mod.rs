@@ -6,7 +6,6 @@
 //! Note: dead_code/unused warnings are expected during Phase 2 development.
 //! These will be cleaned up when the module is integrated in later phases.
 
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 pub mod anthropic;

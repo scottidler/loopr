@@ -29,7 +29,6 @@
 //! ```
 
 // Allow dead code and unused imports for now - this module is newly added and will be integrated soon
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 mod feedback;
