@@ -1,18 +1,21 @@
 use clap::Parser;
-use colored::*;
 use eyre::{Context, Result};
 use log::info;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 mod cli;
 mod config;
 mod llm;
 mod loops;
 mod store;
+mod tui;
 
 use cli::Cli;
 use config::Config;
+use store::TaskStore;
 
 fn setup_logging() -> Result<()> {
     // Create log directory
@@ -42,27 +45,51 @@ fn setup_logging() -> Result<()> {
     Ok(())
 }
 
-fn run_application(_cli: &Cli, config: &Config) -> Result<()> {
-    info!("Starting application");
+/// Get the project directory for data storage.
+fn get_project_dir() -> Result<PathBuf> {
+    // Use current directory as project root
+    let project_root = std::env::current_dir().context("Failed to get current directory")?;
 
-    // Load and display configuration
-    println!("{}", "✓ Configuration loaded successfully".green());
-    if config.debug {
-        println!("{}", "🔍 Debug mode enabled".yellow());
-    }
+    // Create .loopr directory for data
+    let data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("loopr")
+        .join("projects");
 
-    // Demonstrate colored output
-    println!("{} Hello from {}!", "🎉".green(), "loopr".cyan());
-    println!("{} Author: {}", "👤".blue(), config.name);
-    println!("{} Age: {}", "📅".blue(), config.age);
+    // Use a hash of the project path for the project ID
+    let project_id = store::compute_project_hash(&project_root)?;
+    let project_dir = data_dir.join(&project_id);
 
-    // Log some information
-    info!("Application executed successfully");
+    fs::create_dir_all(&project_dir).context("Failed to create project data directory")?;
 
-    Ok(())
+    Ok(project_dir)
 }
 
-fn main() -> Result<()> {
+async fn run_tui(_config: &Config) -> Result<()> {
+    info!("Starting TUI mode");
+
+    // Initialize TaskStore
+    let project_dir = get_project_dir()?;
+    let store = TaskStore::open_at(&project_dir).context("Failed to open TaskStore")?;
+    let store = Arc::new(Mutex::new(store));
+
+    // Initialize terminal
+    let terminal = tui::init_terminal().context("Failed to initialize terminal")?;
+
+    // Create and run TUI
+    let mut runner = tui::TuiRunner::with_store(terminal, store);
+
+    // Run the TUI loop
+    let result = runner.run().await;
+
+    // Always restore terminal, even on error
+    tui::restore_terminal().context("Failed to restore terminal")?;
+
+    result
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     // Setup logging first
     setup_logging().context("Failed to setup logging")?;
 
@@ -74,8 +101,8 @@ fn main() -> Result<()> {
 
     info!("Starting with config from: {:?}", cli.config);
 
-    // Run the main application logic
-    run_application(&cli, &config).context("Application failed")?;
+    // Run the TUI
+    run_tui(&config).await.context("TUI failed")?;
 
     Ok(())
 }
