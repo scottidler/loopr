@@ -57,6 +57,13 @@ impl App {
     }
 
     fn handle_normal_mode(&mut self, key: KeyEvent) {
+        // In Chat view, automatically switch to ChatInput mode (no vim-style modes)
+        if self.state.current_view == View::Chat {
+            self.state.interaction_mode = InteractionMode::ChatInput;
+            self.handle_chat_input(key);
+            return;
+        }
+
         match key.code {
             // Global keys
             KeyCode::Char('q') => {
@@ -72,6 +79,10 @@ impl App {
             }
             KeyCode::Tab => {
                 self.state.current_view = self.state.current_view.next();
+                // Auto-enter ChatInput when switching to Chat view
+                if self.state.current_view == View::Chat {
+                    self.state.interaction_mode = InteractionMode::ChatInput;
+                }
             }
             KeyCode::Char('?') => {
                 self.state.interaction_mode = InteractionMode::Help;
@@ -80,36 +91,8 @@ impl App {
                 // In normal mode, Esc does nothing special
             }
 
-            // View-specific keys
-            _ => match self.state.current_view {
-                View::Chat => self.handle_chat_normal(key),
-                View::Loops => self.handle_loops_normal(key),
-            },
-        }
-    }
-
-    fn handle_chat_normal(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('i') | KeyCode::Enter => {
-                self.state.interaction_mode = InteractionMode::ChatInput;
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                // Scroll down
-                self.state.chat_scroll = self.state.chat_scroll.saturating_add(1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                // Scroll up
-                self.state.chat_scroll = self.state.chat_scroll.saturating_sub(1);
-            }
-            KeyCode::Char('g') => {
-                // Go to top
-                self.state.chat_scroll = 0;
-            }
-            KeyCode::Char('G') => {
-                // Go to bottom (will be clamped during render)
-                self.state.chat_scroll = usize::MAX;
-            }
-            _ => {}
+            // View-specific keys (only Loops now, since Chat auto-switches to ChatInput)
+            _ => self.handle_loops_normal(key),
         }
     }
 
@@ -195,32 +178,111 @@ impl App {
                         self.state.pending_chat_submit = Some(input);
                     }
                     self.state.chat_input.clear();
+                    self.state.chat_cursor_pos = 0;
                 }
             }
             KeyCode::Esc => {
-                self.state.interaction_mode = InteractionMode::Normal;
+                // Clear input on Esc (like Claude Code), don't change mode
+                self.state.chat_input.clear();
+                self.state.chat_cursor_pos = 0;
             }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+D quits (like shell EOF)
+                self.state.should_quit = true;
+            }
+            // Cursor movement
+            KeyCode::Left => {
+                if self.state.chat_cursor_pos > 0 {
+                    self.state.chat_cursor_pos = self.prev_char_boundary(self.state.chat_cursor_pos);
+                }
+            }
+            KeyCode::Right => {
+                if self.state.chat_cursor_pos < self.state.chat_input.len() {
+                    self.state.chat_cursor_pos = self.next_char_boundary(self.state.chat_cursor_pos);
+                }
+            }
+            KeyCode::Home => {
+                self.state.chat_cursor_pos = 0;
+            }
+            KeyCode::End => {
+                self.state.chat_cursor_pos = self.state.chat_input.len();
+            }
+            // Deletion
             KeyCode::Backspace => {
-                self.state.chat_input.pop();
+                if self.state.chat_cursor_pos > 0 {
+                    let new_pos = self.prev_char_boundary(self.state.chat_cursor_pos);
+                    self.state.chat_input.drain(new_pos..self.state.chat_cursor_pos);
+                    self.state.chat_cursor_pos = new_pos;
+                }
+            }
+            KeyCode::Delete => {
+                if self.state.chat_cursor_pos < self.state.chat_input.len() {
+                    let end_pos = self.next_char_boundary(self.state.chat_cursor_pos);
+                    self.state.chat_input.drain(self.state.chat_cursor_pos..end_pos);
+                }
+            }
+            KeyCode::Char('?') if self.state.chat_input.is_empty() => {
+                // Show help only if input is empty
+                self.state.interaction_mode = InteractionMode::Help;
             }
             KeyCode::Char(c) => {
-                self.state.chat_input.push(c);
+                // Insert at cursor position
+                self.state.chat_input.insert(self.state.chat_cursor_pos, c);
+                self.state.chat_cursor_pos += c.len_utf8();
             }
             KeyCode::Tab => {
-                // Switch views even in input mode
+                // Switch views - go to Normal mode only for Loops
                 self.state.current_view = self.state.current_view.next();
                 if self.state.current_view == View::Loops {
                     self.state.interaction_mode = InteractionMode::Normal;
                 }
             }
+            // Scrolling while in input mode (no need to switch modes)
+            KeyCode::PageUp => {
+                self.state.chat_scroll = self.state.chat_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.state.chat_scroll = self.state.chat_scroll.saturating_add(10);
+            }
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.state.chat_scroll = self.state.chat_scroll.saturating_sub(1);
+            }
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.state.chat_scroll = self.state.chat_scroll.saturating_add(1);
+            }
             _ => {}
         }
+    }
+
+    /// Get the previous character boundary for UTF-8 safe cursor movement
+    fn prev_char_boundary(&self, pos: usize) -> usize {
+        let input = &self.state.chat_input;
+        let mut new_pos = pos.saturating_sub(1);
+        while new_pos > 0 && !input.is_char_boundary(new_pos) {
+            new_pos -= 1;
+        }
+        new_pos
+    }
+
+    /// Get the next character boundary for UTF-8 safe cursor movement
+    fn next_char_boundary(&self, pos: usize) -> usize {
+        let input = &self.state.chat_input;
+        let mut new_pos = pos + 1;
+        while new_pos < input.len() && !input.is_char_boundary(new_pos) {
+            new_pos += 1;
+        }
+        new_pos.min(input.len())
     }
 
     fn handle_help_mode(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
-                self.state.interaction_mode = InteractionMode::Normal;
+                // Return to ChatInput if in Chat view, Normal otherwise
+                self.state.interaction_mode = if self.state.current_view == View::Chat {
+                    InteractionMode::ChatInput
+                } else {
+                    InteractionMode::Normal
+                };
             }
             _ => {}
         }
@@ -231,6 +293,13 @@ impl App {
         let dialog = match &self.state.interaction_mode {
             InteractionMode::Confirm(d) => d.clone(),
             _ => return,
+        };
+
+        // Determine the mode to return to
+        let return_mode = if self.state.current_view == View::Chat {
+            InteractionMode::ChatInput
+        } else {
+            InteractionMode::Normal
         };
 
         match key.code {
@@ -247,11 +316,11 @@ impl App {
                         self.state.pending_action = Some(PendingAction::DeleteLoop(id));
                     }
                 }
-                self.state.interaction_mode = InteractionMode::Normal;
+                self.state.interaction_mode = return_mode;
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 // Cancel
-                self.state.interaction_mode = InteractionMode::Normal;
+                self.state.interaction_mode = return_mode;
             }
             _ => {}
         }
@@ -283,20 +352,26 @@ mod tests {
     #[test]
     fn test_view_switching() {
         let mut app = App::new();
-        app.state_mut().interaction_mode = InteractionMode::Normal;
-
+        // App starts in ChatInput mode
+        assert!(matches!(app.state().interaction_mode, InteractionMode::ChatInput));
         assert_eq!(app.state().current_view, View::Chat);
 
+        // Tab switches to Loops (and Normal mode)
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.state().current_view, View::Loops);
+        assert!(matches!(app.state().interaction_mode, InteractionMode::Normal));
 
+        // Tab back to Chat (automatically enters ChatInput mode)
         app.handle_key(key(KeyCode::Tab));
         assert_eq!(app.state().current_view, View::Chat);
+        assert!(matches!(app.state().interaction_mode, InteractionMode::ChatInput));
     }
 
     #[test]
-    fn test_quit_without_loops() {
+    fn test_quit_from_loops() {
         let mut app = App::new();
+        // Switch to Loops view first (where quit works)
+        app.state_mut().current_view = View::Loops;
         app.state_mut().interaction_mode = InteractionMode::Normal;
 
         let should_quit = app.handle_key(key(KeyCode::Char('q')));
@@ -306,6 +381,8 @@ mod tests {
     #[test]
     fn test_quit_with_loops_confirms() {
         let mut app = App::new();
+        // Switch to Loops view (where quit works)
+        app.state_mut().current_view = View::Loops;
         app.state_mut().interaction_mode = InteractionMode::Normal;
         app.state_mut().loops_active = 1;
 
@@ -314,15 +391,31 @@ mod tests {
     }
 
     #[test]
-    fn test_help_toggle() {
+    fn test_help_toggle_in_chat() {
         let mut app = App::new();
-        app.state_mut().interaction_mode = InteractionMode::Normal;
+        // App starts in ChatInput mode with empty input
+        assert!(matches!(app.state().interaction_mode, InteractionMode::ChatInput));
+        assert!(app.state().chat_input.is_empty());
 
+        // ? shows help when input is empty
         app.handle_key(key(KeyCode::Char('?')));
         assert!(matches!(app.state().interaction_mode, InteractionMode::Help));
 
+        // Closing help returns to ChatInput (not Normal)
         app.handle_key(key(KeyCode::Esc));
-        assert!(matches!(app.state().interaction_mode, InteractionMode::Normal));
+        assert!(matches!(app.state().interaction_mode, InteractionMode::ChatInput));
+    }
+
+    #[test]
+    fn test_question_mark_types_when_input_not_empty() {
+        let mut app = App::new();
+        app.state_mut().chat_input = "hello".to_string();
+        app.state_mut().chat_cursor_pos = 5; // Cursor at end
+
+        // ? should type into input, not show help
+        app.handle_key(key(KeyCode::Char('?')));
+        assert_eq!(app.state().chat_input, "hello?");
+        assert!(matches!(app.state().interaction_mode, InteractionMode::ChatInput));
     }
 
     #[test]
@@ -336,6 +429,17 @@ mod tests {
 
         app.handle_key(key(KeyCode::Backspace));
         assert_eq!(app.state().chat_input, "h");
+    }
+
+    #[test]
+    fn test_esc_clears_input() {
+        let mut app = App::new();
+        app.state_mut().chat_input = "some text".to_string();
+
+        // Esc should clear input, not change mode
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.state().chat_input.is_empty());
+        assert!(matches!(app.state().interaction_mode, InteractionMode::ChatInput));
     }
 
     #[test]

@@ -2,8 +2,9 @@
 
 use async_trait::async_trait;
 use futures::StreamExt;
+use log::{debug, error, trace};
 use reqwest::Client;
-use reqwest_eventsource::{Event, EventSource};
+use reqwest_eventsource::{Error as EventSourceError, Event, EventSource};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -26,7 +27,7 @@ pub struct AnthropicConfig {
 impl Default for AnthropicConfig {
     fn default() -> Self {
         Self {
-            model: "claude-opus-4-5-20250514".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             base_url: "https://api.anthropic.com".to_string(),
             max_tokens: 16384,
@@ -159,6 +160,13 @@ impl LlmClient for AnthropicClient {
         let mut body = self.build_request_body(&request);
         body["stream"] = serde_json::json!(true);
 
+        debug!("Streaming request to {} with model {}", url, self.model);
+        debug!("Request has {} tools", request.tools.len());
+        trace!(
+            "Request body: {}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+
         let request_builder = self
             .http
             .post(&url)
@@ -167,13 +175,17 @@ impl LlmClient for AnthropicClient {
             .header("content-type", "application/json")
             .json(&body);
 
-        let mut es = EventSource::new(request_builder).map_err(|e| LlmError::EventSource(e.to_string()))?;
+        let mut es = EventSource::new(request_builder).map_err(|e| {
+            error!("Failed to create EventSource: {}", e);
+            LlmError::EventSource(e.to_string())
+        })?;
 
         let mut full_content = String::new();
         let mut tool_calls = Vec::new();
         let mut current_tool: Option<(String, String, String)> = None; // (id, name, json)
         let mut stop_reason = StopReason::EndTurn;
         let mut usage = TokenUsage::default();
+        let mut received_message_delta = false;
 
         while let Some(event) = es.next().await {
             match event {
@@ -228,6 +240,7 @@ impl LlmClient for AnthropicClient {
                             }
                         }
                         Some("message_delta") => {
+                            received_message_delta = true;
                             if let Some(sr) = data["delta"]["stop_reason"].as_str() {
                                 stop_reason = match sr {
                                     "end_turn" => StopReason::EndTurn,
@@ -260,8 +273,35 @@ impl LlmClient for AnthropicClient {
                     // Connection opened, continue
                 }
                 Err(e) => {
-                    let _ = chunk_tx.send(StreamChunk::Error(e.to_string())).await;
-                    return Err(LlmError::EventSource(e.to_string()));
+                    // StreamEnded is expected when the server finishes sending the response
+                    // It's only an error if we haven't received a complete response
+                    if matches!(e, EventSourceError::StreamEnded) {
+                        // Finalize any in-progress tool call
+                        if let Some((id, name, json)) = current_tool.take() {
+                            let input: serde_json::Value =
+                                serde_json::from_str(&json).unwrap_or(serde_json::json!({}));
+                            tool_calls.push(ToolCall {
+                                id: id.clone(),
+                                name,
+                                input,
+                            });
+                            let _ = chunk_tx.send(StreamChunk::ToolUseEnd { id }).await;
+                        }
+
+                        if received_message_delta || !full_content.is_empty() || !tool_calls.is_empty() {
+                            // We received content, this is a normal end of stream
+                            debug!("Stream ended normally after receiving content");
+                            // If we have tool calls but didn't get message_delta, set stop_reason
+                            if !tool_calls.is_empty() && !received_message_delta {
+                                stop_reason = StopReason::ToolUse;
+                            }
+                            break;
+                        }
+                    }
+                    error!("EventSource error: {:?}", e);
+                    let error_msg = e.to_string();
+                    let _ = chunk_tx.send(StreamChunk::Error(error_msg.clone())).await;
+                    return Err(LlmError::EventSource(error_msg));
                 }
             }
         }
@@ -358,7 +398,7 @@ mod tests {
     #[test]
     fn test_anthropic_config_default() {
         let config = AnthropicConfig::default();
-        assert!(config.model.contains("opus"));
+        assert!(config.model.contains("sonnet"));
         assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
         assert!(config.base_url.contains("anthropic.com"));
     }

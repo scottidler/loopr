@@ -85,11 +85,19 @@ The primary interaction view. Users describe tasks, the LLM responds, and plans 
 ```
 
 **Chat Features:**
-- Message history with scroll (j/k or arrows)
+- **Direct input mode**: Type directly without vim-style mode switching (Claude Code-style)
+- **Full cursor editing**: Left/Right arrows, Home/End, Backspace/Delete at cursor position
+- **UTF-8 safe cursor movement**: Properly handles multi-byte characters
+- Message history with scroll (PgUp/PgDn, Ctrl+arrows)
 - Streaming LLM responses with progress indicator
-- Tool call display (collapsible with Ctrl+o)
+- Tool call display with execution status
 - `/clear` to reset conversation
 - `/plan <description>` to create a plan (triggers Rule of Five)
+
+**Input Line Rendering:**
+- Cursor rendered at correct position (not always at end)
+- Character under cursor highlighted when in middle of text
+- Blinking cursor indicator (`▌`) when at end of text
 
 ### View 2: Loops
 
@@ -190,12 +198,22 @@ mod colors {
 
 ### Chat View Keys
 
+The Chat view uses **Claude Code-style direct input** - users can type directly without entering a special mode. This differs from vim-style interfaces that require pressing `i` to enter insert mode.
+
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `j/k` or `↑/↓` | Scroll history |
-| `g/G` | Top/bottom of history |
-| `Ctrl+o` | Toggle tool output expand/collapse |
+| `Esc` | Clear input |
+| `Ctrl+D` | Quit |
+| `Left` | Move cursor left |
+| `Right` | Move cursor right |
+| `Home` | Move cursor to start |
+| `End` | Move cursor to end |
+| `Backspace` | Delete character before cursor |
+| `Delete` | Delete character at cursor |
+| `PgUp/PgDn` | Scroll history |
+| `Ctrl+↑/↓` | Scroll history one line |
+| `?` | Show help (only when input is empty) |
 | `/clear` | Clear conversation |
 | `/plan <desc>` | Create a plan from description |
 
@@ -215,6 +233,57 @@ mod colors {
 
 ---
 
+## Tool Integration
+
+The Chat view integrates with the LLM tool system, allowing the assistant to:
+- Read and write files
+- Run commands
+- Search code with grep/glob
+- Search the web (via Tavily, Brave, or SerpAPI)
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents |
+| `write_file` | Write content to a file |
+| `edit_file` | Make targeted edits to a file |
+| `list_directory` | List directory contents |
+| `glob` | Find files matching a pattern |
+| `grep` | Search file contents |
+| `search` | Web search (requires API key) |
+| `run_command` | Execute shell commands |
+| `complete_task` | Signal task completion |
+
+### Web Search Configuration
+
+Web search requires one of these environment variables:
+- `TAVILY_API_KEY` - Tavily search API (recommended for AI agents)
+- `BRAVE_API_KEY` - Brave Search API
+- `SERPAPI_KEY` - SerpAPI (Google search)
+
+### Tool Execution Flow
+
+1. LLM requests tool use via streaming response
+2. Tool call displayed in chat with "executing..." status
+3. Tool executed with working directory context
+4. Result displayed (truncated to 50 chars in summary)
+5. Full result available in expandable view
+6. Conversation continues with tool results
+
+### Tool Display
+
+```
+│ > What's in the src directory?                                │
+│                                                               │
+│   I'll check the directory for you.                           │
+│   ● list_directory → src, docs, tests, Cargo.toml...         │
+│                                                               │
+│   The src directory contains: main.rs, lib.rs, ...           │
+```
+
+---
+
 ## State Management
 
 ### AppState
@@ -228,6 +297,7 @@ pub struct AppState {
     // Chat state
     pub chat_history: Vec<ChatMessage>,
     pub chat_input: String,
+    pub chat_cursor_pos: usize,  // Byte offset for cursor position
     pub chat_streaming: bool,
 
     // Loops state

@@ -13,7 +13,8 @@ use ratatui::{
 };
 
 /// Main render function - dispatches to view-specific renderers.
-pub fn render(state: &AppState, frame: &mut Frame) {
+/// `streaming_text` is the in-progress LLM response being streamed.
+pub fn render(state: &AppState, frame: &mut Frame, streaming_text: Option<&str>) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -26,7 +27,7 @@ pub fn render(state: &AppState, frame: &mut Frame) {
     render_header(state, frame, chunks[0]);
 
     match state.current_view {
-        View::Chat => render_chat(state, frame, chunks[1]),
+        View::Chat => render_chat(state, frame, chunks[1], streaming_text),
         View::Loops => render_loops(state, frame, chunks[1]),
     }
 
@@ -93,17 +94,28 @@ fn render_header(state: &AppState, frame: &mut Frame, area: Rect) {
     frame.render_widget(header, area);
 }
 
-fn render_chat(state: &AppState, frame: &mut Frame, area: Rect) {
+fn render_chat(state: &AppState, frame: &mut Frame, area: Rect, streaming_text: Option<&str>) {
+    // Create outer block with border
+    let outer_block = Block::default()
+        .title(" Chat ")
+        .title_style(Style::default().fg(colors::HEADER))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(colors::DIM));
+
+    let inner_area = outer_block.inner(area);
+    frame.render_widget(outer_block, area);
+
+    // Split inner area: history takes most space, input is 1 line at bottom
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),    // Chat history
-            Constraint::Length(3), // Input
+            Constraint::Length(1), // Input line
         ])
-        .split(area);
+        .split(inner_area);
 
     // Chat history
-    let history_items: Vec<ListItem> = state
+    let mut history_items: Vec<ListItem> = state
         .chat_history
         .iter()
         .flat_map(|msg| {
@@ -149,39 +161,63 @@ fn render_chat(state: &AppState, frame: &mut Frame, area: Rect) {
         })
         .collect();
 
-    let history = List::new(history_items).block(
-        Block::default()
-            .title(" Chat ")
-            .title_style(Style::default().fg(colors::HEADER))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(colors::DIM)),
-    );
+    // Add streaming response if active
+    if let Some(text) = streaming_text {
+        let style = Style::default().fg(colors::HEADER);
+        let lines: Vec<Line> = if text.is_empty() {
+            // Show typing indicator when buffer is empty but streaming
+            vec![Line::from(vec![
+                Span::styled("  ", style),
+                Span::styled("...", Style::default().fg(colors::DIM)),
+            ])]
+        } else {
+            text.lines()
+                .enumerate()
+                .map(|(i, line)| {
+                    if i == 0 {
+                        Line::from(vec![Span::styled("  ", style), Span::styled(line.to_string(), style)])
+                    } else {
+                        Line::from(vec![Span::raw("  "), Span::styled(line.to_string(), style)])
+                    }
+                })
+                .collect()
+        };
+        history_items.push(ListItem::new(Text::from(lines)));
+    }
 
+    let history = List::new(history_items);
     frame.render_widget(history, chunks[0]);
 
-    // Input field
-    let input_style = if matches!(state.interaction_mode, InteractionMode::ChatInput) {
-        Style::default().fg(Color::White)
+    // Input line at the bottom (no border, just the prompt)
+    // Split input at cursor position for proper cursor rendering
+    let cursor_pos = state.chat_cursor_pos;
+    let (before_cursor, after_cursor) = state.chat_input.split_at(cursor_pos.min(state.chat_input.len()));
+
+    let input_spans = if after_cursor.is_empty() {
+        // Cursor at end - show blinking cursor
+        vec![
+            Span::styled("> ", Style::default().fg(colors::HEADER)),
+            Span::styled(before_cursor, Style::default().fg(Color::White)),
+            Span::styled("▌", Style::default().fg(Color::Gray)),
+        ]
     } else {
-        Style::default().fg(colors::DIM)
+        // Cursor in middle - highlight character under cursor
+        let mut chars = after_cursor.chars();
+        let cursor_char = chars.next().unwrap_or(' ');
+        let rest: String = chars.collect();
+
+        vec![
+            Span::styled("> ", Style::default().fg(colors::HEADER)),
+            Span::styled(before_cursor, Style::default().fg(Color::White)),
+            Span::styled(
+                cursor_char.to_string(),
+                Style::default().fg(Color::Black).bg(Color::White),
+            ),
+            Span::styled(rest, Style::default().fg(Color::White)),
+        ]
     };
 
-    let cursor_char = if matches!(state.interaction_mode, InteractionMode::ChatInput) {
-        "▌"
-    } else {
-        ""
-    };
-
-    let input = Paragraph::new(format!("> {}{}", state.chat_input, cursor_char))
-        .style(input_style)
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(
-            if matches!(state.interaction_mode, InteractionMode::ChatInput) {
-                colors::HEADER
-            } else {
-                colors::DIM
-            },
-        )));
-
+    let input = Paragraph::new(Line::from(input_spans));
     frame.render_widget(input, chunks[1]);
 }
 
@@ -273,43 +309,39 @@ fn render_loops(state: &AppState, frame: &mut Frame, area: Rect) {
 }
 
 fn render_footer(state: &AppState, frame: &mut Frame, area: Rect) {
-    let keybinds = match state.current_view {
+    let footer_line = match state.current_view {
         View::Chat => {
-            if matches!(state.interaction_mode, InteractionMode::ChatInput) {
-                vec![("[Enter]", "Send"), ("[Esc]", "Normal"), ("[Tab]", "Views")]
-            } else {
-                vec![
-                    ("[i]", "Input"),
-                    ("[j/k]", "Scroll"),
-                    ("[Tab]", "Views"),
-                    ("[?]", "Help"),
-                    ("[q]", "Quit"),
-                ]
-            }
+            // Claude Code-style minimal footer
+            Line::from(vec![
+                Span::styled("? ", Style::default().fg(colors::KEYBIND)),
+                Span::styled("for shortcuts", Style::default().fg(colors::DIM)),
+            ])
         }
-        View::Loops => vec![
-            ("[j/k]", "Navigate"),
-            ("[h/l]", "Collapse/Expand"),
-            ("[s]", "Start/Pause"),
-            ("[x]", "Cancel"),
-            ("[Tab]", "Views"),
-            ("[?]", "Help"),
-        ],
+        View::Loops => {
+            // Loops view has more keys to show
+            let keybinds = vec![
+                ("[j/k]", "Navigate"),
+                ("[h/l]", "Collapse/Expand"),
+                ("[s]", "Start/Pause"),
+                ("[Tab]", "Chat"),
+                ("[?]", "Help"),
+            ];
+            let spans: Vec<Span> = keybinds
+                .into_iter()
+                .flat_map(|(key, action)| {
+                    vec![
+                        Span::styled(key, Style::default().fg(colors::KEYBIND)),
+                        Span::raw(" "),
+                        Span::styled(action, Style::default().fg(colors::DIM)),
+                        Span::raw("  "),
+                    ]
+                })
+                .collect();
+            Line::from(spans)
+        }
     };
 
-    let spans: Vec<Span> = keybinds
-        .into_iter()
-        .flat_map(|(key, action)| {
-            vec![
-                Span::styled(key, Style::default().fg(colors::KEYBIND)),
-                Span::raw(" "),
-                Span::styled(action, Style::default().fg(colors::DIM)),
-                Span::raw("  "),
-            ]
-        })
-        .collect();
-
-    let footer = Paragraph::new(Line::from(spans)).block(
+    let footer = Paragraph::new(footer_line).block(
         Block::default()
             .borders(Borders::TOP)
             .border_style(Style::default().fg(colors::DIM)),
@@ -328,15 +360,15 @@ fn render_help_overlay(frame: &mut Frame) {
         "",
         "  GLOBAL KEYS",
         "  Tab        Switch views (Chat/Loops)",
-        "  ?          Toggle this help",
-        "  q          Quit (confirms if loops running)",
+        "  ?          Toggle this help (when input empty)",
         "  Ctrl+C     Force quit",
+        "  Ctrl+D     Quit",
         "",
         "  CHAT VIEW",
-        "  i/Enter    Start typing",
-        "  Esc        Exit input mode",
-        "  j/k        Scroll history",
-        "  g/G        Top/bottom of history",
+        "  Enter      Send message",
+        "  Esc        Clear input",
+        "  PgUp/PgDn  Scroll history",
+        "  Ctrl+↑/↓   Scroll one line",
         "  /plan      Create a plan",
         "  /clear     Clear conversation",
         "",
@@ -348,6 +380,7 @@ fn render_help_overlay(frame: &mut Frame) {
         "  x          Cancel loop",
         "  D          Delete loop",
         "  g/G        Top/bottom of tree",
+        "  q          Quit",
         "",
         "  Press ? or Esc to close",
     ];

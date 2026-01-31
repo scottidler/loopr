@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use super::{
-    CompleteTaskTool, EditFileTool, GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, RunCommandTool, Tool,
-    ToolContext, ToolDefinition, ToolResult, WriteFileTool,
+    CompleteTaskTool, EditFileTool, GlobTool, GrepTool, ListDirectoryTool, ReadFileTool, RunCommandTool, SearchTool,
+    Tool, ToolContext, ToolDefinition, ToolResult, WriteFileTool,
 };
 use crate::llm::ToolCall;
 
@@ -27,6 +27,7 @@ impl ToolExecutor {
 
         // Search
         tools.insert("grep".into(), Box::new(GrepTool));
+        tools.insert("search".into(), Box::new(SearchTool));
 
         // Command execution
         tools.insert("run_command".into(), Box::new(RunCommandTool));
@@ -127,6 +128,7 @@ mod tests {
         assert!(executor.has_tool("list_directory"));
         assert!(executor.has_tool("glob"));
         assert!(executor.has_tool("grep"));
+        assert!(executor.has_tool("search"));
         assert!(executor.has_tool("run_command"));
         assert!(executor.has_tool("complete_task"));
     }

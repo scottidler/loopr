@@ -25,7 +25,7 @@ use cli::Cli;
 use config::Config;
 use store::TaskStore;
 
-fn setup_logging() -> Result<()> {
+fn setup_logging(log_level: Option<&str>) -> Result<()> {
     // Create log directory
     let log_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -45,11 +45,36 @@ fn setup_logging() -> Result<()> {
             .context("Failed to open log file")?,
     );
 
-    env_logger::Builder::from_default_env()
+    // Check for env var override: LOOPR_LOG_LEVEL
+    let level_filter = std::env::var("LOOPR_LOG_LEVEL")
+        .ok()
+        .and_then(|s| match s.to_lowercase().as_str() {
+            "trace" => Some(log::LevelFilter::Trace),
+            "debug" => Some(log::LevelFilter::Debug),
+            "info" => Some(log::LevelFilter::Info),
+            "warn" => Some(log::LevelFilter::Warn),
+            "error" => Some(log::LevelFilter::Error),
+            _ => None,
+        })
+        .unwrap_or_else(|| match log_level {
+            Some("trace") => log::LevelFilter::Trace,
+            Some("debug") => log::LevelFilter::Debug,
+            Some("info") => log::LevelFilter::Info,
+            Some("warn") => log::LevelFilter::Warn,
+            Some("error") => log::LevelFilter::Error,
+            _ => log::LevelFilter::Info,
+        });
+
+    env_logger::Builder::new()
+        .filter_level(level_filter)
         .target(env_logger::Target::Pipe(target))
         .init();
 
-    info!("Logging initialized, writing to: {}", log_file.display());
+    info!(
+        "Logging initialized at level {:?}, writing to: {}",
+        level_filter,
+        log_file.display()
+    );
     Ok(())
 }
 
@@ -98,16 +123,21 @@ async fn run_tui(_config: &Config) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Setup logging first
-    setup_logging().context("Failed to setup logging")?;
-
     // Parse CLI arguments
     let cli = Cli::parse();
 
-    // Load configuration
+    // Load log level early (before full config) to enable logging during config parsing
+    let log_level = Config::load_log_level(cli.config.as_ref());
+
+    // Setup logging first with early log level
+    setup_logging(log_level.as_deref()).context("Failed to setup logging")?;
+
+    info!("Logging initialized, log_level={:?}", log_level);
+
+    // Load full configuration
     let config = Config::load(cli.config.as_ref()).context("Failed to load configuration")?;
 
-    info!("Starting with config from: {:?}", cli.config);
+    info!("Configuration loaded: llm.default={}", config.llm.default);
 
     // Run the TUI
     run_tui(&config).await.context("TUI failed")?;

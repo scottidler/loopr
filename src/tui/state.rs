@@ -24,6 +24,8 @@ pub struct AppState {
     pub chat_history: Vec<ChatMessage>,
     /// Current input buffer
     pub chat_input: String,
+    /// Cursor position in input (byte offset)
+    pub chat_cursor_pos: usize,
     /// Whether we're currently streaming a response
     pub chat_streaming: bool,
     /// Scroll position in chat history

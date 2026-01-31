@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // Re-export main types
-pub use self::global::GlobalConfig;
+pub use self::global::{GlobalConfig, LlmConfig, ResolvedLlmConfig};
 pub use self::loop_config::LoopConfig;
 pub use self::loop_type::LoopTypeDefinition;
 pub use self::overrides::ConfigOverrides;
@@ -36,7 +36,7 @@ pub type Config = GlobalConfig;
 pub const DEFAULT_VALIDATION_COMMAND: &str = "otto ci";
 
 /// Default LLM model.
-pub const DEFAULT_MODEL: &str = "anthropic/claude-opus-4-5-20250514";
+pub const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-20250514";
 
 /// Default tools available to loops.
 pub fn default_tools() -> Vec<String> {
