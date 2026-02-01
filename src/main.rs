@@ -7,14 +7,12 @@ use log::info;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Tabs};
 use ratatui::Terminal;
 use std::fs;
 use std::io::stdout;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tempfile::TempDir;
 
 mod cli;
 mod config;
@@ -22,19 +20,9 @@ mod config;
 use cli::Cli;
 use cli::commands::{Commands, DaemonCommands};
 use config::Config;
-
-// Re-export from lib for local usage
-use loopr::coordination::SignalManager;
-use loopr::domain::{LoopStatus, LoopType};
-use loopr::llm::MockLlmClient;
-use loopr::manager::{LoopManager, LoopManagerConfig};
-use loopr::storage::JsonlStorage;
-use loopr::tools::{LocalToolRouter, ToolCatalog};
 use loopr::tui::{App, InputHandler, View};
 use loopr::tui::views::{ApprovalView, ChatView, LoopsView};
-use loopr::tui::app::{ActiveView, LoopSummary, MessageSender};
-use loopr::validation::{ValidationResult, Validator};
-use loopr::worktree::WorktreeManager;
+use loopr::tui::app::{ActiveView, MessageSender};
 
 fn setup_logging() -> Result<()> {
     // Create log directory
