@@ -13,5 +13,6 @@ pub mod runner;
 pub mod storage;
 pub mod tools;
 pub mod validation;
+pub mod worktree;
 
 pub use error::{LooprError, Result};

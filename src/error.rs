@@ -31,6 +31,10 @@ pub enum LooprError {
     #[error("Tool error: {0}")]
     Tool(String),
 
+    /// Git worktree error
+    #[error("Worktree error: {0}")]
+    Worktree(String),
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
