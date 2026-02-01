@@ -11,7 +11,7 @@ pub mod loop_record;
 pub mod signal;
 pub mod tool_job;
 
-pub use event::EventRecord;
+pub use event::{event_types, EventRecord};
 pub use loop_record::{Loop, LoopStatus, LoopType};
 pub use signal::{SignalRecord, SignalType};
 pub use tool_job::{ToolJobRecord, ToolJobStatus};
