@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::error::{LooprError, Result};
 use crate::llm::client::LlmClient;
 use crate::llm::types::{
-    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolResult, Usage,
+    CompletionRequest, CompletionResponse, Role, StopReason, ToolCall, ToolResult, Usage,
 };
 
 /// Anthropic API base URL
@@ -319,6 +319,7 @@ impl std::fmt::Debug for AnthropicClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::types::Message;
 
     #[test]
     fn test_config_default() {
