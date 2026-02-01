@@ -5,6 +5,7 @@
 
 pub mod artifact;
 pub mod coordination;
+pub mod daemon;
 pub mod domain;
 pub mod error;
 pub mod id;
