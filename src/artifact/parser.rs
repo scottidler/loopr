@@ -12,9 +12,9 @@ pub fn extract_section(content: &str, heading: &str) -> Result<String> {
     let target = format!("## {}", heading);
 
     // Find the start of the section
-    let start_pos = content.find(&target).ok_or_else(|| {
-        LooprError::ValidationFailed(format!("Missing required section: ## {}", heading))
-    })?;
+    let start_pos = content
+        .find(&target)
+        .ok_or_else(|| LooprError::ValidationFailed(format!("Missing required section: ## {}", heading)))?;
 
     // Skip past the heading line
     let after_heading = &content[start_pos + target.len()..];
