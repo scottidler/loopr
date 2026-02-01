@@ -340,8 +340,8 @@ mod tests {
     struct EchoHandler;
 
     impl RequestHandler for EchoHandler {
-        fn handle(&self, request: DaemonRequest) -> impl std::future::Future<Output = DaemonResponse> + Send {
-            async move { DaemonResponse::success(request.id, request.params) }
+        async fn handle(&self, request: DaemonRequest) -> DaemonResponse {
+            DaemonResponse::success(request.id, request.params)
         }
     }
 
