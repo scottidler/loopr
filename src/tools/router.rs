@@ -246,55 +246,56 @@ impl ToolRouter for LocalToolRouter {
     }
 }
 
-/// Mock tool router for testing
-#[derive(Default)]
-pub struct MockToolRouter {
-    responses: std::collections::HashMap<String, String>,
-    tools: Vec<String>,
-}
-
-impl MockToolRouter {
-    /// Create a new mock router with predefined responses
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add a predefined response for a tool
-    pub fn with_response(mut self, tool_name: &str, response: &str) -> Self {
-        self.responses.insert(tool_name.to_string(), response.to_string());
-        self
-    }
-
-    /// Add available tools
-    pub fn with_tools(mut self, tools: Vec<String>) -> Self {
-        self.tools = tools;
-        self
-    }
-}
-
-#[async_trait]
-impl ToolRouter for MockToolRouter {
-    async fn execute(&self, call: ToolCall, _worktree: &Path) -> Result<ToolResult> {
-        if let Some(response) = self.responses.get(&call.name) {
-            Ok(ToolResult::success(call.id, response.clone()))
-        } else {
-            Ok(ToolResult::error(
-                call.id,
-                format!("No mock response configured for tool: {}", call.name),
-            ))
-        }
-    }
-
-    fn available_tools(&self) -> Vec<String> {
-        self.tools.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::TempDir;
+
+    /// Mock tool router for testing
+    #[derive(Default)]
+    pub struct MockToolRouter {
+        responses: std::collections::HashMap<String, String>,
+        tools: Vec<String>,
+    }
+
+    impl MockToolRouter {
+        /// Create a new mock router with predefined responses
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Add a predefined response for a tool
+        pub fn with_response(mut self, tool_name: &str, response: &str) -> Self {
+            self.responses
+                .insert(tool_name.to_string(), response.to_string());
+            self
+        }
+
+        /// Add available tools
+        pub fn with_tools(mut self, tools: Vec<String>) -> Self {
+            self.tools = tools;
+            self
+        }
+    }
+
+    #[async_trait]
+    impl ToolRouter for MockToolRouter {
+        async fn execute(&self, call: ToolCall, _worktree: &Path) -> Result<ToolResult> {
+            if let Some(response) = self.responses.get(&call.name) {
+                Ok(ToolResult::success(call.id, response.clone()))
+            } else {
+                Ok(ToolResult::error(
+                    call.id,
+                    format!("No mock response configured for tool: {}", call.name),
+                ))
+            }
+        }
+
+        fn available_tools(&self) -> Vec<String> {
+            self.tools.clone()
+        }
+    }
 
     fn create_test_catalog() -> ToolCatalog {
         let mut catalog = ToolCatalog::new();
