@@ -82,14 +82,14 @@ impl<S: Storage> InvalidationManager<S> {
     pub fn is_descendant_of(&self, loop_id: &str, potential_ancestor: &str) -> Result<bool> {
         let loop_record: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
 
-        if let Some(record) = loop_record {
-            if let Some(parent_id) = &record.parent_id {
-                if parent_id == potential_ancestor {
-                    return Ok(true);
-                }
-                // Recursively check the parent
-                return self.is_descendant_of(parent_id, potential_ancestor);
+        if let Some(record) = loop_record
+            && let Some(parent_id) = &record.parent_id
+        {
+            if parent_id == potential_ancestor {
+                return Ok(true);
             }
+            // Recursively check the parent
+            return self.is_descendant_of(parent_id, potential_ancestor);
         }
 
         Ok(false)
