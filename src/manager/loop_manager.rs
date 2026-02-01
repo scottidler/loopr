@@ -264,14 +264,16 @@ mod tests {
     use crate::tools::{LocalToolRouter, ToolCatalog};
     use tempfile::TempDir;
 
-    fn create_test_deps() -> (
+    type TestDeps = (
         TempDir,
         Arc<JsonlStorage>,
         Arc<MockLlmClient>,
         Arc<LocalToolRouter>,
         Arc<WorktreeManager>,
         Arc<SignalManager<JsonlStorage>>,
-    ) {
+    );
+
+    fn create_test_deps() -> TestDeps {
         let temp_dir = TempDir::new().unwrap();
         let storage = Arc::new(JsonlStorage::new(temp_dir.path()).unwrap());
         let llm_client = Arc::new(MockLlmClient::new());
