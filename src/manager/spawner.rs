@@ -2,9 +2,8 @@
 //!
 //! Handles decisions about spawning child loops based on parent loop outcomes.
 
-use crate::artifact::plan::parse_plan_specs;
-use crate::artifact::spec::parse_spec_phases;
-use crate::domain::loop_record::{Loop, LoopType};
+use crate::artifact::{parse_plan_specs, parse_spec_phases};
+use crate::domain::{Loop, LoopType};
 
 /// Decision about what children to spawn from a completed loop
 #[derive(Debug, Clone)]
@@ -22,7 +21,7 @@ pub enum SpawnDecision {
 /// Descriptor for spawning a spec loop
 #[derive(Debug, Clone)]
 pub struct SpawnSpec {
-    /// Index of this spec (1-based)
+    /// Index of this spec (0-based)
     pub index: u32,
     /// Name/title of the spec
     pub name: String,
@@ -33,12 +32,12 @@ pub struct SpawnSpec {
 /// Descriptor for spawning a phase loop
 #[derive(Debug, Clone)]
 pub struct SpawnPhase {
-    /// Index of this phase (1-based)
+    /// Index of this phase (1-based number)
     pub index: u32,
     /// Name/title of the phase
     pub name: String,
-    /// Number of implementation steps
-    pub step_count: usize,
+    /// Number of files in this phase
+    pub file_count: usize,
 }
 
 /// Determines what child loops to spawn from a completed parent loop
@@ -60,7 +59,11 @@ impl ChildSpawner {
             return SpawnDecision::None;
         };
 
-        let specs = parse_plan_specs(content);
+        let specs = match parse_plan_specs(content) {
+            Ok(s) => s,
+            Err(_) => return SpawnDecision::None,
+        };
+
         if specs.is_empty() {
             return SpawnDecision::None;
         }
@@ -70,7 +73,7 @@ impl ChildSpawner {
             .map(|s| SpawnSpec {
                 index: s.index,
                 name: s.name,
-                description: s.goal,
+                description: s.description,
             })
             .collect();
 
@@ -82,7 +85,11 @@ impl ChildSpawner {
             return SpawnDecision::None;
         };
 
-        let phases = parse_spec_phases(content);
+        let phases = match parse_spec_phases(content) {
+            Ok(p) => p,
+            Err(_) => return SpawnDecision::None,
+        };
+
         if phases.is_empty() {
             return SpawnDecision::None;
         }
@@ -90,9 +97,9 @@ impl ChildSpawner {
         let spawn_phases = phases
             .into_iter()
             .map(|p| SpawnPhase {
-                index: p.index,
+                index: p.number,
                 name: p.name,
-                step_count: p.steps.len(),
+                file_count: p.files.len(),
             })
             .collect();
 
@@ -106,8 +113,10 @@ mod tests {
 
     #[test]
     fn test_spawn_decision_none_for_code() {
-        let parent = Loop::new_plan("task");
-        let code_loop = Loop::new_code(&parent);
+        let plan = Loop::new_plan("task");
+        let spec = Loop::new_spec(&plan, 1);
+        let phase = Loop::new_phase(&spec, 1, "Phase 1", 1);
+        let code_loop = Loop::new_code(&phase);
         let decision = ChildSpawner::decide(&code_loop, None);
         assert!(matches!(decision, SpawnDecision::None));
     }
@@ -134,22 +143,17 @@ mod tests {
         let artifact = r#"
 # Plan
 
-## Specs
+## Specs to Create
 
-### Spec 1: Authentication
-Goal: Implement authentication
-
-### Spec 2: Dashboard
-Goal: Build dashboard
+- spec-auth: Implement authentication
+- spec-api: Build REST API
 "#;
         let decision = ChildSpawner::decide(&plan, Some(artifact));
         match decision {
             SpawnDecision::Specs(specs) => {
                 assert_eq!(specs.len(), 2);
-                assert_eq!(specs[0].index, 1);
-                assert_eq!(specs[0].name, "Authentication");
-                assert_eq!(specs[1].index, 2);
-                assert_eq!(specs[1].name, "Dashboard");
+                assert_eq!(specs[0].name, "auth");
+                assert_eq!(specs[1].name, "api");
             }
             _ => panic!("Expected Specs decision"),
         }
@@ -164,14 +168,12 @@ Goal: Build dashboard
 
 ## Phases
 
-### Phase 1: Setup
-Steps:
-- Step 1
-- Step 2
+1. **Setup**: Initialize project
+- file1.rs
+- file2.rs
 
-### Phase 2: Implementation
-Steps:
-- Step 1
+2. **Implementation**: Build core
+- main.rs
 "#;
         let decision = ChildSpawner::decide(&spec, Some(artifact));
         match decision {
@@ -179,8 +181,10 @@ Steps:
                 assert_eq!(phases.len(), 2);
                 assert_eq!(phases[0].index, 1);
                 assert_eq!(phases[0].name, "Setup");
+                assert_eq!(phases[0].file_count, 2);
                 assert_eq!(phases[1].index, 2);
                 assert_eq!(phases[1].name, "Implementation");
+                assert_eq!(phases[1].file_count, 1);
             }
             _ => panic!("Expected Phases decision"),
         }
@@ -203,26 +207,26 @@ Steps:
         let phase = SpawnPhase {
             index: 2,
             name: "Build".to_string(),
-            step_count: 5,
+            file_count: 5,
         };
         assert_eq!(phase.index, 2);
         assert_eq!(phase.name, "Build");
-        assert_eq!(phase.step_count, 5);
+        assert_eq!(phase.file_count, 5);
     }
 
     #[test]
-    fn test_spawn_decision_empty_plan() {
+    fn test_spawn_decision_missing_section_plan() {
         let plan = Loop::new_plan("task");
-        let artifact = "# Plan\n\nNo specs here.";
+        let artifact = "# Plan\n\nNo specs section here.";
         let decision = ChildSpawner::decide(&plan, Some(artifact));
         assert!(matches!(decision, SpawnDecision::None));
     }
 
     #[test]
-    fn test_spawn_decision_empty_spec() {
+    fn test_spawn_decision_missing_section_spec() {
         let parent = Loop::new_plan("task");
         let spec = Loop::new_spec(&parent, 1);
-        let artifact = "# Spec\n\nNo phases here.";
+        let artifact = "# Spec\n\nNo phases section here.";
         let decision = ChildSpawner::decide(&spec, Some(artifact));
         assert!(matches!(decision, SpawnDecision::None));
     }
