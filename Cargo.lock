@@ -958,6 +958,7 @@ name = "loopr"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "clap",
  "colored",
  "dirs",

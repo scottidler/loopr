@@ -35,6 +35,10 @@ pub enum LooprError {
     #[error("Worktree error: {0}")]
     Worktree(String),
 
+    /// IPC communication error
+    #[error("IPC error: {0}")]
+    Ipc(String),
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
