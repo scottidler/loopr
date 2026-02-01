@@ -100,7 +100,7 @@ impl ToolCatalog {
         let lane = toml_tool
             .lane
             .as_deref()
-            .map(ToolLane::from_str)
+            .map(ToolLane::parse)
             .unwrap_or(Some(ToolLane::NoNet))
             .ok_or_else(|| {
                 LooprError::Storage(format!(

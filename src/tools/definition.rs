@@ -8,10 +8,11 @@ use serde_json::Value;
 use crate::llm::ToolDefinition;
 
 /// Lane determines which runner executes a tool
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ToolLane {
     /// No network access - safe file operations and isolated commands
+    #[default]
     NoNet,
     /// Network access - web fetch, API calls, build commands
     Net,
@@ -19,15 +20,9 @@ pub enum ToolLane {
     Heavy,
 }
 
-impl Default for ToolLane {
-    fn default() -> Self {
-        Self::NoNet
-    }
-}
-
 impl ToolLane {
     /// Parse from string representation
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "no-net" | "nonet" | "no_net" => Some(Self::NoNet),
             "net" => Some(Self::Net),
@@ -138,13 +133,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tool_lane_from_str() {
-        assert_eq!(ToolLane::from_str("no-net"), Some(ToolLane::NoNet));
-        assert_eq!(ToolLane::from_str("nonet"), Some(ToolLane::NoNet));
-        assert_eq!(ToolLane::from_str("no_net"), Some(ToolLane::NoNet));
-        assert_eq!(ToolLane::from_str("net"), Some(ToolLane::Net));
-        assert_eq!(ToolLane::from_str("heavy"), Some(ToolLane::Heavy));
-        assert_eq!(ToolLane::from_str("unknown"), None);
+    fn test_tool_lane_parse() {
+        assert_eq!(ToolLane::parse("no-net"), Some(ToolLane::NoNet));
+        assert_eq!(ToolLane::parse("nonet"), Some(ToolLane::NoNet));
+        assert_eq!(ToolLane::parse("no_net"), Some(ToolLane::NoNet));
+        assert_eq!(ToolLane::parse("net"), Some(ToolLane::Net));
+        assert_eq!(ToolLane::parse("heavy"), Some(ToolLane::Heavy));
+        assert_eq!(ToolLane::parse("unknown"), None);
     }
 
     #[test]
