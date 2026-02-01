@@ -1,15 +1,15 @@
 use clap::Parser;
 use colored::*;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use eyre::{Context, Result};
 use log::info;
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Tabs};
-use ratatui::Terminal;
 use std::fs;
 use std::io::stdout;
 use std::path::PathBuf;
@@ -20,9 +20,9 @@ mod config;
 use cli::Cli;
 use cli::commands::{Commands, DaemonCommands};
 use config::Config;
-use loopr::tui::{App, InputHandler, View};
-use loopr::tui::views::{ApprovalView, ChatView, LoopsView};
 use loopr::tui::app::{ActiveView, MessageSender};
+use loopr::tui::views::{ApprovalView, ChatView, LoopsView};
+use loopr::tui::{App, InputHandler, View};
 
 fn setup_logging() -> Result<()> {
     // Create log directory
@@ -115,10 +115,7 @@ fn run_tui(config: &Config) -> Result<()> {
 }
 
 /// Run the TUI event loop
-fn run_event_loop(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    app: &mut App,
-) -> Result<()> {
+fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut App) -> Result<()> {
     let input_handler = InputHandler::new();
     let chat_view = ChatView::new();
     let loops_view = LoopsView::new();
@@ -133,18 +130,14 @@ fn run_event_loop(
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),  // Tabs
-                    Constraint::Min(0),     // Main content
-                    Constraint::Length(1),  // Status bar
+                    Constraint::Length(3), // Tabs
+                    Constraint::Min(0),    // Main content
+                    Constraint::Length(1), // Status bar
                 ])
                 .split(size);
 
             // Render tabs
-            let tab_titles: Vec<Line> = vec![
-                Line::from(" Chat "),
-                Line::from(" Loops "),
-                Line::from(" Approval "),
-            ];
+            let tab_titles: Vec<Line> = vec![Line::from(" Chat "), Line::from(" Loops "), Line::from(" Approval ")];
             let selected_tab = match app.state.active_view {
                 ActiveView::Chat => 0,
                 ActiveView::Loops => 1,
@@ -165,9 +158,12 @@ fn run_event_loop(
             }
 
             // Render status bar
-            let status_text = app.state.status_message.as_deref().unwrap_or("Press Tab to switch views, q to quit");
-            let status = ratatui::widgets::Paragraph::new(status_text)
-                .style(Style::default().fg(Color::DarkGray));
+            let status_text = app
+                .state
+                .status_message
+                .as_deref()
+                .unwrap_or("Press Tab to switch views, q to quit");
+            let status = ratatui::widgets::Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray));
             frame.render_widget(status, chunks[2]);
         })?;
 

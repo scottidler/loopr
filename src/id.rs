@@ -15,11 +15,11 @@ pub fn now_ms() -> i64 {
 /// Generate a unique loop ID
 ///
 /// Format: `{timestamp_ms}-{random_hex}`
-/// Example: `1738300800123-a1b2`
+/// Example: `1738300800123-a1b2c3d4e5f67890`
 pub fn generate_loop_id() -> String {
     let timestamp = now_ms();
-    let random: u16 = rand::rng().random();
-    format!("{}-{:04x}", timestamp, random)
+    let random: u64 = rand::rng().random();
+    format!("{}-{:016x}", timestamp, random)
 }
 
 /// Generate a child ID given parent and index
@@ -68,8 +68,8 @@ mod tests {
         let parts: Vec<&str> = id.split('-').collect();
         assert_eq!(parts.len(), 2);
         assert!(parts[0].chars().all(|c| c.is_ascii_digit()));
-        // Should have 4-char hex suffix
-        assert_eq!(parts[1].len(), 4);
+        // Should have 16-char hex suffix
+        assert_eq!(parts[1].len(), 16);
         assert!(parts[1].chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -89,9 +89,9 @@ mod tests {
 
     #[test]
     fn test_generate_child_id_with_complex_parent() {
-        let child = generate_child_id("1738300800123-a1b2", 5);
+        let child = generate_child_id("1738300800123-a1b2c3d4e5f67890", 5);
         // Should preserve full parent ID in hierarchy
-        assert_eq!(child, "1738300800123-a1b2-005");
+        assert_eq!(child, "1738300800123-a1b2c3d4e5f67890-005");
     }
 
     #[test]
