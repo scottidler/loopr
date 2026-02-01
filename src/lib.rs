@@ -4,6 +4,7 @@
 //! where loops iterate with fresh context until validation passes.
 
 pub mod artifact;
+pub mod cli;
 pub mod coordination;
 pub mod daemon;
 pub mod domain;
