@@ -7,19 +7,13 @@ use std::sync::Arc;
 use crate::domain::loop_record::{Loop, LoopStatus};
 use crate::domain::signal::{SignalRecord, SignalType};
 use crate::error::Result;
-use crate::storage::{Filter, HasId, Storage};
+use crate::storage::{Filter, Storage};
 
 /// Collection name for loops in storage
 const LOOPS_COLLECTION: &str = "loops";
 
 /// Collection name for signals in storage
 const SIGNALS_COLLECTION: &str = "signals";
-
-impl HasId for Loop {
-    fn id(&self) -> &str {
-        &self.id
-    }
-}
 
 /// Manages invalidation cascade for loop hierarchies
 pub struct InvalidationManager<S: Storage> {
@@ -150,7 +144,6 @@ impl<S: Storage> InvalidationManager<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::loop_record::LoopType;
     use crate::storage::JsonlStorage;
     use tempfile::TempDir;
 
