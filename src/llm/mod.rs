@@ -3,18 +3,17 @@
 //! This module provides:
 //! - Message types for LLM communication
 //! - LlmClient trait for API abstraction
-//! - AnthropicClient implementation (to be added)
+//! - AnthropicClient implementation
 //! - Streaming support
 //! - Tool call parsing
 
+pub mod anthropic;
 pub mod client;
 pub mod streaming;
 pub mod tool_parser;
 pub mod types;
 
-// TODO: Add this module in future iteration
-// pub mod anthropic;
-
+pub use anthropic::{AnthropicClient, AnthropicConfig};
 pub use client::{LlmClient, MockLlmClient};
 pub use streaming::{StreamChunk, StreamEvent, StreamHandle, StreamParser, create_stream_channel, parse_sse_event};
 pub use tool_parser::{
