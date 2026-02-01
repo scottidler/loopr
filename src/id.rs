@@ -24,15 +24,10 @@ pub fn generate_loop_id() -> String {
 
 /// Generate a child ID given parent and index
 ///
-/// Format: `{parent_suffix}-{index:03}`
+/// Format: `{parent_id}-{index:03}`
 /// Example: For parent "001" and index 2: "001-002"
 pub fn generate_child_id(parent_id: &str, index: u32) -> String {
-    // Extract the last segment of the parent ID for hierarchy
-    let parent_suffix = parent_id
-        .split('-')
-        .next_back()
-        .unwrap_or(parent_id);
-    format!("{}-{:03}", parent_suffix, index)
+    format!("{}-{:03}", parent_id, index)
 }
 
 /// Generate a signal ID
@@ -95,8 +90,8 @@ mod tests {
     #[test]
     fn test_generate_child_id_with_complex_parent() {
         let child = generate_child_id("1738300800123-a1b2", 5);
-        // Should use last segment of parent
-        assert_eq!(child, "a1b2-005");
+        // Should preserve full parent ID in hierarchy
+        assert_eq!(child, "1738300800123-a1b2-005");
     }
 
     #[test]
