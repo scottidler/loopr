@@ -30,7 +30,7 @@ pub fn generate_child_id(parent_id: &str, index: u32) -> String {
     // Extract the last segment of the parent ID for hierarchy
     let parent_suffix = parent_id
         .split('-')
-        .last()
+        .next_back()
         .unwrap_or(parent_id);
     format!("{}-{:03}", parent_suffix, index)
 }
