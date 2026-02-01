@@ -165,10 +165,7 @@ mod tests {
 
     #[test]
     fn test_validation_result_fail_with_output_and_errors() {
-        let result = ValidationResult::fail_with_output_and_errors(
-            "full output",
-            vec!["specific error".to_string()],
-        );
+        let result = ValidationResult::fail_with_output_and_errors("full output", vec!["specific error".to_string()]);
         assert!(!result.passed);
         assert_eq!(result.output, "full output");
         assert_eq!(result.errors.len(), 1);
@@ -235,11 +232,7 @@ mod tests {
 
     #[test]
     fn test_validation_result_error_count() {
-        let result = ValidationResult::fail_with_errors(vec![
-            "e1".to_string(),
-            "e2".to_string(),
-            "e3".to_string(),
-        ]);
+        let result = ValidationResult::fail_with_errors(vec!["e1".to_string(), "e2".to_string(), "e3".to_string()]);
         assert_eq!(result.error_count(), 3);
     }
 

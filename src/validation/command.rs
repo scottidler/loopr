@@ -139,10 +139,7 @@ impl Validator for CommandValidator {
                     Ok(result)
                 }
             }
-            Err(e) => Ok(ValidationResult::fail(format!(
-                "Command '{}' error: {}",
-                self.name, e
-            ))),
+            Err(e) => Ok(ValidationResult::fail(format!("Command '{}' error: {}", self.name, e))),
         }
     }
 
@@ -162,10 +159,7 @@ pub mod presets {
 
     /// Create a cargo test validator
     pub fn cargo_test() -> CommandValidator {
-        CommandValidator::new(
-            "cargo_test",
-            CommandConfig::new("cargo test").timeout_ms(120000),
-        )
+        CommandValidator::new("cargo_test", CommandConfig::new("cargo test").timeout_ms(120000))
     }
 
     /// Create a cargo clippy validator
@@ -245,10 +239,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_success() {
         let validator = CommandValidator::simple("true_cmd", "true");
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(result.passed);
         assert!(result.errors.is_empty());
     }
@@ -256,10 +247,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_failure() {
         let validator = CommandValidator::simple("false_cmd", "false");
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(!result.passed);
         assert!(!result.errors.is_empty());
     }
@@ -267,10 +255,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_with_stderr() {
         let validator = CommandValidator::simple("stderr_cmd", "echo error >&2 && false");
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(!result.passed);
         // Should capture stderr
         let has_stderr = result.errors.iter().any(|e| e.contains("stderr"));
@@ -280,10 +265,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_echo_output() {
         let validator = CommandValidator::simple("echo_cmd", "echo hello");
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(result.passed);
         assert!(result.output.contains("hello"));
     }
@@ -292,10 +274,7 @@ mod tests {
     async fn test_validate_with_env() {
         let config = CommandConfig::new("test \"$MY_VAR\" = \"hello\"").env("MY_VAR", "hello");
         let validator = CommandValidator::new("env_cmd", config);
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(result.passed);
     }
 
@@ -303,10 +282,7 @@ mod tests {
     async fn test_validate_timeout() {
         let config = CommandConfig::new("sleep 10").timeout_ms(100);
         let validator = CommandValidator::new("sleep_cmd", config);
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(!result.passed);
         assert!(result.errors.iter().any(|e| e.contains("timed out")));
     }
@@ -314,10 +290,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_invalid_command() {
         let validator = CommandValidator::simple("invalid", "nonexistent_command_xyz123");
-        let result = validator
-            .validate(&test_artifact(), &test_worktree())
-            .await
-            .unwrap();
+        let result = validator.validate(&test_artifact(), &test_worktree()).await.unwrap();
         assert!(!result.passed);
     }
 

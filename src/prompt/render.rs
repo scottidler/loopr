@@ -111,9 +111,7 @@ impl PromptRenderer {
     pub fn register_template(&mut self, name: &str, template: &str) -> Result<()> {
         self.handlebars
             .register_template_string(name, template)
-            .map_err(|e| {
-                LooprError::InvalidState(format!("Failed to register template '{}': {}", name, e))
-            })
+            .map_err(|e| LooprError::InvalidState(format!("Failed to register template '{}': {}", name, e)))
     }
 
     /// Render a previously registered template
@@ -254,9 +252,7 @@ mod tests {
         context.insert("task".to_string(), "Build feature".to_string());
 
         let progress = "Iteration 1 failed: tests not passing";
-        let result = renderer
-            .render_with_progress(template, &context, progress)
-            .unwrap();
+        let result = renderer.render_with_progress(template, &context, progress).unwrap();
 
         assert!(result.contains("Task: Build feature"));
         assert!(result.contains("---"));
@@ -271,9 +267,7 @@ mod tests {
         let context: HashMap<String, String> = HashMap::new();
 
         let progress = "Iteration 1:\n- Error 1\n- Error 2\n\nIteration 2:\n- Error 3";
-        let result = renderer
-            .render_with_progress(template, &context, progress)
-            .unwrap();
+        let result = renderer.render_with_progress(template, &context, progress).unwrap();
 
         assert!(result.contains("## System"));
         assert!(result.contains("## Previous Iteration Feedback"));
@@ -284,18 +278,14 @@ mod tests {
     #[test]
     fn test_register_template() {
         let mut renderer = create_renderer();
-        renderer
-            .register_template("greeting", "Hello, {{name}}!")
-            .unwrap();
+        renderer.register_template("greeting", "Hello, {{name}}!").unwrap();
         assert!(renderer.has_template("greeting"));
     }
 
     #[test]
     fn test_render_named() {
         let mut renderer = create_renderer();
-        renderer
-            .register_template("greeting", "Hello, {{name}}!")
-            .unwrap();
+        renderer.register_template("greeting", "Hello, {{name}}!").unwrap();
 
         let mut context = HashMap::new();
         context.insert("name".to_string(), "World".to_string());

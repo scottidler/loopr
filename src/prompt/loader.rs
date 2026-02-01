@@ -36,9 +36,10 @@ impl PromptLoader {
     pub fn load(&self, name: &str) -> Result<String> {
         // Check cache first
         {
-            let cache = self.cache.read().map_err(|e| {
-                LooprError::Storage(format!("Failed to acquire read lock: {}", e))
-            })?;
+            let cache = self
+                .cache
+                .read()
+                .map_err(|e| LooprError::Storage(format!("Failed to acquire read lock: {}", e)))?;
             if let Some(content) = cache.get(name) {
                 return Ok(content.clone());
             }
@@ -55,9 +56,10 @@ impl PromptLoader {
 
         // Cache the loaded template
         {
-            let mut cache = self.cache.write().map_err(|e| {
-                LooprError::Storage(format!("Failed to acquire write lock: {}", e))
-            })?;
+            let mut cache = self
+                .cache
+                .write()
+                .map_err(|e| LooprError::Storage(format!("Failed to acquire write lock: {}", e)))?;
             cache.insert(name.to_string(), content.clone());
         }
 
@@ -97,10 +99,7 @@ impl PromptLoader {
         let entries = std::fs::read_dir(&self.templates_dir).map_err(|e| {
             LooprError::Io(std::io::Error::new(
                 e.kind(),
-                format!(
-                    "Failed to read templates directory {:?}: {}",
-                    self.templates_dir, e
-                ),
+                format!("Failed to read templates directory {:?}: {}", self.templates_dir, e),
             ))
         })?;
 
@@ -132,9 +131,10 @@ impl PromptLoader {
 
     /// Clear the template cache
     pub fn clear_cache(&self) -> Result<()> {
-        let mut cache = self.cache.write().map_err(|e| {
-            LooprError::Storage(format!("Failed to acquire write lock: {}", e))
-        })?;
+        let mut cache = self
+            .cache
+            .write()
+            .map_err(|e| LooprError::Storage(format!("Failed to acquire write lock: {}", e)))?;
         cache.clear();
         Ok(())
     }

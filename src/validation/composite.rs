@@ -117,10 +117,7 @@ mod tests {
     impl Validator for MockValidator {
         async fn validate(&self, _artifact: &Path, _worktree: &Path) -> Result<ValidationResult> {
             if self.should_pass {
-                Ok(ValidationResult::pass_with_output(format!(
-                    "{} passed",
-                    self.desc
-                )))
+                Ok(ValidationResult::pass_with_output(format!("{} passed", self.desc)))
             } else {
                 Ok(ValidationResult::fail(&self.error_msg))
             }

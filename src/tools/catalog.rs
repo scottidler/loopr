@@ -51,23 +51,20 @@ pub struct ToolCatalog {
 impl ToolCatalog {
     /// Create an empty catalog
     pub fn new() -> Self {
-        Self {
-            tools: HashMap::new(),
-        }
+        Self { tools: HashMap::new() }
     }
 
     /// Load catalog from a TOML file
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref()).map_err(|e| {
-            LooprError::Storage(format!("Failed to read catalog file: {}", e))
-        })?;
+        let content = std::fs::read_to_string(path.as_ref())
+            .map_err(|e| LooprError::Storage(format!("Failed to read catalog file: {}", e)))?;
         Self::from_toml(&content)
     }
 
     /// Load catalog from TOML string
     pub fn from_toml(content: &str) -> Result<Self> {
-        let catalog: TomlCatalog = toml::from_str(content)
-            .map_err(|e| LooprError::Storage(format!("Failed to parse TOML: {}", e)))?;
+        let catalog: TomlCatalog =
+            toml::from_str(content).map_err(|e| LooprError::Storage(format!("Failed to parse TOML: {}", e)))?;
 
         let mut tools = HashMap::new();
         for toml_tool in catalog.tools {

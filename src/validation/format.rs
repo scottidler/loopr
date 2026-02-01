@@ -141,9 +141,7 @@ impl Validator for FormatValidator {
 
         // If no required sections, pass automatically
         if self.config.required_sections.is_empty() {
-            return Ok(ValidationResult::pass_with_output(
-                "No format requirements to check",
-            ));
+            return Ok(ValidationResult::pass_with_output("No format requirements to check"));
         }
 
         // Find missing sections
@@ -199,21 +197,15 @@ mod tests {
         assert_eq!(config.required_sections.len(), 4);
         assert!(config.required_sections.contains(&"## Overview".to_string()));
         assert!(config.required_sections.contains(&"## Phases".to_string()));
-        assert!(config
-            .required_sections
-            .contains(&"## Success Criteria".to_string()));
-        assert!(config
-            .required_sections
-            .contains(&"## Specs to Create".to_string()));
+        assert!(config.required_sections.contains(&"## Success Criteria".to_string()));
+        assert!(config.required_sections.contains(&"## Specs to Create".to_string()));
     }
 
     #[test]
     fn test_format_config_spec() {
         let config = FormatConfig::spec();
         assert_eq!(config.required_sections.len(), 3);
-        assert!(config
-            .required_sections
-            .contains(&"## Parent Plan".to_string()));
+        assert!(config.required_sections.contains(&"## Parent Plan".to_string()));
         assert!(config.required_sections.contains(&"## Overview".to_string()));
         assert!(config.required_sections.contains(&"## Phases".to_string()));
     }
@@ -223,12 +215,8 @@ mod tests {
         let config = FormatConfig::phase();
         assert_eq!(config.required_sections.len(), 3);
         assert!(config.required_sections.contains(&"## Task".to_string()));
-        assert!(config
-            .required_sections
-            .contains(&"## Specific Work".to_string()));
-        assert!(config
-            .required_sections
-            .contains(&"## Success Criteria".to_string()));
+        assert!(config.required_sections.contains(&"## Specific Work".to_string()));
+        assert!(config.required_sections.contains(&"## Success Criteria".to_string()));
     }
 
     #[test]
@@ -351,8 +339,7 @@ mod tests {
     #[tokio::test]
     async fn test_validate_spec_format() {
         let dir = TempDir::new().unwrap();
-        let content =
-            "# Spec\n\n## Parent Plan\n\nplan.md\n\n## Overview\n\nContent\n\n## Phases\n\n1. Phase 1";
+        let content = "# Spec\n\n## Parent Plan\n\nplan.md\n\n## Overview\n\nContent\n\n## Phases\n\n1. Phase 1";
         let artifact = create_temp_file(&dir, "spec.md", content).await;
 
         let validator = FormatValidator::for_spec();
@@ -390,8 +377,7 @@ mod tests {
 
     #[test]
     fn test_custom_config() {
-        let config = FormatConfig::new(vec!["## Custom Section".to_string()])
-            .with_description("custom validator");
+        let config = FormatConfig::new(vec!["## Custom Section".to_string()]).with_description("custom validator");
         let validator = FormatValidator::new(config);
         assert_eq!(validator.description(), "custom validator");
     }

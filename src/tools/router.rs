@@ -98,21 +98,13 @@ impl LocalToolRouter {
             Err(_) => {
                 // Timeout - try to kill the process
                 let _ = child.kill().await;
-                Err(LooprError::Tool(format!(
-                    "Command timed out after {}ms",
-                    timeout_ms
-                )))
+                Err(LooprError::Tool(format!("Command timed out after {}ms", timeout_ms)))
             }
         }
     }
 
     /// Read a file with optional offset and limit
-    async fn execute_read_file(
-        &self,
-        path: &Path,
-        offset: Option<usize>,
-        limit: Option<usize>,
-    ) -> Result<String> {
+    async fn execute_read_file(&self, path: &Path, offset: Option<usize>, limit: Option<usize>) -> Result<String> {
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| LooprError::Tool(format!("Failed to read file: {}", e)))?;
@@ -151,16 +143,21 @@ impl LocalToolRouter {
             .await
             .map_err(|e| LooprError::Tool(format!("Failed to write file: {}", e)))?;
 
-        Ok(format!("Successfully wrote {} bytes to {}", content.len(), path.display()))
+        Ok(format!(
+            "Successfully wrote {} bytes to {}",
+            content.len(),
+            path.display()
+        ))
     }
 }
 
 #[async_trait]
 impl ToolRouter for LocalToolRouter {
     async fn execute(&self, call: ToolCall, worktree: &Path) -> Result<ToolResult> {
-        let tool = self.catalog.get(&call.name).ok_or_else(|| {
-            LooprError::Tool(format!("Unknown tool: {}", call.name))
-        })?;
+        let tool = self
+            .catalog
+            .get(&call.name)
+            .ok_or_else(|| LooprError::Tool(format!("Unknown tool: {}", call.name)))?;
 
         // Check if tool requires worktree and worktree exists
         if tool.requires_worktree && !worktree.exists() {
@@ -267,8 +264,7 @@ mod tests {
 
         /// Add a predefined response for a tool
         pub fn with_response(mut self, tool_name: &str, response: &str) -> Self {
-            self.responses
-                .insert(tool_name.to_string(), response.to_string());
+            self.responses.insert(tool_name.to_string(), response.to_string());
             self
         }
 
@@ -395,7 +391,11 @@ mod tests {
         let test_file = temp_dir.path().join("test.txt");
         std::fs::write(&test_file, "line 1\nline 2\nline 3").unwrap();
 
-        let call = ToolCall::new("call_1", "read_file", json!({"path": "test.txt", "offset": 1, "limit": 1}));
+        let call = ToolCall::new(
+            "call_1",
+            "read_file",
+            json!({"path": "test.txt", "offset": 1, "limit": 1}),
+        );
         let result = router.execute(call, temp_dir.path()).await.unwrap();
 
         assert!(!result.is_error);
