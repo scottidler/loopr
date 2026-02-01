@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_chat_view_default() {
-        let view = ChatView::default();
+        let view = ChatView;
         assert_eq!(view.title(), "Chat");
     }
 
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_loops_view_default() {
-        let view = LoopsView::default();
+        let view = LoopsView;
         assert_eq!(view.title(), "Loops");
     }
 
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_approval_view_default() {
-        let view = ApprovalView::default();
+        let view = ApprovalView;
         assert_eq!(view.title(), "Approval");
     }
 
