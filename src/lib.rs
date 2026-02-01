@@ -9,6 +9,7 @@ pub mod daemon;
 pub mod domain;
 pub mod error;
 pub mod id;
+pub mod ipc;
 pub mod llm;
 pub mod manager;
 pub mod prompt;
