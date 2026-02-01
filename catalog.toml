@@ -1,0 +1,104 @@
+# Tool Catalog - defines available tools for Loopr
+#
+# Each tool has:
+#   - name: unique identifier
+#   - description: what the tool does (for LLM)
+#   - lane: runner lane (no-net, net, heavy)
+#   - timeout_ms: execution timeout (optional)
+#   - requires_worktree: whether tool needs worktree context (optional)
+#   - max_output_bytes: maximum output size (optional)
+#   - input_schema: JSON schema for input parameters (optional)
+
+[[tool]]
+name = "read_file"
+description = "Read file contents with line numbers. Returns file content with line numbers prefixed."
+lane = "no-net"
+timeout_ms = 10000
+requires_worktree = true
+max_output_bytes = 100000
+
+[tool.input_schema]
+type = "object"
+required = ["path"]
+
+[tool.input_schema.properties.path]
+type = "string"
+description = "File path relative to worktree"
+
+[tool.input_schema.properties.offset]
+type = "integer"
+description = "Start line (0-indexed, default: 0)"
+
+[tool.input_schema.properties.limit]
+type = "integer"
+description = "Max lines to read (default: 2000)"
+
+[[tool]]
+name = "write_file"
+description = "Write content to a file. Creates parent directories if needed."
+lane = "no-net"
+timeout_ms = 10000
+requires_worktree = true
+
+[tool.input_schema]
+type = "object"
+required = ["path", "content"]
+
+[tool.input_schema.properties.path]
+type = "string"
+description = "File path relative to worktree"
+
+[tool.input_schema.properties.content]
+type = "string"
+description = "Content to write to the file"
+
+[[tool]]
+name = "bash"
+description = "Execute a bash command in the worktree directory. Returns stdout and stderr."
+lane = "no-net"
+timeout_ms = 60000
+requires_worktree = true
+max_output_bytes = 100000
+
+[tool.input_schema]
+type = "object"
+required = ["command"]
+
+[tool.input_schema.properties.command]
+type = "string"
+description = "The bash command to execute"
+
+[tool.input_schema.properties.timeout_ms]
+type = "integer"
+description = "Override default timeout in milliseconds"
+
+[[tool]]
+name = "run_command"
+description = "Execute a shell command with network access. Use for builds, tests, and external commands."
+lane = "net"
+timeout_ms = 120000
+requires_worktree = true
+max_output_bytes = 100000
+
+[tool.input_schema]
+type = "object"
+required = ["command"]
+
+[tool.input_schema.properties.command]
+type = "string"
+description = "The command to execute"
+
+[[tool]]
+name = "build"
+description = "Run the project build command. Long-running operation for full builds."
+lane = "heavy"
+timeout_ms = 600000
+requires_worktree = true
+max_output_bytes = 1000000
+
+[tool.input_schema]
+type = "object"
+
+[tool.input_schema.properties.target]
+type = "string"
+description = "Build target (optional)"
