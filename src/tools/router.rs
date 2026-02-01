@@ -242,7 +242,7 @@ impl ToolRouter for LocalToolRouter {
     }
 
     fn available_tools(&self) -> Vec<String> {
-        self.catalog.list()
+        self.catalog.list().into_iter().map(String::from).collect()
     }
 }
 
