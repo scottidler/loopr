@@ -5,6 +5,7 @@
 //! validation passes.
 
 use crate::id::{generate_child_id, generate_loop_id, now_ms};
+use crate::storage::HasId;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -216,6 +217,12 @@ impl Loop {
     /// Update the timestamp
     pub fn touch(&mut self) {
         self.updated_at = now_ms();
+    }
+}
+
+impl HasId for Loop {
+    fn id(&self) -> &str {
+        &self.id
     }
 }
 
