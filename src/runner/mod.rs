@@ -7,7 +7,7 @@
 
 mod loop_runner;
 
-pub use loop_runner::{LoopOutcome, LoopRunner, LoopRunnerConfig};
+pub use loop_runner::{LoopOutcome, LoopRunner, LoopRunnerConfig, SignalChecker};
 
 #[cfg(test)]
 mod tests {

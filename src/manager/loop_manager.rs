@@ -11,16 +11,15 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-use crate::coordination::signals::SignalManager;
-use crate::domain::loop_record::{Loop, LoopStatus, LoopType};
-use crate::domain::signal::SignalType;
+use crate::coordination::SignalManager;
+use crate::domain::{Loop, LoopStatus, LoopType, SignalType};
 use crate::error::{LooprError, Result};
-use crate::id::{generate_loop_id, now_ms};
-use crate::llm::client::LlmClient;
-use crate::runner::loop_runner::{LoopOutcome, LoopRunner, LoopRunnerConfig, SignalChecker};
+use crate::id::now_ms;
+use crate::llm::LlmClient;
+use crate::runner::{LoopOutcome, LoopRunner, LoopRunnerConfig, SignalChecker};
 use crate::storage::{Filter, HasId, Storage};
-use crate::tools::router::ToolRouter;
-use crate::worktree::manager::WorktreeManager;
+use crate::tools::ToolRouter;
+use crate::worktree::WorktreeManager;
 
 /// Collection name for loops in storage
 const LOOPS_COLLECTION: &str = "loops";
@@ -56,7 +55,7 @@ struct StorageSignalChecker<S: Storage> {
 
 #[async_trait]
 impl<S: Storage + Send + Sync + 'static> SignalChecker for StorageSignalChecker<S> {
-    async fn check_for_stop(&self, loop_id: &str) -> Result<bool> {
+    async fn should_stop(&self, loop_id: &str) -> Result<bool> {
         if let Some(signal) = self.signal_manager.check(loop_id)? {
             if signal.signal_type == SignalType::Stop {
                 self.signal_manager.acknowledge(&signal.id)?;
@@ -66,7 +65,7 @@ impl<S: Storage + Send + Sync + 'static> SignalChecker for StorageSignalChecker<
         Ok(false)
     }
 
-    async fn check_for_pause(&self, loop_id: &str) -> Result<bool> {
+    async fn should_pause(&self, loop_id: &str) -> Result<bool> {
         if let Some(signal) = self.signal_manager.check(loop_id)? {
             if signal.signal_type == SignalType::Pause {
                 return Ok(true);
@@ -75,19 +74,14 @@ impl<S: Storage + Send + Sync + 'static> SignalChecker for StorageSignalChecker<
         Ok(false)
     }
 
-    async fn wait_for_resume(&self, loop_id: &str) -> Result<()> {
-        loop {
-            if let Some(signal) = self.signal_manager.check(loop_id)? {
-                if signal.signal_type == SignalType::Resume {
-                    self.signal_manager.acknowledge(&signal.id)?;
-                    return Ok(());
-                }
-                if signal.signal_type == SignalType::Stop {
-                    return Err(LooprError::InvalidState("Loop stopped while paused".into()));
-                }
+    async fn is_invalidated(&self, loop_id: &str) -> Result<bool> {
+        if let Some(signal) = self.signal_manager.check(loop_id)? {
+            if signal.signal_type == SignalType::Invalidate {
+                self.signal_manager.acknowledge(&signal.id)?;
+                return Ok(true);
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
+        Ok(false)
     }
 }
 
