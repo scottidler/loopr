@@ -3,23 +3,22 @@
 //! This module provides:
 //! - Message types for LLM communication
 //! - LlmClient trait for API abstraction
-//! - AnthropicClient implementation
+//! - AnthropicClient implementation (to be added)
 //! - Streaming support
-//! - Tool call parsing
+//! - Tool call parsing (to be added)
 
-pub mod anthropic;
 pub mod client;
 pub mod streaming;
-pub mod tool_parser;
 pub mod types;
 
-pub use anthropic::AnthropicClient;
-pub use client::LlmClient;
-pub use streaming::{StreamEvent, StreamHandle};
-pub use tool_parser::ToolParser;
+// TODO: Add these modules in future iterations
+// pub mod anthropic;
+// pub mod tool_parser;
+
+pub use client::{LlmClient, MockLlmClient};
+pub use streaming::{StreamChunk, StreamEvent, StreamHandle, StreamParser, create_stream_channel, parse_sse_event};
 pub use types::{
-    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolDefinition,
-    ToolResult, Usage,
+    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolDefinition, ToolResult, Usage,
 };
 
 #[cfg(test)]

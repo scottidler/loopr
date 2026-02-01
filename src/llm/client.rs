@@ -175,10 +175,7 @@ mod tests {
         };
         client.queue_response(expected);
 
-        let response = client
-            .complete(CompletionRequest::default())
-            .await
-            .unwrap();
+        let response = client.complete(CompletionRequest::default()).await.unwrap();
 
         assert_eq!(response.tool_calls.len(), 1);
         assert_eq!(response.tool_calls[0].name, "read_file");
@@ -230,10 +227,7 @@ mod tests {
         });
 
         let client: Box<dyn LlmClient> = Box::new(mock);
-        let response = client
-            .complete(CompletionRequest::default())
-            .await
-            .unwrap();
+        let response = client.complete(CompletionRequest::default()).await.unwrap();
         assert_eq!(response.content, "via trait object");
     }
 }

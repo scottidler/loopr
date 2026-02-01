@@ -114,7 +114,7 @@ impl ToolResult {
 }
 
 /// Request to the LLM for completion
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompletionRequest {
     pub system: String,
     pub messages: Vec<Message>,
@@ -124,18 +124,6 @@ pub struct CompletionRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-}
-
-impl Default for CompletionRequest {
-    fn default() -> Self {
-        Self {
-            system: String::new(),
-            messages: Vec::new(),
-            tools: Vec::new(),
-            max_tokens: None,
-            model: None,
-        }
-    }
 }
 
 impl CompletionRequest {
@@ -234,8 +222,7 @@ impl Usage {
             _ => (0.003, 0.015),
         };
 
-        (self.input_tokens as f64 / 1000.0 * input_rate)
-            + (self.output_tokens as f64 / 1000.0 * output_rate)
+        (self.input_tokens as f64 / 1000.0 * input_rate) + (self.output_tokens as f64 / 1000.0 * output_rate)
     }
 }
 
@@ -246,10 +233,7 @@ mod tests {
     #[test]
     fn test_role_serialization() {
         assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
-        assert_eq!(
-            serde_json::to_string(&Role::Assistant).unwrap(),
-            "\"assistant\""
-        );
+        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
     }
 
     #[test]
