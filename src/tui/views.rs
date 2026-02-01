@@ -4,11 +4,11 @@
 //! Includes chat view, loops view, and approval view.
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 
 use super::app::{AppState, ChatMessage, LoopSummary, MessageSender, PendingApproval};
@@ -62,22 +62,14 @@ impl View for ChatView {
             .split(area);
 
         // Messages area
-        let items: Vec<ListItem> = state
-            .chat_messages
-            .iter()
-            .map(Self::format_message)
-            .collect();
+        let items: Vec<ListItem> = state.chat_messages.iter().map(Self::format_message).collect();
 
-        let messages = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Chat Messages "),
-        );
+        let messages = List::new(items).block(Block::default().borders(Borders::ALL).title(" Chat Messages "));
         frame.render_widget(messages, chunks[0]);
 
         // Input area
-        let input = Paragraph::new(state.chat_input.as_str())
-            .block(Block::default().borders(Borders::ALL).title(" Input "));
+        let input =
+            Paragraph::new(state.chat_input.as_str()).block(Block::default().borders(Borders::ALL).title(" Input "));
         frame.render_widget(input, chunks[1]);
     }
 
@@ -107,9 +99,7 @@ impl LoopsView {
         };
 
         let style = if selected {
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD)
+            Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -117,17 +107,11 @@ impl LoopsView {
         // Use owned strings to satisfy 'static lifetime
         let line = Line::from(vec![
             Span::raw(indent),
-            Span::styled(
-                format!("[{}] ", summary.loop_type),
-                Style::default().fg(Color::Magenta),
-            ),
+            Span::styled(format!("[{}] ", summary.loop_type), Style::default().fg(Color::Magenta)),
             Span::raw(summary.id.clone()),
             Span::raw(" - "),
             Span::styled(summary.status.clone(), Style::default().fg(status_color)),
-            Span::raw(format!(
-                " ({}/{})",
-                summary.iteration, summary.max_iterations
-            )),
+            Span::raw(format!(" ({}/{})", summary.iteration, summary.max_iterations)),
         ]);
 
         ListItem::new(line).style(style)
@@ -173,18 +157,10 @@ impl ApprovalView {
     }
 
     /// Render the approval content
-    fn render_approval(
-        frame: &mut Frame,
-        area: Rect,
-        approval: &PendingApproval,
-    ) {
+    fn render_approval(frame: &mut Frame, area: Rect, approval: &PendingApproval) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(5),
-                Constraint::Length(5),
-                Constraint::Length(3),
-            ])
+            .constraints([Constraint::Min(5), Constraint::Length(5), Constraint::Length(3)])
             .split(area);
 
         // Plan content
@@ -203,19 +179,12 @@ impl ApprovalView {
         } else {
             approval.specs.join(", ")
         };
-        let specs = Paragraph::new(specs_text).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Specs to Create "),
-        );
+        let specs = Paragraph::new(specs_text).block(Block::default().borders(Borders::ALL).title(" Specs to Create "));
         frame.render_widget(specs, chunks[1]);
 
         // Feedback input
-        let feedback = Paragraph::new(approval.feedback.as_str()).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Feedback (optional) "),
-        );
+        let feedback = Paragraph::new(approval.feedback.as_str())
+            .block(Block::default().borders(Borders::ALL).title(" Feedback (optional) "));
         frame.render_widget(feedback, chunks[2]);
     }
 

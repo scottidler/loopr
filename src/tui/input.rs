@@ -68,11 +68,7 @@ impl KeyEvent {
 
     /// Get the character if this is a char key
     pub fn char(&self) -> Option<char> {
-        if let KeyCode::Char(c) = self.code {
-            Some(c)
-        } else {
-            None
-        }
+        if let KeyCode::Char(c) = self.code { Some(c) } else { None }
     }
 
     /// Check if this is the backspace key
@@ -118,9 +114,7 @@ impl InputHandler {
 
     /// Create with custom poll timeout
     pub fn with_timeout(timeout: Duration) -> Self {
-        Self {
-            poll_timeout: timeout,
-        }
+        Self { poll_timeout: timeout }
     }
 
     /// Poll for the next key event

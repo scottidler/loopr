@@ -266,9 +266,7 @@ impl App {
 
     /// Get currently selected loop
     pub fn selected_loop(&self) -> Option<&LoopSummary> {
-        self.state
-            .selected_loop
-            .and_then(|i| self.state.loops.get(i))
+        self.state.selected_loop.and_then(|i| self.state.loops.get(i))
     }
 
     /// Set pending approval
@@ -508,10 +506,7 @@ mod tests {
     #[test]
     fn test_app_config_default() {
         let config = AppConfig::default();
-        assert_eq!(
-            config.socket_path,
-            std::path::PathBuf::from("/tmp/loopr.sock")
-        );
+        assert_eq!(config.socket_path, std::path::PathBuf::from("/tmp/loopr.sock"));
         assert_eq!(config.tick_rate_ms, 100);
     }
 }
