@@ -7,13 +7,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::{LooprError, Result};
 use crate::llm::client::LlmClient;
-use crate::llm::types::{
-    CompletionRequest, CompletionResponse, Role, StopReason, ToolCall, ToolResult, Usage,
-};
+use crate::llm::types::{CompletionRequest, CompletionResponse, Role, StopReason, ToolCall, ToolResult, Usage};
 
 /// Anthropic API base URL
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -68,8 +66,8 @@ impl AnthropicClient {
     ///
     /// Reads ANTHROPIC_API_KEY from environment
     pub fn new(config: AnthropicConfig) -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .map_err(|_| LooprError::Llm("ANTHROPIC_API_KEY not set".to_string()))?;
+        let api_key =
+            std::env::var("ANTHROPIC_API_KEY").map_err(|_| LooprError::Llm("ANTHROPIC_API_KEY not set".to_string()))?;
 
         Self::with_api_key(api_key, config)
     }
@@ -91,11 +89,7 @@ impl AnthropicClient {
 
     /// Build the request body for the Anthropic API
     fn build_request(&self, request: &CompletionRequest) -> Value {
-        let model = request
-            .model
-            .as_ref()
-            .unwrap_or(&self.config.model)
-            .clone();
+        let model = request.model.as_ref().unwrap_or(&self.config.model).clone();
 
         let max_tokens = request.max_tokens.unwrap_or(self.config.max_tokens);
 
@@ -134,11 +128,7 @@ impl AnthropicClient {
     }
 
     /// Build a request that continues with tool results
-    fn build_continuation_request(
-        &self,
-        request: &CompletionRequest,
-        results: &[ToolResult],
-    ) -> Value {
+    fn build_continuation_request(&self, request: &CompletionRequest, results: &[ToolResult]) -> Value {
         let mut body = self.build_request(request);
 
         // Add tool results as user messages with tool_result content blocks
@@ -257,14 +247,8 @@ impl AnthropicClient {
 
         // Handle other errors
         if !status.is_success() {
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(LooprError::Llm(format!(
-                "API error {}: {}",
-                status, error_body
-            )));
+            let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LooprError::Llm(format!("API error {}: {}", status, error_body)));
         }
 
         response
@@ -359,8 +343,7 @@ mod tests {
 
     #[test]
     fn test_client_with_api_key() {
-        let result =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default());
+        let result = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default());
         assert!(result.is_ok());
         let client = result.unwrap();
         assert!(client.is_ready());
@@ -369,9 +352,7 @@ mod tests {
 
     #[test]
     fn test_build_request_basic() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let request = CompletionRequest::new("You are helpful").with_user_message("Hello");
 
@@ -386,9 +367,7 @@ mod tests {
 
     #[test]
     fn test_build_request_with_tools() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let tool = crate::llm::ToolDefinition::new(
             "read_file",
@@ -414,9 +393,7 @@ mod tests {
 
     #[test]
     fn test_build_request_custom_model() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let mut request = CompletionRequest::new("test").with_user_message("Hello");
         request.model = Some("claude-opus-4-5-20250514".to_string());
@@ -428,9 +405,7 @@ mod tests {
 
     #[test]
     fn test_parse_response_text_only() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let api_response = json!({
             "content": [
@@ -454,9 +429,7 @@ mod tests {
 
     #[test]
     fn test_parse_response_with_tool_use() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let api_response = json!({
             "content": [
@@ -487,9 +460,7 @@ mod tests {
 
     #[test]
     fn test_parse_response_multiple_tool_calls() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let api_response = json!({
             "content": [
@@ -519,9 +490,7 @@ mod tests {
 
     #[test]
     fn test_parse_response_stop_reasons() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let test_cases = vec![
             ("end_turn", StopReason::EndTurn),
@@ -545,9 +514,7 @@ mod tests {
 
     #[test]
     fn test_total_usage_accumulation() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         // Parse first response
         let _ = client.parse_response(json!({
@@ -570,9 +537,7 @@ mod tests {
 
     #[test]
     fn test_build_continuation_request() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let request = CompletionRequest::new("system")
             .with_user_message("Read the file")
@@ -598,9 +563,7 @@ mod tests {
 
     #[test]
     fn test_build_continuation_with_error_result() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let request = CompletionRequest::new("system").with_user_message("Read it");
 
@@ -616,9 +579,7 @@ mod tests {
 
     #[test]
     fn test_debug_impl() {
-        let client =
-            AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default())
-                .unwrap();
+        let client = AnthropicClient::with_api_key("test-key".to_string(), AnthropicConfig::default()).unwrap();
 
         let debug_str = format!("{:?}", client);
         assert!(debug_str.contains("AnthropicClient"));
@@ -635,8 +596,7 @@ mod tests {
 
     #[test]
     fn test_empty_api_key_not_ready() {
-        let client =
-            AnthropicClient::with_api_key(String::new(), AnthropicConfig::default()).unwrap();
+        let client = AnthropicClient::with_api_key(String::new(), AnthropicConfig::default()).unwrap();
         assert!(!client.is_ready());
     }
 }
