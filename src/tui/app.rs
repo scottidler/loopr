@@ -229,14 +229,14 @@ impl App {
     pub fn update_loops(&mut self, loops: Vec<LoopSummary>) {
         self.state.loops = loops;
         // Reset selection if out of bounds
-        if let Some(idx) = self.state.selected_loop {
-            if idx >= self.state.loops.len() {
-                self.state.selected_loop = if self.state.loops.is_empty() {
-                    None
-                } else {
-                    Some(self.state.loops.len() - 1)
-                };
-            }
+        if let Some(idx) = self.state.selected_loop
+            && idx >= self.state.loops.len()
+        {
+            self.state.selected_loop = if self.state.loops.is_empty() {
+                None
+            } else {
+                Some(self.state.loops.len() - 1)
+            };
         }
     }
 

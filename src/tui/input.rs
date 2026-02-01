@@ -125,10 +125,10 @@ impl InputHandler {
 
     /// Poll for the next key event
     pub fn poll(&self) -> std::io::Result<Option<KeyEvent>> {
-        if event::poll(self.poll_timeout)? {
-            if let Event::Key(key) = event::read()? {
-                return Ok(Some(KeyEvent::new(key.code, key.modifiers)));
-            }
+        if event::poll(self.poll_timeout)?
+            && let Event::Key(key) = event::read()?
+        {
+            return Ok(Some(KeyEvent::new(key.code, key.modifiers)));
         }
         Ok(None)
     }
