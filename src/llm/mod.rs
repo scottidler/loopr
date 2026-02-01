@@ -5,20 +5,27 @@
 //! - LlmClient trait for API abstraction
 //! - AnthropicClient implementation (to be added)
 //! - Streaming support
-//! - Tool call parsing (to be added)
+//! - Tool call parsing
 
 pub mod client;
 pub mod streaming;
+pub mod tool_parser;
 pub mod types;
 
-// TODO: Add these modules in future iterations
+// TODO: Add this module in future iteration
 // pub mod anthropic;
-// pub mod tool_parser;
 
 pub use client::{LlmClient, MockLlmClient};
-pub use streaming::{StreamChunk, StreamEvent, StreamHandle, StreamParser, create_stream_channel, parse_sse_event};
+pub use streaming::{
+    create_stream_channel, parse_sse_event, StreamChunk, StreamEvent, StreamHandle, StreamParser,
+};
+pub use tool_parser::{
+    extract_tool_calls, find_tool_definition, needs_tool_execution, parse_response,
+    validate_tool_calls, validate_tool_input,
+};
 pub use types::{
-    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolDefinition, ToolResult, Usage,
+    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolDefinition,
+    ToolResult, Usage,
 };
 
 #[cfg(test)]
