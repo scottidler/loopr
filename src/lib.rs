@@ -10,5 +10,6 @@ pub mod llm;
 pub mod prompt;
 pub mod storage;
 pub mod tools;
+pub mod validation;
 
 pub use error::{LooprError, Result};
