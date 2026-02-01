@@ -60,9 +60,7 @@ pub struct LoopManager<S: Storage, L: LlmClient, T: ToolRouter> {
     running_loops: RwLock<HashMap<String, JoinHandle<Result<LoopOutcome>>>>,
 }
 
-impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter + 'static>
-    LoopManager<S, L, T>
-{
+impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter + 'static> LoopManager<S, L, T> {
     /// Create a new LoopManager with the given dependencies
     pub fn new(
         storage: Arc<S>,
@@ -101,12 +99,7 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
     }
 
     /// Create a child loop from a parent
-    pub async fn create_child_loop(
-        &self,
-        parent: &Loop,
-        loop_type: LoopType,
-        index: u32,
-    ) -> Result<Loop> {
+    pub async fn create_child_loop(&self, parent: &Loop, loop_type: LoopType, index: u32) -> Result<Loop> {
         let loop_instance = match loop_type {
             LoopType::Spec => Loop::new_spec(parent, index),
             LoopType::Phase => Loop::new_phase(parent, index, "Phase", 1),
@@ -132,33 +125,27 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
     pub async fn start_loop(&self, loop_id: &str) -> Result<()> {
         // Get the loop from storage
         let loop_instance: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
-        let mut loop_instance =
-            loop_instance.ok_or_else(|| LooprError::LoopNotFound(loop_id.to_string()))?;
+        let mut loop_instance = loop_instance.ok_or_else(|| LooprError::LoopNotFound(loop_id.to_string()))?;
 
         // Check if already running
         {
             let running = self.running_loops.read().await;
             if running.contains_key(loop_id) {
-                return Err(LooprError::InvalidState(format!(
-                    "Loop {} is already running",
-                    loop_id
-                )));
+                return Err(LooprError::InvalidState(format!("Loop {} is already running", loop_id)));
             }
         }
 
         // Update status to running
         loop_instance.status = LoopStatus::Running;
         loop_instance.updated_at = now_ms();
-        self.storage
-            .update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
+        self.storage.update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
 
         // Create worktree for this loop (sync method)
         let worktree_path = self.worktree_manager.create(loop_id)?;
         loop_instance.worktree = worktree_path;
 
         // Update loop with worktree path
-        self.storage
-            .update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
+        self.storage.update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
 
         // TODO: Spawn actual loop execution with LoopRunner once validator integration is complete
         // For now, just mark it as tracked
@@ -180,30 +167,26 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
 
     /// Stop a running loop
     pub async fn stop_loop(&self, loop_id: &str) -> Result<()> {
-        self.signal_manager
-            .send_stop(loop_id, "User requested stop")?;
+        self.signal_manager.send_stop(loop_id, "User requested stop")?;
         Ok(())
     }
 
     /// Pause a running loop
     pub async fn pause_loop(&self, loop_id: &str) -> Result<()> {
-        self.signal_manager
-            .send_pause(loop_id, "User requested pause")?;
+        self.signal_manager.send_pause(loop_id, "User requested pause")?;
         Ok(())
     }
 
     /// Resume a paused loop
     pub async fn resume_loop(&self, loop_id: &str) -> Result<()> {
-        self.signal_manager
-            .send_resume(loop_id, "User requested resume")?;
+        self.signal_manager.send_resume(loop_id, "User requested resume")?;
         Ok(())
     }
 
     /// Handle loop completion - spawn children if needed
     pub async fn on_loop_complete(&self, loop_id: &str) -> Result<()> {
         let loop_instance: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
-        let loop_instance =
-            loop_instance.ok_or_else(|| LooprError::LoopNotFound(loop_id.to_string()))?;
+        let loop_instance = loop_instance.ok_or_else(|| LooprError::LoopNotFound(loop_id.to_string()))?;
 
         // Clean up the running task tracking
         {
@@ -223,8 +206,7 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
             }
             LoopType::Phase => {
                 // Spawn CodeLoop
-                self.create_child_loop(&loop_instance, LoopType::Code, 0)
-                    .await?;
+                self.create_child_loop(&loop_instance, LoopType::Code, 0).await?;
             }
             LoopType::Code => {
                 // Code loops are leaf nodes, check if ready to merge
@@ -320,8 +302,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_plan_loop() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -332,10 +313,7 @@ mod tests {
             config,
         );
 
-        let loop_instance = manager
-            .create_loop(LoopType::Plan, "Build a test app")
-            .await
-            .unwrap();
+        let loop_instance = manager.create_loop(LoopType::Plan, "Build a test app").await.unwrap();
 
         assert_eq!(loop_instance.loop_type, LoopType::Plan);
         assert_eq!(loop_instance.status, LoopStatus::Pending);
@@ -344,8 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_spec_loop_error() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage,
@@ -362,8 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_loop() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -374,10 +350,7 @@ mod tests {
             config,
         );
 
-        let created = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
+        let created = manager.create_loop(LoopType::Plan, "task").await.unwrap();
         let fetched = manager.get_loop(&created.id).await.unwrap();
 
         assert!(fetched.is_some());
@@ -386,8 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_loops() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -398,14 +370,8 @@ mod tests {
             config,
         );
 
-        manager
-            .create_loop(LoopType::Plan, "task1")
-            .await
-            .unwrap();
-        manager
-            .create_loop(LoopType::Plan, "task2")
-            .await
-            .unwrap();
+        manager.create_loop(LoopType::Plan, "task1").await.unwrap();
+        manager.create_loop(LoopType::Plan, "task2").await.unwrap();
 
         let loops = manager.list_loops().await.unwrap();
         assert_eq!(loops.len(), 2);
@@ -413,8 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_by_status() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -425,10 +390,7 @@ mod tests {
             config,
         );
 
-        manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
+        manager.create_loop(LoopType::Plan, "task").await.unwrap();
 
         let pending = manager.find_by_status(LoopStatus::Pending).await.unwrap();
         assert_eq!(pending.len(), 1);
@@ -439,8 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_available_slots() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig {
             max_concurrent_loops: 3,
             ..Default::default()
@@ -460,8 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_child_loop() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -472,14 +432,8 @@ mod tests {
             config,
         );
 
-        let parent = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
-        let child = manager
-            .create_child_loop(&parent, LoopType::Spec, 1)
-            .await
-            .unwrap();
+        let parent = manager.create_loop(LoopType::Plan, "task").await.unwrap();
+        let child = manager.create_child_loop(&parent, LoopType::Spec, 1).await.unwrap();
 
         assert_eq!(child.loop_type, LoopType::Spec);
         assert_eq!(child.parent_id, Some(parent.id.clone()));
@@ -487,8 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_plan_as_child_error() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -499,10 +452,7 @@ mod tests {
             config,
         );
 
-        let parent = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
+        let parent = manager.create_loop(LoopType::Plan, "task").await.unwrap();
         let result = manager.create_child_loop(&parent, LoopType::Plan, 1).await;
 
         assert!(result.is_err());
@@ -510,8 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stop_loop_sends_signal() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -522,10 +471,7 @@ mod tests {
             config,
         );
 
-        let loop_instance = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
+        let loop_instance = manager.create_loop(LoopType::Plan, "task").await.unwrap();
         manager.stop_loop(&loop_instance.id).await.unwrap();
 
         // Check that a stop signal was sent
@@ -536,8 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pause_loop_sends_signal() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -548,10 +493,7 @@ mod tests {
             config,
         );
 
-        let loop_instance = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
+        let loop_instance = manager.create_loop(LoopType::Plan, "task").await.unwrap();
         manager.pause_loop(&loop_instance.id).await.unwrap();
 
         let signal = signal_manager.check(&loop_instance.id).unwrap();
@@ -561,8 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resume_loop_sends_signal() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -573,10 +514,7 @@ mod tests {
             config,
         );
 
-        let loop_instance = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
+        let loop_instance = manager.create_loop(LoopType::Plan, "task").await.unwrap();
         manager.resume_loop(&loop_instance.id).await.unwrap();
 
         let signal = signal_manager.check(&loop_instance.id).unwrap();
@@ -586,8 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_by_parent() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
@@ -598,18 +535,9 @@ mod tests {
             config,
         );
 
-        let parent = manager
-            .create_loop(LoopType::Plan, "task")
-            .await
-            .unwrap();
-        manager
-            .create_child_loop(&parent, LoopType::Spec, 1)
-            .await
-            .unwrap();
-        manager
-            .create_child_loop(&parent, LoopType::Spec, 2)
-            .await
-            .unwrap();
+        let parent = manager.create_loop(LoopType::Plan, "task").await.unwrap();
+        manager.create_child_loop(&parent, LoopType::Spec, 1).await.unwrap();
+        manager.create_child_loop(&parent, LoopType::Spec, 2).await.unwrap();
 
         let children = manager.find_by_parent(&parent.id).await.unwrap();
         assert_eq!(children.len(), 2);
@@ -617,8 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_loop_not_found() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage,
@@ -635,8 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_loop_not_found() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) =
-            create_test_deps();
+        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage,
