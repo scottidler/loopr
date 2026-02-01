@@ -8,7 +8,4 @@
 
 pub mod messages;
 
-pub use messages::{
-    DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, Events, IpcMessage,
-    Methods,
-};
+pub use messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, Events, IpcMessage, Methods};

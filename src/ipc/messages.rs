@@ -187,18 +187,12 @@ impl DaemonEvent {
 
     /// Create a loop.created event.
     pub fn loop_created(loop_record: &Loop) -> Self {
-        Self::new(
-            "loop.created",
-            serde_json::to_value(loop_record).unwrap_or(Value::Null),
-        )
+        Self::new("loop.created", serde_json::to_value(loop_record).unwrap_or(Value::Null))
     }
 
     /// Create a loop.updated event.
     pub fn loop_updated(loop_record: &Loop) -> Self {
-        Self::new(
-            "loop.updated",
-            serde_json::to_value(loop_record).unwrap_or(Value::Null),
-        )
+        Self::new("loop.updated", serde_json::to_value(loop_record).unwrap_or(Value::Null))
     }
 
     /// Create a loop.iteration event.
@@ -392,30 +386,12 @@ mod tests {
     #[test]
     fn test_daemon_error_codes() {
         assert_eq!(DaemonError::parse_error("test").code, ErrorCode::PARSE_ERROR);
-        assert_eq!(
-            DaemonError::invalid_request("test").code,
-            ErrorCode::INVALID_REQUEST
-        );
-        assert_eq!(
-            DaemonError::method_not_found("test").code,
-            ErrorCode::METHOD_NOT_FOUND
-        );
-        assert_eq!(
-            DaemonError::invalid_params("test").code,
-            ErrorCode::INVALID_PARAMS
-        );
-        assert_eq!(
-            DaemonError::internal_error("test").code,
-            ErrorCode::INTERNAL_ERROR
-        );
-        assert_eq!(
-            DaemonError::loop_not_found("test").code,
-            ErrorCode::LOOP_NOT_FOUND
-        );
-        assert_eq!(
-            DaemonError::invalid_state("test").code,
-            ErrorCode::INVALID_STATE
-        );
+        assert_eq!(DaemonError::invalid_request("test").code, ErrorCode::INVALID_REQUEST);
+        assert_eq!(DaemonError::method_not_found("test").code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(DaemonError::invalid_params("test").code, ErrorCode::INVALID_PARAMS);
+        assert_eq!(DaemonError::internal_error("test").code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(DaemonError::loop_not_found("test").code, ErrorCode::LOOP_NOT_FOUND);
+        assert_eq!(DaemonError::invalid_state("test").code, ErrorCode::INVALID_STATE);
     }
 
     #[test]
