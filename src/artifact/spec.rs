@@ -55,19 +55,23 @@ pub fn parse_spec_phases(content: &str) -> Result<Vec<PhaseDescriptor>> {
     let mut phases = Vec::new();
     let mut current_phase: Option<(u32, String, String, Vec<String>)> = None;
     let mut in_files_block = false;
+    let mut phase_counter = 0u32;
 
     for line in section.lines() {
         let trimmed = line.trim();
 
         // Check for numbered phase: "1. **Name**: Description" or "1. **Name**"
-        if let Some(rest) = try_parse_numbered_item(trimmed) {
+        if let Some((line_number, rest)) = try_parse_numbered_item_with_number(trimmed) {
             // Save previous phase if exists
             if let Some((num, name, desc, files)) = current_phase.take() {
                 phases.push(PhaseDescriptor::new(num, name, desc, files));
             }
 
             // Parse the new phase
-            if let Some((number, name, description)) = parse_phase_header(rest) {
+            if let Some((_, name, description)) = parse_phase_header(rest) {
+                // Use the actual number from the line if available, otherwise use counter
+                phase_counter += 1;
+                let number = if line_number > 0 { line_number } else { phase_counter };
                 current_phase = Some((number, name, description, Vec::new()));
                 in_files_block = false;
             }
@@ -97,8 +101,8 @@ pub fn parse_spec_phases(content: &str) -> Result<Vec<PhaseDescriptor>> {
     Ok(phases)
 }
 
-/// Try to parse a numbered list item (e.g., "1. rest" or "2. rest")
-fn try_parse_numbered_item(line: &str) -> Option<&str> {
+/// Try to parse a numbered list item, returning the number and rest (e.g., "1. rest" -> (1, "rest"))
+fn try_parse_numbered_item_with_number(line: &str) -> Option<(u32, &str)> {
     let bytes = line.as_bytes();
     let mut i = 0;
 
@@ -116,8 +120,17 @@ fn try_parse_numbered_item(line: &str) -> Option<&str> {
         return None;
     }
 
-    // Return the rest of the line
-    Some(&line[i + 2..])
+    // Parse the number
+    let number: u32 = line[..i].parse().ok()?;
+
+    // Return the number and rest of the line
+    Some((number, &line[i + 2..]))
+}
+
+/// Try to parse a numbered list item (e.g., "1. rest" or "2. rest")
+#[allow(dead_code)]
+fn try_parse_numbered_item(line: &str) -> Option<&str> {
+    try_parse_numbered_item_with_number(line).map(|(_, rest)| rest)
 }
 
 /// Parse a phase header like "**Phase Name**: Description" or "**Phase Name**"
