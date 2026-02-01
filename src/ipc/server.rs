@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use log::debug;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -89,7 +90,6 @@ where
 #[derive(Debug)]
 struct ClientState {
     /// Unique client ID (used for debugging/logging)
-    #[allow(dead_code)]
     id: u64,
     /// Whether client is subscribed to events
     subscribed: bool,
@@ -267,6 +267,7 @@ async fn handle_client<H: RequestHandler>(
                                     let mut clients = clients.write().await;
                                     if let Some(state) = clients.get_mut(&client_id) {
                                         state.subscribed = true;
+                                        debug!("Client {} subscribed to events", state.id);
                                     }
                                     let response = DaemonResponse::success(request.id, serde_json::json!({"subscribed": true}));
                                     let response_json = serde_json::to_string(&response).unwrap_or_default();
@@ -298,11 +299,12 @@ async fn handle_client<H: RequestHandler>(
             event_result = event_rx.recv() => {
                 match event_result {
                     Ok(event) => {
-                        let is_subscribed = {
+                        let subscribed_client_id = {
                             let clients = clients.read().await;
-                            clients.get(&client_id).is_some_and(|s| s.subscribed)
+                            clients.get(&client_id).filter(|s| s.subscribed).map(|s| s.id)
                         };
-                        if is_subscribed {
+                        if let Some(cid) = subscribed_client_id {
+                            debug!("Forwarding event to client {}", cid);
                             let event_json = serde_json::to_string(&event).unwrap_or_default();
                             if writer.write_all(event_json.as_bytes()).await.is_err() {
                                 break;

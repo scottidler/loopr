@@ -53,12 +53,16 @@ impl Scheduler {
     }
 
     /// Check if a loop can run given dependencies
-    /// A loop can run if its parent (if any) is in a state that allows children
-    /// Note: loop_record is passed for potential future use (e.g., checking loop status)
+    /// A loop can run if:
+    /// 1. It's in Pending status (not already running, complete, or failed)
+    /// 2. Its parent (if any) is in a state that allows children to run
     pub fn can_run(&self, loop_record: &Loop, parent: Option<&Loop>) -> bool {
-        // For now, we only check parent status. The loop_record itself would be used
-        // for additional checks like whether the loop is already running, etc.
-        let _ = loop_record; // Suppress unused warning until extended
+        // Loop must be pending to be scheduled
+        if loop_record.status != crate::domain::LoopStatus::Pending {
+            return false;
+        }
+
+        // Check parent status
         match parent {
             None => true, // No parent, can always run
             Some(p) => {

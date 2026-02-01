@@ -492,66 +492,77 @@ src/validation/composite.rs
 - [loop.md](loop.md) - The essential document, especially "The Iteration Model" section
 - [execution-model.md](execution-model.md) - Loop execution flow
 
-**Files to create:**
+**Files to modify:**
 ```
-src/runner/mod.rs
-src/runner/loop_runner.rs
+src/domain/loop_record.rs   # Add run() method
+src/runner/mod.rs           # Re-export LoopOutcome only
 ```
+
+> **NOTE:** Per domain-types.md, `Loop` is self-contained with its own `run()` method.
+> There is no separate `LoopRunner` struct - that was deemed unnecessary indirection.
 
 **Deliverables:**
 
-1. **LoopRunner struct:**
-   - Holds references to LlmClient, ToolRouter, Storage, PromptRenderer, Validator
-   - Manages single loop execution
-
-2. **`run()` method implementing Ralph Wiggum pattern:**
+1. **`Loop::run()` method implementing Ralph Wiggum pattern:**
    ```rust
-   pub async fn run(&self, loop_instance: &mut Loop) -> Result<LoopOutcome> {
-       while loop_instance.iteration < loop_instance.max_iterations {
-           // 1. Build prompt with accumulated feedback (FRESH CONTEXT)
-           let prompt = self.build_prompt(loop_instance)?;
+   impl Loop {
+       pub async fn run<L, T, V>(
+           &mut self,
+           llm: Arc<L>,
+           tool_router: Arc<T>,
+           validator: Arc<V>,
+       ) -> Result<LoopOutcome>
+       where
+           L: LlmClient,
+           T: ToolRouter,
+           V: Validator,
+       {
+           while self.iteration < self.max_iterations {
+               // 1. Build prompt with accumulated feedback (FRESH CONTEXT)
+               let prompt = self.build_system_prompt(&prompt_renderer)?;
 
-           // 2. Call LLM - NEW messages array each time
-           let response = self.llm.complete(CompletionRequest {
-               system: prompt,
-               messages: vec![Message::user(&loop_instance.context["task"])],
-               tools: self.get_tools(loop_instance.loop_type),
-               ..Default::default()
-           }).await?;
+               // 2. Call LLM - NEW messages array each time
+               let response = llm.complete(CompletionRequest {
+                   system: prompt,
+                   messages: vec![Message::user(&self.context["task"])],
+                   tools: self.get_tools_for_loop_type(&*tool_router),
+                   ..Default::default()
+               }).await?;
 
-           // 3. Execute tool calls
-           for call in response.tool_calls {
-               self.execute_tool(loop_instance, call).await?;
+               // 3. Execute tool calls
+               for call in response.tool_calls {
+                   tool_router.execute(call, &self.worktree).await?;
+               }
+
+               // 4. Validate output
+               let result = validator.validate(&artifact_path, &self.worktree).await?;
+
+               if result.passed {
+                   self.status = LoopStatus::Complete;
+                   return Ok(LoopOutcome::Complete);
+               }
+
+               // 5. Accumulate feedback for next iteration
+               self.progress.push_str(&format!(
+                   "\n---\nIteration {} failed:\n{}\n",
+                   self.iteration + 1,
+                   result.output
+               ));
+               self.iteration += 1;
            }
 
-           // 4. Validate output
-           let result = self.validate(loop_instance).await?;
-
-           if result.passed {
-               loop_instance.status = LoopStatus::Complete;
-               return Ok(LoopOutcome::Complete);
-           }
-
-           // 5. Accumulate feedback for next iteration
-           loop_instance.progress.push_str(&format!(
-               "\n---\nIteration {} failed:\n{}\n",
-               loop_instance.iteration + 1,
-               result.output
-           ));
-           loop_instance.iteration += 1;
+           self.status = LoopStatus::Failed;
+           Ok(LoopOutcome::Failed("Max iterations".into()))
        }
-
-       loop_instance.status = LoopStatus::Failed;
-       Ok(LoopOutcome::Failed("Max iterations".into()))
    }
    ```
 
-3. **LoopOutcome enum:** Complete, Failed(String), Invalidated
+2. **LoopOutcome enum:** Complete, Failed(String), Invalidated
 
-4. **Helper methods:**
-   - `build_prompt()` - render template with context and progress
-   - `execute_tool()` - route to ToolRouter
-   - `validate()` - run appropriate validator
+3. **Private helper methods on Loop:**
+   - `build_system_prompt()` - render template with context and progress
+   - `get_tools_for_loop_type()` - get appropriate tools based on loop type
+   - `get_artifact_path()` - get path to output artifact for validation
 
 **Validation:**
 - Loop iterates until validation passes
@@ -794,7 +805,7 @@ src/manager/spawner.rs
 
 4. **Loop execution wrapper:**
    - Create worktree
-   - Run LoopRunner
+   - Call `loop_instance.run(llm, tools, validator)`
    - Handle outcome (complete/failed/invalidated)
    - Cleanup worktree
    - Persist final state

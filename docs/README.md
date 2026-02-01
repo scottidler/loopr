@@ -306,6 +306,36 @@ loopr --start-daemon
 
 ---
 
+## Documentation Guidelines
+
+**Consistency is Mandatory.** Documentation inconsistency has caused real bugs in this project.
+
+All docs MUST be:
+
+1. **Internally consistent** - Docs must not contradict each other
+2. **Code-aligned** - Docs must match what the code actually does
+3. **Current** - Update docs in the same PR as code changes
+
+### Single Source of Truth
+
+| Concept | Authoritative Document |
+|---------|------------------------|
+| Type design & domain model | [domain-types.md](domain-types.md) |
+| System architecture | [architecture.md](architecture.md) |
+| Build/implementation phases | [implementation-phases.md](implementation-phases.md) |
+| TUI specification | [tui.md](tui.md) |
+| Loop execution model | [loop.md](loop.md) |
+
+When documents conflict, the authoritative document wins.
+
+### Before Implementing
+
+1. Read [domain-types.md](domain-types.md) first—it defines the core abstractions
+2. Cross-check [implementation-phases.md](implementation-phases.md) against domain-types.md
+3. If they conflict, domain-types.md is correct—fix the other doc or ask
+
+---
+
 ## References
 
 - [Ralph Wiggum Technique](https://ghuntley.com/ralph/) - Geoffrey Huntley (original concept)
