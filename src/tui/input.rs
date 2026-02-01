@@ -20,10 +20,10 @@ impl KeyEvent {
         Self { code, modifiers }
     }
 
-    /// Check if this is a quit key (q or Ctrl+C)
+    /// Check if this is a quit key (Ctrl+C or Ctrl+D)
     pub fn is_quit(&self) -> bool {
-        self.code == KeyCode::Char('q')
-            || (self.code == KeyCode::Char('c') && self.modifiers.contains(KeyModifiers::CONTROL))
+        (self.code == KeyCode::Char('c') && self.modifiers.contains(KeyModifiers::CONTROL))
+            || (self.code == KeyCode::Char('d') && self.modifiers.contains(KeyModifiers::CONTROL))
     }
 
     /// Check if this is the escape key
@@ -299,12 +299,19 @@ mod tests {
 
     #[test]
     fn test_key_event_is_quit() {
+        // 'q' should NOT quit (changed from previous behavior)
         let q_key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
-        assert!(q_key.is_quit());
+        assert!(!q_key.is_quit());
 
+        // Ctrl+C should quit (unchanged)
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(ctrl_c.is_quit());
 
+        // Ctrl+D should quit (new)
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert!(ctrl_d.is_quit());
+
+        // Other chars should NOT quit (unchanged)
         let a_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         assert!(!a_key.is_quit());
     }

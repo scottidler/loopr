@@ -101,7 +101,7 @@ fn run_tui(config: &Config) -> Result<()> {
     // Add welcome message
     app.add_chat_message(
         MessageSender::System,
-        "Welcome to Loopr! Press Tab to switch views, q to quit.".to_string(),
+        "Welcome to Loopr! Press Tab to switch views, Ctrl+C to quit.".to_string(),
     );
 
     // 4. Run event loop
@@ -162,7 +162,7 @@ fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, ap
                 .state
                 .status_message
                 .as_deref()
-                .unwrap_or("Press Tab to switch views, q to quit");
+                .unwrap_or("Press Tab to switch views, Ctrl+C to quit");
             let status = ratatui::widgets::Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray));
             frame.render_widget(status, chunks[2]);
         })?;
@@ -229,19 +229,19 @@ fn handle_daemon_command(command: &DaemonCommands, config: &Config) -> Result<()
             } else {
                 println!("{}", "Starting daemon...".cyan());
             }
-            // TODO: Wire up daemon start
+            println!("{}", "Daemon start not yet implemented".yellow());
         }
         DaemonCommands::Stop => {
             println!("{}", "Stopping daemon...".cyan());
-            // TODO: Wire up daemon stop
+            println!("{}", "Daemon stop not yet implemented".yellow());
         }
         DaemonCommands::Status => {
             println!("{}", "Checking daemon status...".cyan());
-            // TODO: Wire up daemon status check
+            println!("{}", "Daemon status not yet implemented".yellow());
         }
         DaemonCommands::Restart => {
             println!("{}", "Restarting daemon...".cyan());
-            // TODO: Wire up daemon restart
+            println!("{}", "Daemon restart not yet implemented".yellow());
         }
     }
     Ok(())
@@ -253,7 +253,7 @@ fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
         println!("{}", "[debug] Plan command handler".yellow());
     }
     println!("{} Creating plan: {}", "Planning:".green(), task);
-    // TODO: Wire up plan creation via LoopManager
+    println!("{}", "Plan creation not yet implemented".yellow());
     Ok(())
 }
 
@@ -269,7 +269,7 @@ fn handle_list_command(status: Option<&str>, loop_type: Option<&str>, config: &C
     if let Some(t) = loop_type {
         println!("  Filtering by type: {}", t);
     }
-    // TODO: Wire up loop listing via Storage
+    println!("{}", "Loop listing not yet implemented".yellow());
     Ok(())
 }
 
@@ -282,7 +282,7 @@ fn handle_status_command(id: &str, detailed: bool, config: &Config) -> Result<()
     if detailed {
         println!("  (detailed view)");
     }
-    // TODO: Wire up status retrieval via Storage
+    println!("{}", "Status retrieval not yet implemented".yellow());
     Ok(())
 }
 
@@ -292,7 +292,7 @@ fn handle_approve_command(id: &str, config: &Config) -> Result<()> {
         println!("{}", "[debug] Approve command handler".yellow());
     }
     println!("{} {}", "Approving:".green(), id);
-    // TODO: Wire up plan approval via LoopManager
+    println!("{}", "Plan approval not yet implemented".yellow());
     Ok(())
 }
 
@@ -305,7 +305,7 @@ fn handle_reject_command(id: &str, reason: Option<&str>, config: &Config) -> Res
     if let Some(r) = reason {
         println!("  Reason: {}", r);
     }
-    // TODO: Wire up plan rejection via LoopManager
+    println!("{}", "Plan rejection not yet implemented".yellow());
     Ok(())
 }
 
@@ -315,7 +315,7 @@ fn handle_pause_command(id: &str, config: &Config) -> Result<()> {
         println!("{}", "[debug] Pause command handler".yellow());
     }
     println!("{} {}", "Pausing:".yellow(), id);
-    // TODO: Wire up loop pause via signal
+    println!("{}", "Loop pause not yet implemented".yellow());
     Ok(())
 }
 
@@ -325,7 +325,7 @@ fn handle_resume_command(id: &str, config: &Config) -> Result<()> {
         println!("{}", "[debug] Resume command handler".yellow());
     }
     println!("{} {}", "Resuming:".green(), id);
-    // TODO: Wire up loop resume via signal
+    println!("{}", "Loop resume not yet implemented".yellow());
     Ok(())
 }
 
@@ -335,7 +335,7 @@ fn handle_cancel_command(id: &str, config: &Config) -> Result<()> {
         println!("{}", "[debug] Cancel command handler".yellow());
     }
     println!("{} {}", "Canceling:".red(), id);
-    // TODO: Wire up loop cancellation via signal
+    println!("{}", "Loop cancellation not yet implemented".yellow());
     Ok(())
 }
 

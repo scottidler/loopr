@@ -56,21 +56,31 @@ impl Default for ChatView {
 
 impl View for ChatView {
     fn render(&self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let chunks = Layout::default()
+        // Single outer block with border
+        let outer_block = Block::default().borders(Borders::ALL).title(" Chat ");
+
+        let inner_area = outer_block.inner(area);
+        frame.render_widget(outer_block, area);
+
+        // Split inner area: messages at top, input line at bottom
+        let inner_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(3)])
-            .split(area);
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner_area);
 
-        // Messages area
+        // Messages area (no borders)
         let items: Vec<ListItem> = state.chat_messages.iter().map(Self::format_message).collect();
+        let messages = List::new(items);
+        frame.render_widget(messages, inner_chunks[0]);
 
-        let messages = List::new(items).block(Block::default().borders(Borders::ALL).title(" Chat Messages "));
-        frame.render_widget(messages, chunks[0]);
-
-        // Input area
-        let input =
-            Paragraph::new(state.chat_input.as_str()).block(Block::default().borders(Borders::ALL).title(" Input "));
-        frame.render_widget(input, chunks[1]);
+        // Input line with prompt (no borders)
+        let input_line = Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::raw(state.chat_input.as_str()),
+            Span::styled("_", Style::default().fg(Color::DarkGray)),
+        ]);
+        let input = Paragraph::new(input_line);
+        frame.render_widget(input, inner_chunks[1]);
     }
 
     fn title(&self) -> &'static str {
