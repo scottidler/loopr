@@ -32,8 +32,8 @@ impl CompositeValidator {
         }
     }
 
-    /// Add a validator to the chain
-    pub fn add(mut self, validator: impl Validator + 'static) -> Self {
+    /// Add a validator to the chain (builder pattern)
+    pub fn with_validator(mut self, validator: impl Validator + 'static) -> Self {
         self.validators.push(Box::new(validator));
         self
     }
@@ -147,8 +147,8 @@ mod tests {
     #[test]
     fn test_composite_add() {
         let composite = CompositeValidator::new()
-            .add(MockValidator::passing("v1"))
-            .add(MockValidator::passing("v2"));
+            .with_validator(MockValidator::passing("v1"))
+            .with_validator(MockValidator::passing("v2"));
 
         assert_eq!(composite.len(), 2);
         assert!(!composite.is_empty());
@@ -157,8 +157,8 @@ mod tests {
     #[test]
     fn test_composite_validator_descriptions() {
         let composite = CompositeValidator::new()
-            .add(MockValidator::passing("format check"))
-            .add(MockValidator::passing("command check"));
+            .with_validator(MockValidator::passing("format check"))
+            .with_validator(MockValidator::passing("command check"));
 
         let descriptions = composite.validator_descriptions();
         assert_eq!(descriptions, vec!["format check", "command check"]);
@@ -167,9 +167,9 @@ mod tests {
     #[tokio::test]
     async fn test_composite_all_pass() {
         let composite = CompositeValidator::new()
-            .add(MockValidator::passing("v1"))
-            .add(MockValidator::passing("v2"))
-            .add(MockValidator::passing("v3"));
+            .with_validator(MockValidator::passing("v1"))
+            .with_validator(MockValidator::passing("v2"))
+            .with_validator(MockValidator::passing("v3"));
 
         let result = composite
             .validate(Path::new("/tmp/artifact"), Path::new("/tmp/worktree"))
@@ -185,9 +185,9 @@ mod tests {
     #[tokio::test]
     async fn test_composite_one_fails() {
         let composite = CompositeValidator::new()
-            .add(MockValidator::passing("v1"))
-            .add(MockValidator::failing("v2", "validation error"))
-            .add(MockValidator::passing("v3"));
+            .with_validator(MockValidator::passing("v1"))
+            .with_validator(MockValidator::failing("v2", "validation error"))
+            .with_validator(MockValidator::passing("v3"));
 
         let result = composite
             .validate(Path::new("/tmp/artifact"), Path::new("/tmp/worktree"))
@@ -202,9 +202,9 @@ mod tests {
     #[tokio::test]
     async fn test_composite_multiple_fail() {
         let composite = CompositeValidator::new()
-            .add(MockValidator::failing("v1", "error 1"))
-            .add(MockValidator::passing("v2"))
-            .add(MockValidator::failing("v3", "error 2"));
+            .with_validator(MockValidator::failing("v1", "error 1"))
+            .with_validator(MockValidator::passing("v2"))
+            .with_validator(MockValidator::failing("v3", "error 2"));
 
         let result = composite
             .validate(Path::new("/tmp/artifact"), Path::new("/tmp/worktree"))
@@ -232,8 +232,8 @@ mod tests {
     #[tokio::test]
     async fn test_composite_collects_all_output() {
         let composite = CompositeValidator::new()
-            .add(MockValidator::passing("format"))
-            .add(MockValidator::passing("cargo"));
+            .with_validator(MockValidator::passing("format"))
+            .with_validator(MockValidator::passing("cargo"));
 
         let result = composite
             .validate(Path::new("/tmp/artifact"), Path::new("/tmp/worktree"))
@@ -252,7 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_composite_single_validator_pass() {
-        let composite = CompositeValidator::new().add(MockValidator::passing("only"));
+        let composite = CompositeValidator::new().with_validator(MockValidator::passing("only"));
 
         let result = composite
             .validate(Path::new("/tmp/artifact"), Path::new("/tmp/worktree"))
@@ -264,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_composite_single_validator_fail() {
-        let composite = CompositeValidator::new().add(MockValidator::failing("only", "failed"));
+        let composite = CompositeValidator::new().with_validator(MockValidator::failing("only", "failed"));
 
         let result = composite
             .validate(Path::new("/tmp/artifact"), Path::new("/tmp/worktree"))
@@ -302,9 +302,9 @@ mod tests {
     fn test_composite_builder_pattern() {
         // Verify the builder pattern works fluently
         let composite = CompositeValidator::with_description("full validation")
-            .add(MockValidator::passing("format"))
-            .add(MockValidator::passing("lint"))
-            .add(MockValidator::passing("test"));
+            .with_validator(MockValidator::passing("format"))
+            .with_validator(MockValidator::passing("lint"))
+            .with_validator(MockValidator::passing("test"));
 
         assert_eq!(composite.len(), 3);
         assert_eq!(composite.description(), "full validation");
@@ -314,9 +314,9 @@ mod tests {
     async fn test_composite_preserves_order() {
         // Verify validators run in the order they were added
         let composite = CompositeValidator::new()
-            .add(MockValidator::passing("first"))
-            .add(MockValidator::passing("second"))
-            .add(MockValidator::passing("third"));
+            .with_validator(MockValidator::passing("first"))
+            .with_validator(MockValidator::passing("second"))
+            .with_validator(MockValidator::passing("third"));
 
         let descs = composite.validator_descriptions();
         assert_eq!(descs[0], "first");
