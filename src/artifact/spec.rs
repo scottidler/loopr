@@ -127,11 +127,6 @@ fn try_parse_numbered_item_with_number(line: &str) -> Option<(u32, &str)> {
     Some((number, &line[i + 2..]))
 }
 
-/// Try to parse a numbered list item (e.g., "1. rest" or "2. rest")
-#[allow(dead_code)]
-fn try_parse_numbered_item(line: &str) -> Option<&str> {
-    try_parse_numbered_item_with_number(line).map(|(_, rest)| rest)
-}
 
 /// Parse a phase header like "**Phase Name**: Description" or "**Phase Name**"
 fn parse_phase_header(text: &str) -> Option<(u32, String, String)> {
@@ -170,6 +165,11 @@ fn parse_phase_header(text: &str) -> Option<(u32, String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test helper: Try to parse a numbered list item (e.g., "1. rest" or "2. rest")
+    fn try_parse_numbered_item(line: &str) -> Option<&str> {
+        try_parse_numbered_item_with_number(line).map(|(_, rest)| rest)
+    }
 
     const SAMPLE_SPEC: &str = r#"# Authentication Spec
 

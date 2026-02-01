@@ -3,11 +3,23 @@
 //! The Loop is the core abstraction in Loopr. It implements the Ralph Wiggum pattern:
 //! an iterative loop that calls an LLM with fresh context on each iteration until
 //! validation passes.
+//!
+//! Per domain-types.md, Loop is self-contained with its own `run()` method.
+//! There is no separate LoopRunner - that was unnecessary indirection.
 
-use crate::id::{generate_child_id, generate_loop_id, now_ms};
-use crate::storage::HasId;
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+
+use crate::domain::LoopOutcome;
+use crate::error::Result;
+use crate::id::{generate_child_id, generate_loop_id, now_ms};
+use crate::llm::{CompletionRequest, LlmClient, Message, ToolDefinition};
+use crate::prompt::PromptRenderer;
+use crate::storage::HasId;
+use crate::tools::ToolRouter;
+use crate::validation::Validator;
 
 /// The core Loop struct representing a single loop instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +229,168 @@ impl Loop {
     /// Update the timestamp
     pub fn touch(&mut self) {
         self.updated_at = now_ms();
+    }
+
+    /// Run the loop until completion or failure.
+    ///
+    /// This implements the Ralph Wiggum pattern:
+    /// - Fresh context (new messages array) each iteration
+    /// - Feedback accumulated in the prompt, not conversation history
+    /// - Iterate until validation passes or max iterations reached
+    ///
+    /// Per domain-types.md, Loop is self-contained. The `run()` method
+    /// takes dependencies as parameters rather than having a separate
+    /// LoopRunner struct.
+    pub async fn run<L, T, V>(
+        &mut self,
+        llm: Arc<L>,
+        tool_router: Arc<T>,
+        validator: Arc<V>,
+    ) -> Result<LoopOutcome>
+    where
+        L: LlmClient,
+        T: ToolRouter,
+        V: Validator,
+    {
+        self.run_with_config(llm, tool_router, validator, LoopRunConfig::default()).await
+    }
+
+    /// Run the loop with custom configuration.
+    pub async fn run_with_config<L, T, V>(
+        &mut self,
+        llm: Arc<L>,
+        tool_router: Arc<T>,
+        validator: Arc<V>,
+        config: LoopRunConfig,
+    ) -> Result<LoopOutcome>
+    where
+        L: LlmClient,
+        T: ToolRouter,
+        V: Validator,
+    {
+        self.status = LoopStatus::Running;
+        let prompt_renderer = PromptRenderer::new();
+
+        while self.iteration < self.max_iterations {
+            // 1. Build prompt with accumulated feedback (FRESH CONTEXT)
+            let system_prompt = self.build_system_prompt(&prompt_renderer)?;
+            let user_message = self.build_user_message();
+
+            // 2. Call LLM - NEW messages array each time
+            let tools = self.get_tools_for_loop_type(&*tool_router);
+            let request = CompletionRequest {
+                system: system_prompt,
+                messages: vec![Message::user(&user_message)],
+                tools,
+                max_tokens: Some(config.max_tokens),
+                ..Default::default()
+            };
+
+            let response = llm.complete(request).await?;
+
+            // 3. Execute tool calls
+            for call in &response.tool_calls {
+                let result = tool_router.execute(call.clone(), &self.worktree).await?;
+
+                // If tool execution fails, add to progress
+                if result.is_error {
+                    self.progress
+                        .push_str(&format!("\nTool {} failed: {}\n", call.name, result.content));
+                }
+            }
+
+            // 4. Validate output
+            let artifact_path = self.get_artifact_path();
+            let validation_result = validator.validate(&artifact_path, &self.worktree).await?;
+
+            if validation_result.passed {
+                self.status = LoopStatus::Complete;
+                return Ok(LoopOutcome::Complete);
+            }
+
+            // 5. Accumulate feedback for next iteration
+            self.progress.push_str(&format!(
+                "\n---\n## Iteration {} Failed\n{}\n",
+                self.iteration + 1,
+                validation_result.output
+            ));
+
+            for error in &validation_result.errors {
+                self.progress.push_str(&format!("- {}\n", error));
+            }
+
+            self.iteration += 1;
+
+            // ITERATION ENDS - Context is discarded
+            // Next iteration starts completely fresh
+        }
+
+        // Max iterations exhausted
+        self.status = LoopStatus::Failed;
+        Ok(LoopOutcome::Failed("Max iterations exhausted".into()))
+    }
+
+    /// Build the system prompt for this loop.
+    fn build_system_prompt(&self, prompt_renderer: &PromptRenderer) -> Result<String> {
+        // Render the prompt template with the loop's context
+        prompt_renderer.render_json(&self.prompt_path.to_string_lossy(), &self.context)
+    }
+
+    /// Build the user message with task and accumulated feedback.
+    fn build_user_message(&self) -> String {
+        let task = self.context.get("task").and_then(|v| v.as_str()).unwrap_or("");
+
+        if self.progress.is_empty() {
+            task.to_string()
+        } else {
+            format!("{}\n\n## Previous Iteration Feedback\n{}", task, self.progress)
+        }
+    }
+
+    /// Get tool definitions appropriate for the loop type.
+    fn get_tools_for_loop_type<T: ToolRouter + ?Sized>(&self, tool_router: &T) -> Vec<ToolDefinition> {
+        // For now, return all available tools
+        // In the future, this could filter based on loop type
+        let tool_names = tool_router.available_tools();
+        tool_names
+            .iter()
+            .map(|name| ToolDefinition {
+                name: name.clone(),
+                description: format!("Tool: {}", name),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            })
+            .collect()
+    }
+
+    /// Get the path to the output artifact for validation.
+    fn get_artifact_path(&self) -> PathBuf {
+        if let Some(artifact) = self.output_artifacts.first() {
+            artifact.clone()
+        } else {
+            // For CodeLoop, validate the worktree itself
+            self.worktree.clone()
+        }
+    }
+}
+
+/// Configuration for loop execution.
+#[derive(Debug, Clone)]
+pub struct LoopRunConfig {
+    /// Maximum tokens for LLM responses
+    pub max_tokens: u32,
+    /// Whether to use streaming for LLM calls
+    pub use_streaming: bool,
+}
+
+impl Default for LoopRunConfig {
+    fn default() -> Self {
+        Self {
+            max_tokens: 8192,
+            use_streaming: false,
+        }
     }
 }
 

@@ -27,21 +27,10 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
-#[allow(dead_code)]
 impl Cli {
-    /// Parse command line arguments
-    pub fn parse_args() -> Self {
-        Self::parse()
-    }
-
     /// Check if verbose mode is enabled
     pub fn is_verbose(&self) -> bool {
         self.verbose
-    }
-
-    /// Get the config path if specified
-    pub fn config_path(&self) -> Option<&PathBuf> {
-        self.config.as_ref()
     }
 }
 
@@ -136,33 +125,29 @@ pub enum DaemonCommands {
     Restart,
 }
 
-#[allow(dead_code)]
-impl DaemonCommands {
-    /// Check if this is a start command
-    pub fn is_start(&self) -> bool {
-        matches!(self, DaemonCommands::Start { .. })
-    }
-
-    /// Check if this is a stop command
-    pub fn is_stop(&self) -> bool {
-        matches!(self, DaemonCommands::Stop)
-    }
-
-    /// Check if this is a status command
-    pub fn is_status(&self) -> bool {
-        matches!(self, DaemonCommands::Status)
-    }
-
-    /// Check if foreground mode is requested (for start)
-    pub fn is_foreground(&self) -> bool {
-        matches!(self, DaemonCommands::Start { foreground: true })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    // Test helper methods for DaemonCommands
+    impl DaemonCommands {
+        fn is_start(&self) -> bool {
+            matches!(self, DaemonCommands::Start { .. })
+        }
+
+        fn is_stop(&self) -> bool {
+            matches!(self, DaemonCommands::Stop)
+        }
+
+        fn is_status(&self) -> bool {
+            matches!(self, DaemonCommands::Status)
+        }
+
+        fn is_foreground(&self) -> bool {
+            matches!(self, DaemonCommands::Start { foreground: true })
+        }
+    }
 
     #[test]
     fn test_cli_parse_no_args() {
@@ -182,7 +167,7 @@ mod tests {
     #[test]
     fn test_cli_config_option() {
         let cli = Cli::try_parse_from(["loopr", "-c", "/path/to/config.toml"]).unwrap();
-        assert_eq!(cli.config_path(), Some(&PathBuf::from("/path/to/config.toml")));
+        assert_eq!(cli.config.as_ref(), Some(&PathBuf::from("/path/to/config.toml")));
     }
 
     #[test]

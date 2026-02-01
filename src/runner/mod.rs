@@ -1,13 +1,14 @@
-//! Loop runner module - implements Ralph Wiggum iteration pattern.
+//! Loop runner module - re-exports for backwards compatibility.
 //!
-//! This module provides the core loop execution logic, including:
-//! - LoopRunner for executing single loops
-//! - LoopOutcome for representing execution results
-//! - Fresh context pattern with accumulated feedback
+//! NOTE: Per domain-types.md, the LoopRunner struct was removed.
+//! Loop execution is now handled by `Loop::run()` directly.
+//!
+//! This module re-exports LoopOutcome from the domain module for
+//! backwards compatibility. It will be kept for potential future
+//! runner subprocess work (runner-no-net, runner-net, runner-heavy).
 
-mod loop_runner;
-
-pub use loop_runner::{LoopOutcome, LoopRunner, LoopRunnerConfig, SignalChecker};
+// Re-export LoopOutcome from domain for backwards compatibility
+pub use crate::domain::LoopOutcome;
 
 #[cfg(test)]
 mod tests {

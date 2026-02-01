@@ -11,13 +11,13 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 use crate::coordination::SignalManager;
-use crate::domain::{Loop, LoopStatus, LoopType};
+use crate::domain::{Loop, LoopOutcome, LoopStatus, LoopType};
 use crate::error::{LooprError, Result};
 use crate::id::now_ms;
 use crate::llm::LlmClient;
-use crate::runner::LoopOutcome;
 use crate::storage::{Filter, Storage};
 use crate::tools::ToolRouter;
+use crate::validation::Validator;
 use crate::worktree::WorktreeManager;
 
 /// Collection name for loops in storage
@@ -48,24 +48,34 @@ impl Default for LoopManagerConfig {
 }
 
 /// Manages loop lifecycle - creation, execution, child spawning
-pub struct LoopManager<S: Storage, L: LlmClient, T: ToolRouter> {
+///
+/// Per domain-types.md, Loop is self-contained with its own `run()` method.
+/// LoopManager orchestrates loops by calling `Loop::run()` with the
+/// appropriate dependencies.
+pub struct LoopManager<S: Storage, L: LlmClient, T: ToolRouter, V: Validator> {
     storage: Arc<S>,
-    #[allow(dead_code)]
     llm_client: Arc<L>,
-    #[allow(dead_code)]
     tool_router: Arc<T>,
+    validator: Arc<V>,
     worktree_manager: Arc<WorktreeManager>,
     signal_manager: Arc<SignalManager<S>>,
     config: LoopManagerConfig,
     running_loops: RwLock<HashMap<String, JoinHandle<Result<LoopOutcome>>>>,
 }
 
-impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter + 'static> LoopManager<S, L, T> {
+impl<S, L, T, V> LoopManager<S, L, T, V>
+where
+    S: Storage + Send + Sync + 'static,
+    L: LlmClient + 'static,
+    T: ToolRouter + 'static,
+    V: Validator + 'static,
+{
     /// Create a new LoopManager with the given dependencies
     pub fn new(
         storage: Arc<S>,
         llm_client: Arc<L>,
         tool_router: Arc<T>,
+        validator: Arc<V>,
         worktree_manager: Arc<WorktreeManager>,
         signal_manager: Arc<SignalManager<S>>,
         config: LoopManagerConfig,
@@ -74,6 +84,7 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
             storage,
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -118,10 +129,8 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
 
     /// Start executing a loop (spawns tokio task)
     ///
-    /// Note: Full loop execution with LoopRunner requires a Validator.
-    /// For now, this method marks the loop as running and sets up the worktree.
-    /// The actual execution integration will be completed when validation
-    /// infrastructure is properly wired.
+    /// Creates a worktree for the loop and spawns a task that calls `Loop::run()`
+    /// with the LLM client, tool router, and validator.
     pub async fn start_loop(&self, loop_id: &str) -> Result<()> {
         // Get the loop from storage
         let loop_instance: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
@@ -147,13 +156,22 @@ impl<S: Storage + Send + Sync + 'static, L: LlmClient + 'static, T: ToolRouter +
         // Update loop with worktree path
         self.storage.update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
 
-        // TODO: Spawn actual loop execution with LoopRunner once validator integration is complete
-        // For now, just mark it as tracked
+        // Clone dependencies for the spawned task
+        let llm = self.llm_client.clone();
+        let tools = self.tool_router.clone();
+        let validator = self.validator.clone();
+        let storage = self.storage.clone();
         let loop_id_owned = loop_id.to_string();
+
+        // Spawn the loop execution task
         let handle = tokio::spawn(async move {
-            // Placeholder - actual runner integration needs validator
-            let _ = loop_id_owned; // Use the variable
-            Ok(LoopOutcome::Complete)
+            // Run the loop with the dependencies
+            let outcome = loop_instance.run(llm, tools, validator).await?;
+
+            // Update the loop status in storage after completion
+            storage.update(LOOPS_COLLECTION, &loop_id_owned, &loop_instance)?;
+
+            Ok(outcome)
         });
 
         // Track the running task
@@ -262,13 +280,27 @@ mod tests {
     use crate::llm::MockLlmClient;
     use crate::storage::JsonlStorage;
     use crate::tools::{LocalToolRouter, ToolCatalog};
+    use crate::validation::ValidationResult;
+    use async_trait::async_trait;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    /// Mock validator for testing - always passes
+    struct MockValidator;
+
+    #[async_trait]
+    impl Validator for MockValidator {
+        async fn validate(&self, _artifact: &Path, _worktree: &Path) -> Result<ValidationResult> {
+            Ok(ValidationResult::pass_with_output("Validation passed"))
+        }
+    }
 
     type TestDeps = (
         TempDir,
         Arc<JsonlStorage>,
         Arc<MockLlmClient>,
         Arc<LocalToolRouter>,
+        Arc<MockValidator>,
         Arc<WorktreeManager>,
         Arc<SignalManager<JsonlStorage>>,
     );
@@ -279,6 +311,7 @@ mod tests {
         let llm_client = Arc::new(MockLlmClient::new());
         let catalog = ToolCatalog::default();
         let tool_router = Arc::new(LocalToolRouter::new(catalog));
+        let validator = Arc::new(MockValidator);
         let worktree_manager = Arc::new(WorktreeManager::new(
             temp_dir.path().to_path_buf(),
             temp_dir.path().to_path_buf(),
@@ -290,6 +323,7 @@ mod tests {
             storage,
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
         )
@@ -304,12 +338,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_plan_loop() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -324,12 +359,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_spec_loop_error() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage,
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -341,12 +377,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_loop() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -361,12 +398,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_loops() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -381,12 +419,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_by_status() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -403,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_available_slots() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig {
             max_concurrent_loops: 3,
             ..Default::default()
@@ -412,6 +451,7 @@ mod tests {
             storage,
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -423,12 +463,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_child_loop() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -443,12 +484,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_plan_as_child_error() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -462,12 +504,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_stop_loop_sends_signal() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager.clone(),
             config,
@@ -484,12 +527,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_pause_loop_sends_signal() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager.clone(),
             config,
@@ -505,12 +549,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_resume_loop_sends_signal() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager.clone(),
             config,
@@ -526,12 +571,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_find_by_parent() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage.clone(),
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -547,12 +593,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_loop_not_found() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage,
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,
@@ -564,12 +611,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_loop_not_found() {
-        let (_temp, storage, llm_client, tool_router, worktree_manager, signal_manager) = create_test_deps();
+        let (_temp, storage, llm_client, tool_router, validator, worktree_manager, signal_manager) = create_test_deps();
         let config = LoopManagerConfig::default();
         let manager = LoopManager::new(
             storage,
             llm_client,
             tool_router,
+            validator,
             worktree_manager,
             signal_manager,
             config,

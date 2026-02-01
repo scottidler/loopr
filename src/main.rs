@@ -9,6 +9,7 @@ mod cli;
 mod config;
 
 use cli::Cli;
+use cli::commands::{Commands, DaemonCommands};
 use config::Config;
 
 fn setup_logging() -> Result<()> {
@@ -39,23 +40,151 @@ fn setup_logging() -> Result<()> {
     Ok(())
 }
 
-fn run_application(_cli: &Cli, config: &Config) -> Result<()> {
+fn run_application(cli: &Cli, config: &Config) -> Result<()> {
     info!("Starting application");
 
-    // Load and display configuration
-    println!("{}", "✓ Configuration loaded successfully".green());
-    if config.debug {
-        println!("{}", "🔍 Debug mode enabled".yellow());
+    if cli.is_verbose() {
+        println!("{}", "Verbose mode enabled".yellow());
     }
 
-    // Demonstrate colored output
-    println!("{} Hello from {}!", "🎉".green(), "loopr".cyan());
-    println!("{} Author: {}", "👤".blue(), config.name);
-    println!("{} Age: {}", "📅".blue(), config.age);
+    match &cli.command {
+        None => {
+            // Default: launch TUI mode
+            run_tui(config)
+        }
+        Some(Commands::Daemon { command }) => handle_daemon_command(command, config),
+        Some(Commands::Plan { task }) => handle_plan_command(task, config),
+        Some(Commands::List { status, loop_type }) => {
+            handle_list_command(status.as_deref(), loop_type.as_deref(), config)
+        }
+        Some(Commands::Status { id, detailed }) => handle_status_command(id, *detailed, config),
+        Some(Commands::Approve { id }) => handle_approve_command(id, config),
+        Some(Commands::Reject { id, reason }) => {
+            handle_reject_command(id, reason.as_deref(), config)
+        }
+        Some(Commands::Pause { id }) => handle_pause_command(id, config),
+        Some(Commands::Resume { id }) => handle_resume_command(id, config),
+        Some(Commands::Cancel { id }) => handle_cancel_command(id, config),
+    }
+}
 
-    // Log some information
-    info!("Application executed successfully");
+// Command handlers - stubs for now, will be wired to real implementations
 
+fn run_tui(config: &Config) -> Result<()> {
+    info!("Launching TUI mode");
+    println!("{}", "Launching TUI...".cyan());
+    if config.debug {
+        println!("{}", "Debug mode enabled".yellow());
+    }
+    // TODO: Wire up actual TUI
+    Ok(())
+}
+
+fn handle_daemon_command(command: &DaemonCommands, config: &Config) -> Result<()> {
+    info!("Handling daemon command: {:?}", command);
+    match command {
+        DaemonCommands::Start { foreground } => {
+            if *foreground {
+                println!("{}", "Starting daemon in foreground...".cyan());
+            } else {
+                println!("{}", "Starting daemon...".cyan());
+            }
+            // TODO: Wire up daemon start
+        }
+        DaemonCommands::Stop => {
+            println!("{}", "Stopping daemon...".cyan());
+            // TODO: Wire up daemon stop
+        }
+        DaemonCommands::Status => {
+            println!("{}", "Checking daemon status...".cyan());
+            // TODO: Wire up daemon status check
+        }
+        DaemonCommands::Restart => {
+            println!("{}", "Restarting daemon...".cyan());
+            // TODO: Wire up daemon restart
+        }
+    }
+    let _ = config; // Suppress unused warning until wired up
+    Ok(())
+}
+
+fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
+    info!("Creating plan for task: {}", task);
+    println!("{} Creating plan: {}", "Planning:".green(), task);
+    let _ = config;
+    // TODO: Wire up plan creation via LoopManager
+    Ok(())
+}
+
+fn handle_list_command(
+    status: Option<&str>,
+    loop_type: Option<&str>,
+    config: &Config,
+) -> Result<()> {
+    info!("Listing loops - status: {:?}, type: {:?}", status, loop_type);
+    println!("{}", "Listing loops...".cyan());
+    if let Some(s) = status {
+        println!("  Filtering by status: {}", s);
+    }
+    if let Some(t) = loop_type {
+        println!("  Filtering by type: {}", t);
+    }
+    let _ = config;
+    // TODO: Wire up loop listing via Storage
+    Ok(())
+}
+
+fn handle_status_command(id: &str, detailed: bool, config: &Config) -> Result<()> {
+    info!("Getting status for loop: {} (detailed: {})", id, detailed);
+    println!("{} {}", "Status for:".green(), id);
+    if detailed {
+        println!("  (detailed view)");
+    }
+    let _ = config;
+    // TODO: Wire up status retrieval via Storage
+    Ok(())
+}
+
+fn handle_approve_command(id: &str, config: &Config) -> Result<()> {
+    info!("Approving plan: {}", id);
+    println!("{} {}", "Approving:".green(), id);
+    let _ = config;
+    // TODO: Wire up plan approval via LoopManager
+    Ok(())
+}
+
+fn handle_reject_command(id: &str, reason: Option<&str>, config: &Config) -> Result<()> {
+    info!("Rejecting plan: {} (reason: {:?})", id, reason);
+    println!("{} {}", "Rejecting:".red(), id);
+    if let Some(r) = reason {
+        println!("  Reason: {}", r);
+    }
+    let _ = config;
+    // TODO: Wire up plan rejection via LoopManager
+    Ok(())
+}
+
+fn handle_pause_command(id: &str, config: &Config) -> Result<()> {
+    info!("Pausing loop: {}", id);
+    println!("{} {}", "Pausing:".yellow(), id);
+    let _ = config;
+    // TODO: Wire up loop pause via signal
+    Ok(())
+}
+
+fn handle_resume_command(id: &str, config: &Config) -> Result<()> {
+    info!("Resuming loop: {}", id);
+    println!("{} {}", "Resuming:".green(), id);
+    let _ = config;
+    // TODO: Wire up loop resume via signal
+    Ok(())
+}
+
+fn handle_cancel_command(id: &str, config: &Config) -> Result<()> {
+    info!("Canceling loop: {}", id);
+    println!("{} {}", "Canceling:".red(), id);
+    let _ = config;
+    // TODO: Wire up loop cancellation via signal
     Ok(())
 }
 
