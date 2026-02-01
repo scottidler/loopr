@@ -9,8 +9,5 @@
 pub mod codec;
 pub mod messages;
 
-pub use codec::{decode_message, encode_message, JsonCodec, NdJsonCodec};
-pub use messages::{
-    DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, Events, IpcMessage,
-    Methods,
-};
+pub use codec::{JsonCodec, NdJsonCodec, decode_message, encode_message};
+pub use messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, Events, IpcMessage, Methods};

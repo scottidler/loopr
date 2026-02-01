@@ -3,7 +3,7 @@
 //! Provides a codec for encoding/decoding JSON messages over a stream.
 
 use bytes::{Buf, BufMut, BytesMut};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::marker::PhantomData;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -93,9 +93,8 @@ impl<T: DeserializeOwned> Decoder for JsonCodec<T> {
         let data = src.split_to(length);
 
         // Deserialize
-        serde_json::from_slice(&data).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e))
-        })
+        serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e)))
     }
 }
 
@@ -104,9 +103,8 @@ impl<T: Serialize> Encoder<T> for JsonCodec<T> {
 
     fn encode(&mut self, item: T, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
         // Serialize to JSON
-        let json = serde_json::to_vec(&item).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e))
-        })?;
+        let json = serde_json::to_vec(&item)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e)))?;
 
         let length = json.len();
 
@@ -193,12 +191,8 @@ impl<T: DeserializeOwned> Decoder for NdJsonCodec<T> {
                 src.advance(1);
 
                 // Deserialize
-                serde_json::from_slice(&line).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("JSON error: {}", e),
-                    )
-                })
+                serde_json::from_slice(&line)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e)))
             }
             None => {
                 // Check if buffer is getting too large
@@ -219,9 +213,8 @@ impl<T: Serialize> Encoder<T> for NdJsonCodec<T> {
 
     fn encode(&mut self, item: T, dst: &mut BytesMut) -> std::result::Result<(), Self::Error> {
         // Serialize to JSON (compact, no newlines)
-        let json = serde_json::to_vec(&item).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e))
-        })?;
+        let json = serde_json::to_vec(&item)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON error: {}", e)))?;
 
         // Check max length
         if json.len() > self.max_length {
