@@ -8,6 +8,7 @@ pub mod error;
 pub mod id;
 pub mod llm;
 pub mod prompt;
+pub mod runner;
 pub mod storage;
 pub mod tools;
 pub mod validation;
