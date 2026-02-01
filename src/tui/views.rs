@@ -114,15 +114,16 @@ impl LoopsView {
             Style::default()
         };
 
+        // Use owned strings to satisfy 'static lifetime
         let line = Line::from(vec![
             Span::raw(indent),
             Span::styled(
                 format!("[{}] ", summary.loop_type),
                 Style::default().fg(Color::Magenta),
             ),
-            Span::raw(&summary.id),
+            Span::raw(summary.id.clone()),
             Span::raw(" - "),
-            Span::styled(&summary.status, Style::default().fg(status_color)),
+            Span::styled(summary.status.clone(), Style::default().fg(status_color)),
             Span::raw(format!(
                 " ({}/{})",
                 summary.iteration, summary.max_iterations
