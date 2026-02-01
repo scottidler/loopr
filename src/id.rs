@@ -5,11 +5,11 @@
 use rand::Rng;
 
 /// Get current timestamp in milliseconds since Unix epoch
-pub fn now_ms() -> u64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis() as u64
+        .as_millis() as i64
 }
 
 /// Generate a unique loop ID
