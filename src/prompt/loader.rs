@@ -107,12 +107,11 @@ impl PromptLoader {
         let mut templates = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "md") {
-                if let Some(stem) = path.file_stem() {
-                    if let Some(name) = stem.to_str() {
-                        templates.push(name.to_string());
-                    }
-                }
+            if path.extension().is_some_and(|ext| ext == "md")
+                && let Some(stem) = path.file_stem()
+                && let Some(name) = stem.to_str()
+            {
+                templates.push(name.to_string());
             }
         }
 
