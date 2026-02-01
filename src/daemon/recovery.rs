@@ -179,7 +179,7 @@ mod tests {
 
     fn setup_test() -> (TempDir, Arc<JsonlStorage>, Arc<WorktreeManager>) {
         let temp = TempDir::new().unwrap();
-        let storage = Arc::new(JsonlStorage::new(temp.path().join("storage")));
+        let storage = Arc::new(JsonlStorage::new(temp.path().join("storage")).unwrap());
         let worktree_mgr = Arc::new(WorktreeManager::new(
             temp.path().to_path_buf(),
             temp.path().join("worktrees"),

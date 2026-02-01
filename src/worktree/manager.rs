@@ -8,6 +8,7 @@ use std::process::Command;
 ///
 /// Each loop gets its own worktree with a dedicated branch, enabling
 /// parallel development without conflicts.
+#[derive(Debug)]
 pub struct WorktreeManager {
     /// Base path where worktrees are created
     base_path: PathBuf,
