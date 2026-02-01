@@ -16,16 +16,13 @@ pub mod types;
 // pub mod anthropic;
 
 pub use client::{LlmClient, MockLlmClient};
-pub use streaming::{
-    create_stream_channel, parse_sse_event, StreamChunk, StreamEvent, StreamHandle, StreamParser,
-};
+pub use streaming::{StreamChunk, StreamEvent, StreamHandle, StreamParser, create_stream_channel, parse_sse_event};
 pub use tool_parser::{
-    extract_tool_calls, find_tool_definition, needs_tool_execution, parse_response,
-    validate_tool_calls, validate_tool_input,
+    extract_tool_calls, find_tool_definition, needs_tool_execution, parse_response, validate_tool_calls,
+    validate_tool_input,
 };
 pub use types::{
-    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolDefinition,
-    ToolResult, Usage,
+    CompletionRequest, CompletionResponse, Message, Role, StopReason, ToolCall, ToolDefinition, ToolResult, Usage,
 };
 
 #[cfg(test)]

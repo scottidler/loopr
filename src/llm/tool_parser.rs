@@ -44,10 +44,7 @@ pub fn parse_response(response: &Value) -> Result<CompletionResponse> {
         .unwrap_or(StopReason::EndTurn);
 
     // Parse usage
-    let usage = response
-        .get("usage")
-        .map(parse_usage)
-        .unwrap_or_default();
+    let usage = response.get("usage").map(parse_usage).unwrap_or_default();
 
     Ok(CompletionResponse {
         content,
@@ -80,14 +77,8 @@ fn parse_stop_reason(reason: &str) -> StopReason {
 /// Parse usage object from response
 fn parse_usage(usage: &Value) -> Usage {
     Usage {
-        input_tokens: usage
-            .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        output_tokens: usage
-            .get("output_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
+        input_tokens: usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
+        output_tokens: usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0),
     }
 }
 
@@ -100,13 +91,13 @@ pub fn validate_tool_input(call: &ToolCall, definition: &ToolDefinition) -> Resu
     // Check required fields
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
         for req in required {
-            if let Some(field_name) = req.as_str() {
-                if !call.input.get(field_name).is_some() {
-                    return Err(LooprError::ValidationFailed(format!(
-                        "Tool '{}' missing required field: {}",
-                        call.name, field_name
-                    )));
-                }
+            if let Some(field_name) = req.as_str()
+                && call.input.get(field_name).is_none()
+            {
+                return Err(LooprError::ValidationFailed(format!(
+                    "Tool '{}' missing required field: {}",
+                    call.name, field_name
+                )));
             }
         }
     }
@@ -115,23 +106,16 @@ pub fn validate_tool_input(call: &ToolCall, definition: &ToolDefinition) -> Resu
 }
 
 /// Find a tool definition by name in a list
-pub fn find_tool_definition<'a>(
-    name: &str,
-    tools: &'a [ToolDefinition],
-) -> Option<&'a ToolDefinition> {
+pub fn find_tool_definition<'a>(name: &str, tools: &'a [ToolDefinition]) -> Option<&'a ToolDefinition> {
     tools.iter().find(|t| t.name == name)
 }
 
 /// Validate all tool calls in a response against available tool definitions
-pub fn validate_tool_calls(
-    response: &CompletionResponse,
-    tools: &[ToolDefinition],
-) -> Result<()> {
+pub fn validate_tool_calls(response: &CompletionResponse, tools: &[ToolDefinition]) -> Result<()> {
     for call in &response.tool_calls {
         // Check tool exists
-        let definition = find_tool_definition(&call.name, tools).ok_or_else(|| {
-            LooprError::ValidationFailed(format!("Unknown tool: {}", call.name))
-        })?;
+        let definition = find_tool_definition(&call.name, tools)
+            .ok_or_else(|| LooprError::ValidationFailed(format!("Unknown tool: {}", call.name)))?;
 
         // Validate input
         validate_tool_input(call, definition)?;
