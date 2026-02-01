@@ -6,10 +6,12 @@
 //! - Client for TUI connection
 //! - Length-prefixed JSON codec
 
+pub mod client;
 pub mod codec;
 pub mod messages;
 pub mod server;
 
+pub use client::{IpcClient, IpcClientConfig};
 pub use codec::{JsonCodec, NdJsonCodec, decode_message, encode_message};
 pub use messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, Events, IpcMessage, Methods};
 pub use server::{CallbackHandler, IpcServer, IpcServerConfig, RequestHandler};
