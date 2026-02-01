@@ -71,8 +71,7 @@ impl<S: Storage> InvalidationManager<S> {
 
             // Update the loop status to Invalidated
             descendant.status = LoopStatus::Invalidated;
-            self.storage
-                .update(LOOPS_COLLECTION, &descendant.id, &descendant)?;
+            self.storage.update(LOOPS_COLLECTION, &descendant.id, &descendant)?;
         }
 
         Ok(count)
@@ -251,9 +250,7 @@ mod tests {
         storage.create(LOOPS_COLLECTION, &parent).unwrap();
         storage.create(LOOPS_COLLECTION, &child).unwrap();
 
-        let count = manager
-            .invalidate_descendants("parent-003", "Reason")
-            .unwrap();
+        let count = manager.invalidate_descendants("parent-003", "Reason").unwrap();
         assert_eq!(count, 1);
 
         // Child should still be Complete (not changed to Invalidated)
@@ -360,8 +357,8 @@ mod tests {
         storage.create(LOOPS_COLLECTION, &child).unwrap();
 
         // Send invalidation signal targeting descendants of parent
-        let signal = SignalRecord::new(SignalType::Invalidate, "Test invalidation")
-            .to_selector("descendants:parent-006");
+        let signal =
+            SignalRecord::new(SignalType::Invalidate, "Test invalidation").to_selector("descendants:parent-006");
         storage.create(SIGNALS_COLLECTION, &signal).unwrap();
 
         let found = manager.check_invalidation("child-007").unwrap();
@@ -381,9 +378,7 @@ mod tests {
         storage.create(LOOPS_COLLECTION, &parent).unwrap();
         storage.create(LOOPS_COLLECTION, &child).unwrap();
 
-        manager
-            .invalidate_descendants("parent-007", "Test reason")
-            .unwrap();
+        manager.invalidate_descendants("parent-007", "Test reason").unwrap();
 
         // Check that a signal was created for the child
         let filters = vec![Filter::eq("target_loop", "child-008")];

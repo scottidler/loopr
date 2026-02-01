@@ -61,8 +61,7 @@ impl<S: Storage> SignalManager<S> {
         let signal: Option<SignalRecord> = self.storage.get(SIGNALS_COLLECTION, signal_id)?;
         if let Some(mut signal) = signal {
             signal.acknowledged_at = Some(now_ms());
-            self.storage
-                .update(SIGNALS_COLLECTION, signal_id, &signal)?;
+            self.storage.update(SIGNALS_COLLECTION, signal_id, &signal)?;
         }
         Ok(())
     }
@@ -239,9 +238,7 @@ mod tests {
         let (_temp, storage) = create_test_storage();
         let manager = SignalManager::new(storage);
 
-        manager
-            .send_invalidate("parent-001", "Parent re-iterated")
-            .unwrap();
+        manager.send_invalidate("parent-001", "Parent re-iterated").unwrap();
 
         let signals = manager.check_selector("descendants:parent-001").unwrap();
         assert_eq!(signals.len(), 1);
@@ -254,8 +251,7 @@ mod tests {
         let (_temp, storage) = create_test_storage();
         let manager = SignalManager::new(storage);
 
-        let signal = SignalRecord::new(SignalType::Invalidate, "Test")
-            .to_selector("descendants:root-001");
+        let signal = SignalRecord::new(SignalType::Invalidate, "Test").to_selector("descendants:root-001");
         manager.send(signal).unwrap();
 
         let signals = manager.check_selector("descendants:root-001").unwrap();
@@ -317,8 +313,7 @@ mod tests {
         let (_temp, storage) = create_test_storage();
         let manager = SignalManager::new(storage);
 
-        let signal =
-            SignalRecord::new(SignalType::Invalidate, "Parent changed").to_loop("loop-009");
+        let signal = SignalRecord::new(SignalType::Invalidate, "Parent changed").to_loop("loop-009");
         manager.send(signal).unwrap();
 
         assert!(manager.has_stop_signal("loop-009").unwrap());
