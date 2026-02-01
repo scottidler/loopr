@@ -182,10 +182,7 @@ mod tests {
     #[test]
     fn test_cli_config_option() {
         let cli = Cli::try_parse_from(["loopr", "-c", "/path/to/config.toml"]).unwrap();
-        assert_eq!(
-            cli.config_path(),
-            Some(&PathBuf::from("/path/to/config.toml"))
-        );
+        assert_eq!(cli.config_path(), Some(&PathBuf::from("/path/to/config.toml")));
     }
 
     #[test]
@@ -270,8 +267,7 @@ mod tests {
 
     #[test]
     fn test_list_with_filters() {
-        let cli =
-            Cli::try_parse_from(["loopr", "list", "-s", "running", "-t", "code"]).unwrap();
+        let cli = Cli::try_parse_from(["loopr", "list", "-s", "running", "-t", "code"]).unwrap();
         match cli.command {
             Some(Commands::List { status, loop_type }) => {
                 assert_eq!(status, Some("running".to_string()));
@@ -330,9 +326,7 @@ mod tests {
 
     #[test]
     fn test_reject_with_reason() {
-        let cli =
-            Cli::try_parse_from(["loopr", "reject", "plan-456", "-r", "Not detailed enough"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["loopr", "reject", "plan-456", "-r", "Not detailed enough"]).unwrap();
         match cli.command {
             Some(Commands::Reject { id, reason }) => {
                 assert_eq!(id, "plan-456");
