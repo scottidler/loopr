@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::{Loop, LoopStatus, LoopType};
+use crate::domain::Loop;
 
 /// Request sent from TUI to Daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
