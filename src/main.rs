@@ -59,9 +59,7 @@ fn run_application(cli: &Cli, config: &Config) -> Result<()> {
         }
         Some(Commands::Status { id, detailed }) => handle_status_command(id, *detailed, config),
         Some(Commands::Approve { id }) => handle_approve_command(id, config),
-        Some(Commands::Reject { id, reason }) => {
-            handle_reject_command(id, reason.as_deref(), config)
-        }
+        Some(Commands::Reject { id, reason }) => handle_reject_command(id, reason.as_deref(), config),
         Some(Commands::Pause { id }) => handle_pause_command(id, config),
         Some(Commands::Resume { id }) => handle_resume_command(id, config),
         Some(Commands::Cancel { id }) => handle_cancel_command(id, config),
@@ -120,11 +118,7 @@ fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn handle_list_command(
-    status: Option<&str>,
-    loop_type: Option<&str>,
-    config: &Config,
-) -> Result<()> {
+fn handle_list_command(status: Option<&str>, loop_type: Option<&str>, config: &Config) -> Result<()> {
     info!("Listing loops - status: {:?}, type: {:?}", status, loop_type);
     if config.debug {
         println!("{}", "[debug] List command handler".yellow());

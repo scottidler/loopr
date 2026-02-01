@@ -241,18 +241,14 @@ impl Loop {
     /// Per domain-types.md, Loop is self-contained. The `run()` method
     /// takes dependencies as parameters rather than having a separate
     /// LoopRunner struct.
-    pub async fn run<L, T, V>(
-        &mut self,
-        llm: Arc<L>,
-        tool_router: Arc<T>,
-        validator: Arc<V>,
-    ) -> Result<LoopOutcome>
+    pub async fn run<L, T, V>(&mut self, llm: Arc<L>, tool_router: Arc<T>, validator: Arc<V>) -> Result<LoopOutcome>
     where
         L: LlmClient,
         T: ToolRouter,
         V: Validator,
     {
-        self.run_with_config(llm, tool_router, validator, LoopRunConfig::default()).await
+        self.run_with_config(llm, tool_router, validator, LoopRunConfig::default())
+            .await
     }
 
     /// Run the loop with custom configuration.

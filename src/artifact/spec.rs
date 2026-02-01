@@ -127,7 +127,6 @@ fn try_parse_numbered_item_with_number(line: &str) -> Option<(u32, &str)> {
     Some((number, &line[i + 2..]))
 }
 
-
 /// Parse a phase header like "**Phase Name**: Description" or "**Phase Name**"
 fn parse_phase_header(text: &str) -> Option<(u32, String, String)> {
     // Extract the bold name: **Name**

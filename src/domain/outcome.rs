@@ -28,7 +28,10 @@ mod tests {
     #[test]
     fn test_loop_outcome_debug() {
         assert_eq!(format!("{:?}", LoopOutcome::Complete), "Complete");
-        assert_eq!(format!("{:?}", LoopOutcome::Failed("error".into())), "Failed(\"error\")");
+        assert_eq!(
+            format!("{:?}", LoopOutcome::Failed("error".into())),
+            "Failed(\"error\")"
+        );
         assert_eq!(format!("{:?}", LoopOutcome::Invalidated), "Invalidated");
     }
 
