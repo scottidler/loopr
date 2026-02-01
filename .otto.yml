@@ -26,16 +26,16 @@ tasks:
       echo ""
       echo "✅ All checks passed!"
 
+  ensure-tests-exist:
+    help: "Run script to ensure tests exist (fails if not tests exist)"
+    bash: |
+      bin/ensure-tests-exist.sh
+
   # Run tests
   test:
     help: "Run all tests"
+    before: [ensure-tests-exist]
     bash: |
-      # Fail if no tests exist
-      if ! cargo test --all-targets --workspace -- --list --format=terse 2>&1 \
-           | awk 'END { exit(found ? 0 : 1) } /: test$/ { found=1 }'; then
-        echo "❌ No tests found! Tests must be wired into the crate."
-        exit 1
-      fi
       cargo test --all-features
 
   # Code coverage with llvm-cov
@@ -91,4 +91,3 @@ tasks:
     bash: |
       cargo install --path .
       echo "✅ Binary installed to ~/.cargo/bin"
-

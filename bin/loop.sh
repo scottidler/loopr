@@ -5,16 +5,14 @@
 # https://ghuntley.com/ralph/
 set -e
 
-# Configuration (override via environment variables)
+# Configuration (override via environment variables or first positional arg)
+PROMPT_FILE=${1:-${PROMPT_FILE:-PROMPT.md}}
 MAX_ITERATIONS=${MAX_ITERATIONS:-100}
-PROMPT_FILE=${PROMPT_FILE:-PROMPT.md}
 PROGRESS_FILE=${PROGRESS_FILE:-progress.txt}
 MODEL=${MODEL:-opus}
 SLEEP_BETWEEN=${SLEEP_BETWEEN:-2}
 TIMEOUT_MINUTES=${TIMEOUT_MINUTES:-10}
 COMPLETION_SIGNAL="<promise>COMPLETE</promise>"
-BRANCH_PREFIX=${BRANCH_PREFIX:-iter}
-BASE_BRANCH=${BASE_BRANCH:-$(git branch --show-current)}
 VALIDATION_CMD=${VALIDATION_CMD:-"otto ci"}
 
 # Colors
@@ -29,6 +27,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 
+# Current branch (we commit directly here, no iter branches)
+CURRENT_BRANCH=$(git branch --show-current)
+
 echo -e "${GREEN}=== Loopr Build Loop (Ralph Wiggum) ===${NC}"
 echo "Project:    $PROJECT_ROOT"
 echo "Prompt:     $PROMPT_FILE"
@@ -36,7 +37,7 @@ echo "Progress:   $PROGRESS_FILE"
 echo "Model:      $MODEL"
 echo "Timeout:    ${TIMEOUT_MINUTES}m per iteration"
 echo "Max:        $MAX_ITERATIONS iterations"
-echo "Branching:  ${BASE_BRANCH}-${BRANCH_PREFIX}N"
+echo "Branch:     $CURRENT_BRANCH (committing directly)"
 echo "Validation: $VALIDATION_CMD"
 echo ""
 
@@ -50,9 +51,52 @@ fi
 if [[ ! -f "$PROGRESS_FILE" ]]; then
     echo "# Ralph Progress Log" >"$PROGRESS_FILE"
     echo "Started: $(date)" >>"$PROGRESS_FILE"
-    echo "Base branch: $BASE_BRANCH" >>"$PROGRESS_FILE"
+    echo "Branch: $CURRENT_BRANCH" >>"$PROGRESS_FILE"
+    echo "Prompt: $PROMPT_FILE" >>"$PROGRESS_FILE"
     echo "---" >>"$PROGRESS_FILE"
 fi
+
+# Quality gate checks - returns 0 if clean, 1 if issues found
+check_quality_gates() {
+    local issues_found=0
+
+    # Check 1: No #[allow(dead_code)] markers in src/
+    # This is the primary quality gate - dead_code markers must be removed
+    local dead_code_markers
+    dead_code_markers=$(grep -rn "allow(dead_code)" src/ 2>/dev/null || true)
+    if [[ -n "$dead_code_markers" ]]; then
+        echo -e "${RED}Quality gate FAILED: #[allow(dead_code)] markers found${NC}"
+        echo "$dead_code_markers"
+        local count
+        count=$(echo "$dead_code_markers" | wc -l)
+        echo -e "${RED}  Total: $count markers - all must be removed${NC}"
+        issues_found=1
+    else
+        echo -e "${GREEN}Quality gate PASSED: no dead_code markers${NC}"
+    fi
+
+    # Check 2: No underscore-prefixed parameters in non-trait-impl code
+    # Pattern: params starting with underscore like (_foo: Type)
+    # Note: Trait impl params are acceptable per Rust conventions
+    local underscore_params
+    underscore_params=$(grep -rEn "([(,]\s*_[a-z][a-z_]*\s*:)" src/ 2>/dev/null \
+        | grep -v "test\|mock\|Mock" \
+        || true)
+
+    if [[ -n "$underscore_params" ]]; then
+        echo -e "${YELLOW}Info: underscore-prefixed parameters found${NC}"
+        echo "$underscore_params" | head -10
+        # Specific check: main.rs should NOT have underscore params (it's not a trait impl)
+        if echo "$underscore_params" | grep -q "src/main\.rs"; then
+            echo -e "${RED}Quality gate FAILED: main.rs has underscore params - must use them${NC}"
+            issues_found=1
+        fi
+    else
+        echo -e "${GREEN}Quality gate PASSED: no underscore-prefixed parameters${NC}"
+    fi
+
+    return $issues_found
+}
 
 for i in $(seq 1 $MAX_ITERATIONS); do
     echo ""
@@ -60,33 +104,12 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     echo -e "${YELLOW}  Ralph Iteration $i of $MAX_ITERATIONS${NC}"
     echo -e "${BLUE}===============================================================${NC}"
 
-    # Create iteration branch (iter0, iter1, ...)
-    branch_name="${BASE_BRANCH}-${BRANCH_PREFIX}$((i - 1))"
-    echo -e "${BLUE}Setting up branch: $branch_name${NC}"
-
     # Auto-commit any uncommitted changes from previous iteration
     if [[ -n "$(git status --porcelain)" ]]; then
-        prev_branch=$(git branch --show-current)
-        echo -e "${YELLOW}Auto-committing changes on $prev_branch...${NC}"
+        echo -e "${YELLOW}Auto-committing changes from previous iteration...${NC}"
         git add -A
-        git commit -m "ralph: auto-commit iteration changes on $prev_branch" || true
+        git commit -m "ralph: iteration $((i - 1)) changes" || true
     fi
-
-    # For first iteration, start from base branch
-    if [[ $i -eq 1 ]]; then
-        git checkout "$BASE_BRANCH" 2>/dev/null || true
-        git pull --ff-only 2>/dev/null || true
-    fi
-
-    # Delete branch if it exists (re-running same iteration)
-    if git show-ref --verify --quiet "refs/heads/$branch_name"; then
-        echo -e "${YELLOW}Branch $branch_name exists, deleting...${NC}"
-        git branch -D "$branch_name"
-    fi
-
-    # Create new branch from current state
-    git checkout -b "$branch_name"
-    echo -e "${GREEN}Now on branch: $branch_name${NC}"
 
     # Run Claude with timeout - capture output
     echo -e "${BLUE}Running Claude (timeout: ${TIMEOUT_MINUTES}m)...${NC}"
@@ -100,7 +123,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         if [[ $EXIT_CODE -eq 124 ]]; then
             echo -e "${RED}Timeout! Claude ran for ${TIMEOUT_MINUTES}m without exiting.${NC}"
             echo -e "${RED}This means Claude is NOT following Ralph Wiggum pattern.${NC}"
-            echo "Iteration $i ($branch_name): TIMEOUT after ${TIMEOUT_MINUTES}m" >>"$PROGRESS_FILE"
+            echo "Iteration $i: TIMEOUT after ${TIMEOUT_MINUTES}m" >>"$PROGRESS_FILE"
         else
             echo -e "${YELLOW}Claude exited with code $EXIT_CODE${NC}"
         fi
@@ -110,7 +133,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     if [[ -n "$(git status --porcelain)" ]]; then
         echo -e "${YELLOW}Auto-committing iteration $i changes...${NC}"
         git add -A
-        git commit -m "ralph: iteration $i complete on $branch_name" || true
+        git commit -m "ralph: iteration $i complete on $CURRENT_BRANCH" || true
     fi
 
     # Run validation EXTERNALLY (not inside LLM session)
@@ -119,7 +142,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     if eval "$VALIDATION_CMD"; then
         echo -e "${GREEN}Validation PASSED${NC}"
         VALIDATION_PASSED=true
-        echo "Iteration $i: PASS" >>"$PROGRESS_FILE"
+        echo "Iteration $i: validation PASS" >>"$PROGRESS_FILE"
     else
         echo -e "${RED}Validation FAILED${NC}"
         echo "Iteration $i: FAIL - validation failed" >>"$PROGRESS_FILE"
@@ -132,15 +155,23 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         echo -e "${GREEN}Completion promise found${NC}"
     fi
 
-    # Only complete if BOTH validation passes AND promise found
+    # Only consider completion if BOTH validation passes AND promise found
     if [[ "$VALIDATION_PASSED" == "true" && "$PROMISE_FOUND" == "true" ]]; then
-        echo ""
-        echo -e "${GREEN}===============================================================${NC}"
-        echo -e "${GREEN}  BUILD COMPLETE!${NC}"
-        echo -e "${GREEN}===============================================================${NC}"
-        echo "Completed at iteration $i on branch $branch_name"
-        echo "Completed: $(date) on $branch_name" >>"$PROGRESS_FILE"
-        exit 0
+        # Quality gate checks - the final hurdle
+        echo -e "${BLUE}Running quality gate checks...${NC}"
+        if check_quality_gates; then
+            echo -e "${GREEN}Quality gates PASSED${NC}"
+            echo ""
+            echo -e "${GREEN}===============================================================${NC}"
+            echo -e "${GREEN}  BUILD COMPLETE!${NC}"
+            echo -e "${GREEN}===============================================================${NC}"
+            echo "Completed at iteration $i on branch $CURRENT_BRANCH"
+            echo "Completed: $(date) on $CURRENT_BRANCH" >>"$PROGRESS_FILE"
+            exit 0
+        else
+            echo -e "${YELLOW}Quality gates FAILED - continuing iterations${NC}"
+            echo "Iteration $i: validation+promise OK but quality gates failed" >>"$PROGRESS_FILE"
+        fi
     fi
 
     # If promise found but validation failed, note it
