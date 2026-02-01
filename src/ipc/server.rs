@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{RwLock, broadcast, mpsc};
 
 use crate::error::{LooprError, Result};
-use crate::ipc::messages::{DaemonEvent, DaemonRequest, DaemonResponse, DaemonError, ErrorCode};
+use crate::ipc::messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode};
 
 /// Configuration for the IPC server
 #[derive(Debug, Clone)]
@@ -55,10 +55,7 @@ impl IpcServerConfig {
 /// Handler trait for processing requests
 pub trait RequestHandler: Send + Sync {
     /// Handle a request and return a response
-    fn handle(
-        &self,
-        request: DaemonRequest,
-    ) -> impl std::future::Future<Output = DaemonResponse> + Send;
+    fn handle(&self, request: DaemonRequest) -> impl std::future::Future<Output = DaemonResponse> + Send;
 }
 
 /// Simple handler that routes to a callback
@@ -82,10 +79,7 @@ impl<F> RequestHandler for CallbackHandler<F>
 where
     F: Fn(DaemonRequest) -> DaemonResponse + Send + Sync,
 {
-    fn handle(
-        &self,
-        request: DaemonRequest,
-    ) -> impl std::future::Future<Output = DaemonResponse> + Send {
+    fn handle(&self, request: DaemonRequest) -> impl std::future::Future<Output = DaemonResponse> + Send {
         let result = (self.callback)(request);
         async move { result }
     }
@@ -151,10 +145,7 @@ impl IpcServer {
     }
 
     /// Run the server with a request handler
-    pub async fn run<H: RequestHandler + 'static>(
-        &mut self,
-        handler: Arc<H>,
-    ) -> Result<()> {
+    pub async fn run<H: RequestHandler + 'static>(&mut self, handler: Arc<H>) -> Result<()> {
         // Remove existing socket if present
         if self.config.socket_path.exists() {
             std::fs::remove_file(&self.config.socket_path)?;
@@ -349,10 +340,7 @@ mod tests {
     struct EchoHandler;
 
     impl RequestHandler for EchoHandler {
-        fn handle(
-            &self,
-            request: DaemonRequest,
-        ) -> impl std::future::Future<Output = DaemonResponse> + Send {
+        fn handle(&self, request: DaemonRequest) -> impl std::future::Future<Output = DaemonResponse> + Send {
             async move { DaemonResponse::success(request.id, request.params) }
         }
     }
@@ -412,9 +400,7 @@ mod tests {
 
     #[test]
     fn test_callback_handler() {
-        let handler = CallbackHandler::new(|req| {
-            DaemonResponse::success(req.id, serde_json::json!({"echo": true}))
-        });
+        let handler = CallbackHandler::new(|req| DaemonResponse::success(req.id, serde_json::json!({"echo": true})));
         let request = DaemonRequest::new(1, "test", serde_json::json!({}));
         let rt = tokio::runtime::Runtime::new().unwrap();
         let response = rt.block_on(handler.handle(request));
