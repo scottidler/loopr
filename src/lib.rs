@@ -7,6 +7,8 @@ pub mod domain;
 pub mod error;
 pub mod id;
 pub mod llm;
+pub mod prompt;
 pub mod storage;
+pub mod tools;
 
 pub use error::{LooprError, Result};
