@@ -78,12 +78,7 @@ where
     V: Validator,
 {
     /// Create a new LoopRunner with the given dependencies.
-    pub fn new(
-        llm: Arc<L>,
-        tool_router: Arc<T>,
-        validator: Arc<V>,
-        prompt_renderer: PromptRenderer,
-    ) -> Self {
+    pub fn new(llm: Arc<L>, tool_router: Arc<T>, validator: Arc<V>, prompt_renderer: PromptRenderer) -> Self {
         Self {
             llm,
             tool_router,
@@ -138,27 +133,19 @@ where
 
             // 3. Execute tool calls
             for call in &response.tool_calls {
-                let result = self
-                    .tool_router
-                    .execute(call.clone(), &loop_instance.worktree)
-                    .await?;
+                let result = self.tool_router.execute(call.clone(), &loop_instance.worktree).await?;
 
                 // If tool execution fails, add to progress
-                if result.is_error.unwrap_or(false) {
-                    loop_instance.progress.push_str(&format!(
-                        "\nTool {} failed: {}\n",
-                        call.name,
-                        result.content.as_deref().unwrap_or("unknown error")
-                    ));
+                if result.is_error {
+                    loop_instance
+                        .progress
+                        .push_str(&format!("\nTool {} failed: {}\n", call.name, result.content));
                 }
             }
 
             // 4. Validate output
             let artifact_path = self.get_artifact_path(loop_instance);
-            let validation_result = self
-                .validator
-                .validate(&artifact_path, &loop_instance.worktree)
-                .await?;
+            let validation_result = self.validator.validate(&artifact_path, &loop_instance.worktree).await?;
 
             if validation_result.passed {
                 loop_instance.status = LoopStatus::Complete;
@@ -196,24 +183,17 @@ where
 
     /// Build the user message with task and accumulated feedback.
     fn build_user_message(&self, loop_instance: &Loop) -> String {
-        let task = loop_instance
-            .context
-            .get("task")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let task = loop_instance.context.get("task").and_then(|v| v.as_str()).unwrap_or("");
 
         if loop_instance.progress.is_empty() {
             task.to_string()
         } else {
-            format!(
-                "{}\n\n## Previous Iteration Feedback\n{}",
-                task, loop_instance.progress
-            )
+            format!("{}\n\n## Previous Iteration Feedback\n{}", task, loop_instance.progress)
         }
     }
 
     /// Get tool definitions appropriate for the loop type.
-    fn get_tools_for_loop_type(&self, loop_type: LoopType) -> Vec<crate::llm::ToolDefinition> {
+    fn get_tools_for_loop_type(&self, _loop_type: LoopType) -> Vec<crate::llm::ToolDefinition> {
         // For now, return all available tools
         // In the future, this could filter based on loop type
         let tool_names = self.tool_router.available_tools();
@@ -242,6 +222,7 @@ where
 }
 
 /// Trait for signal checking during loop execution.
+#[allow(dead_code)]
 #[async_trait]
 pub trait SignalChecker: Send + Sync {
     /// Check if the loop should be stopped.
@@ -255,6 +236,7 @@ pub trait SignalChecker: Send + Sync {
 }
 
 /// No-op signal checker for testing.
+#[allow(dead_code)]
 pub struct NoOpSignalChecker;
 
 #[async_trait]
@@ -299,8 +281,8 @@ mod tests {
         async fn execute(&self, call: ToolCall, _worktree: &Path) -> Result<ToolResult> {
             Ok(ToolResult {
                 tool_use_id: call.id,
-                content: Some(format!("Executed {}", call.name)),
-                is_error: Some(false),
+                content: format!("Executed {}", call.name),
+                is_error: false,
             })
         }
 
@@ -309,14 +291,12 @@ mod tests {
         }
     }
 
-    /// Mock validator for testing.
-    struct MockValidator {
-        pass_on_iteration: u32,
-    }
+    /// Mock validator for testing - always passes.
+    struct MockValidator;
 
     impl MockValidator {
-        fn new(pass_on_iteration: u32) -> Self {
-            Self { pass_on_iteration }
+        fn new() -> Self {
+            Self
         }
     }
 
@@ -325,7 +305,7 @@ mod tests {
         async fn validate(&self, _artifact: &Path, _worktree: &Path) -> Result<ValidationResult> {
             // We use a static counter via file system trick since we can't mutate self
             // For simplicity in tests, always pass
-            Ok(ValidationResult::pass("Validation passed"))
+            Ok(ValidationResult::pass_with_output("Validation passed"))
         }
     }
 
@@ -347,11 +327,9 @@ mod tests {
     #[async_trait]
     impl Validator for CountingValidator {
         async fn validate(&self, _artifact: &Path, _worktree: &Path) -> Result<ValidationResult> {
-            let count = self
-                .fail_count
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let count = self.fail_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if count >= self.pass_after {
-                Ok(ValidationResult::pass("Validation passed"))
+                Ok(ValidationResult::pass_with_output("Validation passed"))
             } else {
                 Ok(ValidationResult::fail(format!(
                     "Validation failed (attempt {})",
@@ -364,10 +342,7 @@ mod tests {
     #[test]
     fn test_loop_outcome_variants() {
         assert_eq!(LoopOutcome::Complete, LoopOutcome::Complete);
-        assert_eq!(
-            LoopOutcome::Failed("test".into()),
-            LoopOutcome::Failed("test".into())
-        );
+        assert_eq!(LoopOutcome::Failed("test".into()), LoopOutcome::Failed("test".into()));
         assert_eq!(LoopOutcome::Invalidated, LoopOutcome::Invalidated);
         assert_ne!(LoopOutcome::Complete, LoopOutcome::Invalidated);
     }
@@ -398,16 +373,13 @@ mod tests {
         };
         let result = router.execute(call, Path::new("/tmp")).await.unwrap();
         assert_eq!(result.tool_use_id, "call-1");
-        assert_eq!(result.is_error, Some(false));
+        assert!(!result.is_error);
     }
 
     #[tokio::test]
     async fn test_mock_validator_passes() {
-        let validator = MockValidator::new(1);
-        let result = validator
-            .validate(Path::new("/tmp"), Path::new("/tmp"))
-            .await
-            .unwrap();
+        let validator = MockValidator::new();
+        let result = validator.validate(Path::new("/tmp"), Path::new("/tmp")).await.unwrap();
         assert!(result.passed);
     }
 
@@ -416,24 +388,15 @@ mod tests {
         let validator = CountingValidator::new(2);
 
         // First call - fails
-        let result1 = validator
-            .validate(Path::new("/tmp"), Path::new("/tmp"))
-            .await
-            .unwrap();
+        let result1 = validator.validate(Path::new("/tmp"), Path::new("/tmp")).await.unwrap();
         assert!(!result1.passed);
 
         // Second call - fails
-        let result2 = validator
-            .validate(Path::new("/tmp"), Path::new("/tmp"))
-            .await
-            .unwrap();
+        let result2 = validator.validate(Path::new("/tmp"), Path::new("/tmp")).await.unwrap();
         assert!(!result2.passed);
 
         // Third call - passes
-        let result3 = validator
-            .validate(Path::new("/tmp"), Path::new("/tmp"))
-            .await
-            .unwrap();
+        let result3 = validator.validate(Path::new("/tmp"), Path::new("/tmp")).await.unwrap();
         assert!(result3.passed);
     }
 
@@ -448,9 +411,9 @@ mod tests {
     #[test]
     fn test_build_user_message_no_progress() {
         let renderer = PromptRenderer::new();
-        let llm = Arc::new(MockLlmClient::new(vec![]));
+        let llm = Arc::new(MockLlmClient::new());
         let router = Arc::new(MockToolRouter::new());
-        let validator = Arc::new(MockValidator::new(1));
+        let validator = Arc::new(MockValidator::new());
 
         let runner = LoopRunner::new(llm, router, validator, renderer);
 
@@ -464,9 +427,9 @@ mod tests {
     #[test]
     fn test_build_user_message_with_progress() {
         let renderer = PromptRenderer::new();
-        let llm = Arc::new(MockLlmClient::new(vec![]));
+        let llm = Arc::new(MockLlmClient::new());
         let router = Arc::new(MockToolRouter::new());
-        let validator = Arc::new(MockValidator::new(1));
+        let validator = Arc::new(MockValidator::new());
 
         let runner = LoopRunner::new(llm, router, validator, renderer);
 
@@ -482,9 +445,9 @@ mod tests {
     #[test]
     fn test_get_tools_for_loop_type() {
         let renderer = PromptRenderer::new();
-        let llm = Arc::new(MockLlmClient::new(vec![]));
+        let llm = Arc::new(MockLlmClient::new());
         let router = Arc::new(MockToolRouter::new());
-        let validator = Arc::new(MockValidator::new(1));
+        let validator = Arc::new(MockValidator::new());
 
         let runner = LoopRunner::new(llm, router, validator, renderer);
 
@@ -495,16 +458,14 @@ mod tests {
     #[test]
     fn test_get_artifact_path_with_artifact() {
         let renderer = PromptRenderer::new();
-        let llm = Arc::new(MockLlmClient::new(vec![]));
+        let llm = Arc::new(MockLlmClient::new());
         let router = Arc::new(MockToolRouter::new());
-        let validator = Arc::new(MockValidator::new(1));
+        let validator = Arc::new(MockValidator::new());
 
         let runner = LoopRunner::new(llm, router, validator, renderer);
 
         let mut loop_instance = Loop::new_plan("test");
-        loop_instance
-            .output_artifacts
-            .push(PathBuf::from("/tmp/plan.md"));
+        loop_instance.output_artifacts.push(PathBuf::from("/tmp/plan.md"));
 
         let path = runner.get_artifact_path(&loop_instance);
         assert_eq!(path, PathBuf::from("/tmp/plan.md"));
@@ -513,13 +474,16 @@ mod tests {
     #[test]
     fn test_get_artifact_path_no_artifact() {
         let renderer = PromptRenderer::new();
-        let llm = Arc::new(MockLlmClient::new(vec![]));
+        let llm = Arc::new(MockLlmClient::new());
         let router = Arc::new(MockToolRouter::new());
-        let validator = Arc::new(MockValidator::new(1));
+        let validator = Arc::new(MockValidator::new());
 
         let runner = LoopRunner::new(llm, router, validator, renderer);
 
-        let loop_instance = Loop::new_code("parent-001", 1);
+        let plan = Loop::new_plan("Test");
+        let spec = Loop::new_spec(&plan, 1);
+        let phase = Loop::new_phase(&spec, 1, "Phase 1", 1);
+        let loop_instance = Loop::new_code(&phase);
 
         let path = runner.get_artifact_path(&loop_instance);
         assert_eq!(path, loop_instance.worktree);
@@ -536,11 +500,14 @@ mod tests {
                 input_tokens: 100,
                 output_tokens: 50,
             },
-            model: "claude-3".to_string(),
         };
-        let llm = Arc::new(MockLlmClient::new(vec![response]));
+        let llm = Arc::new({
+            let mock = MockLlmClient::new();
+            mock.queue_response(response);
+            mock
+        });
         let router = Arc::new(MockToolRouter::new());
-        let validator = Arc::new(MockValidator::new(0)); // Always passes
+        let validator = Arc::new(MockValidator::new()); // Always passes
 
         let runner = LoopRunner::new(llm, router, validator, renderer);
 
@@ -565,10 +532,13 @@ mod tests {
                     input_tokens: 100,
                     output_tokens: 50,
                 },
-                model: "claude-3".to_string(),
             })
             .collect();
-        let llm = Arc::new(MockLlmClient::new(responses));
+        let llm = Arc::new({
+            let mock = MockLlmClient::new();
+            mock.queue_responses(responses);
+            mock
+        });
         let router = Arc::new(MockToolRouter::new());
         let validator = Arc::new(CountingValidator::new(100)); // Never passes
 
@@ -596,10 +566,13 @@ mod tests {
                     input_tokens: 100,
                     output_tokens: 50,
                 },
-                model: "claude-3".to_string(),
             })
             .collect();
-        let llm = Arc::new(MockLlmClient::new(responses));
+        let llm = Arc::new({
+            let mock = MockLlmClient::new();
+            mock.queue_responses(responses);
+            mock
+        });
         let router = Arc::new(MockToolRouter::new());
         let validator = Arc::new(CountingValidator::new(2)); // Passes on 3rd attempt
 
