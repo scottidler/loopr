@@ -45,10 +45,10 @@ impl Scheduler {
     /// Code loops complete first (depth-first)
     fn loop_priority(loop_type: &LoopType) -> u8 {
         match loop_type {
-            LoopType::Code => 0,  // Highest priority
+            LoopType::Code => 0, // Highest priority
             LoopType::Phase => 1,
             LoopType::Spec => 2,
-            LoopType::Plan => 3,  // Lowest priority
+            LoopType::Plan => 3, // Lowest priority
         }
     }
 
@@ -165,10 +165,10 @@ mod tests {
         ];
         let result = s.select(pending, 4);
         assert_eq!(result.len(), 4);
-        assert_eq!(result[0].id, "code");  // Highest priority
+        assert_eq!(result[0].id, "code"); // Highest priority
         assert_eq!(result[1].id, "phase");
         assert_eq!(result[2].id, "spec");
-        assert_eq!(result[3].id, "plan");  // Lowest priority
+        assert_eq!(result[3].id, "plan"); // Lowest priority
     }
 
     #[test]

@@ -51,11 +51,7 @@ pub struct Recovery<S: Storage> {
 
 impl<S: Storage> Recovery<S> {
     /// Create a new recovery manager
-    pub fn new(
-        storage: Arc<S>,
-        worktree_manager: Arc<WorktreeManager>,
-        config: RecoveryConfig,
-    ) -> Self {
+    pub fn new(storage: Arc<S>, worktree_manager: Arc<WorktreeManager>, config: RecoveryConfig) -> Self {
         Self {
             storage,
             worktree_manager,
@@ -71,10 +67,7 @@ impl<S: Storage> Recovery<S> {
     /// Recover all interrupted loops
     pub fn recover_all(&self) -> Result<Vec<RecoveryAction>> {
         let loops: Vec<Loop> = self.storage.list("loops")?;
-        let interrupted: Vec<Loop> = loops
-            .into_iter()
-            .filter(|l| l.status == LoopStatus::Running)
-            .collect();
+        let interrupted: Vec<Loop> = loops.into_iter().filter(|l| l.status == LoopStatus::Running).collect();
 
         let mut actions = Vec::new();
         for loop_record in interrupted {
@@ -98,10 +91,9 @@ impl<S: Storage> Recovery<S> {
             if self.config.auto_commit {
                 // Note: auto_commit returns a Result but we don't need to fail recovery
                 // if commit fails (might be nothing to commit)
-                let _ = self.worktree_manager.auto_commit(
-                    &loop_record.id,
-                    &self.config.commit_message,
-                );
+                let _ = self
+                    .worktree_manager
+                    .auto_commit(&loop_record.id, &self.config.commit_message);
             }
 
             // Mark as pending for resume
@@ -132,10 +124,7 @@ impl<S: Storage> Recovery<S> {
     /// Count of loops that need recovery
     pub fn count_interrupted(&self) -> Result<usize> {
         let loops: Vec<Loop> = self.storage.list("loops")?;
-        Ok(loops
-            .iter()
-            .filter(|l| l.status == LoopStatus::Running)
-            .count())
+        Ok(loops.iter().filter(|l| l.status == LoopStatus::Running).count())
     }
 
     /// Check if any loops need recovery
