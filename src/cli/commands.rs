@@ -27,6 +27,7 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
+#[allow(dead_code)]
 impl Cli {
     /// Parse command line arguments
     pub fn parse_args() -> Self {
@@ -135,6 +136,7 @@ pub enum DaemonCommands {
     Restart,
 }
 
+#[allow(dead_code)]
 impl DaemonCommands {
     /// Check if this is a start command
     pub fn is_start(&self) -> bool {

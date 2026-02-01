@@ -5,4 +5,4 @@
 
 pub mod commands;
 
-pub use commands::{Cli, Commands, DaemonCommands};
+pub use commands::Cli;
