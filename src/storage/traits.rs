@@ -1,7 +1,7 @@
 //! Storage trait definitions and filter types.
 
 use crate::error::Result;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Filter operations for querying records.
 #[derive(Debug, Clone, PartialEq)]

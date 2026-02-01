@@ -102,10 +102,7 @@ impl SignalRecord {
 
     /// Check if this signal should stop the target loop
     pub fn is_stop_signal(&self) -> bool {
-        matches!(
-            self.signal_type,
-            SignalType::Stop | SignalType::Invalidate
-        )
+        matches!(self.signal_type, SignalType::Stop | SignalType::Invalidate)
     }
 
     /// Check if this signal pauses execution
@@ -121,14 +118,8 @@ mod tests {
 
     #[test]
     fn test_signal_type_serialization() {
-        assert_eq!(
-            serde_json::to_string(&SignalType::Stop).unwrap(),
-            "\"stop\""
-        );
-        assert_eq!(
-            serde_json::to_string(&SignalType::Pause).unwrap(),
-            "\"pause\""
-        );
+        assert_eq!(serde_json::to_string(&SignalType::Stop).unwrap(), "\"stop\"");
+        assert_eq!(serde_json::to_string(&SignalType::Pause).unwrap(), "\"pause\"");
         assert_eq!(
             serde_json::to_string(&SignalType::Invalidate).unwrap(),
             "\"invalidate\""
@@ -160,29 +151,25 @@ mod tests {
 
     #[test]
     fn test_signal_builder_from_loop() {
-        let signal = SignalRecord::new(SignalType::Pause, "Pausing")
-            .from_loop("parent-001");
+        let signal = SignalRecord::new(SignalType::Pause, "Pausing").from_loop("parent-001");
         assert_eq!(signal.source_loop, Some("parent-001".to_string()));
     }
 
     #[test]
     fn test_signal_builder_to_loop() {
-        let signal = SignalRecord::new(SignalType::Stop, "Stopping")
-            .to_loop("child-001-002");
+        let signal = SignalRecord::new(SignalType::Stop, "Stopping").to_loop("child-001-002");
         assert_eq!(signal.target_loop, Some("child-001-002".to_string()));
     }
 
     #[test]
     fn test_signal_builder_to_selector() {
-        let signal = SignalRecord::new(SignalType::Invalidate, "Parent changed")
-            .to_selector("descendants:001");
+        let signal = SignalRecord::new(SignalType::Invalidate, "Parent changed").to_selector("descendants:001");
         assert_eq!(signal.target_selector, Some("descendants:001".to_string()));
     }
 
     #[test]
     fn test_signal_builder_with_payload() {
-        let signal = SignalRecord::new(SignalType::Error, "Something failed")
-            .with_payload(json!({"error_code": 42}));
+        let signal = SignalRecord::new(SignalType::Error, "Something failed").with_payload(json!({"error_code": 42}));
         assert!(signal.payload.is_some());
         assert_eq!(signal.payload.unwrap()["error_code"], 42);
     }

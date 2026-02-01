@@ -28,10 +28,7 @@ pub enum ToolJobStatus {
 impl ToolJobStatus {
     /// Check if this status represents a terminal state
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Success | Self::Failed | Self::Timeout | Self::Cancelled
-        )
+        matches!(self, Self::Success | Self::Failed | Self::Timeout | Self::Cancelled)
     }
 
     /// Check if this status represents a successful completion
@@ -209,8 +206,7 @@ mod tests {
 
     #[test]
     fn test_tool_job_record_with_input() {
-        let job = ToolJobRecord::new("loop-123", 1, "write_file", "no-net")
-            .with_input("some input data");
+        let job = ToolJobRecord::new("loop-123", 1, "write_file", "no-net").with_input("some input data");
 
         assert_eq!(job.input_summary, "some input data");
     }

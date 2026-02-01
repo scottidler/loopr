@@ -62,10 +62,7 @@ mod tests {
     #[test]
     fn test_validation_failed_error() {
         let err = LooprError::ValidationFailed("missing ## Overview section".to_string());
-        assert_eq!(
-            err.to_string(),
-            "Validation failed: missing ## Overview section"
-        );
+        assert_eq!(err.to_string(), "Validation failed: missing ## Overview section");
     }
 
     #[test]

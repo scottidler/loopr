@@ -6,10 +6,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
-use crate::error::{LooprError, Result};
 use super::traits::{Filter, HasId, Storage};
+use crate::error::{LooprError, Result};
 
 /// JSONL-based storage with in-memory caching.
 pub struct JsonlStorage {
@@ -71,10 +71,7 @@ impl JsonlStorage {
     /// Append a record to the JSONL file.
     fn append_to_file(&self, collection: &str, record: &serde_json::Value) -> Result<()> {
         let path = self.collection_path(collection);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         writeln!(file, "{}", serde_json::to_string(record)?)?;
         Ok(())
     }
@@ -82,9 +79,9 @@ impl JsonlStorage {
     /// Rewrite the entire collection file from cache.
     fn rewrite_file(&self, collection: &str) -> Result<()> {
         let cache = self.cache.read().map_err(|e| LooprError::Storage(e.to_string()))?;
-        let records = cache.get(collection).ok_or_else(|| {
-            LooprError::Storage(format!("Collection not loaded: {}", collection))
-        })?;
+        let records = cache
+            .get(collection)
+            .ok_or_else(|| LooprError::Storage(format!("Collection not loaded: {}", collection)))?;
 
         let path = self.collection_path(collection);
         let mut file = File::create(&path)?;
@@ -115,9 +112,9 @@ impl Storage for JsonlStorage {
         self.ensure_loaded(collection)?;
 
         let cache = self.cache.read().map_err(|e| LooprError::Storage(e.to_string()))?;
-        let records = cache.get(collection).ok_or_else(|| {
-            LooprError::Storage(format!("Collection not loaded: {}", collection))
-        })?;
+        let records = cache
+            .get(collection)
+            .ok_or_else(|| LooprError::Storage(format!("Collection not loaded: {}", collection)))?;
 
         for record in records {
             if record.get("id").and_then(|v| v.as_str()) == Some(id) {
@@ -136,9 +133,9 @@ impl Storage for JsonlStorage {
 
         {
             let mut cache = self.cache.write().map_err(|e| LooprError::Storage(e.to_string()))?;
-            let records = cache.get_mut(collection).ok_or_else(|| {
-                LooprError::Storage(format!("Collection not loaded: {}", collection))
-            })?;
+            let records = cache
+                .get_mut(collection)
+                .ok_or_else(|| LooprError::Storage(format!("Collection not loaded: {}", collection)))?;
 
             let mut found = false;
             for r in records.iter_mut() {
@@ -165,9 +162,9 @@ impl Storage for JsonlStorage {
 
         {
             let mut cache = self.cache.write().map_err(|e| LooprError::Storage(e.to_string()))?;
-            let records = cache.get_mut(collection).ok_or_else(|| {
-                LooprError::Storage(format!("Collection not loaded: {}", collection))
-            })?;
+            let records = cache
+                .get_mut(collection)
+                .ok_or_else(|| LooprError::Storage(format!("Collection not loaded: {}", collection)))?;
 
             let original_len = records.len();
             records.retain(|r| r.get("id").and_then(|v| v.as_str()) != Some(id));
@@ -187,9 +184,9 @@ impl Storage for JsonlStorage {
         self.ensure_loaded(collection)?;
 
         let cache = self.cache.read().map_err(|e| LooprError::Storage(e.to_string()))?;
-        let records = cache.get(collection).ok_or_else(|| {
-            LooprError::Storage(format!("Collection not loaded: {}", collection))
-        })?;
+        let records = cache
+            .get(collection)
+            .ok_or_else(|| LooprError::Storage(format!("Collection not loaded: {}", collection)))?;
 
         let mut results = Vec::new();
         for record in records {
@@ -318,27 +315,40 @@ mod tests {
     fn test_query_with_filters() {
         let (storage, _temp) = create_test_storage();
 
-        storage.create("test", &TestRecord {
-            id: "1".to_string(),
-            name: "alice".to_string(),
-            status: "active".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "test",
+                &TestRecord {
+                    id: "1".to_string(),
+                    name: "alice".to_string(),
+                    status: "active".to_string(),
+                },
+            )
+            .unwrap();
 
-        storage.create("test", &TestRecord {
-            id: "2".to_string(),
-            name: "bob".to_string(),
-            status: "inactive".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "test",
+                &TestRecord {
+                    id: "2".to_string(),
+                    name: "bob".to_string(),
+                    status: "inactive".to_string(),
+                },
+            )
+            .unwrap();
 
-        storage.create("test", &TestRecord {
-            id: "3".to_string(),
-            name: "charlie".to_string(),
-            status: "active".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "test",
+                &TestRecord {
+                    id: "3".to_string(),
+                    name: "charlie".to_string(),
+                    status: "active".to_string(),
+                },
+            )
+            .unwrap();
 
-        let active: Vec<TestRecord> = storage.query("test", &[
-            Filter::eq("status", "active"),
-        ]).unwrap();
+        let active: Vec<TestRecord> = storage.query("test", &[Filter::eq("status", "active")]).unwrap();
 
         assert_eq!(active.len(), 2);
         assert!(active.iter().all(|r| r.status == "active"));
@@ -348,17 +358,27 @@ mod tests {
     fn test_list() {
         let (storage, _temp) = create_test_storage();
 
-        storage.create("test", &TestRecord {
-            id: "1".to_string(),
-            name: "one".to_string(),
-            status: "active".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "test",
+                &TestRecord {
+                    id: "1".to_string(),
+                    name: "one".to_string(),
+                    status: "active".to_string(),
+                },
+            )
+            .unwrap();
 
-        storage.create("test", &TestRecord {
-            id: "2".to_string(),
-            name: "two".to_string(),
-            status: "active".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "test",
+                &TestRecord {
+                    id: "2".to_string(),
+                    name: "two".to_string(),
+                    status: "active".to_string(),
+                },
+            )
+            .unwrap();
 
         let all: Vec<TestRecord> = storage.list("test").unwrap();
         assert_eq!(all.len(), 2);
@@ -371,11 +391,16 @@ mod tests {
         // Create and write with first instance
         {
             let storage = JsonlStorage::new(temp_dir.path()).unwrap();
-            storage.create("test", &TestRecord {
-                id: "1".to_string(),
-                name: "test".to_string(),
-                status: "active".to_string(),
-            }).unwrap();
+            storage
+                .create(
+                    "test",
+                    &TestRecord {
+                        id: "1".to_string(),
+                        name: "test".to_string(),
+                        status: "active".to_string(),
+                    },
+                )
+                .unwrap();
         }
 
         // Read with second instance
@@ -398,17 +423,27 @@ mod tests {
     fn test_multiple_collections() {
         let (storage, _temp) = create_test_storage();
 
-        storage.create("collection_a", &TestRecord {
-            id: "1".to_string(),
-            name: "in_a".to_string(),
-            status: "active".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "collection_a",
+                &TestRecord {
+                    id: "1".to_string(),
+                    name: "in_a".to_string(),
+                    status: "active".to_string(),
+                },
+            )
+            .unwrap();
 
-        storage.create("collection_b", &TestRecord {
-            id: "1".to_string(),
-            name: "in_b".to_string(),
-            status: "active".to_string(),
-        }).unwrap();
+        storage
+            .create(
+                "collection_b",
+                &TestRecord {
+                    id: "1".to_string(),
+                    name: "in_b".to_string(),
+                    status: "active".to_string(),
+                },
+            )
+            .unwrap();
 
         let a: Option<TestRecord> = storage.get("collection_a", "1").unwrap();
         let b: Option<TestRecord> = storage.get("collection_b", "1").unwrap();

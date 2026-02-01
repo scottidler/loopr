@@ -1,8 +1,8 @@
 //! Loop-specific storage helpers.
 
+use super::traits::{Filter, Storage};
 use crate::domain::loop_record::{Loop, LoopStatus};
 use crate::error::Result;
-use super::traits::{Filter, Storage};
 
 /// Collection name for loops.
 pub const LOOPS_COLLECTION: &str = "loops";
@@ -21,16 +21,14 @@ impl<'a, S: Storage> LoopStore<'a, S> {
     /// Find all loops with a specific status.
     pub fn find_by_status(&self, status: LoopStatus) -> Result<Vec<Loop>> {
         let status_str = serde_json::to_value(status)?;
-        self.storage.query(LOOPS_COLLECTION, &[
-            Filter::eq("status", status_str),
-        ])
+        self.storage
+            .query(LOOPS_COLLECTION, &[Filter::eq("status", status_str)])
     }
 
     /// Find all child loops of a parent.
     pub fn find_by_parent(&self, parent_id: &str) -> Result<Vec<Loop>> {
-        self.storage.query(LOOPS_COLLECTION, &[
-            Filter::eq("parent_id", parent_id),
-        ])
+        self.storage
+            .query(LOOPS_COLLECTION, &[Filter::eq("parent_id", parent_id)])
     }
 
     /// Find all pending loops.

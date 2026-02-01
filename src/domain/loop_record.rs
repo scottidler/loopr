@@ -323,38 +323,17 @@ mod tests {
 
     #[test]
     fn test_loop_type_serialization() {
-        assert_eq!(
-            serde_json::to_string(&LoopType::Plan).unwrap(),
-            "\"plan\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LoopType::Spec).unwrap(),
-            "\"spec\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LoopType::Phase).unwrap(),
-            "\"phase\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LoopType::Code).unwrap(),
-            "\"code\""
-        );
+        assert_eq!(serde_json::to_string(&LoopType::Plan).unwrap(), "\"plan\"");
+        assert_eq!(serde_json::to_string(&LoopType::Spec).unwrap(), "\"spec\"");
+        assert_eq!(serde_json::to_string(&LoopType::Phase).unwrap(), "\"phase\"");
+        assert_eq!(serde_json::to_string(&LoopType::Code).unwrap(), "\"code\"");
     }
 
     #[test]
     fn test_loop_status_serialization() {
-        assert_eq!(
-            serde_json::to_string(&LoopStatus::Pending).unwrap(),
-            "\"pending\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LoopStatus::Running).unwrap(),
-            "\"running\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LoopStatus::Complete).unwrap(),
-            "\"complete\""
-        );
+        assert_eq!(serde_json::to_string(&LoopStatus::Pending).unwrap(), "\"pending\"");
+        assert_eq!(serde_json::to_string(&LoopStatus::Running).unwrap(), "\"running\"");
+        assert_eq!(serde_json::to_string(&LoopStatus::Complete).unwrap(), "\"complete\"");
     }
 
     #[test]

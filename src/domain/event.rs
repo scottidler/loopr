@@ -56,11 +56,7 @@ impl EventRecord {
 
     /// Create a loop.started event
     pub fn loop_started(loop_id: &str) -> Self {
-        Self::new(
-            event_types::LOOP_STARTED,
-            Some(loop_id.to_string()),
-            Value::Null,
-        )
+        Self::new(event_types::LOOP_STARTED, Some(loop_id.to_string()), Value::Null)
     }
 
     /// Create a loop.status_change event

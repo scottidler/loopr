@@ -3,10 +3,10 @@
 //! This module provides the storage abstraction for persisting Loop, Signal,
 //! ToolJob, and Event records.
 
-mod traits;
 mod jsonl;
 mod loops;
+mod traits;
 
-pub use traits::{Filter, FilterOp, HasId, Storage};
 pub use jsonl::JsonlStorage;
 pub use loops::LoopStore;
+pub use traits::{Filter, FilterOp, HasId, Storage};
