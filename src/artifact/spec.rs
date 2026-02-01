@@ -39,7 +39,8 @@ impl PhaseDescriptor {
 ///
 /// Looks for a "## Phases" section and parses numbered items in the format:
 /// 1. **Phase Name**: Description
-/// or
+///
+/// Or with description on next line:
 /// 1. **Phase Name**
 ///    Description on next line
 ///

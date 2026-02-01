@@ -44,8 +44,8 @@ pub fn has_section(content: &str, heading: &str) -> bool {
 pub fn list_sections(content: &str) -> Vec<String> {
     let mut sections = Vec::new();
     for line in content.lines() {
-        if line.starts_with("## ") {
-            sections.push(line[3..].trim().to_string());
+        if let Some(heading) = line.strip_prefix("## ") {
+            sections.push(heading.trim().to_string());
         }
     }
     sections

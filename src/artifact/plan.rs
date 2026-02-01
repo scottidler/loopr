@@ -35,9 +35,10 @@ impl SpecDescriptor {
 /// Parse specs from a plan.md artifact.
 ///
 /// Looks for a "## Specs to Create" section and parses list items in the format:
-/// - spec-<name>: <description>
-/// or
-/// - <name>: <description>
+/// - spec-\<name\>: \<description\>
+///
+/// Or without the `spec-` prefix:
+/// - \<name\>: \<description\>
 ///
 /// Returns an empty Vec if no specs are found (but section exists).
 /// Returns an error if the section is missing.
@@ -51,18 +52,18 @@ pub fn parse_plan_specs(content: &str) -> Result<Vec<SpecDescriptor>> {
         let trimmed = line.trim();
 
         // Look for list items: "- spec-name: description" or "- name: description"
-        if let Some(item) = trimmed.strip_prefix("- ") {
-            if let Some((name_part, description)) = item.split_once(':') {
-                let name = name_part
-                    .trim()
-                    .strip_prefix("spec-")
-                    .unwrap_or(name_part.trim())
-                    .to_string();
+        if let Some(item) = trimmed.strip_prefix("- ")
+            && let Some((name_part, description)) = item.split_once(':')
+        {
+            let name = name_part
+                .trim()
+                .strip_prefix("spec-")
+                .unwrap_or(name_part.trim())
+                .to_string();
 
-                if !name.is_empty() {
-                    specs.push(SpecDescriptor::new(name, description.trim(), index));
-                    index += 1;
-                }
+            if !name.is_empty() {
+                specs.push(SpecDescriptor::new(name, description.trim(), index));
+                index += 1;
             }
         }
     }
