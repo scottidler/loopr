@@ -54,7 +54,7 @@ impl Scheduler {
 
     /// Check if a loop can run given dependencies
     /// A loop can run if its parent (if any) is in a state that allows children
-    pub fn can_run(&self, loop_record: &Loop, parent: Option<&Loop>) -> bool {
+    pub fn can_run(&self, _loop_record: &Loop, parent: Option<&Loop>) -> bool {
         match parent {
             None => true, // No parent, can always run
             Some(p) => {
@@ -103,15 +103,15 @@ mod tests {
             id: id.to_string(),
             loop_type,
             parent_id: None,
-            input_artifact: String::new(),
+            input_artifact: None,
             output_artifacts: Vec::new(),
-            prompt_path: String::new(),
-            validation_command: None,
+            prompt_path: std::path::PathBuf::from("prompts/test.md"),
+            validation_command: String::new(),
             max_iterations: 10,
-            worktree: None,
+            worktree: std::path::PathBuf::from(".loopr/worktrees/test"),
             iteration: 0,
             status: LoopStatus::Pending,
-            progress: Vec::new(),
+            progress: String::new(),
             context: serde_json::Value::Null,
             created_at: 0,
             updated_at: 0,
@@ -217,7 +217,7 @@ mod tests {
         let s = Scheduler::new(4);
         let child = make_loop("child", LoopType::Code);
         let mut parent = make_loop("parent", LoopType::Phase);
-        parent.output_artifacts = vec!["artifact.md".to_string()];
+        parent.output_artifacts = vec![std::path::PathBuf::from("artifact.md")];
         assert!(s.can_run(&child, Some(&parent)));
     }
 
@@ -246,15 +246,15 @@ mod tests {
             id: "parent".to_string(),
             loop_type: LoopType::Phase,
             parent_id: None,
-            input_artifact: String::new(),
+            input_artifact: None,
             output_artifacts: Vec::new(),
-            prompt_path: String::new(),
-            validation_command: None,
+            prompt_path: std::path::PathBuf::from("prompts/test.md"),
+            validation_command: String::new(),
             max_iterations: 10,
-            worktree: None,
+            worktree: std::path::PathBuf::from(".loopr/worktrees/test"),
             iteration: 0,
             status: LoopStatus::Running,
-            progress: Vec::new(),
+            progress: String::new(),
             context: serde_json::Value::Null,
             created_at: 0,
             updated_at: 0,
@@ -281,15 +281,15 @@ mod tests {
             id: "parent".to_string(),
             loop_type: LoopType::Phase,
             parent_id: None,
-            input_artifact: String::new(),
+            input_artifact: None,
             output_artifacts: Vec::new(),
-            prompt_path: String::new(),
-            validation_command: None,
+            prompt_path: std::path::PathBuf::from("prompts/test.md"),
+            validation_command: String::new(),
             max_iterations: 10,
-            worktree: None,
+            worktree: std::path::PathBuf::from(".loopr/worktrees/test"),
             iteration: 0,
             status: LoopStatus::Complete,
-            progress: Vec::new(),
+            progress: String::new(),
             context: serde_json::Value::Null,
             created_at: 0,
             updated_at: 0,
