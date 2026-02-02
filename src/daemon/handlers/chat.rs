@@ -203,10 +203,17 @@ pub async fn handle_chat_send(id: u64, params: &Value, ctx: &DaemonContext) -> D
         );
     }
 
-    // Generate message ID
+    // Generate message ID and include response content
     let message_id = generate_loop_id();
+    let response_content = current_response.content.clone();
 
-    DaemonResponse::success(id, json!({"message_id": message_id}))
+    DaemonResponse::success(
+        id,
+        json!({
+            "message_id": message_id,
+            "response": response_content
+        }),
+    )
 }
 
 /// Handle chat.clear - clear chat history

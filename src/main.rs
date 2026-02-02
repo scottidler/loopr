@@ -8,7 +8,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Tabs};
 use std::fs;
 use std::io::stdout;
@@ -24,7 +24,7 @@ use cli::commands::{Commands, DaemonCommands};
 use config::Config;
 use loopr::daemon::{Daemon, DaemonConfig, VERSION, default_pid_path, default_socket_path};
 use loopr::error::LooprError;
-use loopr::tui::app::{ActiveView, MessageSender};
+use loopr::tui::app::{ActiveView, DaemonStatus, MessageSender};
 use loopr::tui::views::{ApprovalView, ChatView, LoopsView};
 use loopr::tui::{App, InputHandler, View};
 
@@ -191,8 +191,12 @@ async fn try_connect_with_autostart(app: &mut App, socket_path: &str, pid_path: 
 async fn run_tui(config: &Config) -> Result<()> {
     info!("Launching TUI mode");
 
-    // 1. Create app and attempt daemon connection FIRST (before entering raw mode)
-    let mut app = App::with_defaults();
+    // 1. Create app from config and attempt daemon connection FIRST (before entering raw mode)
+    let app_config = loopr::tui::app::AppConfig {
+        socket_path: config.tui.socket_path.clone().unwrap_or_else(default_socket_path),
+        tick_rate_ms: config.tui.tick_rate_ms,
+    };
+    let mut app = App::new(app_config);
     let socket_path = app.config.socket_path.display().to_string();
     let pid_path = default_pid_path();
 
@@ -210,8 +214,6 @@ async fn run_tui(config: &Config) -> Result<()> {
         return Err(eyre!("Could not connect to daemon after auto-start attempts"));
     }
 
-    eprintln!("{} Connected to daemon", "Loopr:".green());
-
     // 2. Enable raw mode
     enable_raw_mode().context("Failed to enable raw mode")?;
 
@@ -220,10 +222,6 @@ async fn run_tui(config: &Config) -> Result<()> {
     execute!(stdout, EnterAlternateScreen).context("Failed to enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
-
-    if config.debug {
-        app.set_status("Debug mode enabled");
-    }
 
     // Add welcome message
     app.add_chat_message(
@@ -253,15 +251,26 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
         terminal.draw(|frame| {
             let size = frame.area();
 
-            // Create main layout
+            // Create main layout (no status bar at bottom)
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3), // Tabs
+                    Constraint::Length(3), // Tabs/header
                     Constraint::Min(0),    // Main content
-                    Constraint::Length(1), // Status bar
                 ])
                 .split(size);
+
+            // Build header title with status indicator
+            let (indicator, indicator_color) = match app.state.daemon_status {
+                DaemonStatus::Connected => ("●", Color::Green),
+                DaemonStatus::VersionMismatch => ("●", Color::Yellow),
+                DaemonStatus::Disconnected => ("●", Color::Red),
+            };
+            let title = Line::from(vec![
+                Span::raw(" "),
+                Span::styled(indicator, Style::default().fg(indicator_color)),
+                Span::styled(" Loopr ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]);
 
             // Render tabs
             let tab_titles: Vec<Line> = vec![Line::from(" Chat "), Line::from(" Loops "), Line::from(" Approval ")];
@@ -271,7 +280,7 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                 ActiveView::Approval => 2,
             };
             let tabs = Tabs::new(tab_titles)
-                .block(Block::default().borders(Borders::ALL).title(" Loopr "))
+                .block(Block::default().borders(Borders::ALL).title(title))
                 .select(selected_tab)
                 .style(Style::default().fg(Color::White))
                 .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
@@ -283,15 +292,6 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                 ActiveView::Loops => loops_view.render(frame, chunks[1], &app.state),
                 ActiveView::Approval => approval_view.render(frame, chunks[1], &app.state),
             }
-
-            // Render status bar
-            let status_text = app
-                .state
-                .status_message
-                .as_deref()
-                .unwrap_or("Press Tab to switch views, Ctrl+C to quit");
-            let status = ratatui::widgets::Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(status, chunks[2]);
         })?;
 
         // Handle input
@@ -306,9 +306,41 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                 // View-specific input handling
                 match app.state.active_view {
                     ActiveView::Chat => {
-                        if key.is_enter() && !app.state.chat_input.is_empty() {
+                        if key.is_enter() && !app.state.chat_input.is_empty() && !app.state.is_loading {
                             let msg = std::mem::take(&mut app.state.chat_input);
                             app.add_chat_message(MessageSender::User, msg.clone());
+                            app.state.is_loading = true;
+
+                            // Force redraw to show loading state before async call
+                            terminal.draw(|frame| {
+                                let size = frame.area();
+                                let chunks = Layout::default()
+                                    .direction(Direction::Vertical)
+                                    .constraints([Constraint::Length(3), Constraint::Min(0)])
+                                    .split(size);
+                                let (indicator, indicator_color) = match app.state.daemon_status {
+                                    DaemonStatus::Connected => ("●", Color::Green),
+                                    DaemonStatus::VersionMismatch => ("●", Color::Yellow),
+                                    DaemonStatus::Disconnected => ("●", Color::Red),
+                                };
+                                let title = Line::from(vec![
+                                    Span::raw(" "),
+                                    Span::styled(indicator, Style::default().fg(indicator_color)),
+                                    Span::styled(
+                                        " Loopr ",
+                                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                                    ),
+                                ]);
+                                let tab_titles: Vec<Line> =
+                                    vec![Line::from(" Chat "), Line::from(" Loops "), Line::from(" Approval ")];
+                                let tabs = Tabs::new(tab_titles)
+                                    .block(Block::default().borders(Borders::ALL).title(title))
+                                    .select(0)
+                                    .style(Style::default().fg(Color::White))
+                                    .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+                                frame.render_widget(tabs, chunks[0]);
+                                chat_view.render(frame, chunks[1], &app.state);
+                            })?;
 
                             // Send message to daemon
                             if let Some(client) = app.client_mut() {
@@ -320,7 +352,7 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                                                     result
                                                         .get("response")
                                                         .and_then(|v| v.as_str())
-                                                        .unwrap_or("Message received")
+                                                        .unwrap_or("No response")
                                                 });
                                             app.add_chat_message(MessageSender::Daemon, reply.to_string());
                                         } else if let Some(error) = response.error {
@@ -331,7 +363,7 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                                         } else {
                                             app.add_chat_message(
                                                 MessageSender::Daemon,
-                                                "Message sent to daemon".to_string(),
+                                                "No response from daemon".to_string(),
                                             );
                                         }
                                     }
@@ -342,9 +374,12 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                             } else {
                                 app.add_chat_message(MessageSender::Daemon, "Not connected to daemon".to_string());
                             }
+                            app.state.is_loading = false;
                         } else if let Some(c) = key.char() {
-                            app.state.chat_input.push(c);
-                        } else if key.is_backspace() && !app.state.chat_input.is_empty() {
+                            if !app.state.is_loading {
+                                app.state.chat_input.push(c);
+                            }
+                        } else if key.is_backspace() && !app.state.chat_input.is_empty() && !app.state.is_loading {
                             app.state.chat_input.pop();
                         }
                     }
@@ -375,7 +410,7 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
 
 async fn handle_daemon_command(command: &DaemonCommands, config: &Config) -> Result<()> {
     info!("Handling daemon command: {:?}", command);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Daemon command handler".yellow());
     }
     match command {
@@ -501,7 +536,7 @@ async fn handle_daemon_restart() -> Result<()> {
 
 async fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
     info!("Creating plan for task: {}", task);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Plan command handler".yellow());
     }
 
@@ -532,7 +567,7 @@ async fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
 
 async fn handle_list_command(status: Option<&str>, loop_type: Option<&str>, config: &Config) -> Result<()> {
     info!("Listing loops - status: {:?}, type: {:?}", status, loop_type);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] List command handler".yellow());
     }
 
@@ -584,7 +619,7 @@ async fn handle_list_command(status: Option<&str>, loop_type: Option<&str>, conf
 
 async fn handle_status_command(id: &str, detailed: bool, config: &Config) -> Result<()> {
     info!("Getting status for loop: {} (detailed: {})", id, detailed);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Status command handler".yellow());
     }
 
@@ -640,7 +675,7 @@ async fn handle_status_command(id: &str, detailed: bool, config: &Config) -> Res
 
 async fn handle_approve_command(id: &str, config: &Config) -> Result<()> {
     info!("Approving plan: {}", id);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Approve command handler".yellow());
     }
 
@@ -676,7 +711,7 @@ async fn handle_approve_command(id: &str, config: &Config) -> Result<()> {
 
 async fn handle_reject_command(id: &str, reason: Option<&str>, config: &Config) -> Result<()> {
     info!("Rejecting plan: {} (reason: {:?})", id, reason);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Reject command handler".yellow());
     }
 
@@ -711,7 +746,7 @@ async fn handle_reject_command(id: &str, reason: Option<&str>, config: &Config) 
 
 async fn handle_pause_command(id: &str, config: &Config) -> Result<()> {
     info!("Pausing loop: {}", id);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Pause command handler".yellow());
     }
 
@@ -743,7 +778,7 @@ async fn handle_pause_command(id: &str, config: &Config) -> Result<()> {
 
 async fn handle_resume_command(id: &str, config: &Config) -> Result<()> {
     info!("Resuming loop: {}", id);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Resume command handler".yellow());
     }
 
@@ -775,7 +810,7 @@ async fn handle_resume_command(id: &str, config: &Config) -> Result<()> {
 
 async fn handle_cancel_command(id: &str, config: &Config) -> Result<()> {
     info!("Canceling loop: {}", id);
-    if config.debug {
+    if config.debug.trace_tools {
         println!("{}", "[debug] Cancel command handler".yellow());
     }
 

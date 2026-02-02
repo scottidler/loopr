@@ -13,6 +13,9 @@ use ratatui::{
 
 use super::app::{AppState, ChatMessage, LoopSummary, MessageSender, PendingApproval};
 
+#[cfg(test)]
+use super::app::DaemonStatus;
+
 /// Trait for renderable views
 pub trait View {
     /// Render the view to the frame
@@ -73,12 +76,19 @@ impl View for ChatView {
         let messages = List::new(items);
         frame.render_widget(messages, inner_chunks[0]);
 
-        // Input line with prompt (no borders)
-        let input_line = Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::raw(state.chat_input.as_str()),
-            Span::styled("_", Style::default().fg(Color::DarkGray)),
-        ]);
+        // Input line with prompt (no borders) or loading indicator
+        let input_line = if state.is_loading {
+            Line::from(vec![
+                Span::styled("⏳ ", Style::default().fg(Color::Yellow)),
+                Span::styled("Thinking...", Style::default().fg(Color::Yellow)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Cyan)),
+                Span::raw(state.chat_input.as_str()),
+                Span::styled("_", Style::default().fg(Color::DarkGray)),
+            ])
+        };
         let input = Paragraph::new(input_line);
         frame.render_widget(input, inner_chunks[1]);
     }
@@ -380,12 +390,13 @@ mod tests {
         let state = AppState {
             active_view: ActiveView::Chat,
             should_quit: false,
+            daemon_status: DaemonStatus::default(),
+            is_loading: false,
             chat_input: "test".to_string(),
             chat_messages: vec![],
             loops: vec![],
             selected_loop: None,
             pending_approval: None,
-            status_message: None,
         };
         assert_eq!(state.active_view, ActiveView::Chat);
     }

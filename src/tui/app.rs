@@ -44,6 +44,18 @@ impl ActiveView {
     }
 }
 
+/// Daemon connection status for the TUI header indicator
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DaemonStatus {
+    /// Daemon running, version matches CLI
+    Connected,
+    /// Daemon running, version mismatch
+    VersionMismatch,
+    /// Daemon not running
+    #[default]
+    Disconnected,
+}
+
 /// Application configuration
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -69,6 +81,10 @@ pub struct AppState {
     pub active_view: ActiveView,
     /// Whether the app should quit
     pub should_quit: bool,
+    /// Daemon connection status
+    pub daemon_status: DaemonStatus,
+    /// Whether a chat response is being awaited
+    pub is_loading: bool,
     /// Chat input buffer
     pub chat_input: String,
     /// Chat message history
@@ -79,8 +95,6 @@ pub struct AppState {
     pub selected_loop: Option<usize>,
     /// Plan awaiting approval (if any)
     pub pending_approval: Option<PendingApproval>,
-    /// Status message to display
-    pub status_message: Option<String>,
 }
 
 /// A chat message
@@ -170,7 +184,7 @@ impl App {
         let client = IpcClient::new(config);
         client.connect().await?;
         self.client = Some(client);
-        self.state.status_message = Some("Connected to daemon".to_string());
+        self.state.daemon_status = DaemonStatus::Connected;
         Ok(())
     }
 
@@ -179,7 +193,12 @@ impl App {
         if let Some(client) = self.client.take() {
             let _ = client.disconnect().await;
         }
-        self.state.status_message = Some("Disconnected".to_string());
+        self.state.daemon_status = DaemonStatus::Disconnected;
+    }
+
+    /// Set daemon status
+    pub fn set_daemon_status(&mut self, status: DaemonStatus) {
+        self.state.daemon_status = status;
     }
 
     /// Get mutable reference to client
@@ -214,16 +233,6 @@ impl App {
             content,
             timestamp: crate::id::now_ms(),
         });
-    }
-
-    /// Set status message
-    pub fn set_status(&mut self, message: impl Into<String>) {
-        self.state.status_message = Some(message.into());
-    }
-
-    /// Clear status message
-    pub fn clear_status(&mut self) {
-        self.state.status_message = None;
     }
 
     /// Update loops list
@@ -358,15 +367,15 @@ mod tests {
     }
 
     #[test]
-    fn test_status_message() {
+    fn test_daemon_status() {
         let mut app = App::with_defaults();
-        assert!(app.state.status_message.is_none());
+        assert_eq!(app.state.daemon_status, DaemonStatus::Disconnected);
 
-        app.set_status("Testing");
-        assert_eq!(app.state.status_message, Some("Testing".to_string()));
+        app.set_daemon_status(DaemonStatus::Connected);
+        assert_eq!(app.state.daemon_status, DaemonStatus::Connected);
 
-        app.clear_status();
-        assert!(app.state.status_message.is_none());
+        app.set_daemon_status(DaemonStatus::VersionMismatch);
+        assert_eq!(app.state.daemon_status, DaemonStatus::VersionMismatch);
     }
 
     #[test]
