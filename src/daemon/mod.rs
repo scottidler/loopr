@@ -223,8 +223,15 @@ impl Daemon {
         // Ensure data directory exists
         fs::create_dir_all(&self.config.data_dir)?;
 
-        // Create DaemonContext with all components
-        let ctx = match DaemonContext::new(&self.config.data_dir) {
+        // Create IPC server first so we can share its event channel with DaemonContext
+        let server_config = IpcServerConfig::default().with_socket_path(&self.config.socket_path);
+        let mut server = IpcServer::with_config(server_config);
+
+        // Get the server's event sender to share with DaemonContext
+        let event_tx = server.event_sender();
+
+        // Create DaemonContext with the shared event channel
+        let ctx = match DaemonContext::with_event_channel(&self.config.data_dir, event_tx) {
             Ok(c) => Arc::new(c),
             Err(e) => {
                 // If context creation fails (e.g., no API key), log and continue with minimal handler
@@ -233,10 +240,6 @@ impl Daemon {
                 return self.run_legacy().await;
             }
         };
-
-        // Create IPC server
-        let server_config = IpcServerConfig::default().with_socket_path(&self.config.socket_path);
-        let mut server = IpcServer::with_config(server_config);
 
         // Create async request handler
         let handler = Arc::new(AsyncDaemonHandler::new(ctx));

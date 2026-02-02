@@ -86,6 +86,16 @@ pub struct DaemonContext {
 impl DaemonContext {
     /// Create a new DaemonContext with all components initialized
     pub fn new(data_dir: &Path) -> Result<Self> {
+        // Create event broadcast channel
+        let (event_tx, _) = broadcast::channel(256);
+        Self::with_event_channel(data_dir, event_tx)
+    }
+
+    /// Create a new DaemonContext with an external event channel
+    ///
+    /// This allows the IPC server to share its event channel with the context,
+    /// so events broadcast from handlers reach connected TUI clients.
+    pub fn with_event_channel(data_dir: &Path, event_tx: broadcast::Sender<DaemonEvent>) -> Result<Self> {
         // Create storage
         let storage = Arc::new(JsonlStorage::new(data_dir.join(".taskstore"))?);
 
@@ -124,9 +134,6 @@ impl DaemonContext {
             signal_manager,
             config,
         )));
-
-        // Create event broadcast channel
-        let (event_tx, _) = broadcast::channel(256);
 
         Ok(Self {
             loop_manager,

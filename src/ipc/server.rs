@@ -140,6 +140,14 @@ impl IpcServer {
         }
     }
 
+    /// Get a clone of the event sender for sharing with other components
+    ///
+    /// This allows the DaemonContext to use the same event channel, so events
+    /// broadcast from request handlers reach connected TUI clients.
+    pub fn event_sender(&self) -> broadcast::Sender<DaemonEvent> {
+        self.event_tx.clone()
+    }
+
     /// Get count of connected clients
     pub async fn client_count(&self) -> usize {
         self.clients.read().await.len()
