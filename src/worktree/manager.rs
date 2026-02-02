@@ -239,9 +239,9 @@ mod tests {
         let repo_path = temp.path().join("repo");
         std::fs::create_dir(&repo_path).unwrap();
 
-        // Initialize git repo
+        // Initialize git repo with main branch
         Command::new("git")
-            .args(["init"])
+            .args(["init", "-b", "main"])
             .current_dir(&repo_path)
             .output()
             .unwrap();
