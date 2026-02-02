@@ -143,6 +143,18 @@ impl DaemonError {
     pub fn invalid_state(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::INVALID_STATE, message)
     }
+
+    /// Version mismatch error (1004).
+    pub fn version_mismatch(client_version: &str, daemon_version: &str) -> Self {
+        Self::with_data(
+            ErrorCode::VERSION_MISMATCH,
+            format!("Version mismatch: client={}, daemon={}", client_version, daemon_version),
+            serde_json::json!({
+                "client_version": client_version,
+                "daemon_version": daemon_version,
+            }),
+        )
+    }
 }
 
 /// Standard error codes.
@@ -165,6 +177,8 @@ impl ErrorCode {
     pub const INVALID_STATE: i32 = 1002;
     /// Action not permitted.
     pub const UNAUTHORIZED: i32 = 1003;
+    /// Client/daemon version mismatch.
+    pub const VERSION_MISMATCH: i32 = 1004;
 }
 
 /// Push event sent from Daemon to TUI (no request ID).
@@ -291,7 +305,8 @@ pub enum IpcMessage {
 pub struct Methods;
 
 impl Methods {
-    // Connection
+    // Connection & Handshake
+    pub const INITIALIZE: &'static str = "initialize";
     pub const CONNECT: &'static str = "connect";
     pub const DISCONNECT: &'static str = "disconnect";
     pub const PING: &'static str = "ping";
@@ -392,6 +407,35 @@ mod tests {
         assert_eq!(DaemonError::internal_error("test").code, ErrorCode::INTERNAL_ERROR);
         assert_eq!(DaemonError::loop_not_found("test").code, ErrorCode::LOOP_NOT_FOUND);
         assert_eq!(DaemonError::invalid_state("test").code, ErrorCode::INVALID_STATE);
+        assert_eq!(
+            DaemonError::version_mismatch("v1.0", "v2.0").code,
+            ErrorCode::VERSION_MISMATCH
+        );
+    }
+
+    #[test]
+    fn test_daemon_error_version_mismatch() {
+        let err = DaemonError::version_mismatch("v1.0.0", "v2.0.0");
+
+        // Check error code
+        assert_eq!(err.code, ErrorCode::VERSION_MISMATCH);
+
+        // Check message contains both versions
+        assert!(err.message.contains("v1.0.0"), "Message should contain client version");
+        assert!(err.message.contains("v2.0.0"), "Message should contain daemon version");
+        assert!(err.message.contains("mismatch"), "Message should mention mismatch");
+
+        // Check data contains structured version info
+        let data = err.data.expect("version_mismatch should include data");
+        assert_eq!(data["client_version"], "v1.0.0");
+        assert_eq!(data["daemon_version"], "v2.0.0");
+    }
+
+    #[test]
+    fn test_version_mismatch_error_code_value() {
+        // Verify VERSION_MISMATCH is in the application-specific range (1000+)
+        // If it equals 1004, it's implicitly > 1000
+        assert_eq!(ErrorCode::VERSION_MISMATCH, 1004);
     }
 
     #[test]

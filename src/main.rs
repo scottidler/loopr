@@ -22,7 +22,8 @@ mod config;
 use cli::Cli;
 use cli::commands::{Commands, DaemonCommands};
 use config::Config;
-use loopr::daemon::{Daemon, DaemonConfig, default_pid_path, default_socket_path};
+use loopr::daemon::{Daemon, DaemonConfig, VERSION, default_pid_path, default_socket_path};
+use loopr::error::LooprError;
 use loopr::tui::app::{ActiveView, MessageSender};
 use loopr::tui::views::{ApprovalView, ChatView, LoopsView};
 use loopr::tui::{App, InputHandler, View};
@@ -88,8 +89,29 @@ async fn try_connect_with_autostart(app: &mut App, socket_path: &str, pid_path: 
     // First attempt - try direct connection with short timeout
     match tokio::time::timeout(Duration::from_secs(2), app.connect()).await {
         Ok(Ok(())) => return Ok(true),
-        Ok(Err(_)) | Err(_) => {
-            // Connection failed, check if daemon is running
+        Ok(Err(LooprError::VersionMismatch { client, daemon })) => {
+            // Version mismatch - need to restart daemon
+            eprintln!(
+                "{} Version mismatch detected (client={}, daemon={})",
+                "⚠".yellow(),
+                client,
+                daemon
+            );
+            eprintln!("{} Restarting daemon with matching version...", "⏳".yellow());
+
+            // Stop the old daemon
+            if let Err(stop_err) = Daemon::stop(pid_path) {
+                eprintln!("{} Failed to stop old daemon: {}", "⚠".yellow(), stop_err);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+
+            // Fall through to auto-start logic below
+        }
+        Ok(Err(_)) => {
+            // Other errors - fall through to check daemon status
+        }
+        Err(_) => {
+            // Timeout - fall through to check daemon status
         }
     }
 
@@ -174,7 +196,12 @@ async fn run_tui(config: &Config) -> Result<()> {
     let socket_path = app.config.socket_path.display().to_string();
     let pid_path = default_pid_path();
 
-    eprintln!("{} Connecting to daemon at {}...", "Loopr:".cyan(), &socket_path);
+    eprintln!(
+        "{} v{} - Connecting to daemon at {}...",
+        "Loopr".cyan(),
+        VERSION,
+        &socket_path
+    );
 
     // Try to connect, auto-starting daemon if needed
     let connected = try_connect_with_autostart(&mut app, &socket_path, &pid_path).await?;

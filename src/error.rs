@@ -39,6 +39,10 @@ pub enum LooprError {
     #[error("IPC error: {0}")]
     Ipc(String),
 
+    /// Version mismatch between client and daemon
+    #[error("Version mismatch: client={client}, daemon={daemon}")]
+    VersionMismatch { client: String, daemon: String },
+
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -118,5 +122,34 @@ mod tests {
 
         assert!(returns_ok().is_ok());
         assert!(returns_err().is_err());
+    }
+
+    #[test]
+    fn test_version_mismatch_error() {
+        let err = LooprError::VersionMismatch {
+            client: "v1.0.0".to_string(),
+            daemon: "v2.0.0".to_string(),
+        };
+
+        let msg = err.to_string();
+        assert!(msg.contains("v1.0.0"), "Should contain client version");
+        assert!(msg.contains("v2.0.0"), "Should contain daemon version");
+        assert!(msg.contains("mismatch"), "Should mention mismatch");
+    }
+
+    #[test]
+    fn test_version_mismatch_pattern_matching() {
+        let err = LooprError::VersionMismatch {
+            client: "abc".to_string(),
+            daemon: "xyz".to_string(),
+        };
+
+        // Verify we can pattern match to extract versions
+        if let LooprError::VersionMismatch { client, daemon } = err {
+            assert_eq!(client, "abc");
+            assert_eq!(daemon, "xyz");
+        } else {
+            panic!("Should match VersionMismatch variant");
+        }
     }
 }

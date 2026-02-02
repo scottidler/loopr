@@ -8,6 +8,9 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+/// Current version from git describe (set at compile time)
+pub const VERSION: &str = env!("GIT_DESCRIBE");
 use std::sync::Arc;
 
 use log::info;
@@ -44,6 +47,11 @@ pub fn default_socket_path() -> PathBuf {
 /// Get the default PID file path (~/.loopr/daemon.pid)
 pub fn default_pid_path() -> PathBuf {
     default_data_dir().join("daemon.pid")
+}
+
+/// Get the default version file path (~/.loopr/daemon.version)
+pub fn default_version_path() -> PathBuf {
+    default_data_dir().join("daemon.version")
 }
 
 /// Configuration for the daemon
@@ -103,6 +111,26 @@ impl RequestHandler for AsyncDaemonHandler {
 /// Handle incoming requests from clients (async version)
 async fn handle_request_async(request: DaemonRequest, ctx: &DaemonContext) -> DaemonResponse {
     match request.method.as_str() {
+        // Handshake - client sends version, daemon validates and returns its version
+        Methods::INITIALIZE => {
+            let client_version = request.params["version"].as_str().unwrap_or("unknown");
+            if client_version != VERSION {
+                return DaemonResponse::error(request.id, DaemonError::version_mismatch(client_version, VERSION));
+            }
+            DaemonResponse::success(
+                request.id,
+                json!({
+                    "version": VERSION,
+                    "protocol": "1.0",
+                    "capabilities": {
+                        "chat": true,
+                        "loops": true,
+                        "events": true,
+                    }
+                }),
+            )
+        }
+
         // Connection
         Methods::PING => DaemonResponse::success(request.id, json!({"pong": true})),
 
@@ -366,6 +394,27 @@ impl Daemon {
 /// Handle incoming requests from clients (sync version for fallback)
 fn handle_request_sync(request: DaemonRequest, _tick_state: &Arc<RwLock<TickState>>) -> DaemonResponse {
     match request.method.as_str() {
+        // Handshake - version check
+        Methods::INITIALIZE => {
+            let client_version = request.params["version"].as_str().unwrap_or("unknown");
+            if client_version != VERSION {
+                return DaemonResponse::error(request.id, DaemonError::version_mismatch(client_version, VERSION));
+            }
+            DaemonResponse::success(
+                request.id,
+                json!({
+                    "version": VERSION,
+                    "protocol": "1.0",
+                    "mode": "legacy",
+                    "capabilities": {
+                        "chat": false,  // Legacy mode doesn't support chat
+                        "loops": true,
+                        "events": false,
+                    }
+                }),
+            )
+        }
+
         "ping" => DaemonResponse::success(request.id, json!({"pong": true})),
 
         "status" => DaemonResponse::success(
@@ -390,6 +439,7 @@ fn handle_request_sync(request: DaemonRequest, _tick_state: &Arc<RwLock<TickStat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::messages::ErrorCode;
     use tempfile::tempdir;
 
     #[test]
@@ -486,5 +536,68 @@ mod tests {
         let response = handle_request_sync(request, &tick_state);
         assert!(!response.is_success());
         assert!(response.error.is_some());
+    }
+
+    // Version handshake tests
+
+    #[test]
+    fn test_initialize_version_match() {
+        // Test that initialize succeeds when client version matches daemon version
+        let tick_state = Arc::new(RwLock::new(TickState::new()));
+        let request = DaemonRequest::new(1, Methods::INITIALIZE, json!({ "version": VERSION }));
+        let response = handle_request_sync(request, &tick_state);
+
+        assert!(response.is_success(), "Initialize should succeed with matching version");
+        let result = response.result.unwrap();
+        assert_eq!(result["version"].as_str().unwrap(), VERSION);
+        assert_eq!(result["protocol"].as_str().unwrap(), "1.0");
+        assert!(result["capabilities"].is_object());
+    }
+
+    #[test]
+    fn test_initialize_version_mismatch() {
+        // Test that initialize fails when client version doesn't match daemon version
+        let tick_state = Arc::new(RwLock::new(TickState::new()));
+        let mismatched_version = "v0.0.0-fake";
+        let request = DaemonRequest::new(1, Methods::INITIALIZE, json!({ "version": mismatched_version }));
+        let response = handle_request_sync(request, &tick_state);
+
+        assert!(!response.is_success(), "Initialize should fail with mismatched version");
+        let error = response.error.unwrap();
+        assert_eq!(error.code, ErrorCode::VERSION_MISMATCH);
+        assert!(error.message.contains("Version mismatch"));
+        assert!(error.message.contains(mismatched_version));
+        assert!(error.message.contains(VERSION));
+
+        // Verify error data contains both versions
+        let data = error.data.unwrap();
+        assert_eq!(data["client_version"].as_str().unwrap(), mismatched_version);
+        assert_eq!(data["daemon_version"].as_str().unwrap(), VERSION);
+    }
+
+    #[test]
+    fn test_initialize_missing_version() {
+        // Test that initialize handles missing version param (treats as "unknown")
+        let tick_state = Arc::new(RwLock::new(TickState::new()));
+        let request = DaemonRequest::new(1, Methods::INITIALIZE, json!({}));
+        let response = handle_request_sync(request, &tick_state);
+
+        // Should fail because "unknown" won't match the actual version
+        assert!(!response.is_success(), "Initialize should fail with missing version");
+        let error = response.error.unwrap();
+        assert_eq!(error.code, ErrorCode::VERSION_MISMATCH);
+        let data = error.data.unwrap();
+        assert_eq!(data["client_version"].as_str().unwrap(), "unknown");
+    }
+
+    #[test]
+    fn test_version_constant_not_empty() {
+        // Verify VERSION is set at compile time and not empty
+        assert!(!VERSION.is_empty(), "VERSION should not be empty");
+        // VERSION should either be a git tag or cargo version
+        assert!(
+            VERSION.starts_with('v') || VERSION.chars().next().unwrap().is_ascii_digit(),
+            "VERSION should start with 'v' or a digit"
+        );
     }
 }

@@ -14,9 +14,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::VERSION;
 use crate::daemon::default_socket_path;
 use crate::error::{LooprError, Result};
-use crate::ipc::messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse};
+use crate::ipc::messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode, Methods};
 
 /// Configuration for IPC client.
 #[derive(Debug, Clone)]
@@ -149,6 +150,28 @@ impl IpcClient {
                 }
             }
         });
+
+        // Perform version handshake
+        let response = self
+            .request(Methods::INITIALIZE, serde_json::json!({ "version": VERSION }))
+            .await?;
+
+        // Check for version mismatch error
+        if let Some(error) = response.error {
+            if error.code == ErrorCode::VERSION_MISMATCH {
+                self.disconnect().await?;
+                return Err(LooprError::VersionMismatch {
+                    client: VERSION.to_string(),
+                    daemon: error
+                        .data
+                        .as_ref()
+                        .and_then(|d| d["daemon_version"].as_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                });
+            }
+            return Err(LooprError::Ipc(error.message));
+        }
 
         Ok(())
     }

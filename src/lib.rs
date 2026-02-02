@@ -21,4 +21,5 @@ pub mod tui;
 pub mod validation;
 pub mod worktree;
 
+pub use daemon::VERSION;
 pub use error::{LooprError, Result};
