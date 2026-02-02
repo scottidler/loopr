@@ -2,6 +2,7 @@
 //!
 //! Main application struct that manages views, state, and event loop.
 
+use crate::daemon::default_socket_path;
 use crate::error::Result;
 use crate::ipc::{IpcClient, IpcClientConfig};
 
@@ -55,7 +56,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            socket_path: std::path::PathBuf::from("/tmp/loopr.sock"),
+            socket_path: default_socket_path(),
             tick_rate_ms: 100,
         }
     }
@@ -506,7 +507,7 @@ mod tests {
     #[test]
     fn test_app_config_default() {
         let config = AppConfig::default();
-        assert_eq!(config.socket_path, std::path::PathBuf::from("/tmp/loopr.sock"));
+        assert!(config.socket_path.ends_with("daemon.sock"));
         assert_eq!(config.tick_rate_ms, 100);
     }
 }

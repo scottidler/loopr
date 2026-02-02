@@ -14,6 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, mpsc, oneshot};
 
+use crate::daemon::default_socket_path;
 use crate::error::{LooprError, Result};
 use crate::ipc::messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse};
 
@@ -31,7 +32,7 @@ pub struct IpcClientConfig {
 impl Default for IpcClientConfig {
     fn default() -> Self {
         Self {
-            socket_path: PathBuf::from("/tmp/loopr.sock"),
+            socket_path: default_socket_path(),
             request_timeout_ms: 30000,
             auto_reconnect: true,
         }
@@ -313,7 +314,7 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = IpcClientConfig::default();
-        assert_eq!(config.socket_path, PathBuf::from("/tmp/loopr.sock"));
+        assert!(config.socket_path.ends_with("daemon.sock"));
         assert_eq!(config.request_timeout_ms, 30000);
         assert!(config.auto_reconnect);
     }
@@ -328,7 +329,7 @@ mod tests {
     fn test_client_new() {
         let client = IpcClient::with_default_config();
         assert!(!client.is_connected());
-        assert_eq!(client.socket_path(), Path::new("/tmp/loopr.sock"));
+        assert!(client.socket_path().ends_with("daemon.sock"));
     }
 
     #[test]

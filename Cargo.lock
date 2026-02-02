@@ -1121,6 +1121,7 @@ dependencies = [
  "eyre",
  "futures",
  "handlebars",
+ "libc",
  "log",
  "rand",
  "ratatui",

@@ -15,6 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
+use crate::daemon::default_socket_path;
 use crate::error::{LooprError, Result};
 use crate::ipc::messages::{DaemonError, DaemonEvent, DaemonRequest, DaemonResponse, ErrorCode};
 
@@ -32,7 +33,7 @@ pub struct IpcServerConfig {
 impl Default for IpcServerConfig {
     fn default() -> Self {
         Self {
-            socket_path: PathBuf::from("/tmp/loopr-daemon.sock"),
+            socket_path: default_socket_path(),
             max_clients: 16,
             event_channel_capacity: 256,
         }
