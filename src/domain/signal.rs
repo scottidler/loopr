@@ -2,8 +2,11 @@
 //!
 //! Signals provide coordination between loops: stop, pause, resume, invalidate.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use taskstore::{IndexValue, Record};
 
 use crate::id::{generate_signal_id, now_ms};
 
@@ -108,6 +111,37 @@ impl SignalRecord {
     /// Check if this signal pauses execution
     pub fn is_pause_signal(&self) -> bool {
         matches!(self.signal_type, SignalType::Pause | SignalType::Rebase)
+    }
+}
+
+impl Record for SignalRecord {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        // Signals are immutable after creation
+        self.created_at
+    }
+
+    fn collection_name() -> &'static str {
+        "signals"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut fields = HashMap::new();
+        if let Some(target) = &self.target_loop {
+            fields.insert("target_loop".to_string(), IndexValue::String(target.clone()));
+        }
+        if let Some(selector) = &self.target_selector {
+            fields.insert("target_selector".to_string(), IndexValue::String(selector.clone()));
+        }
+        // Index whether acknowledged for efficient "pending signals" query
+        fields.insert(
+            "acknowledged".to_string(),
+            IndexValue::Bool(self.acknowledged_at.is_some()),
+        );
+        fields
     }
 }
 

@@ -6,11 +6,12 @@
 //! - Auto-committing work if the worktree exists
 //! - Marking loops as Pending for resume, or Failed if worktree lost
 
+use std::sync::Arc;
+
 use crate::domain::{Loop, LoopStatus};
 use crate::error::Result;
-use crate::storage::Storage;
+use crate::storage::StorageWrapper;
 use crate::worktree::WorktreeManager;
-use std::sync::Arc;
 
 /// Result of recovering a single loop
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,15 +44,15 @@ impl Default for RecoveryConfig {
 
 /// Recovery manager handles restoring interrupted loops
 #[derive(Debug)]
-pub struct Recovery<S: Storage> {
-    storage: Arc<S>,
+pub struct Recovery {
+    storage: Arc<StorageWrapper>,
     worktree_manager: Arc<WorktreeManager>,
     config: RecoveryConfig,
 }
 
-impl<S: Storage> Recovery<S> {
+impl Recovery {
     /// Create a new recovery manager
-    pub fn new(storage: Arc<S>, worktree_manager: Arc<WorktreeManager>, config: RecoveryConfig) -> Self {
+    pub fn new(storage: Arc<StorageWrapper>, worktree_manager: Arc<WorktreeManager>, config: RecoveryConfig) -> Self {
         Self {
             storage,
             worktree_manager,
@@ -60,13 +61,13 @@ impl<S: Storage> Recovery<S> {
     }
 
     /// Create with default config
-    pub fn with_defaults(storage: Arc<S>, worktree_manager: Arc<WorktreeManager>) -> Self {
+    pub fn with_defaults(storage: Arc<StorageWrapper>, worktree_manager: Arc<WorktreeManager>) -> Self {
         Self::new(storage, worktree_manager, RecoveryConfig::default())
     }
 
     /// Recover all interrupted loops
     pub fn recover_all(&self) -> Result<Vec<RecoveryAction>> {
-        let loops: Vec<Loop> = self.storage.list("loops")?;
+        let loops: Vec<Loop> = self.storage.list_all()?;
         let interrupted: Vec<Loop> = loops.into_iter().filter(|l| l.status == LoopStatus::Running).collect();
 
         let mut actions = Vec::new();
@@ -103,7 +104,7 @@ impl<S: Storage> Recovery<S> {
                 "\n---\nRecovered at iteration {} after crash\n",
                 updated.iteration
             ));
-            self.storage.update("loops", &updated.id, &updated)?;
+            self.storage.update(&updated)?;
 
             Ok(RecoveryAction::Resumed {
                 loop_id: loop_record.id.clone(),
@@ -113,7 +114,7 @@ impl<S: Storage> Recovery<S> {
             let mut updated = loop_record.clone();
             updated.status = LoopStatus::Failed;
             updated.progress.push_str("\n---\nFailed: worktree lost during crash\n");
-            self.storage.update("loops", &updated.id, &updated)?;
+            self.storage.update(&updated)?;
 
             Ok(RecoveryAction::MarkedFailed {
                 loop_id: loop_record.id.clone(),
@@ -123,7 +124,7 @@ impl<S: Storage> Recovery<S> {
 
     /// Count of loops that need recovery
     pub fn count_interrupted(&self) -> Result<usize> {
-        let loops: Vec<Loop> = self.storage.list("loops")?;
+        let loops: Vec<Loop> = self.storage.list_all()?;
         Ok(loops.iter().filter(|l| l.status == LoopStatus::Running).count())
     }
 
@@ -136,7 +137,7 @@ impl<S: Storage> Recovery<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::JsonlStorage;
+    use crate::storage::StorageWrapper;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -166,9 +167,9 @@ mod tests {
         l
     }
 
-    fn setup_test() -> (TempDir, Arc<JsonlStorage>, Arc<WorktreeManager>) {
+    fn setup_test() -> (TempDir, Arc<StorageWrapper>, Arc<WorktreeManager>) {
         let temp = TempDir::new().unwrap();
-        let storage = Arc::new(JsonlStorage::new(temp.path().join("storage")).unwrap());
+        let storage = Arc::new(StorageWrapper::open(temp.path().join("storage")).unwrap());
         let worktree_mgr = Arc::new(WorktreeManager::new(
             temp.path().to_path_buf(),
             temp.path().join("worktrees"),
@@ -224,7 +225,7 @@ mod tests {
         let recovery = Recovery::with_defaults(Arc::clone(&storage), worktree_mgr);
 
         let running = make_running_loop("test-2");
-        storage.create("loops", &running).unwrap();
+        storage.create(&running).unwrap();
 
         let action = recovery.recover_loop(&running).unwrap();
 
@@ -236,7 +237,9 @@ mod tests {
         );
 
         // Verify status was updated
-        let updated: Loop = storage.get("loops", "test-2").unwrap().unwrap();
+        let updated: Option<Loop> = storage.get("test-2").unwrap();
+        assert!(updated.is_some());
+        let updated = updated.unwrap();
         assert_eq!(updated.status, LoopStatus::Failed);
         assert!(updated.progress.contains("worktree lost"));
     }
@@ -246,9 +249,9 @@ mod tests {
         let (_temp, storage, worktree_mgr) = setup_test();
         let recovery = Recovery::with_defaults(Arc::clone(&storage), worktree_mgr);
 
-        storage.create("loops", &make_running_loop("r1")).unwrap();
-        storage.create("loops", &make_running_loop("r2")).unwrap();
-        storage.create("loops", &make_pending_loop("p1")).unwrap();
+        storage.create(&make_running_loop("r1")).unwrap();
+        storage.create(&make_running_loop("r2")).unwrap();
+        storage.create(&make_pending_loop("p1")).unwrap();
 
         assert_eq!(recovery.count_interrupted().unwrap(), 2);
     }
@@ -258,7 +261,7 @@ mod tests {
         let (_temp, storage, worktree_mgr) = setup_test();
         let recovery = Recovery::with_defaults(Arc::clone(&storage), worktree_mgr);
 
-        storage.create("loops", &make_running_loop("r1")).unwrap();
+        storage.create(&make_running_loop("r1")).unwrap();
 
         assert!(recovery.needs_recovery().unwrap());
     }
@@ -268,7 +271,7 @@ mod tests {
         let (_temp, storage, worktree_mgr) = setup_test();
         let recovery = Recovery::with_defaults(Arc::clone(&storage), worktree_mgr);
 
-        storage.create("loops", &make_pending_loop("p1")).unwrap();
+        storage.create(&make_pending_loop("p1")).unwrap();
 
         assert!(!recovery.needs_recovery().unwrap());
     }
@@ -287,9 +290,9 @@ mod tests {
         let (_temp, storage, worktree_mgr) = setup_test();
         let recovery = Recovery::with_defaults(Arc::clone(&storage), worktree_mgr);
 
-        storage.create("loops", &make_running_loop("r1")).unwrap();
-        storage.create("loops", &make_running_loop("r2")).unwrap();
-        storage.create("loops", &make_pending_loop("p1")).unwrap();
+        storage.create(&make_running_loop("r1")).unwrap();
+        storage.create(&make_running_loop("r2")).unwrap();
+        storage.create(&make_pending_loop("p1")).unwrap();
 
         let actions = recovery.recover_all().unwrap();
         assert_eq!(actions.len(), 2);

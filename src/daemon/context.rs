@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::ipc::messages::DaemonEvent;
 use crate::llm::{AnthropicClient, AnthropicConfig, LlmClient, Message};
 use crate::manager::{LoopManager, LoopManagerConfig};
-use crate::storage::JsonlStorage;
+use crate::storage::StorageWrapper;
 use crate::tools::{LocalToolRouter, ToolCatalog};
 use crate::validation::CompositeValidator;
 use crate::worktree::WorktreeManager;
@@ -65,7 +65,7 @@ impl ChatSession {
 }
 
 /// Type alias for the concrete LoopManager used by the daemon
-pub type DaemonLoopManager = LoopManager<JsonlStorage, AnthropicClient, LocalToolRouter, CompositeValidator>;
+pub type DaemonLoopManager = LoopManager<AnthropicClient, LocalToolRouter, CompositeValidator>;
 
 /// Shared context for all daemon request handlers
 pub struct DaemonContext {
@@ -80,7 +80,7 @@ pub struct DaemonContext {
     /// Chat session state (conversation history)
     pub chat_session: Arc<RwLock<ChatSession>>,
     /// Persistent storage
-    pub storage: Arc<JsonlStorage>,
+    pub storage: Arc<StorageWrapper>,
 }
 
 impl DaemonContext {
@@ -97,7 +97,7 @@ impl DaemonContext {
     /// so events broadcast from handlers reach connected TUI clients.
     pub fn with_event_channel(data_dir: &Path, event_tx: broadcast::Sender<DaemonEvent>) -> Result<Self> {
         // Create storage
-        let storage = Arc::new(JsonlStorage::new(data_dir.join(".taskstore"))?);
+        let storage = Arc::new(StorageWrapper::open(data_dir)?);
 
         // Create LLM client
         let llm_client = Arc::new(AnthropicClient::new(AnthropicConfig::default())?);

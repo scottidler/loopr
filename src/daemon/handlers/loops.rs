@@ -4,11 +4,8 @@
 
 use serde_json::{Value, json};
 
-// Storage trait needed for delete method
-#[allow(unused_imports)]
-use crate::storage::Storage;
-
 use crate::daemon::context::DaemonContext;
+use crate::domain::Loop;
 use crate::domain::LoopType;
 use crate::ipc::messages::{DaemonError, DaemonEvent, DaemonResponse};
 
@@ -154,8 +151,8 @@ pub async fn handle_loop_delete(id: u64, params: &Value, ctx: &DaemonContext) ->
         None => return DaemonResponse::error(id, DaemonError::invalid_params("Missing 'id' parameter")),
     };
 
-    // Delete from storage
-    match ctx.storage.delete("loops", loop_id) {
+    // Delete from storage using the typed delete method
+    match ctx.storage.delete::<Loop>(loop_id) {
         Ok(()) => DaemonResponse::success(id, json!({"deleted": true})),
         Err(e) => DaemonResponse::error(id, DaemonError::internal_error(e.to_string())),
     }

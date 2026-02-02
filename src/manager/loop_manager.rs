@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use taskstore::{Filter, FilterOp, IndexValue};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -15,13 +16,10 @@ use crate::domain::{Loop, LoopOutcome, LoopStatus, LoopType};
 use crate::error::{LooprError, Result};
 use crate::id::now_ms;
 use crate::llm::LlmClient;
-use crate::storage::{Filter, Storage};
+use crate::storage::StorageWrapper;
 use crate::tools::ToolRouter;
 use crate::validation::Validator;
 use crate::worktree::WorktreeManager;
-
-/// Collection name for loops in storage
-const LOOPS_COLLECTION: &str = "loops";
 
 /// Configuration for the LoopManager
 #[derive(Debug, Clone)]
@@ -52,32 +50,31 @@ impl Default for LoopManagerConfig {
 /// Per domain-types.md, Loop is self-contained with its own `run()` method.
 /// LoopManager orchestrates loops by calling `Loop::run()` with the
 /// appropriate dependencies.
-pub struct LoopManager<S: Storage, L: LlmClient, T: ToolRouter, V: Validator> {
-    storage: Arc<S>,
+pub struct LoopManager<L: LlmClient, T: ToolRouter, V: Validator> {
+    storage: Arc<StorageWrapper>,
     llm_client: Arc<L>,
     tool_router: Arc<T>,
     validator: Arc<V>,
     worktree_manager: Arc<WorktreeManager>,
-    signal_manager: Arc<SignalManager<S>>,
+    signal_manager: Arc<SignalManager>,
     config: LoopManagerConfig,
     running_loops: RwLock<HashMap<String, JoinHandle<Result<LoopOutcome>>>>,
 }
 
-impl<S, L, T, V> LoopManager<S, L, T, V>
+impl<L, T, V> LoopManager<L, T, V>
 where
-    S: Storage + Send + Sync + 'static,
     L: LlmClient + 'static,
     T: ToolRouter + 'static,
     V: Validator + 'static,
 {
     /// Create a new LoopManager with the given dependencies
     pub fn new(
-        storage: Arc<S>,
+        storage: Arc<StorageWrapper>,
         llm_client: Arc<L>,
         tool_router: Arc<T>,
         validator: Arc<V>,
         worktree_manager: Arc<WorktreeManager>,
-        signal_manager: Arc<SignalManager<S>>,
+        signal_manager: Arc<SignalManager>,
         config: LoopManagerConfig,
     ) -> Self {
         Self {
@@ -104,7 +101,7 @@ where
         };
 
         // Persist the new loop
-        self.storage.create(LOOPS_COLLECTION, &loop_instance)?;
+        self.storage.create(&loop_instance)?;
 
         Ok(loop_instance)
     }
@@ -122,7 +119,7 @@ where
             }
         };
 
-        self.storage.create(LOOPS_COLLECTION, &loop_instance)?;
+        self.storage.create(&loop_instance)?;
 
         Ok(loop_instance)
     }
@@ -133,7 +130,7 @@ where
     /// with the LLM client, tool router, and validator.
     pub async fn start_loop(&self, loop_id: &str) -> Result<()> {
         // Get the loop from storage
-        let loop_instance: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
+        let loop_instance: Option<Loop> = self.storage.get(loop_id)?;
         let mut loop_instance = loop_instance.ok_or_else(|| LooprError::LoopNotFound(loop_id.to_string()))?;
 
         // Check if already running
@@ -147,21 +144,20 @@ where
         // Update status to running
         loop_instance.status = LoopStatus::Running;
         loop_instance.updated_at = now_ms();
-        self.storage.update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
+        self.storage.update(&loop_instance)?;
 
         // Create worktree for this loop (sync method)
         let worktree_path = self.worktree_manager.create(loop_id)?;
         loop_instance.worktree = worktree_path;
 
         // Update loop with worktree path
-        self.storage.update(LOOPS_COLLECTION, loop_id, &loop_instance)?;
+        self.storage.update(&loop_instance)?;
 
         // Clone dependencies for the spawned task
         let llm = self.llm_client.clone();
         let tools = self.tool_router.clone();
         let validator = self.validator.clone();
         let storage = self.storage.clone();
-        let loop_id_owned = loop_id.to_string();
 
         // Spawn the loop execution task
         let handle = tokio::spawn(async move {
@@ -169,7 +165,7 @@ where
             let outcome = loop_instance.run(llm, tools, validator).await?;
 
             // Update the loop status in storage after completion
-            storage.update(LOOPS_COLLECTION, &loop_id_owned, &loop_instance)?;
+            storage.update(&loop_instance)?;
 
             Ok(outcome)
         });
@@ -203,7 +199,7 @@ where
 
     /// Handle loop completion - spawn children if needed
     pub async fn on_loop_complete(&self, loop_id: &str) -> Result<()> {
-        let loop_instance: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
+        let loop_instance: Option<Loop> = self.storage.get(loop_id)?;
         let loop_instance = loop_instance.ok_or_else(|| LooprError::LoopNotFound(loop_id.to_string()))?;
 
         // Clean up the running task tracking
@@ -239,25 +235,33 @@ where
 
     /// Get a loop by ID
     pub async fn get_loop(&self, loop_id: &str) -> Result<Option<Loop>> {
-        self.storage.get(LOOPS_COLLECTION, loop_id)
+        self.storage.get(loop_id)
     }
 
     /// List all loops
     pub async fn list_loops(&self) -> Result<Vec<Loop>> {
-        self.storage.list(LOOPS_COLLECTION)
+        self.storage.list_all()
     }
 
     /// Find loops by status
     pub async fn find_by_status(&self, status: LoopStatus) -> Result<Vec<Loop>> {
-        let status_str = serde_json::to_value(status)?;
-        let filters = vec![Filter::eq("status", status_str)];
-        self.storage.query(LOOPS_COLLECTION, &filters)
+        let status_str = serde_json::to_string(&status)?;
+        let filters = vec![Filter {
+            field: "status".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(status_str),
+        }];
+        self.storage.list(&filters)
     }
 
     /// Find loops by parent
     pub async fn find_by_parent(&self, parent_id: &str) -> Result<Vec<Loop>> {
-        let filters = vec![Filter::eq("parent_id", parent_id)];
-        self.storage.query(LOOPS_COLLECTION, &filters)
+        let filters = vec![Filter {
+            field: "parent_id".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(parent_id.to_string()),
+        }];
+        self.storage.list(&filters)
     }
 
     /// Get count of running loops
@@ -278,7 +282,7 @@ mod tests {
     use super::*;
     use crate::domain::SignalType;
     use crate::llm::MockLlmClient;
-    use crate::storage::JsonlStorage;
+    use crate::storage::StorageWrapper;
     use crate::tools::{LocalToolRouter, ToolCatalog};
     use crate::validation::ValidationResult;
     use async_trait::async_trait;
@@ -297,17 +301,17 @@ mod tests {
 
     type TestDeps = (
         TempDir,
-        Arc<JsonlStorage>,
+        Arc<StorageWrapper>,
         Arc<MockLlmClient>,
         Arc<LocalToolRouter>,
         Arc<MockValidator>,
         Arc<WorktreeManager>,
-        Arc<SignalManager<JsonlStorage>>,
+        Arc<SignalManager>,
     );
 
     fn create_test_deps() -> TestDeps {
         let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(JsonlStorage::new(temp_dir.path()).unwrap());
+        let storage = Arc::new(StorageWrapper::open(temp_dir.path()).unwrap());
         let llm_client = Arc::new(MockLlmClient::new());
         let catalog = ToolCatalog::default();
         let tool_router = Arc::new(LocalToolRouter::new(catalog));

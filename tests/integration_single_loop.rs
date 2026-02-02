@@ -6,7 +6,7 @@ use loopr::domain::{Loop, LoopStatus, LoopType};
 use loopr::error::Result;
 use loopr::id::{generate_loop_id, now_ms};
 use loopr::llm::{CompletionResponse, LlmClient, Message, MockLlmClient, Role, StopReason, ToolCall, Usage};
-use loopr::storage::{JsonlStorage, Storage};
+use loopr::storage::StorageWrapper;
 use loopr::tools::ToolCatalog;
 use loopr::validation::ValidationResult;
 use tempfile::TempDir;
@@ -23,21 +23,19 @@ fn test_mock_llm_client_creation() {
 #[test]
 fn test_storage_persistence() -> Result<()> {
     let temp_dir = TempDir::new()?;
-    let storage_path = temp_dir.path().join("storage");
-    std::fs::create_dir_all(&storage_path)?;
 
     // Create a loop and store it
     let loop_record = Loop::new_plan("Test task");
 
     {
-        let storage = JsonlStorage::new(storage_path.clone())?;
-        storage.create("loops", &loop_record)?;
+        let storage = StorageWrapper::open(temp_dir.path())?;
+        storage.create(&loop_record)?;
     }
 
     // Reload storage and verify persistence
     {
-        let storage = JsonlStorage::new(storage_path)?;
-        let loaded: Option<Loop> = storage.get("loops", &loop_record.id)?;
+        let storage = StorageWrapper::open(temp_dir.path())?;
+        let loaded: Option<Loop> = storage.get(&loop_record.id)?;
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();
         assert_eq!(loaded.id, loop_record.id);
@@ -218,10 +216,8 @@ fn test_now_ms_sensible() {
 #[test]
 fn test_storage_query_filtering() -> Result<()> {
     let temp_dir = TempDir::new()?;
-    let storage_path = temp_dir.path().join("storage");
-    std::fs::create_dir_all(&storage_path)?;
 
-    let storage = JsonlStorage::new(storage_path)?;
+    let storage = StorageWrapper::open(temp_dir.path())?;
 
     // Create multiple loops with different statuses
     let mut plan1 = Loop::new_plan("Task 1");
@@ -231,12 +227,12 @@ fn test_storage_query_filtering() -> Result<()> {
     let plan3 = Loop::new_plan("Task 3");
     // plan3 stays Pending
 
-    storage.create("loops", &plan1)?;
-    storage.create("loops", &plan2)?;
-    storage.create("loops", &plan3)?;
+    storage.create(&plan1)?;
+    storage.create(&plan2)?;
+    storage.create(&plan3)?;
 
     // Verify we can list all
-    let all: Vec<Loop> = storage.list("loops")?;
+    let all: Vec<Loop> = storage.list_all()?;
     assert_eq!(all.len(), 3);
 
     Ok(())

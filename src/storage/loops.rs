@@ -1,34 +1,43 @@
 //! Loop-specific storage helpers.
 
-use super::traits::{Filter, Storage};
+use std::sync::Arc;
+
+use taskstore::{Filter, FilterOp, IndexValue};
+
 use crate::domain::loop_record::{Loop, LoopStatus};
 use crate::error::Result;
-
-/// Collection name for loops.
-pub const LOOPS_COLLECTION: &str = "loops";
+use crate::storage::StorageWrapper;
 
 /// Helper for loop-specific queries.
-pub struct LoopStore<'a, S: Storage> {
-    storage: &'a S,
+pub struct LoopStore {
+    storage: Arc<StorageWrapper>,
 }
 
-impl<'a, S: Storage> LoopStore<'a, S> {
+impl LoopStore {
     /// Create a new LoopStore wrapping the given storage.
-    pub fn new(storage: &'a S) -> Self {
+    pub fn new(storage: Arc<StorageWrapper>) -> Self {
         Self { storage }
     }
 
     /// Find all loops with a specific status.
     pub fn find_by_status(&self, status: LoopStatus) -> Result<Vec<Loop>> {
-        let status_str = serde_json::to_value(status)?;
-        self.storage
-            .query(LOOPS_COLLECTION, &[Filter::eq("status", status_str)])
+        let status_str = serde_json::to_string(&status)?;
+        let filters = vec![Filter {
+            field: "status".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(status_str),
+        }];
+        self.storage.list(&filters)
     }
 
     /// Find all child loops of a parent.
     pub fn find_by_parent(&self, parent_id: &str) -> Result<Vec<Loop>> {
-        self.storage
-            .query(LOOPS_COLLECTION, &[Filter::eq("parent_id", parent_id)])
+        let filters = vec![Filter {
+            field: "parent_id".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(parent_id.to_string()),
+        }];
+        self.storage.list(&filters)
     }
 
     /// Find all pending loops.
@@ -53,27 +62,27 @@ impl<'a, S: Storage> LoopStore<'a, S> {
 
     /// List all loops.
     pub fn list_all(&self) -> Result<Vec<Loop>> {
-        self.storage.list(LOOPS_COLLECTION)
+        self.storage.list_all()
     }
 
     /// Get a loop by ID.
     pub fn get(&self, id: &str) -> Result<Option<Loop>> {
-        self.storage.get(LOOPS_COLLECTION, id)
+        self.storage.get(id)
     }
 
     /// Create a new loop.
     pub fn create(&self, record: &Loop) -> Result<()> {
-        self.storage.create(LOOPS_COLLECTION, record)
+        self.storage.create(record)
     }
 
     /// Update an existing loop.
     pub fn update(&self, record: &Loop) -> Result<()> {
-        self.storage.update(LOOPS_COLLECTION, &record.id, record)
+        self.storage.update(record)
     }
 
     /// Delete a loop.
     pub fn delete(&self, id: &str) -> Result<()> {
-        self.storage.delete(LOOPS_COLLECTION, id)
+        self.storage.delete::<Loop>(id)
     }
 }
 
@@ -81,19 +90,18 @@ impl<'a, S: Storage> LoopStore<'a, S> {
 mod tests {
     use super::*;
     use crate::domain::loop_record::LoopType;
-    use crate::storage::JsonlStorage;
     use tempfile::TempDir;
 
-    fn create_test_storage() -> (JsonlStorage, TempDir) {
+    fn create_test_storage() -> (Arc<StorageWrapper>, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let storage = JsonlStorage::new(temp_dir.path()).unwrap();
+        let storage = Arc::new(StorageWrapper::open(temp_dir.path()).unwrap());
         (storage, temp_dir)
     }
 
     #[test]
     fn test_create_and_get_loop() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let record = Loop::new_plan("Test task");
         loop_store.create(&record).unwrap();
@@ -106,7 +114,7 @@ mod tests {
     #[test]
     fn test_find_by_status() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let plan1 = Loop::new_plan("Task 1");
         let plan2 = Loop::new_plan("Task 2");
@@ -122,7 +130,7 @@ mod tests {
     #[test]
     fn test_find_by_parent() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let parent = Loop::new_plan("Parent task");
         let child1 = Loop::new_spec(&parent, 0);
@@ -139,7 +147,7 @@ mod tests {
     #[test]
     fn test_update_loop() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let mut record = Loop::new_plan("Test task");
         loop_store.create(&record).unwrap();
@@ -156,7 +164,7 @@ mod tests {
     #[test]
     fn test_delete_loop() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let record = Loop::new_plan("Test task");
         loop_store.create(&record).unwrap();
@@ -170,7 +178,7 @@ mod tests {
     #[test]
     fn test_list_all() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         loop_store.create(&Loop::new_plan("Task 1")).unwrap();
         loop_store.create(&Loop::new_plan("Task 2")).unwrap();
@@ -183,7 +191,7 @@ mod tests {
     #[test]
     fn test_find_running() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let mut record = Loop::new_plan("Test task");
         record.status = LoopStatus::Running;
@@ -196,7 +204,7 @@ mod tests {
     #[test]
     fn test_find_complete() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let mut record = Loop::new_plan("Test task");
         record.status = LoopStatus::Complete;
@@ -209,7 +217,7 @@ mod tests {
     #[test]
     fn test_find_failed() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let mut record = Loop::new_plan("Test task");
         record.status = LoopStatus::Failed;
@@ -222,7 +230,7 @@ mod tests {
     #[test]
     fn test_nested_hierarchy() {
         let (storage, _temp) = create_test_storage();
-        let loop_store = LoopStore::new(&storage);
+        let loop_store = LoopStore::new(storage);
 
         let plan = Loop::new_plan("Build feature");
         let spec = Loop::new_spec(&plan, 0);

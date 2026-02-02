@@ -1,7 +1,10 @@
 //! Event record types for observability.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use taskstore::{IndexValue, Record};
 
 use crate::id::{generate_signal_id, now_ms};
 
@@ -133,6 +136,30 @@ impl EventRecord {
     /// Check if this is a daemon-related event
     pub fn is_daemon_event(&self) -> bool {
         self.event_type.starts_with("daemon.")
+    }
+}
+
+impl Record for EventRecord {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        // Events are immutable
+        self.created_at
+    }
+
+    fn collection_name() -> &'static str {
+        "events"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut fields = HashMap::new();
+        fields.insert("event_type".to_string(), IndexValue::String(self.event_type.clone()));
+        if let Some(loop_id) = &self.loop_id {
+            fields.insert("loop_id".to_string(), IndexValue::String(loop_id.clone()));
+        }
+        fields
     }
 }
 

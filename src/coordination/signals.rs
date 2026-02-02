@@ -5,43 +5,44 @@
 
 use std::sync::Arc;
 
+use taskstore::{Filter, FilterOp, IndexValue};
+
 use crate::domain::signal::{SignalRecord, SignalType};
 use crate::error::Result;
 use crate::id::now_ms;
-use crate::storage::{Filter, HasId, Storage};
-
-/// Collection name for signals in storage
-const SIGNALS_COLLECTION: &str = "signals";
-
-impl HasId for SignalRecord {
-    fn id(&self) -> &str {
-        &self.id
-    }
-}
+use crate::storage::StorageWrapper;
 
 /// Manages signal-based coordination between loops
-pub struct SignalManager<S: Storage> {
-    storage: Arc<S>,
+pub struct SignalManager {
+    storage: Arc<StorageWrapper>,
 }
 
-impl<S: Storage> SignalManager<S> {
+impl SignalManager {
     /// Create a new SignalManager with the given storage
-    pub fn new(storage: Arc<S>) -> Self {
+    pub fn new(storage: Arc<StorageWrapper>) -> Self {
         Self { storage }
     }
 
     /// Write a signal to storage
     pub fn send(&self, signal: SignalRecord) -> Result<()> {
-        self.storage.create(SIGNALS_COLLECTION, &signal)
+        self.storage.create(&signal)
     }
 
     /// Check for unacknowledged signals targeting a specific loop
     pub fn check(&self, loop_id: &str) -> Result<Option<SignalRecord>> {
         let filters = vec![
-            Filter::eq("target_loop", loop_id),
-            Filter::eq("acknowledged_at", serde_json::Value::Null),
+            Filter {
+                field: "target_loop".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(loop_id.to_string()),
+            },
+            Filter {
+                field: "acknowledged".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::Bool(false),
+            },
         ];
-        let signals: Vec<SignalRecord> = self.storage.query(SIGNALS_COLLECTION, &filters)?;
+        let signals: Vec<SignalRecord> = self.storage.list(&filters)?;
 
         // Return the first unacknowledged signal for this loop
         Ok(signals.into_iter().next())
@@ -50,26 +51,38 @@ impl<S: Storage> SignalManager<S> {
     /// Check for signals matching a selector (e.g., "descendants:001")
     pub fn check_selector(&self, selector: &str) -> Result<Vec<SignalRecord>> {
         let filters = vec![
-            Filter::eq("target_selector", selector),
-            Filter::eq("acknowledged_at", serde_json::Value::Null),
+            Filter {
+                field: "target_selector".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(selector.to_string()),
+            },
+            Filter {
+                field: "acknowledged".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::Bool(false),
+            },
         ];
-        self.storage.query(SIGNALS_COLLECTION, &filters)
+        self.storage.list(&filters)
     }
 
     /// Acknowledge a signal by ID
     pub fn acknowledge(&self, signal_id: &str) -> Result<()> {
-        let signal: Option<SignalRecord> = self.storage.get(SIGNALS_COLLECTION, signal_id)?;
+        let signal: Option<SignalRecord> = self.storage.get(signal_id)?;
         if let Some(mut signal) = signal {
             signal.acknowledged_at = Some(now_ms());
-            self.storage.update(SIGNALS_COLLECTION, signal_id, &signal)?;
+            self.storage.update(&signal)?;
         }
         Ok(())
     }
 
     /// Get all unacknowledged signals
     pub fn pending(&self) -> Result<Vec<SignalRecord>> {
-        let filters = vec![Filter::eq("acknowledged_at", serde_json::Value::Null)];
-        self.storage.query(SIGNALS_COLLECTION, &filters)
+        let filters = vec![Filter {
+            field: "acknowledged".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::Bool(false),
+        }];
+        self.storage.list(&filters)
     }
 
     /// Send a stop signal to a specific loop
@@ -121,12 +134,12 @@ impl<S: Storage> SignalManager<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::JsonlStorage;
+    use crate::storage::StorageWrapper;
     use tempfile::TempDir;
 
-    fn create_test_storage() -> (TempDir, Arc<JsonlStorage>) {
+    fn create_test_storage() -> (TempDir, Arc<StorageWrapper>) {
         let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(JsonlStorage::new(temp_dir.path()).unwrap());
+        let storage = Arc::new(StorageWrapper::open(temp_dir.path()).unwrap());
         (temp_dir, storage)
     }
 

@@ -4,25 +4,21 @@
 
 use std::sync::Arc;
 
+use taskstore::{Filter, FilterOp, IndexValue};
+
 use crate::domain::loop_record::{Loop, LoopStatus};
 use crate::domain::signal::{SignalRecord, SignalType};
 use crate::error::Result;
-use crate::storage::{Filter, Storage};
-
-/// Collection name for loops in storage
-const LOOPS_COLLECTION: &str = "loops";
-
-/// Collection name for signals in storage
-const SIGNALS_COLLECTION: &str = "signals";
+use crate::storage::StorageWrapper;
 
 /// Manages invalidation cascade for loop hierarchies
-pub struct InvalidationManager<S: Storage> {
-    storage: Arc<S>,
+pub struct InvalidationManager {
+    storage: Arc<StorageWrapper>,
 }
 
-impl<S: Storage> InvalidationManager<S> {
+impl InvalidationManager {
     /// Create a new InvalidationManager with the given storage
-    pub fn new(storage: Arc<S>) -> Self {
+    pub fn new(storage: Arc<StorageWrapper>) -> Self {
         Self { storage }
     }
 
@@ -36,8 +32,12 @@ impl<S: Storage> InvalidationManager<S> {
 
         while let Some(current_id) = to_check.pop() {
             // Find all loops with this parent_id
-            let filters = vec![Filter::eq("parent_id", &current_id)];
-            let children: Vec<Loop> = self.storage.query(LOOPS_COLLECTION, &filters)?;
+            let filters = vec![Filter {
+                field: "parent_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(current_id),
+            }];
+            let children: Vec<Loop> = self.storage.list(&filters)?;
 
             for child in children {
                 // Add this child's ID to check for its descendants
@@ -67,11 +67,11 @@ impl<S: Storage> InvalidationManager<S> {
             let signal = SignalRecord::new(SignalType::Invalidate, reason)
                 .from_loop(parent_id)
                 .to_loop(&descendant.id);
-            self.storage.create(SIGNALS_COLLECTION, &signal)?;
+            self.storage.create(&signal)?;
 
             // Update the loop status to Invalidated
             descendant.status = LoopStatus::Invalidated;
-            self.storage.update(LOOPS_COLLECTION, &descendant.id, &descendant)?;
+            self.storage.update(&descendant)?;
         }
 
         Ok(count)
@@ -79,7 +79,7 @@ impl<S: Storage> InvalidationManager<S> {
 
     /// Check if a loop is a descendant of another loop
     pub fn is_descendant_of(&self, loop_id: &str, potential_ancestor: &str) -> Result<bool> {
-        let loop_record: Option<Loop> = self.storage.get(LOOPS_COLLECTION, loop_id)?;
+        let loop_record: Option<Loop> = self.storage.get(loop_id)?;
 
         if let Some(record) = loop_record
             && let Some(parent_id) = &record.parent_id
@@ -100,7 +100,7 @@ impl<S: Storage> InvalidationManager<S> {
         let mut current_id = loop_id.to_string();
 
         loop {
-            let loop_record: Option<Loop> = self.storage.get(LOOPS_COLLECTION, &current_id)?;
+            let loop_record: Option<Loop> = self.storage.get(&current_id)?;
 
             if let Some(record) = loop_record {
                 if let Some(parent_id) = record.parent_id {
@@ -126,10 +126,18 @@ impl<S: Storage> InvalidationManager<S> {
         for ancestor in ancestors {
             let selector = format!("descendants:{}", ancestor);
             let filters = vec![
-                Filter::eq("target_selector", &selector),
-                Filter::eq("acknowledged_at", serde_json::Value::Null),
+                Filter {
+                    field: "target_selector".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(selector),
+                },
+                Filter {
+                    field: "acknowledged".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::Bool(false),
+                },
             ];
-            let signals: Vec<SignalRecord> = self.storage.query(SIGNALS_COLLECTION, &filters)?;
+            let signals: Vec<SignalRecord> = self.storage.list(&filters)?;
 
             if let Some(signal) = signals.into_iter().next() {
                 return Ok(Some(signal));
@@ -143,12 +151,12 @@ impl<S: Storage> InvalidationManager<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::JsonlStorage;
+    use crate::storage::StorageWrapper;
     use tempfile::TempDir;
 
-    fn create_test_storage() -> (TempDir, Arc<JsonlStorage>) {
+    fn create_test_storage() -> (TempDir, Arc<StorageWrapper>) {
         let temp_dir = TempDir::new().unwrap();
-        let storage = Arc::new(JsonlStorage::new(temp_dir.path()).unwrap());
+        let storage = Arc::new(StorageWrapper::open(temp_dir.path()).unwrap());
         (temp_dir, storage)
     }
 
@@ -184,9 +192,9 @@ mod tests {
         let child1 = create_test_loop("child-001", Some("parent-001"));
         let child2 = create_test_loop("child-002", Some("parent-001"));
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child1).unwrap();
-        storage.create(LOOPS_COLLECTION, &child2).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child1).unwrap();
+        storage.create(&child2).unwrap();
 
         let descendants = manager.find_descendants("parent-001").unwrap();
         assert_eq!(descendants.len(), 2);
@@ -202,9 +210,9 @@ mod tests {
         let parent = create_test_loop("p-001", Some("gp-001"));
         let child = create_test_loop("c-001", Some("p-001"));
 
-        storage.create(LOOPS_COLLECTION, &grandparent).unwrap();
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&grandparent).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         let descendants = manager.find_descendants("gp-001").unwrap();
         assert_eq!(descendants.len(), 2);
@@ -223,8 +231,8 @@ mod tests {
         let mut child = create_test_loop("child-003", Some("parent-002"));
         child.status = LoopStatus::Running;
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         let count = manager
             .invalidate_descendants("parent-002", "Parent re-iterated")
@@ -232,7 +240,7 @@ mod tests {
         assert_eq!(count, 1);
 
         // Verify child status was updated
-        let updated: Option<Loop> = storage.get(LOOPS_COLLECTION, "child-003").unwrap();
+        let updated: Option<Loop> = storage.get("child-003").unwrap();
         assert!(updated.is_some());
         assert_eq!(updated.unwrap().status, LoopStatus::Invalidated);
     }
@@ -247,14 +255,14 @@ mod tests {
         let mut child = create_test_loop("child-004", Some("parent-003"));
         child.status = LoopStatus::Complete;
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         let count = manager.invalidate_descendants("parent-003", "Reason").unwrap();
         assert_eq!(count, 1);
 
         // Child should still be Complete (not changed to Invalidated)
-        let updated: Option<Loop> = storage.get(LOOPS_COLLECTION, "child-004").unwrap();
+        let updated: Option<Loop> = storage.get("child-004").unwrap();
         assert_eq!(updated.unwrap().status, LoopStatus::Complete);
     }
 
@@ -266,8 +274,8 @@ mod tests {
         let parent = create_test_loop("parent-004", None);
         let child = create_test_loop("child-005", Some("parent-004"));
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         assert!(manager.is_descendant_of("child-005", "parent-004").unwrap());
         assert!(!manager.is_descendant_of("parent-004", "child-005").unwrap());
@@ -282,9 +290,9 @@ mod tests {
         let parent = create_test_loop("p-002", Some("gp-002"));
         let child = create_test_loop("c-002", Some("p-002"));
 
-        storage.create(LOOPS_COLLECTION, &grandparent).unwrap();
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&grandparent).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         assert!(manager.is_descendant_of("c-002", "gp-002").unwrap());
         assert!(manager.is_descendant_of("c-002", "p-002").unwrap());
@@ -305,7 +313,7 @@ mod tests {
         let manager = InvalidationManager::new(storage.clone());
 
         let root = create_test_loop("root-001", None);
-        storage.create(LOOPS_COLLECTION, &root).unwrap();
+        storage.create(&root).unwrap();
 
         let chain = manager.get_ancestor_chain("root-001").unwrap();
         assert!(chain.is_empty());
@@ -320,9 +328,9 @@ mod tests {
         let parent = create_test_loop("p-003", Some("gp-003"));
         let child = create_test_loop("c-003", Some("p-003"));
 
-        storage.create(LOOPS_COLLECTION, &grandparent).unwrap();
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&grandparent).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         let chain = manager.get_ancestor_chain("c-003").unwrap();
         assert_eq!(chain.len(), 2);
@@ -338,8 +346,8 @@ mod tests {
         let parent = create_test_loop("parent-005", None);
         let child = create_test_loop("child-006", Some("parent-005"));
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         let signal = manager.check_invalidation("child-006").unwrap();
         assert!(signal.is_none());
@@ -353,13 +361,13 @@ mod tests {
         let parent = create_test_loop("parent-006", None);
         let child = create_test_loop("child-007", Some("parent-006"));
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         // Send invalidation signal targeting descendants of parent
         let signal =
             SignalRecord::new(SignalType::Invalidate, "Test invalidation").to_selector("descendants:parent-006");
-        storage.create(SIGNALS_COLLECTION, &signal).unwrap();
+        storage.create(&signal).unwrap();
 
         let found = manager.check_invalidation("child-007").unwrap();
         assert!(found.is_some());
@@ -375,14 +383,18 @@ mod tests {
         let mut child = create_test_loop("child-008", Some("parent-007"));
         child.status = LoopStatus::Running;
 
-        storage.create(LOOPS_COLLECTION, &parent).unwrap();
-        storage.create(LOOPS_COLLECTION, &child).unwrap();
+        storage.create(&parent).unwrap();
+        storage.create(&child).unwrap();
 
         manager.invalidate_descendants("parent-007", "Test reason").unwrap();
 
         // Check that a signal was created for the child
-        let filters = vec![Filter::eq("target_loop", "child-008")];
-        let signals: Vec<SignalRecord> = storage.query(SIGNALS_COLLECTION, &filters).unwrap();
+        let filters = vec![Filter {
+            field: "target_loop".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String("child-008".to_string()),
+        }];
+        let signals: Vec<SignalRecord> = storage.list(&filters).unwrap();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].signal_type, SignalType::Invalidate);
     }
@@ -399,11 +411,11 @@ mod tests {
         let leaf1 = create_test_loop("leaf1", Some("branch1"));
         let leaf2 = create_test_loop("leaf2", Some("branch2"));
 
-        storage.create(LOOPS_COLLECTION, &root).unwrap();
-        storage.create(LOOPS_COLLECTION, &branch1).unwrap();
-        storage.create(LOOPS_COLLECTION, &branch2).unwrap();
-        storage.create(LOOPS_COLLECTION, &leaf1).unwrap();
-        storage.create(LOOPS_COLLECTION, &leaf2).unwrap();
+        storage.create(&root).unwrap();
+        storage.create(&branch1).unwrap();
+        storage.create(&branch2).unwrap();
+        storage.create(&leaf1).unwrap();
+        storage.create(&leaf2).unwrap();
 
         let descendants = manager.find_descendants("root-002").unwrap();
         assert_eq!(descendants.len(), 4);

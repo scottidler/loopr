@@ -3,7 +3,10 @@
 //! ToolJobRecord tracks each tool execution within a loop iteration,
 //! providing an audit trail for debugging and observability.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::id::{generate_job_id, now_ms};
 
@@ -141,6 +144,32 @@ impl ToolJobRecord {
     pub fn mark_cancelled(&mut self) {
         self.status = ToolJobStatus::Cancelled;
         self.completed_at = Some(now_ms());
+    }
+}
+
+impl Record for ToolJobRecord {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.completed_at.unwrap_or(self.created_at)
+    }
+
+    fn collection_name() -> &'static str {
+        "tool_jobs"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut fields = HashMap::new();
+        fields.insert("loop_id".to_string(), IndexValue::String(self.loop_id.clone()));
+        fields.insert("iteration".to_string(), IndexValue::Int(self.iteration as i64));
+        fields.insert("tool_name".to_string(), IndexValue::String(self.tool_name.clone()));
+        fields.insert(
+            "status".to_string(),
+            IndexValue::String(serde_json::to_string(&self.status).unwrap_or_default()),
+        );
+        fields
     }
 }
 

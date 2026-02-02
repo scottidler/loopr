@@ -7,17 +7,18 @@
 //! Per domain-types.md, Loop is self-contained with its own `run()` method.
 //! There is no separate LoopRunner - that was unnecessary indirection.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::domain::LoopOutcome;
 use crate::error::Result;
 use crate::id::{generate_child_id, generate_loop_id, now_ms};
 use crate::llm::{CompletionRequest, LlmClient, Message, ToolDefinition};
 use crate::prompt::PromptRenderer;
-use crate::storage::HasId;
 use crate::tools::ToolRouter;
 use crate::validation::Validator;
 
@@ -390,9 +391,33 @@ impl Default for LoopRunConfig {
     }
 }
 
-impl HasId for Loop {
+impl Record for Loop {
     fn id(&self) -> &str {
         &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "loops"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut fields = HashMap::new();
+        fields.insert(
+            "status".to_string(),
+            IndexValue::String(serde_json::to_string(&self.status).unwrap_or_default()),
+        );
+        fields.insert(
+            "loop_type".to_string(),
+            IndexValue::String(serde_json::to_string(&self.loop_type).unwrap_or_default()),
+        );
+        if let Some(parent) = &self.parent_id {
+            fields.insert("parent_id".to_string(), IndexValue::String(parent.clone()));
+        }
+        fields
     }
 }
 
