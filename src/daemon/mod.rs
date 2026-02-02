@@ -11,17 +11,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use log::info;
+use serde_json::json;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::RwLock;
 
 use crate::error::{LooprError, Result};
-use crate::ipc::messages::{DaemonRequest, DaemonResponse};
-use crate::ipc::server::{CallbackHandler, IpcServer, IpcServerConfig};
+use crate::ipc::messages::{DaemonError, DaemonRequest, DaemonResponse, Methods};
+use crate::ipc::server::{IpcServer, IpcServerConfig, RequestHandler};
 
+pub mod context;
+pub mod handlers;
 pub mod recovery;
 pub mod scheduler;
 pub mod tick;
 
+pub use context::*;
+pub use handlers::*;
 pub use recovery::*;
 pub use scheduler::*;
 pub use tick::*;
@@ -74,6 +79,73 @@ impl DaemonConfig {
             data_dir,
             tick_config: TickConfig::default(),
         }
+    }
+}
+
+/// Async request handler that uses DaemonContext
+pub struct AsyncDaemonHandler {
+    ctx: Arc<DaemonContext>,
+}
+
+impl AsyncDaemonHandler {
+    /// Create a new handler with the given context
+    pub fn new(ctx: Arc<DaemonContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+impl RequestHandler for AsyncDaemonHandler {
+    async fn handle(&self, request: DaemonRequest) -> DaemonResponse {
+        handle_request_async(request, &self.ctx).await
+    }
+}
+
+/// Handle incoming requests from clients (async version)
+async fn handle_request_async(request: DaemonRequest, ctx: &DaemonContext) -> DaemonResponse {
+    match request.method.as_str() {
+        // Connection
+        Methods::PING => DaemonResponse::success(request.id, json!({"pong": true})),
+
+        "status" => DaemonResponse::success(
+            request.id,
+            json!({
+                "running": true,
+                "version": env!("CARGO_PKG_VERSION"),
+                "llm_ready": ctx.llm_ready(),
+            }),
+        ),
+
+        // Chat methods
+        Methods::CHAT_SEND => handle_chat_send(request.id, &request.params, ctx).await,
+        Methods::CHAT_CLEAR => handle_chat_clear(request.id, ctx).await,
+        Methods::CHAT_CANCEL => handle_chat_cancel(request.id, ctx).await,
+
+        // Loop methods
+        Methods::LOOP_LIST => handle_loop_list(request.id, ctx).await,
+        Methods::LOOP_GET => handle_loop_get(request.id, &request.params, ctx).await,
+        Methods::LOOP_CREATE_PLAN => handle_loop_create_plan(request.id, &request.params, ctx).await,
+        Methods::LOOP_START => handle_loop_start(request.id, &request.params, ctx).await,
+        Methods::LOOP_PAUSE => handle_loop_pause(request.id, &request.params, ctx).await,
+        Methods::LOOP_RESUME => handle_loop_resume(request.id, &request.params, ctx).await,
+        Methods::LOOP_CANCEL => handle_loop_cancel(request.id, &request.params, ctx).await,
+        Methods::LOOP_DELETE => handle_loop_delete(request.id, &request.params, ctx).await,
+
+        // Plan approval methods
+        Methods::PLAN_APPROVE => handle_plan_approve(request.id, &request.params, ctx).await,
+        Methods::PLAN_REJECT => handle_plan_reject(request.id, &request.params, ctx).await,
+        Methods::PLAN_ITERATE => handle_plan_iterate(request.id, &request.params, ctx).await,
+        Methods::PLAN_GET_PREVIEW => handle_plan_get_preview(request.id, &request.params, ctx).await,
+
+        // Metrics
+        Methods::METRICS_GET => DaemonResponse::success(
+            request.id,
+            json!({
+                "running_loops": ctx.loop_manager.read().await.running_count().await,
+            }),
+        ),
+
+        // Unknown method
+        _ => DaemonResponse::error(request.id, DaemonError::method_not_found(&request.method)),
     }
 }
 
@@ -151,17 +223,74 @@ impl Daemon {
         // Ensure data directory exists
         fs::create_dir_all(&self.config.data_dir)?;
 
+        // Create DaemonContext with all components
+        let ctx = match DaemonContext::new(&self.config.data_dir) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                // If context creation fails (e.g., no API key), log and continue with minimal handler
+                info!("Warning: Could not create full daemon context: {}", e);
+                // Fall back to legacy handler
+                return self.run_legacy().await;
+            }
+        };
+
         // Create IPC server
         let server_config = IpcServerConfig::default().with_socket_path(&self.config.socket_path);
         let mut server = IpcServer::with_config(server_config);
 
-        // Create request handler
-        let tick_state = Arc::clone(&self.tick_state);
-        let handler = Arc::new(CallbackHandler::new(move |request: DaemonRequest| {
-            handle_request(request, &tick_state)
-        }));
+        // Create async request handler
+        let handler = Arc::new(AsyncDaemonHandler::new(ctx));
 
         info!("Daemon listening on {}", self.config.socket_path.display());
+
+        // Run server with signal handling
+        let result = tokio::select! {
+            result = server.run(handler) => {
+                result
+            }
+            _ = async {
+                let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+                let mut sigint = signal(SignalKind::interrupt()).expect("Failed to register SIGINT handler");
+                tokio::select! {
+                    _ = sigterm.recv() => {
+                        info!("Received SIGTERM, shutting down...");
+                    }
+                    _ = sigint.recv() => {
+                        info!("Received SIGINT, shutting down...");
+                    }
+                }
+            } => {
+                info!("Signal received, stopping server...");
+                let _ = server.shutdown().await;
+                Ok(())
+            }
+        };
+
+        // Always clean up PID file on exit
+        self.remove_pid();
+        info!("Daemon stopped");
+
+        result
+    }
+
+    /// Legacy run method using synchronous handler (fallback when DaemonContext fails)
+    async fn run_legacy(&mut self) -> Result<()> {
+        use crate::ipc::server::CallbackHandler;
+
+        // Create IPC server
+        let server_config = IpcServerConfig::default().with_socket_path(&self.config.socket_path);
+        let mut server = IpcServer::with_config(server_config);
+
+        // Create simple request handler
+        let tick_state = Arc::clone(&self.tick_state);
+        let handler = Arc::new(CallbackHandler::new(move |request: DaemonRequest| {
+            handle_request_sync(request, &tick_state)
+        }));
+
+        info!(
+            "Daemon (legacy mode) listening on {}",
+            self.config.socket_path.display()
+        );
 
         // Run server with signal handling
         let result = tokio::select! {
@@ -231,41 +360,27 @@ impl Daemon {
     }
 }
 
-/// Handle incoming requests from clients
-fn handle_request(request: DaemonRequest, _tick_state: &Arc<RwLock<TickState>>) -> DaemonResponse {
+/// Handle incoming requests from clients (sync version for fallback)
+fn handle_request_sync(request: DaemonRequest, _tick_state: &Arc<RwLock<TickState>>) -> DaemonResponse {
     match request.method.as_str() {
-        "ping" => DaemonResponse::success(request.id, serde_json::json!({"pong": true})),
+        "ping" => DaemonResponse::success(request.id, json!({"pong": true})),
 
-        "status" => {
-            // We can't block here, so return a simple status
-            DaemonResponse::success(
-                request.id,
-                serde_json::json!({
-                    "running": true,
-                    "version": env!("CARGO_PKG_VERSION"),
-                }),
-            )
-        }
-
-        "loop.list" => {
-            // TODO: Wire to actual loop manager
-            DaemonResponse::success(request.id, serde_json::json!({"loops": []}))
-        }
-
-        "loop.get" => {
-            // TODO: Wire to actual loop manager
-            DaemonResponse::success(request.id, serde_json::json!({"loop": null}))
-        }
-
-        "loop.create_plan" => {
-            // TODO: Wire to actual loop manager
-            DaemonResponse::success(request.id, serde_json::json!({"id": "plan-001", "status": "created"}))
-        }
-
-        _ => DaemonResponse::success(
+        "status" => DaemonResponse::success(
             request.id,
-            serde_json::json!({"message": format!("Method '{}' not yet implemented", request.method)}),
+            json!({
+                "running": true,
+                "version": env!("CARGO_PKG_VERSION"),
+                "mode": "legacy",
+            }),
         ),
+
+        "loop.list" => DaemonResponse::success(request.id, json!({"loops": []})),
+
+        "loop.get" => DaemonResponse::success(request.id, json!({"loop": null})),
+
+        "loop.create_plan" => DaemonResponse::success(request.id, json!({"id": "plan-001", "status": "created"})),
+
+        _ => DaemonResponse::error(request.id, DaemonError::method_not_found(&request.method)),
     }
 }
 
@@ -344,30 +459,29 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_request_ping() {
+    fn test_handle_request_sync_ping() {
         let tick_state = Arc::new(RwLock::new(TickState::new()));
-        let request = DaemonRequest::new(1, "ping", serde_json::json!({}));
-        let response = handle_request(request, &tick_state);
+        let request = DaemonRequest::new(1, "ping", json!({}));
+        let response = handle_request_sync(request, &tick_state);
         assert!(response.is_success());
         assert!(response.result.unwrap()["pong"].as_bool().unwrap());
     }
 
     #[test]
-    fn test_handle_request_status() {
+    fn test_handle_request_sync_status() {
         let tick_state = Arc::new(RwLock::new(TickState::new()));
-        let request = DaemonRequest::new(2, "status", serde_json::json!({}));
-        let response = handle_request(request, &tick_state);
+        let request = DaemonRequest::new(2, "status", json!({}));
+        let response = handle_request_sync(request, &tick_state);
         assert!(response.is_success());
         assert!(response.result.unwrap()["running"].as_bool().unwrap());
     }
 
     #[test]
-    fn test_handle_request_unknown_method() {
+    fn test_handle_request_sync_unknown_method() {
         let tick_state = Arc::new(RwLock::new(TickState::new()));
-        let request = DaemonRequest::new(3, "unknown.method", serde_json::json!({}));
-        let response = handle_request(request, &tick_state);
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert!(result["message"].as_str().unwrap().contains("not yet implemented"));
+        let request = DaemonRequest::new(3, "unknown.method", json!({}));
+        let response = handle_request_sync(request, &tick_state);
+        assert!(!response.is_success());
+        assert!(response.error.is_some());
     }
 }

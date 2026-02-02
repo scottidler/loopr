@@ -288,10 +288,8 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                                 match client.chat_send(&msg).await {
                                     Ok(response) => {
                                         if let Some(result) = response.result {
-                                            let reply = result
-                                                .get("message")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or_else(|| {
+                                            let reply =
+                                                result.get("message").and_then(|v| v.as_str()).unwrap_or_else(|| {
                                                     result
                                                         .get("response")
                                                         .and_then(|v| v.as_str())
@@ -311,17 +309,11 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
                                         }
                                     }
                                     Err(e) => {
-                                        app.add_chat_message(
-                                            MessageSender::Daemon,
-                                            format!("Failed to send: {}", e),
-                                        );
+                                        app.add_chat_message(MessageSender::Daemon, format!("Failed to send: {}", e));
                                     }
                                 }
                             } else {
-                                app.add_chat_message(
-                                    MessageSender::Daemon,
-                                    "Not connected to daemon".to_string(),
-                                );
+                                app.add_chat_message(MessageSender::Daemon, "Not connected to daemon".to_string());
                             }
                         } else if let Some(c) = key.char() {
                             app.state.chat_input.push(c);
