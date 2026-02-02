@@ -68,16 +68,16 @@ async fn run_application(cli: &Cli, config: &Config) -> Result<()> {
             run_tui(config).await
         }
         Some(Commands::Daemon { command }) => handle_daemon_command(command, config).await,
-        Some(Commands::Plan { task }) => handle_plan_command(task, config),
+        Some(Commands::Plan { task }) => handle_plan_command(task, config).await,
         Some(Commands::List { status, loop_type }) => {
-            handle_list_command(status.as_deref(), loop_type.as_deref(), config)
+            handle_list_command(status.as_deref(), loop_type.as_deref(), config).await
         }
-        Some(Commands::Status { id, detailed }) => handle_status_command(id, *detailed, config),
-        Some(Commands::Approve { id }) => handle_approve_command(id, config),
-        Some(Commands::Reject { id, reason }) => handle_reject_command(id, reason.as_deref(), config),
-        Some(Commands::Pause { id }) => handle_pause_command(id, config),
-        Some(Commands::Resume { id }) => handle_resume_command(id, config),
-        Some(Commands::Cancel { id }) => handle_cancel_command(id, config),
+        Some(Commands::Status { id, detailed }) => handle_status_command(id, *detailed, config).await,
+        Some(Commands::Approve { id }) => handle_approve_command(id, config).await,
+        Some(Commands::Reject { id, reason }) => handle_reject_command(id, reason.as_deref(), config).await,
+        Some(Commands::Pause { id }) => handle_pause_command(id, config).await,
+        Some(Commands::Resume { id }) => handle_resume_command(id, config).await,
+        Some(Commands::Cancel { id }) => handle_cancel_command(id, config).await,
     }
 }
 
@@ -472,95 +472,309 @@ async fn handle_daemon_restart() -> Result<()> {
     handle_daemon_start(false).await
 }
 
-fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
+async fn handle_plan_command(task: &str, config: &Config) -> Result<()> {
     info!("Creating plan for task: {}", task);
     if config.debug {
         println!("{}", "[debug] Plan command handler".yellow());
     }
-    println!("{} Creating plan: {}", "Planning:".green(), task);
-    println!("{}", "Plan creation not yet implemented".yellow());
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    println!("{} Creating plan: {}", "Planning:".cyan(), task);
+
+    match client.create_plan(task).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                let id = result["id"].as_str().unwrap_or("unknown");
+                let status = result["status"].as_str().unwrap_or("unknown");
+                println!("{} Plan created", "✓".green());
+                println!("  ID: {}", id.cyan());
+                println!("  Status: {}", status);
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to create plan: {}", "✗".red(), e);
+        }
+    }
+
     Ok(())
 }
 
-fn handle_list_command(status: Option<&str>, loop_type: Option<&str>, config: &Config) -> Result<()> {
+async fn handle_list_command(status: Option<&str>, loop_type: Option<&str>, config: &Config) -> Result<()> {
     info!("Listing loops - status: {:?}, type: {:?}", status, loop_type);
     if config.debug {
         println!("{}", "[debug] List command handler".yellow());
     }
-    println!("{}", "Listing loops...".cyan());
-    if let Some(s) = status {
-        println!("  Filtering by status: {}", s);
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    match client.list_loops().await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                if let Some(loops) = result["loops"].as_array() {
+                    if loops.is_empty() {
+                        println!("{}", "No loops found".yellow());
+                    } else {
+                        println!("{}", "Loops:".cyan());
+                        for loop_record in loops {
+                            let id = loop_record["id"].as_str().unwrap_or("?");
+                            let ltype = loop_record["loop_type"].as_str().unwrap_or("?");
+                            let lstatus = loop_record["status"].as_str().unwrap_or("?");
+
+                            // Apply filters
+                            if let Some(filter_status) = status
+                                && lstatus.to_lowercase() != filter_status.to_lowercase()
+                            {
+                                continue;
+                            }
+                            if let Some(filter_type) = loop_type
+                                && ltype.to_lowercase() != filter_type.to_lowercase()
+                            {
+                                continue;
+                            }
+
+                            println!("  {} - {} ({})", id.cyan(), ltype, lstatus.yellow());
+                        }
+                    }
+                } else {
+                    println!("{}", "No loops data in response".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to list loops: {}", "✗".red(), e);
+        }
     }
-    if let Some(t) = loop_type {
-        println!("  Filtering by type: {}", t);
-    }
-    println!("{}", "Loop listing not yet implemented".yellow());
+
     Ok(())
 }
 
-fn handle_status_command(id: &str, detailed: bool, config: &Config) -> Result<()> {
+async fn handle_status_command(id: &str, detailed: bool, config: &Config) -> Result<()> {
     info!("Getting status for loop: {} (detailed: {})", id, detailed);
     if config.debug {
         println!("{}", "[debug] Status command handler".yellow());
     }
-    println!("{} {}", "Status for:".green(), id);
-    if detailed {
-        println!("  (detailed view)");
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    match client.get_loop(id).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                if let Some(loop_record) = result.get("loop") {
+                    if loop_record.is_null() {
+                        println!("{} Loop '{}' not found", "✗".red(), id);
+                        return Ok(());
+                    }
+
+                    let loop_id = loop_record["id"].as_str().unwrap_or("?");
+                    let loop_type = loop_record["loop_type"].as_str().unwrap_or("?");
+                    let status = loop_record["status"].as_str().unwrap_or("?");
+                    let description = loop_record["description"].as_str().unwrap_or("");
+
+                    println!("{} {}", "Loop:".cyan(), loop_id);
+                    println!("  Type: {}", loop_type);
+                    println!("  Status: {}", status.yellow());
+                    if !description.is_empty() {
+                        println!("  Description: {}", description);
+                    }
+
+                    if detailed {
+                        if let Some(parent_id) = loop_record.get("parent_id").and_then(|v| v.as_str()) {
+                            println!("  Parent: {}", parent_id);
+                        }
+                        if let Some(created) = loop_record.get("created_at").and_then(|v| v.as_i64()) {
+                            println!("  Created: {}", created);
+                        }
+                        if let Some(iterations) = loop_record.get("iterations").and_then(|v| v.as_u64()) {
+                            println!("  Iterations: {}", iterations);
+                        }
+                    }
+                } else {
+                    println!("{}", "No loop data in response".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to get loop status: {}", "✗".red(), e);
+        }
     }
-    println!("{}", "Status retrieval not yet implemented".yellow());
+
     Ok(())
 }
 
-fn handle_approve_command(id: &str, config: &Config) -> Result<()> {
+async fn handle_approve_command(id: &str, config: &Config) -> Result<()> {
     info!("Approving plan: {}", id);
     if config.debug {
         println!("{}", "[debug] Approve command handler".yellow());
     }
-    println!("{} {}", "Approving:".green(), id);
-    println!("{}", "Plan approval not yet implemented".yellow());
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    println!("{} {}", "Approving:".cyan(), id);
+
+    match client.approve_plan(id).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                let approved = result["approved"].as_bool().unwrap_or(false);
+                let specs_spawned = result["specs_spawned"].as_u64().unwrap_or(0);
+                if approved {
+                    println!("{} Plan approved", "✓".green());
+                    if specs_spawned > 0 {
+                        println!("  Spawned {} spec loop(s)", specs_spawned);
+                    }
+                } else {
+                    println!("{} Plan not approved", "⚠".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to approve plan: {}", "✗".red(), e);
+        }
+    }
+
     Ok(())
 }
 
-fn handle_reject_command(id: &str, reason: Option<&str>, config: &Config) -> Result<()> {
+async fn handle_reject_command(id: &str, reason: Option<&str>, config: &Config) -> Result<()> {
     info!("Rejecting plan: {} (reason: {:?})", id, reason);
     if config.debug {
         println!("{}", "[debug] Reject command handler".yellow());
     }
-    println!("{} {}", "Rejecting:".red(), id);
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    println!("{} {}", "Rejecting:".cyan(), id);
     if let Some(r) = reason {
         println!("  Reason: {}", r);
     }
-    println!("{}", "Plan rejection not yet implemented".yellow());
+
+    match client.reject_plan(id, reason).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                let rejected = result["rejected"].as_bool().unwrap_or(false);
+                if rejected {
+                    println!("{} Plan rejected", "✓".green());
+                } else {
+                    println!("{} Plan not rejected", "⚠".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to reject plan: {}", "✗".red(), e);
+        }
+    }
+
     Ok(())
 }
 
-fn handle_pause_command(id: &str, config: &Config) -> Result<()> {
+async fn handle_pause_command(id: &str, config: &Config) -> Result<()> {
     info!("Pausing loop: {}", id);
     if config.debug {
         println!("{}", "[debug] Pause command handler".yellow());
     }
-    println!("{} {}", "Pausing:".yellow(), id);
-    println!("{}", "Loop pause not yet implemented".yellow());
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    println!("{} {}", "Pausing:".cyan(), id);
+
+    match client.pause_loop(id).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                let paused = result["paused"].as_bool().unwrap_or(false);
+                if paused {
+                    println!("{} Loop paused", "✓".green());
+                } else {
+                    println!("{} Loop not paused", "⚠".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to pause loop: {}", "✗".red(), e);
+        }
+    }
+
     Ok(())
 }
 
-fn handle_resume_command(id: &str, config: &Config) -> Result<()> {
+async fn handle_resume_command(id: &str, config: &Config) -> Result<()> {
     info!("Resuming loop: {}", id);
     if config.debug {
         println!("{}", "[debug] Resume command handler".yellow());
     }
-    println!("{} {}", "Resuming:".green(), id);
-    println!("{}", "Loop resume not yet implemented".yellow());
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    println!("{} {}", "Resuming:".cyan(), id);
+
+    match client.resume_loop(id).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                let resumed = result["resumed"].as_bool().unwrap_or(false);
+                if resumed {
+                    println!("{} Loop resumed", "✓".green());
+                } else {
+                    println!("{} Loop not resumed", "⚠".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to resume loop: {}", "✗".red(), e);
+        }
+    }
+
     Ok(())
 }
 
-fn handle_cancel_command(id: &str, config: &Config) -> Result<()> {
+async fn handle_cancel_command(id: &str, config: &Config) -> Result<()> {
     info!("Canceling loop: {}", id);
     if config.debug {
         println!("{}", "[debug] Cancel command handler".yellow());
     }
-    println!("{} {}", "Canceling:".red(), id);
-    println!("{}", "Loop cancellation not yet implemented".yellow());
+
+    let client = loopr::ipc::client::IpcClient::with_default_config();
+    client.connect().await.context("Failed to connect to daemon")?;
+
+    println!("{} {}", "Canceling:".cyan(), id);
+
+    match client.cancel_loop(id).await {
+        Ok(response) => {
+            if let Some(result) = response.result {
+                let cancelled = result["cancelled"].as_bool().unwrap_or(false);
+                if cancelled {
+                    println!("{} Loop cancelled", "✓".green());
+                } else {
+                    println!("{} Loop not cancelled", "⚠".yellow());
+                }
+            } else if let Some(error) = response.error {
+                println!("{} {}", "Error:".red(), error.message);
+            }
+        }
+        Err(e) => {
+            println!("{} Failed to cancel loop: {}", "✗".red(), e);
+        }
+    }
+
     Ok(())
 }
 

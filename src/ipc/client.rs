@@ -263,8 +263,8 @@ impl IpcClient {
     }
 
     /// Create a plan.
-    pub async fn create_plan(&self, task: &str) -> Result<DaemonResponse> {
-        self.request("loop.create_plan", serde_json::json!({ "task": task }))
+    pub async fn create_plan(&self, description: &str) -> Result<DaemonResponse> {
+        self.request("loop.create_plan", serde_json::json!({ "description": description }))
             .await
     }
 
