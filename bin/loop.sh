@@ -67,14 +67,12 @@ check_quality_gates() {
     local dead_code_markers
     dead_code_markers=$(grep -rn "allow(dead_code)" src/ 2>/dev/null || true)
     if [[ -n "$dead_code_markers" ]]; then
-        echo -e "${RED}Quality gate FAILED: #[allow(dead_code)] markers found${NC}"
+        echo "Quality gate FAILED: #[allow(dead_code)] markers found"
         echo "$dead_code_markers"
         local count
         count=$(echo "$dead_code_markers" | wc -l)
-        echo -e "${RED}  Total: $count markers — all must be removed${NC}"
+        echo "  Total: $count markers — all must be removed"
         issues_found=1
-    else
-        echo -e "${GREEN}Quality gate PASSED: no dead_code markers${NC}"
     fi
 
     # Check 2: No underscore-prefixed parameters in non-trait-impl code
@@ -84,14 +82,11 @@ check_quality_gates() {
         || true)
 
     if [[ -n "$underscore_params" ]]; then
-        echo -e "${YELLOW}Info: underscore-prefixed parameters found${NC}"
-        echo "$underscore_params" | head -10
         if echo "$underscore_params" | grep -q "src/main\.rs"; then
-            echo -e "${RED}Quality gate FAILED: main.rs has underscore params — must use them${NC}"
+            echo "Quality gate FAILED: main.rs has underscore params — must use them"
+            echo "$underscore_params"
             issues_found=1
         fi
-    else
-        echo -e "${GREEN}Quality gate PASSED: no underscore-prefixed parameters${NC}"
     fi
 
     return $issues_found
@@ -110,6 +105,20 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         git commit -m "ralph: iteration $((i - 1)) changes" || true
     fi
 
+    # Build prompt: PROMPT.md + progress.txt injected directly
+    CONSTRUCTED_PROMPT=$(cat "$PROMPT_FILE")
+    if [[ -f "$PROGRESS_FILE" ]]; then
+        CONSTRUCTED_PROMPT="${CONSTRUCTED_PROMPT}
+
+---
+## Current Iteration: ${i} of ${MAX_ITERATIONS}
+
+## Progress from previous iterations
+\`\`\`
+$(cat "$PROGRESS_FILE")
+\`\`\`"
+    fi
+
     # Run Claude with timeout — capture output
     echo -e "${BLUE}Running Claude (timeout: ${TIMEOUT_MINUTES}m)...${NC}"
 
@@ -117,7 +126,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         --model "$MODEL" \
         --dangerously-skip-permissions \
         --print \
-        <"$PROMPT_FILE" 2>&1 | tee /dev/stderr) || {
+        <<<"$CONSTRUCTED_PROMPT" 2>&1 | tee /dev/stderr) || {
         EXIT_CODE=$?
         if [[ $EXIT_CODE -eq 124 ]]; then
             echo -e "${RED}Timeout! Claude ran for ${TIMEOUT_MINUTES}m without exiting.${NC}"
@@ -134,17 +143,21 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         git commit -m "ralph: iteration $i complete on $CURRENT_BRANCH" || true
     fi
 
-    # Run validation EXTERNALLY (not inside LLM session)
+    # Run validation EXTERNALLY (not inside LLM session) — capture output
     echo -e "${BLUE}Running external validation: $VALIDATION_CMD${NC}"
     VALIDATION_PASSED=false
-    if eval "$VALIDATION_CMD"; then
+    VALIDATION_OUTPUT=$(eval "$VALIDATION_CMD" 2>&1 | tee /dev/stderr) && {
         echo -e "${GREEN}Validation PASSED${NC}"
         VALIDATION_PASSED=true
-        echo "Iteration $i: validation PASS" >>"$PROGRESS_FILE"
-    else
+        echo "Iteration $i: PASS" >>"$PROGRESS_FILE"
+    } || {
         echo -e "${RED}Validation FAILED${NC}"
-        echo "Iteration $i: FAIL — validation failed" >>"$PROGRESS_FILE"
-    fi
+        # Append validation output directly to progress.txt — truncate to last 50 lines
+        {
+            echo "Iteration $i: FAIL — validation errors:"
+            echo "$VALIDATION_OUTPUT" | tail -50
+        } >>"$PROGRESS_FILE"
+    }
 
     # Check for completion signal in output (must be on its own line)
     PROMISE_FOUND=false
@@ -156,8 +169,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
     # Only consider completion if BOTH validation passes AND promise found
     if [[ "$VALIDATION_PASSED" == "true" && "$PROMISE_FOUND" == "true" ]]; then
         echo -e "${BLUE}Running quality gate checks...${NC}"
-        if check_quality_gates; then
-            echo -e "${GREEN}Quality gates PASSED${NC}"
+        GATE_OUTPUT=$(check_quality_gates 2>&1 | tee /dev/stderr) && {
             echo ""
             echo -e "${GREEN}===============================================================${NC}"
             echo -e "${GREEN}  BUILD COMPLETE!${NC}"
@@ -165,10 +177,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
             echo "Completed at iteration $i on branch $CURRENT_BRANCH"
             echo "Completed: $(date) on $CURRENT_BRANCH" >>"$PROGRESS_FILE"
             exit 0
-        else
+        } || {
             echo -e "${YELLOW}Quality gates FAILED — continuing iterations${NC}"
-            echo "Iteration $i: validation+promise OK but quality gates failed" >>"$PROGRESS_FILE"
-        fi
+            # Append gate output directly to progress.txt
+            {
+                echo "Iteration $i: quality gates FAILED:"
+                echo "$GATE_OUTPUT"
+            } >>"$PROGRESS_FILE"
+        }
     fi
 
     # If promise found but validation failed, note it

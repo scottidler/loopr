@@ -5,9 +5,10 @@ Your state persists ONLY in `progress.txt` and the git history.
 
 ## CRITICAL RULES
 
-1. **READ progress.txt FIRST** — it tells you what was done
+1. **CHECK THE INJECTED CONTEXT BELOW** — progress, validation output, and quality gate results from previous iterations are appended to this prompt automatically. You do NOT need to read progress.txt yourself.
 2. **DO ONE SMALL THING** — not a phase. One file, one fix, one test.
 3. **EXIT IMMEDIATELY** — do not retry failures. Do not loop. Just exit.
+4. **If validation failed last iteration, FIX THAT FIRST** — the validation output is injected below. Read it, fix the issue, done.
 
 The bash loop restarts you with fresh context. That's the whole point.
 The bash loop runs validation EXTERNALLY — you do NOT run `otto ci`.
@@ -17,20 +18,25 @@ The bash loop runs validation EXTERNALLY — you do NOT run `otto ci`.
 ## Your Workflow
 
 ```bash
-# 1. Read state (MANDATORY — do this FIRST)
-cat progress.txt
+# 1. Check injected context (appended below this prompt automatically):
+#    - Progress from previous iterations
+#    - Last validation output (if it failed)
+#    - Last quality gate output (if it failed)
+#    You already have this — no need to cat files.
+
+# 2. Optionally check current code state
 git log --oneline -10
 ls src/ 2>/dev/null || echo "src/ not created yet"
 
-# 2. Do ONE small task (see "What is ONE task?" below)
+# 3. Do ONE small task (see "What is ONE task?" below)
 
-# 3. Record what you did
+# 4. Record what you did
 echo "Iteration N: <what you did>" >> progress.txt
 
-# 4. If ALL work is complete (ALL 6 phases done, ALL 11 success criteria met):
+# 5. If ALL work is complete (ALL 6 phases done, ALL 11 success criteria met):
 echo "<promise>COMPLETE</promise>"
 
-# 5. EXIT — do nothing else
+# 6. EXIT — do nothing else
 ```
 
 ---
@@ -51,8 +57,8 @@ echo "<promise>COMPLETE</promise>"
 
 ## On Previous Validation Failure
 
-If progress.txt shows a FAIL from the previous iteration:
-1. Read what failed
+If the injected context below shows a FAIL or validation output with errors:
+1. Read the validation/quality gate output (injected below — you already have it)
 2. Fix that ONE thing
 3. Record what you fixed
 4. EXIT immediately
@@ -306,12 +312,11 @@ The bash loop verifies this externally. If validation fails, you'll be restarted
 
 ## Start of Iteration Checklist
 
-1. [ ] Read `progress.txt`
-2. [ ] Run `git log --oneline | head -10`
-3. [ ] Run `ls src/` to see current state
-4. [ ] Determine what to work on next
-5. [ ] Do ONE small task (implement code + write tests)
-6. [ ] `git add <specific files>` then `git commit`
-7. [ ] `echo "Iteration N: <what you did>" >> progress.txt`
-8. [ ] Check if ALL phases + success criteria complete → `echo "<promise>COMPLETE</promise>"`
-9. [ ] EXIT
+1. [ ] Read injected context below (progress + validation + quality gates)
+2. [ ] If last iteration failed: fix that failure. If not: determine next task.
+3. [ ] Optionally run `git log --oneline -10` and `ls src/` for current state
+4. [ ] Do ONE small task (implement code + write tests)
+5. [ ] `git add <specific files>` then `git commit`
+6. [ ] `echo "Iteration N: <what you did>" >> progress.txt`
+7. [ ] Check if ALL phases + success criteria complete → `echo "<promise>COMPLETE</promise>"`
+8. [ ] EXIT
