@@ -65,6 +65,29 @@ If progress.txt shows a FAIL from the previous iteration:
 
 Loopr is a TUI-based "dev team in a box" orchestrator. MVP1 proves the orchestration spine with zero LLM involvement — the human acts as every persona via the TUI.
 
+### Starting Point
+
+The project has been scaffolded with a basic Rust skeleton (`Cargo.toml`, `build.rs`, `src/main.rs`, `src/cli.rs`, `src/config.rs`). This scaffold is **placeholder code** — it compiles but does not implement any Loopr functionality. Replace it incrementally with the real architecture from the design doc as you work through the phases. Do not preserve scaffold code that doesn't serve the design.
+
+### Adding Dependencies
+
+**ALWAYS use `cargo add` to add dependencies.** Never hand-write version numbers in `Cargo.toml`. This ensures you get the latest published version of each crate, not a stale version from training data.
+
+```bash
+# Correct — always do this:
+cargo add tokio --features full
+cargo add serde --features derive
+cargo add thiserror
+
+# Wrong — never do this:
+# Manually editing Cargo.toml to add: thiserror = "1.0.68"
+```
+
+For the `taskstore` git dependency, use:
+```bash
+cargo add taskstore --git https://github.com/scottidler/taskstore.git
+```
+
 **Read the design doc:** `docs/design/2026-02-25-loopr-v3-mvp1.md`
 This is the single source of truth. It contains all data models, FSMs, IPC protocol, TUI design, and architecture decisions.
 
@@ -212,7 +235,7 @@ MVP1 is complete when a human can do the following end-to-end:
 2. **Structured errors** — thiserror for types, eyre/anyhow for propagation
 3. **Return data** — functions return `Result<T>`, minimize side effects
 4. **Tests in every module** — `#[cfg(test)] mod tests { ... }` at the bottom of each file
-5. **Use `cargo add`** for dependencies — never manually write version numbers in Cargo.toml
+5. **Use `cargo add`** for dependencies — never manually write version numbers in Cargo.toml. Your training data versions are stale; `cargo add` fetches the latest from crates.io.
 
 ### Testing Requirements
 
