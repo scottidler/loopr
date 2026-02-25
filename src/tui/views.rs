@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
+// Note: List and ListItem still used by LoopsView
 
 use super::app::{AppState, ChatMessage, LoopSummary, MessageSender, PendingApproval};
 
@@ -34,20 +35,41 @@ impl ChatView {
         Self
     }
 
-    /// Format a chat message for display
-    fn format_message(msg: &ChatMessage) -> ListItem<'_> {
-        let (prefix, style) = match msg.sender {
-            MessageSender::User => ("You: ", Style::default().fg(Color::Green)),
-            MessageSender::Daemon => ("Loopr: ", Style::default().fg(Color::Cyan)),
-            MessageSender::System => ("System: ", Style::default().fg(Color::Yellow)),
-        };
-
-        let line = Line::from(vec![
-            Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
-            Span::raw(&msg.content),
-        ]);
-
-        ListItem::new(line)
+    /// Format a chat message into lines for display (returns multiple lines for markdown)
+    fn format_message(msg: &ChatMessage) -> Vec<Line<'static>> {
+        match msg.sender {
+            MessageSender::User => {
+                // User messages: green ">" (simple, no markdown)
+                vec![Line::from(vec![
+                    Span::styled("> ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled(msg.content.clone(), Style::default().fg(Color::Green)),
+                ])]
+            }
+            MessageSender::Daemon => {
+                // Daemon responses: render as markdown, indented
+                let content = msg.content.clone();
+                let markdown_text = tui_markdown::from_str(&content);
+                markdown_text
+                    .lines
+                    .into_iter()
+                    .map(|line| {
+                        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")]; // Indent
+                        // Clone spans to get 'static lifetime
+                        for span in line.spans {
+                            spans.push(Span::styled(span.content.to_string(), span.style));
+                        }
+                        Line::from(spans)
+                    })
+                    .collect()
+            }
+            MessageSender::System => {
+                // System messages: yellow ">"
+                vec![Line::from(vec![
+                    Span::styled("> ", Style::default().fg(Color::Yellow)),
+                    Span::styled(msg.content.clone(), Style::default().fg(Color::Yellow)),
+                ])]
+            }
+        }
     }
 }
 
@@ -71,24 +93,39 @@ impl View for ChatView {
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(inner_area);
 
-        // Messages area (no borders)
-        let items: Vec<ListItem> = state.chat_messages.iter().map(Self::format_message).collect();
-        let messages = List::new(items);
+        // Messages area with text wrapping (blank line after each message for readability)
+        let mut lines: Vec<Line> = state
+            .chat_messages
+            .iter()
+            .flat_map(|msg| {
+                let mut msg_lines = Self::format_message(msg);
+                msg_lines.push(Line::from("")); // Blank line after each message
+                msg_lines
+            })
+            .collect();
+
+        // If loading, add the thinking indicator as a line in the messages area (like TaskDaemon)
+        if state.is_loading {
+            let elapsed = state.loading_started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            lines.push(Line::from(vec![
+                Span::styled("* ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Thinking...", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" (ctrl+c to interrupt • {elapsed}s)"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+
+        let messages = Paragraph::new(lines).wrap(Wrap { trim: false });
         frame.render_widget(messages, inner_chunks[0]);
 
-        // Input line with prompt (no borders) or loading indicator
-        let input_line = if state.is_loading {
-            Line::from(vec![
-                Span::styled("⏳ ", Style::default().fg(Color::Yellow)),
-                Span::styled("Thinking...", Style::default().fg(Color::Yellow)),
-            ])
-        } else {
-            Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Cyan)),
-                Span::raw(state.chat_input.as_str()),
-                Span::styled("_", Style::default().fg(Color::DarkGray)),
-            ])
-        };
+        // Input line (always the normal prompt)
+        let input_line = Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::raw(state.chat_input.as_str()),
+            Span::styled("_", Style::default().fg(Color::DarkGray)),
+        ]);
         let input = Paragraph::new(input_line);
         frame.render_widget(input, inner_chunks[1]);
     }
@@ -283,6 +320,7 @@ mod tests {
             sender: MessageSender::User,
             content: "Hello".to_string(),
             timestamp: 0,
+            pending: false,
         };
         let _item = ChatView::format_message(&msg);
         // Just verify it doesn't panic
@@ -294,6 +332,7 @@ mod tests {
             sender: MessageSender::Daemon,
             content: "Hi there".to_string(),
             timestamp: 0,
+            pending: false,
         };
         let _item = ChatView::format_message(&msg);
     }
@@ -304,6 +343,7 @@ mod tests {
             sender: MessageSender::System,
             content: "Connected".to_string(),
             timestamp: 0,
+            pending: false,
         };
         let _item = ChatView::format_message(&msg);
     }
@@ -392,6 +432,8 @@ mod tests {
             should_quit: false,
             daemon_status: DaemonStatus::default(),
             is_loading: false,
+            loading_started_at: None,
+            spinner_frame: 0,
             chat_input: "test".to_string(),
             chat_messages: vec![],
             loops: vec![],

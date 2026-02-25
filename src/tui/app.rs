@@ -2,6 +2,9 @@
 //!
 //! Main application struct that manages views, state, and event loop.
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use crate::daemon::default_socket_path;
 use crate::error::Result;
 use crate::ipc::{IpcClient, IpcClientConfig};
@@ -74,6 +77,9 @@ impl Default for AppConfig {
     }
 }
 
+/// Spinner frames for the thinking indicator
+pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 /// Application state
 #[derive(Debug, Default)]
 pub struct AppState {
@@ -85,6 +91,11 @@ pub struct AppState {
     pub daemon_status: DaemonStatus,
     /// Whether a chat response is being awaited
     pub is_loading: bool,
+    /// When loading started (for elapsed time display)
+    #[allow(clippy::struct_field_names)]
+    pub loading_started_at: Option<Instant>,
+    /// Spinner animation frame
+    pub spinner_frame: usize,
     /// Chat input buffer
     pub chat_input: String,
     /// Chat message history
@@ -106,6 +117,8 @@ pub struct ChatMessage {
     pub content: String,
     /// Timestamp
     pub timestamp: i64,
+    /// Whether this message is awaiting a response
+    pub pending: bool,
 }
 
 /// Message sender type
@@ -155,7 +168,7 @@ pub struct App {
     /// Application config
     pub config: AppConfig,
     /// IPC client (optional, may not be connected)
-    client: Option<IpcClient>,
+    client: Option<Arc<IpcClient>>,
 }
 
 impl App {
@@ -183,7 +196,7 @@ impl App {
         let config = IpcClientConfig::with_socket(&self.config.socket_path);
         let client = IpcClient::new(config);
         client.connect().await?;
-        self.client = Some(client);
+        self.client = Some(Arc::new(client));
         self.state.daemon_status = DaemonStatus::Connected;
         Ok(())
     }
@@ -191,7 +204,10 @@ impl App {
     /// Disconnect from daemon
     pub async fn disconnect(&mut self) {
         if let Some(client) = self.client.take() {
-            let _ = client.disconnect().await;
+            // Try to get ownership, or just drop the Arc
+            if let Ok(client) = Arc::try_unwrap(client) {
+                let _ = client.disconnect().await;
+            }
         }
         self.state.daemon_status = DaemonStatus::Disconnected;
     }
@@ -201,9 +217,9 @@ impl App {
         self.state.daemon_status = status;
     }
 
-    /// Get mutable reference to client
-    pub fn client_mut(&mut self) -> Option<&mut IpcClient> {
-        self.client.as_mut()
+    /// Get a clone of the client Arc for async tasks
+    pub fn client(&self) -> Option<Arc<IpcClient>> {
+        self.client.clone()
     }
 
     /// Switch to next view
@@ -226,13 +242,63 @@ impl App {
         self.state.should_quit = true;
     }
 
+    /// Start loading state (when awaiting response)
+    pub fn start_loading(&mut self) {
+        self.state.is_loading = true;
+        self.state.loading_started_at = Some(Instant::now());
+        self.state.spinner_frame = 0;
+    }
+
+    /// Stop loading state
+    pub fn stop_loading(&mut self) {
+        self.state.is_loading = false;
+        self.state.loading_started_at = None;
+    }
+
+    /// Advance the spinner animation (call on each tick)
+    pub fn tick_spinner(&mut self) {
+        if self.state.is_loading {
+            self.state.spinner_frame = (self.state.spinner_frame + 1) % SPINNER_FRAMES.len();
+        }
+    }
+
+    /// Get elapsed loading time in seconds
+    pub fn loading_elapsed_secs(&self) -> u64 {
+        self.state
+            .loading_started_at
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0)
+    }
+
     /// Add a chat message
     pub fn add_chat_message(&mut self, sender: MessageSender, content: String) {
         self.state.chat_messages.push(ChatMessage {
             sender,
             content,
             timestamp: crate::id::now_ms(),
+            pending: false,
         });
+    }
+
+    /// Add a pending chat message (awaiting response)
+    pub fn add_pending_message(&mut self, content: String) -> usize {
+        let idx = self.state.chat_messages.len();
+        self.state.chat_messages.push(ChatMessage {
+            sender: MessageSender::User,
+            content,
+            timestamp: crate::id::now_ms(),
+            pending: true,
+        });
+        self.start_loading();
+        idx
+    }
+
+    /// Mark a message as no longer pending
+    pub fn mark_message_complete(&mut self, idx: usize) {
+        if let Some(msg) = self.state.chat_messages.get_mut(idx) {
+            msg.pending = false;
+        }
+        self.stop_loading();
     }
 
     /// Update loops list
@@ -518,5 +584,67 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.socket_path.ends_with("daemon.sock"));
         assert_eq!(config.tick_rate_ms, 100);
+    }
+
+    #[test]
+    fn test_loading_state() {
+        let mut app = App::with_defaults();
+        assert!(!app.state.is_loading);
+        assert!(app.state.loading_started_at.is_none());
+
+        app.start_loading();
+        assert!(app.state.is_loading);
+        assert!(app.state.loading_started_at.is_some());
+
+        app.stop_loading();
+        assert!(!app.state.is_loading);
+        assert!(app.state.loading_started_at.is_none());
+    }
+
+    #[test]
+    fn test_spinner_tick() {
+        let mut app = App::with_defaults();
+        app.start_loading();
+        assert_eq!(app.state.spinner_frame, 0);
+
+        app.tick_spinner();
+        assert_eq!(app.state.spinner_frame, 1);
+
+        // Tick through all frames and wrap
+        for _ in 0..SPINNER_FRAMES.len() {
+            app.tick_spinner();
+        }
+        assert_eq!(app.state.spinner_frame, 1); // Wrapped around
+    }
+
+    #[test]
+    fn test_pending_message_starts_loading() {
+        let mut app = App::with_defaults();
+        assert!(!app.state.is_loading);
+
+        app.add_pending_message("Hello".to_string());
+        assert!(app.state.is_loading);
+        assert!(app.state.loading_started_at.is_some());
+    }
+
+    #[test]
+    fn test_mark_complete_stops_loading() {
+        let mut app = App::with_defaults();
+        let idx = app.add_pending_message("Hello".to_string());
+        assert!(app.state.is_loading);
+
+        app.mark_message_complete(idx);
+        assert!(!app.state.is_loading);
+        assert!(app.state.loading_started_at.is_none());
+    }
+
+    #[test]
+    fn test_loading_elapsed_secs() {
+        let mut app = App::with_defaults();
+        assert_eq!(app.loading_elapsed_secs(), 0);
+
+        app.start_loading();
+        // Elapsed should be 0 or very small immediately
+        assert!(app.loading_elapsed_secs() < 2);
     }
 }

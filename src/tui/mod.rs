@@ -8,5 +8,5 @@ pub mod input;
 pub mod views;
 
 pub use app::App;
-pub use input::{InputHandler, KeyEvent};
+pub use input::{AsyncEventHandler, InputHandler, KeyEvent, TuiEvent};
 pub use views::{ApprovalView, ChatView, LoopsView, View};

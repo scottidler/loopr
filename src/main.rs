@@ -24,9 +24,10 @@ use cli::commands::{Commands, DaemonCommands};
 use config::Config;
 use loopr::daemon::{Daemon, DaemonConfig, VERSION, default_pid_path, default_socket_path};
 use loopr::error::LooprError;
+use loopr::ipc::DaemonResponse;
 use loopr::tui::app::{ActiveView, DaemonStatus, MessageSender};
 use loopr::tui::views::{ApprovalView, ChatView, LoopsView};
-use loopr::tui::{App, InputHandler, View};
+use loopr::tui::{App, AsyncEventHandler, TuiEvent, View};
 
 fn setup_logging() -> Result<()> {
     // Create log directory
@@ -239,12 +240,21 @@ async fn run_tui(config: &Config) -> Result<()> {
     result
 }
 
+/// Response from a chat message
+struct ChatResponse {
+    pending_idx: usize,
+    result: Result<DaemonResponse, loopr::error::LooprError>,
+}
+
 /// Run the TUI event loop
 async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut App) -> Result<()> {
-    let input_handler = InputHandler::new();
+    let mut event_handler = AsyncEventHandler::new(Duration::from_millis(50));
     let chat_view = ChatView::new();
     let loops_view = LoopsView::new();
     let approval_view = ApprovalView::new();
+
+    // Channel for receiving chat responses from background tasks
+    let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<ChatResponse>(10);
 
     while !app.state.should_quit {
         // Render the UI
@@ -294,113 +304,99 @@ async fn run_event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout
             }
         })?;
 
-        // Handle input
-        if let Some(key) = input_handler.poll()? {
-            if key.is_quit() {
-                app.quit();
-            } else if key.is_tab() {
-                app.next_view();
-            } else if key.is_escape() {
-                app.prev_view();
-            } else {
-                // View-specific input handling
-                match app.state.active_view {
-                    ActiveView::Chat => {
-                        if key.is_enter() && !app.state.chat_input.is_empty() && !app.state.is_loading {
-                            let msg = std::mem::take(&mut app.state.chat_input);
-                            app.add_chat_message(MessageSender::User, msg.clone());
-                            app.state.is_loading = true;
+        // Use tokio::select! to handle both input events and chat responses concurrently
+        tokio::select! {
+            // Handle terminal events (keyboard input)
+            event = event_handler.next() => {
+                match event {
+                    Some(TuiEvent::Key(key)) => {
+                        if key.is_quit() {
+                            app.quit();
+                        } else if key.is_tab() {
+                            app.next_view();
+                        } else if key.is_escape() {
+                            app.prev_view();
+                        } else {
+                            // View-specific input handling
+                            match app.state.active_view {
+                                ActiveView::Chat => {
+                                    if key.is_enter() && !app.state.chat_input.is_empty() && !app.state.is_loading {
+                                        let msg = std::mem::take(&mut app.state.chat_input);
+                                        let pending_idx = app.add_pending_message(msg.clone());
+                                        app.state.is_loading = true;
 
-                            // Force redraw to show loading state before async call
-                            terminal.draw(|frame| {
-                                let size = frame.area();
-                                let chunks = Layout::default()
-                                    .direction(Direction::Vertical)
-                                    .constraints([Constraint::Length(3), Constraint::Min(0)])
-                                    .split(size);
-                                let (indicator, indicator_color) = match app.state.daemon_status {
-                                    DaemonStatus::Connected => ("●", Color::Green),
-                                    DaemonStatus::VersionMismatch => ("●", Color::Yellow),
-                                    DaemonStatus::Disconnected => ("●", Color::Red),
-                                };
-                                let title = Line::from(vec![
-                                    Span::raw(" "),
-                                    Span::styled(indicator, Style::default().fg(indicator_color)),
-                                    Span::styled(
-                                        " Loopr ",
-                                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                                    ),
-                                ]);
-                                let tab_titles: Vec<Line> =
-                                    vec![Line::from(" Chat "), Line::from(" Loops "), Line::from(" Approval ")];
-                                let tabs = Tabs::new(tab_titles)
-                                    .block(Block::default().borders(Borders::ALL).title(title))
-                                    .select(0)
-                                    .style(Style::default().fg(Color::White))
-                                    .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-                                frame.render_widget(tabs, chunks[0]);
-                                chat_view.render(frame, chunks[1], &app.state);
-                            })?;
-
-                            // Send message to daemon
-                            if let Some(client) = app.client_mut() {
-                                match client.chat_send(&msg).await {
-                                    Ok(response) => {
-                                        if let Some(result) = response.result {
-                                            let reply =
-                                                result.get("message").and_then(|v| v.as_str()).unwrap_or_else(|| {
-                                                    result
-                                                        .get("response")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or("No response")
-                                                });
-                                            app.add_chat_message(MessageSender::Daemon, reply.to_string());
-                                        } else if let Some(error) = response.error {
-                                            app.add_chat_message(
-                                                MessageSender::Daemon,
-                                                format!("Error: {}", error.message),
-                                            );
+                                        // Spawn background task to send message
+                                        if let Some(client) = app.client() {
+                                            let tx = response_tx.clone();
+                                            tokio::spawn(async move {
+                                                let result = client.chat_send(&msg).await;
+                                                let _ = tx.send(ChatResponse { pending_idx, result }).await;
+                                            });
                                         } else {
-                                            app.add_chat_message(
-                                                MessageSender::Daemon,
-                                                "No response from daemon".to_string(),
-                                            );
+                                            app.mark_message_complete(pending_idx);
+                                            app.add_chat_message(MessageSender::Daemon, "Not connected to daemon".to_string());
+                                            app.state.is_loading = false;
                                         }
-                                    }
-                                    Err(e) => {
-                                        app.add_chat_message(MessageSender::Daemon, format!("Failed to send: {}", e));
+                                    } else if let Some(c) = key.char() {
+                                        // Allow typing even while loading
+                                        app.state.chat_input.push(c);
+                                    } else if key.is_backspace() && !app.state.chat_input.is_empty() {
+                                        // Allow backspace even while loading
+                                        app.state.chat_input.pop();
                                     }
                                 }
-                            } else {
-                                app.add_chat_message(MessageSender::Daemon, "Not connected to daemon".to_string());
+                                ActiveView::Loops => {
+                                    if key.is_up() {
+                                        app.select_prev_loop();
+                                    } else if key.is_down() {
+                                        app.select_next_loop();
+                                    }
+                                }
+                                ActiveView::Approval => {
+                                    // Approval view input handling
+                                    if let Some(approval) = &mut app.state.pending_approval {
+                                        if let Some(c) = key.char() {
+                                            approval.feedback.push(c);
+                                        } else if key.is_backspace() && !approval.feedback.is_empty() {
+                                            approval.feedback.pop();
+                                        }
+                                    }
+                                }
                             }
-                            app.state.is_loading = false;
-                        } else if let Some(c) = key.char() {
-                            if !app.state.is_loading {
-                                app.state.chat_input.push(c);
-                            }
-                        } else if key.is_backspace() && !app.state.chat_input.is_empty() && !app.state.is_loading {
-                            app.state.chat_input.pop();
                         }
                     }
-                    ActiveView::Loops => {
-                        if key.is_up() {
-                            app.select_prev_loop();
-                        } else if key.is_down() {
-                            app.select_next_loop();
-                        }
+                    Some(TuiEvent::Tick) => {
+                        // Tick event - advance spinner animation
+                        app.tick_spinner();
                     }
-                    ActiveView::Approval => {
-                        // Approval view input handling
-                        if let Some(approval) = &mut app.state.pending_approval {
-                            if let Some(c) = key.char() {
-                                approval.feedback.push(c);
-                            } else if key.is_backspace() && !approval.feedback.is_empty() {
-                                approval.feedback.pop();
-                            }
-                        }
+                    None => {
+                        // Event handler closed
+                        break;
                     }
                 }
+            }
+
+            // Handle chat responses from background tasks
+            Some(response) = response_rx.recv() => {
+                app.mark_message_complete(response.pending_idx);
+                match response.result {
+                    Ok(daemon_response) => {
+                        if let Some(result) = daemon_response.result {
+                            let reply = result.get("message").and_then(|v| v.as_str()).unwrap_or_else(|| {
+                                result.get("response").and_then(|v| v.as_str()).unwrap_or("No response")
+                            });
+                            app.add_chat_message(MessageSender::Daemon, reply.to_string());
+                        } else if let Some(error) = daemon_response.error {
+                            app.add_chat_message(MessageSender::Daemon, format!("Error: {}", error.message));
+                        } else {
+                            app.add_chat_message(MessageSender::Daemon, "No response from daemon".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        app.add_chat_message(MessageSender::Daemon, format!("Failed to send: {}", e));
+                    }
+                }
+                app.state.is_loading = false;
             }
         }
     }

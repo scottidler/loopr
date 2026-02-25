@@ -4,6 +4,56 @@
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use std::time::Duration;
+use tokio::sync::mpsc;
+
+/// Events that can occur in the TUI
+#[derive(Debug)]
+pub enum TuiEvent {
+    /// A key was pressed
+    Key(KeyEvent),
+    /// A tick occurred (for periodic updates)
+    Tick,
+}
+
+/// Async event handler that polls terminal events in a background thread
+pub struct AsyncEventHandler {
+    /// Receiver for events
+    receiver: mpsc::UnboundedReceiver<TuiEvent>,
+}
+
+impl AsyncEventHandler {
+    /// Create a new async event handler
+    pub fn new(tick_rate: Duration) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        // Spawn a thread to poll terminal events
+        std::thread::spawn(move || {
+            loop {
+                // Poll with tick_rate timeout
+                if event::poll(tick_rate).unwrap_or(false) {
+                    if let Ok(Event::Key(key)) = event::read() {
+                        let key_event = KeyEvent::new(key.code, key.modifiers);
+                        if tx.send(TuiEvent::Key(key_event)).is_err() {
+                            break; // Channel closed, exit thread
+                        }
+                    }
+                } else {
+                    // Timeout - send tick
+                    if tx.send(TuiEvent::Tick).is_err() {
+                        break; // Channel closed, exit thread
+                    }
+                }
+            }
+        });
+
+        Self { receiver: rx }
+    }
+
+    /// Get the next event asynchronously
+    pub async fn next(&mut self) -> Option<TuiEvent> {
+        self.receiver.recv().await
+    }
+}
 
 /// Key event representation
 #[derive(Debug, Clone, PartialEq)]
