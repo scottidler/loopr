@@ -1,0 +1,55 @@
+otto:
+  api: 1
+  tasks: [ci]
+  envs:
+    VERSION: "$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
+
+tasks:
+  lint:
+    help: "Run whitespace linting"
+    bash: |
+      whitespace -r
+
+  check:
+    help: "Run all quality checks (compile, clippy, format)"
+    bash: |
+      echo "=== Checking compilation ==="
+      cargo check --all-targets --all-features
+      echo ""
+      echo "=== Running Clippy ==="
+      cargo clippy --all-targets --all-features -- -D warnings
+      echo ""
+      echo "=== Checking format ==="
+      cargo fmt
+      cargo fmt --all --check
+      echo ""
+      echo "All checks passed!"
+
+  ensure-tests-exist:
+    help: "Fail if no tests exist"
+    bash: |
+      bin/ensure-tests-exist.sh
+
+  test:
+    help: "Run all tests"
+    before: [ensure-tests-exist]
+    bash: |
+      cargo test --all-features
+
+  ci:
+    help: "Full CI pipeline (lint + check + test)"
+    before: [lint, check, test]
+    bash: |
+      echo "All CI checks passed!"
+
+  build:
+    help: "Build release binary"
+    bash: |
+      cargo build --release
+      echo "Release build complete"
+
+  clean:
+    help: "Clean build artifacts"
+    bash: |
+      cargo clean
+      echo "Build artifacts cleaned"
