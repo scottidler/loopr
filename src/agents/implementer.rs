@@ -320,7 +320,7 @@ fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentSession;
+    use crate::agents::{AgentSession, AgentType};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig, ToolEntry};
     use crate::domain::learning::Learning;
     use crate::domain::phase::Phase;
