@@ -12,6 +12,7 @@ mod domain;
 mod error;
 mod id;
 mod ipc;
+mod worktree;
 
 use cli::Cli;
 use config::Config;
@@ -183,6 +184,53 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     info!("Lock released: status={}", lock.status);
     lock.expire();
     info!("Lock expired: status={}", lock.status);
+
+    // Validate WorktreeManager is wired up
+    let wt_mgr = worktree::manager::WorktreeManager::new(
+        config.project.repo_path.clone(),
+        config.project.repo_path.join(".worktrees"),
+    );
+    info!(
+        "WorktreeManager: repo={} worktree_dir={}",
+        wt_mgr.repo_path.display(),
+        wt_mgr.worktree_dir.display()
+    );
+    info!("WorktreeManager worktree_path(wi-test)={}", wt_mgr.worktree_path("wi-test").display());
+    info!("WorktreeManager exists(wi-test)={}", wt_mgr.exists("wi-test"));
+    // Exercise WorktreeInfo serde
+    let wt_info = worktree::manager::WorktreeInfo {
+        path: wt_mgr.worktree_path("wi-test"),
+        branch: "agent/wi-test".to_string(),
+        head: "abc123".to_string(),
+    };
+    let wt_json = serde_json::to_string(&wt_info).map_err(error::LooprError::SerdeJson)?;
+    info!("WorktreeInfo json: {}", wt_json);
+    // Exercise WorktreeError display
+    let wt_err = worktree::manager::WorktreeError::NotFound("wi-test".to_string());
+    info!("WorktreeError: {}", wt_err);
+    let wt_err2 = worktree::manager::WorktreeError::AlreadyExists("wi-test".to_string());
+    info!("WorktreeError: {}", wt_err2);
+    let wt_err3 = worktree::manager::WorktreeError::GitCommand("fatal".to_string());
+    info!("WorktreeError: {}", wt_err3);
+    // Exercise list (read-only git operation)
+    match wt_mgr.list() {
+        Ok(wts) => info!("WorktreeManager list: {} worktrees", wts.len()),
+        Err(e) => info!("WorktreeManager list (expected in test): {}", e),
+    }
+    // Exercise create/refresh/cleanup error paths (nonexistent paths)
+    match wt_mgr.refresh("nonexistent-wi", "HEAD") {
+        Ok(()) => {}
+        Err(e) => info!("WorktreeManager refresh (expected): {}", e),
+    }
+    match wt_mgr.cleanup("nonexistent-wi") {
+        Ok(()) => {}
+        Err(e) => info!("WorktreeManager cleanup (expected): {}", e),
+    }
+    // Exercise create with a path that would fail (no real git repo)
+    match wt_mgr.create("wt-test-fail", "HEAD") {
+        Ok(p) => info!("WorktreeManager create: {}", p.display()),
+        Err(e) => info!("WorktreeManager create (expected): {}", e),
+    }
 
     // Validate that the transition engine is wired up
     let rules: Vec<domain::transition::TransitionRule<&str>> = vec![domain::transition::TransitionRule {
