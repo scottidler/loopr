@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod cli;
 mod config;
 mod error;
+mod id;
 
 use cli::Cli;
 use config::Config;
@@ -41,7 +42,7 @@ fn setup_logging() -> Result<()> {
 }
 
 fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
-    info!("Starting application");
+    info!("Starting application with session_id={}", id::generate_id());
 
     // Load and display configuration
     println!("{}", "✓ Configuration loaded successfully".green());
@@ -55,7 +56,7 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     println!("{} Age: {}", "📅".blue(), config.age);
 
     // Log some information
-    info!("Application executed successfully");
+    info!("Application started at ts={}", id::now_millis());
 
     Ok(())
 }
