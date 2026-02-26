@@ -246,6 +246,21 @@ fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_plan_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().list::<Plan>(&[]) {
+            Ok(plans) => {
+                return match serde_json::to_value(&plans) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let plans = stores.plans.read().unwrap();
     let plan_list: Vec<&Plan> = plans.values().collect();
     match serde_json::to_value(&plan_list) {
@@ -2141,6 +2156,39 @@ mod tests {
             DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"})),
         );
 
+        let req = DaemonRequest::new(3, "plan.list", json!(null));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let plans = resp.result.unwrap();
+        assert_eq!(plans.as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_plan_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create two plans (writes to both TaskStore and HashMap)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"})),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.plans.write().unwrap().clear();
+
+        // List should still return both plans via TaskStore
         let req = DaemonRequest::new(3, "plan.list", json!(null));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
