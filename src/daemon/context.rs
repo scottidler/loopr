@@ -84,10 +84,6 @@ impl DaemonContext {
         (Arc::new(RwLock::new(ctx)), tx)
     }
 
-    /// Get a subscriber for daemon events.
-    pub fn subscribe(&self) -> broadcast::Receiver<DaemonEvent> {
-        self.event_tx.subscribe()
-    }
 }
 
 #[cfg(test)]
@@ -119,12 +115,11 @@ mod tests {
     }
 
     #[test]
-    fn test_context_subscribe() {
+    fn test_context_event_broadcast() {
         let config = Config::default();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx);
-        let mut rx = ctx.subscribe();
-        // Send an event through the context's sender
+        let mut rx = ctx.event_tx.subscribe();
         let event = DaemonEvent::record_created("plan", "p1");
         ctx.event_tx.send(event.clone()).unwrap();
         let received = rx.try_recv().unwrap();
@@ -138,7 +133,7 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let c = ctx.read().await;
-            let mut rx = c.subscribe();
+            let mut rx = c.event_tx.subscribe();
             drop(c);
             tx.send(DaemonEvent::record_created("spec", "s1")).unwrap();
             let received = rx.try_recv().unwrap();

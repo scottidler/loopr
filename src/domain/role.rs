@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -15,6 +16,19 @@ impl fmt::Display for Role {
             Role::Coordinator => write!(f, "Coordinator"),
             Role::Integrator => write!(f, "Integrator"),
             Role::Implementer => write!(f, "Implementer"),
+        }
+    }
+}
+
+impl FromStr for Role {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "coordinator" => Ok(Role::Coordinator),
+            "integrator" => Ok(Role::Integrator),
+            "implementer" => Ok(Role::Implementer),
+            _ => Err(format!("unknown role: '{s}' (expected: Coordinator, Integrator, Implementer)")),
         }
     }
 }

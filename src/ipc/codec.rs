@@ -1,35 +1,36 @@
 use tokio_util::codec::LinesCodec;
 
-use super::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, IpcMessage};
-
 /// Create the standard NDJSON codec used for IPC framing.
 /// Each line is one JSON message. Max line length is 64 KiB.
 pub fn ndjson_codec() -> LinesCodec {
     LinesCodec::new_with_max_length(64 * 1024)
 }
 
-/// Encode a DaemonRequest to a JSON string (one NDJSON line).
+// Test-only codec helpers (thin serde_json wrappers for readability in tests)
+#[cfg(test)]
+use super::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, IpcMessage};
+
+#[cfg(test)]
 pub fn encode_request(req: &DaemonRequest) -> Result<String, serde_json::Error> {
     serde_json::to_string(req)
 }
 
-/// Encode a DaemonResponse to a JSON string (one NDJSON line).
+#[cfg(test)]
 pub fn encode_response(resp: &DaemonResponse) -> Result<String, serde_json::Error> {
     serde_json::to_string(resp)
 }
 
-/// Encode a DaemonEvent to a JSON string (one NDJSON line).
+#[cfg(test)]
 pub fn encode_event(event: &DaemonEvent) -> Result<String, serde_json::Error> {
     serde_json::to_string(event)
 }
 
-/// Decode a raw NDJSON line into a DaemonRequest (daemon side — reads client messages).
+#[cfg(test)]
 pub fn decode_request(line: &str) -> Result<DaemonRequest, serde_json::Error> {
     serde_json::from_str(line)
 }
 
-/// Decode a raw NDJSON line into an IpcMessage (client side — reads daemon messages).
-/// Discriminates between DaemonResponse and DaemonEvent by field presence.
+#[cfg(test)]
 pub fn decode_client_message(line: &str) -> Result<IpcMessage, serde_json::Error> {
     IpcMessage::from_json(line)
 }
@@ -42,8 +43,6 @@ mod tests {
     #[test]
     fn test_ndjson_codec_max_length() {
         let codec = ndjson_codec();
-        // Verify codec is created (LinesCodec doesn't expose max_length,
-        // but we can verify it doesn't panic on creation)
         let _ = codec;
     }
 
@@ -53,7 +52,6 @@ mod tests {
         let line = encode_request(&req).unwrap();
         assert!(line.contains("\"method\":\"plan.create\""));
         assert!(line.contains("\"id\":1"));
-        // Verify no embedded newlines (it's a single NDJSON line)
         assert!(!line.contains('\n'));
     }
 

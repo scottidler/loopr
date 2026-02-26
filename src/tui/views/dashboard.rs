@@ -29,7 +29,6 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             Style::default().fg(match app.connection {
                 crate::tui::app::ConnectionStatus::Connected => Color::Green,
                 crate::tui::app::ConnectionStatus::Disconnected => Color::Red,
-                crate::tui::app::ConnectionStatus::Reconnecting => Color::Yellow,
             }),
         ),
     ]);

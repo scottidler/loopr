@@ -75,7 +75,6 @@ pub struct AppState {
 pub enum ConnectionStatus {
     Connected,
     Disconnected,
-    Reconnecting,
 }
 
 impl fmt::Display for ConnectionStatus {
@@ -83,7 +82,6 @@ impl fmt::Display for ConnectionStatus {
         match self {
             ConnectionStatus::Connected => write!(f, "Connected"),
             ConnectionStatus::Disconnected => write!(f, "Disconnected"),
-            ConnectionStatus::Reconnecting => write!(f, "Reconnecting..."),
         }
     }
 }
@@ -205,7 +203,6 @@ mod tests {
     fn test_connection_status_display() {
         assert_eq!(ConnectionStatus::Connected.to_string(), "Connected");
         assert_eq!(ConnectionStatus::Disconnected.to_string(), "Disconnected");
-        assert_eq!(ConnectionStatus::Reconnecting.to_string(), "Reconnecting...");
     }
 
     #[test]

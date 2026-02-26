@@ -33,15 +33,16 @@ fn remove_pid_file(ctx: &DaemonContext) {
 /// Binds the Unix socket, accepts client connections, and runs the select! loop
 /// until SIGINT (ctrl_c) is received.
 pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
-    let (socket_path, event_tx) = {
+    let socket_path = {
         let c = ctx.read().await;
         write_pid_file(&c)?;
-        (c.config.daemon.socket_path.clone(), c.event_tx.clone())
+        c.config.daemon.socket_path.clone()
     };
 
     let (ipc_server, _) = IpcServer::new(&socket_path);
     let listener = ipc_server.bind().await?;
-    info!("Daemon listening on {}", socket_path.display());
+    info!("Daemon listening on {}", ipc_server.socket_path().display());
+    let event_tx = ipc_server.event_sender();
 
     let result = accept_loop(listener, ctx.clone(), event_tx).await;
 

@@ -157,7 +157,6 @@ fn draw_action_bar(app: &App, frame: &mut Frame, area: Rect) {
             Style::default().fg(match app.connection {
                 ConnectionStatus::Connected => Color::Green,
                 ConnectionStatus::Disconnected => Color::Red,
-                ConnectionStatus::Reconnecting => Color::Yellow,
             }),
         ),
     ]);
@@ -285,7 +284,6 @@ mod tests {
         let statuses = [
             ConnectionStatus::Connected,
             ConnectionStatus::Disconnected,
-            ConnectionStatus::Reconnecting,
         ];
         for status in statuses {
             app.connection = status;
