@@ -2,6 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::AgentSession;
 use crate::domain::bundle::Bundle;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -12,7 +13,7 @@ use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::work_item::WorkItem;
 
-/// The five TUI views, cycled with Tab.
+/// The six TUI views, cycled with Tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum View {
     Dashboard,
@@ -20,16 +21,18 @@ pub enum View {
     Bundles,
     Ticks,
     Learnings,
+    Agents,
 }
 
 impl View {
     /// All views in tab order.
-    pub const ALL: [View; 5] = [
+    pub const ALL: [View; 6] = [
         View::Dashboard,
         View::WorkItems,
         View::Bundles,
         View::Ticks,
         View::Learnings,
+        View::Agents,
     ];
 
     /// Next view in tab cycle.
@@ -53,6 +56,7 @@ impl fmt::Display for View {
             View::Bundles => write!(f, "Bundles"),
             View::Ticks => write!(f, "Ticks"),
             View::Learnings => write!(f, "Learnings"),
+            View::Agents => write!(f, "Agents"),
         }
     }
 }
@@ -68,6 +72,7 @@ pub struct AppState {
     pub ticks: Vec<Tick>,
     pub learnings: Vec<Learning>,
     pub locks: Vec<Lock>,
+    pub agent_sessions: Vec<AgentSession>,
 }
 
 /// Connection state to the daemon.
@@ -158,6 +163,7 @@ impl App {
             View::Bundles => self.state.bundles.len(),
             View::Ticks => self.state.ticks.len(),
             View::Learnings => self.state.learnings.len(),
+            View::Agents => self.state.agent_sessions.len(),
         }
     }
 }
@@ -172,12 +178,14 @@ mod tests {
         assert_eq!(View::WorkItems.next(), View::Bundles);
         assert_eq!(View::Bundles.next(), View::Ticks);
         assert_eq!(View::Ticks.next(), View::Learnings);
-        assert_eq!(View::Learnings.next(), View::Dashboard);
+        assert_eq!(View::Learnings.next(), View::Agents);
+        assert_eq!(View::Agents.next(), View::Dashboard);
     }
 
     #[test]
     fn test_view_prev_cycles() {
-        assert_eq!(View::Dashboard.prev(), View::Learnings);
+        assert_eq!(View::Dashboard.prev(), View::Agents);
+        assert_eq!(View::Agents.prev(), View::Learnings);
         assert_eq!(View::Learnings.prev(), View::Ticks);
         assert_eq!(View::Ticks.prev(), View::Bundles);
         assert_eq!(View::Bundles.prev(), View::WorkItems);
@@ -191,13 +199,15 @@ mod tests {
         assert_eq!(View::Bundles.to_string(), "Bundles");
         assert_eq!(View::Ticks.to_string(), "Ticks");
         assert_eq!(View::Learnings.to_string(), "Learnings");
+        assert_eq!(View::Agents.to_string(), "Agents");
     }
 
     #[test]
     fn test_view_all_order() {
-        assert_eq!(View::ALL.len(), 5);
+        assert_eq!(View::ALL.len(), 6);
         assert_eq!(View::ALL[0], View::Dashboard);
         assert_eq!(View::ALL[4], View::Learnings);
+        assert_eq!(View::ALL[5], View::Agents);
     }
 
     #[test]
@@ -231,7 +241,7 @@ mod tests {
         let mut app = App::new();
         app.selected_index = 5;
         app.prev_view();
-        assert_eq!(app.current_view, View::Learnings);
+        assert_eq!(app.current_view, View::Agents);
         assert_eq!(app.selected_index, 0);
     }
 
@@ -334,6 +344,7 @@ mod tests {
         assert!(state.ticks.is_empty());
         assert!(state.learnings.is_empty());
         assert!(state.locks.is_empty());
+        assert!(state.agent_sessions.is_empty());
     }
 
     #[test]

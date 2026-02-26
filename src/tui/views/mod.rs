@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod bundles;
 pub mod dashboard;
 pub mod learnings;

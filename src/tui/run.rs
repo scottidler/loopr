@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
 use tokio::time::Interval;
 
+use crate::agents::AgentSession;
 use crate::domain::bundle::Bundle;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -181,6 +182,11 @@ async fn refresh_collection(state: &mut AppState, client: &mut IpcClient, collec
                             state.locks = items;
                         }
                     }
+                    "agent" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<AgentSession>>(result) {
+                            state.agent_sessions = items;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -246,6 +252,7 @@ fn draw_content(app: &App, frame: &mut Frame, area: Rect) {
         View::Bundles => views::bundles::render(app, frame, area),
         View::Ticks => views::ticks::render(app, frame, area),
         View::Learnings => views::learnings::render(app, frame, area),
+        View::Agents => views::agents::render(app, frame, area),
     }
 }
 

@@ -74,8 +74,6 @@ pub async fn run_agent_task(
     }
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
 
-    // Phase 2 TODO: implement full agent loop (LLM calls, action parsing, tool execution).
-    // For now, mark as Completed after startup validation.
     let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
 
     // Transition to terminal state based on result
