@@ -28,7 +28,9 @@ impl FromStr for Role {
             "coordinator" => Ok(Role::Coordinator),
             "integrator" => Ok(Role::Integrator),
             "implementer" => Ok(Role::Implementer),
-            _ => Err(format!("unknown role: '{s}' (expected: Coordinator, Integrator, Implementer)")),
+            _ => Err(format!(
+                "unknown role: '{s}' (expected: Coordinator, Integrator, Implementer)"
+            )),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use eyre::{bail, Context, Result};
+use eyre::{Context, Result, bail};
 use serde_json::json;
 
 use crate::domain::role::Role;
@@ -338,9 +338,7 @@ mod tests {
     #[test]
     fn test_tick_validate_mapping() {
         let cmd = Command::Tick {
-            cmd: TickCmd::Validate {
-                id: "t-1".to_string(),
-            },
+            cmd: TickCmd::Validate { id: "t-1".to_string() },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Integrator);
         assert_eq!(method, "integrator.validate");
@@ -350,9 +348,7 @@ mod tests {
     #[test]
     fn test_tick_publish_mapping() {
         let cmd = Command::Tick {
-            cmd: TickCmd::Publish {
-                id: "t-1".to_string(),
-            },
+            cmd: TickCmd::Publish { id: "t-1".to_string() },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Integrator);
         assert_eq!(method, "integrator.publish");
@@ -375,9 +371,7 @@ mod tests {
 
     #[test]
     fn test_worktree_list_mapping() {
-        let cmd = Command::Worktree {
-            cmd: WorktreeCmd::List,
-        };
+        let cmd = Command::Worktree { cmd: WorktreeCmd::List };
         let (method, _params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "worktree.list");
     }
@@ -385,9 +379,7 @@ mod tests {
     #[test]
     fn test_learning_reinforce_mapping() {
         let cmd = Command::Learning {
-            cmd: LearningCmd::Reinforce {
-                id: "l-1".to_string(),
-            },
+            cmd: LearningCmd::Reinforce { id: "l-1".to_string() },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "learning.reinforce");
@@ -426,9 +418,7 @@ mod tests {
     #[test]
     fn test_get_and_list_mappings() {
         let cmd = Command::Plan {
-            cmd: CrudCmd::Get {
-                id: "p-1".to_string(),
-            },
+            cmd: CrudCmd::Get { id: "p-1".to_string() },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "plan.get");

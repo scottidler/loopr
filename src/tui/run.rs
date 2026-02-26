@@ -281,10 +281,7 @@ mod tests {
     #[test]
     fn test_draw_connection_statuses() {
         let mut app = App::new();
-        let statuses = [
-            ConnectionStatus::Connected,
-            ConnectionStatus::Disconnected,
-        ];
+        let statuses = [ConnectionStatus::Connected, ConnectionStatus::Disconnected];
         for status in statuses {
             app.connection = status;
             let mut terminal = test_terminal();

@@ -61,7 +61,10 @@ async fn main() -> Result<()> {
 
         // `loopr tui` or no subcommand — start TUI
         Some(cli::Command::Tui) | None => {
-            info!("Starting TUI, connecting to daemon at {}", config.daemon.socket_path.display());
+            info!(
+                "Starting TUI, connecting to daemon at {}",
+                config.daemon.socket_path.display()
+            );
             tui::run::run_tui(&config.daemon.socket_path)
                 .await
                 .context("TUI failed")?;

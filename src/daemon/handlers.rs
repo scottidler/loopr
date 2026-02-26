@@ -1354,7 +1354,10 @@ fn handle_worktree_cleanup(
                 "worktree.cleaned",
                 json!({ "work_item_id": work_item_id, "path": path.to_string_lossy() }),
             ));
-            DaemonResponse::ok(req.id, json!({ "work_item_id": work_item_id, "path": path.to_string_lossy(), "status": "cleaned" }))
+            DaemonResponse::ok(
+                req.id,
+                json!({ "work_item_id": work_item_id, "path": path.to_string_lossy(), "status": "cleaned" }),
+            )
         }
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }

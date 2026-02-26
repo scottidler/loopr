@@ -83,7 +83,6 @@ impl DaemonContext {
         let ctx = Self::new(config, event_tx);
         (Arc::new(RwLock::new(ctx)), tx)
     }
-
 }
 
 #[cfg(test)]

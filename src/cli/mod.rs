@@ -343,7 +343,9 @@ mod tests {
     fn test_cli_parses_plan_create() {
         let cli = Cli::parse_from(["loopr", "plan", "create", "My Plan", "-d", "A description"]);
         match cli.command {
-            Some(Command::Plan { cmd: CrudCmd::Create { title, description, .. } }) => {
+            Some(Command::Plan {
+                cmd: CrudCmd::Create { title, description, .. },
+            }) => {
                 assert_eq!(title, "My Plan");
                 assert_eq!(description, "A description");
             }
@@ -355,7 +357,9 @@ mod tests {
     fn test_cli_parses_plan_get() {
         let cli = Cli::parse_from(["loopr", "plan", "get", "plan-123"]);
         match cli.command {
-            Some(Command::Plan { cmd: CrudCmd::Get { id } }) => {
+            Some(Command::Plan {
+                cmd: CrudCmd::Get { id },
+            }) => {
                 assert_eq!(id, "plan-123");
             }
             _ => panic!("expected Plan Get"),
@@ -365,14 +369,21 @@ mod tests {
     #[test]
     fn test_cli_parses_plan_list() {
         let cli = Cli::parse_from(["loopr", "plan", "list"]);
-        assert!(matches!(cli.command, Some(Command::Plan { cmd: CrudCmd::List { .. } })));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Plan {
+                cmd: CrudCmd::List { .. }
+            })
+        ));
     }
 
     #[test]
     fn test_cli_parses_plan_transition() {
         let cli = Cli::parse_from(["loopr", "plan", "transition", "p1", "Active"]);
         match cli.command {
-            Some(Command::Plan { cmd: CrudCmd::Transition { id, status } }) => {
+            Some(Command::Plan {
+                cmd: CrudCmd::Transition { id, status },
+            }) => {
                 assert_eq!(id, "p1");
                 assert_eq!(status, "Active");
             }
@@ -384,7 +395,9 @@ mod tests {
     fn test_cli_parses_work_item_create() {
         let cli = Cli::parse_from(["loopr", "work-item", "create", "Task 1", "-p", "phase-1"]);
         match cli.command {
-            Some(Command::WorkItem { cmd: CrudCmd::Create { title, parent, .. } }) => {
+            Some(Command::WorkItem {
+                cmd: CrudCmd::Create { title, parent, .. },
+            }) => {
                 assert_eq!(title, "Task 1");
                 assert_eq!(parent, Some("phase-1".to_string()));
             }
@@ -396,7 +409,11 @@ mod tests {
     fn test_cli_parses_bundle_create() {
         let cli = Cli::parse_from(["loopr", "bundle", "create", "wi-1", "-b", "feature/foo"]);
         match cli.command {
-            Some(Command::Bundle { cmd: BundleCmd::Create { work_item_id, branch, .. } }) => {
+            Some(Command::Bundle {
+                cmd: BundleCmd::Create {
+                    work_item_id, branch, ..
+                },
+            }) => {
                 assert_eq!(work_item_id, "wi-1");
                 assert_eq!(branch, "feature/foo");
             }
@@ -408,7 +425,9 @@ mod tests {
     fn test_cli_parses_tick_publish() {
         let cli = Cli::parse_from(["loopr", "tick", "publish", "t-1"]);
         match cli.command {
-            Some(Command::Tick { cmd: TickCmd::Publish { id } }) => {
+            Some(Command::Tick {
+                cmd: TickCmd::Publish { id },
+            }) => {
                 assert_eq!(id, "t-1");
             }
             _ => panic!("expected Tick Publish"),
@@ -419,7 +438,9 @@ mod tests {
     fn test_cli_parses_worktree_create() {
         let cli = Cli::parse_from(["loopr", "worktree", "create", "wi-1"]);
         match cli.command {
-            Some(Command::Worktree { cmd: WorktreeCmd::Create { work_item_id, git_ref } }) => {
+            Some(Command::Worktree {
+                cmd: WorktreeCmd::Create { work_item_id, git_ref },
+            }) => {
                 assert_eq!(work_item_id, "wi-1");
                 assert_eq!(git_ref, "HEAD");
             }
@@ -449,7 +470,14 @@ mod tests {
     fn test_cli_parses_learning_create() {
         let cli = Cli::parse_from(["loopr", "learning", "create", "wi-1", "WorkItem", "learned something"]);
         match cli.command {
-            Some(Command::Learning { cmd: LearningCmd::Create { source_id, scope, content } }) => {
+            Some(Command::Learning {
+                cmd:
+                    LearningCmd::Create {
+                        source_id,
+                        scope,
+                        content,
+                    },
+            }) => {
                 assert_eq!(source_id, "wi-1");
                 assert_eq!(scope, "WorkItem");
                 assert_eq!(content, "learned something");
@@ -462,7 +490,14 @@ mod tests {
     fn test_cli_parses_lock_create() {
         let cli = Cli::parse_from(["loopr", "lock", "create", "src/main.rs", "wi-1", "coordinator"]);
         match cli.command {
-            Some(Command::Lock { cmd: LockCmd::Create { resource, holder_id, granted_by } }) => {
+            Some(Command::Lock {
+                cmd:
+                    LockCmd::Create {
+                        resource,
+                        holder_id,
+                        granted_by,
+                    },
+            }) => {
                 assert_eq!(resource, "src/main.rs");
                 assert_eq!(holder_id, "wi-1");
                 assert_eq!(granted_by, "coordinator");
