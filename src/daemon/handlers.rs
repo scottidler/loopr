@@ -1356,7 +1356,11 @@ fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespo
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     // Optionally filter by source_id
-    let source_id_filter = req.params.get("source_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let source_id_filter = req
+        .params
+        .get("source_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // Try TaskStore first, fall back to HashMap
     if let Some(store) = &stores.store {
