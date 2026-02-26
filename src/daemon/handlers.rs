@@ -43,9 +43,7 @@ fn check_validation_gate(
     }
 
     // Gate only applies when validator is enabled
-    if stores.validator.is_none() {
-        return None;
-    }
+    stores.validator.as_ref()?;
 
     // Coordinator can skip validation with explicit flag
     if skip_validation {
