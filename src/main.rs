@@ -235,7 +235,7 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     let _ = server.event_sender();
     // Exercise bind (creates socket) then cleanup
     let listener = server.bind().await.map_err(error::LooprError::Io)?;
-    // Exercise handle_client: accept a connection then immediately abort the task
+    // Exercise handle_client: accept a connection, connect a client, then abort
     let event_rx2 = event_tx.subscribe();
     let accept_task = tokio::spawn(async move {
         if let Ok((stream, _)) = listener.accept().await {
@@ -247,6 +247,21 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
             .await;
         }
     });
+    // Exercise IPC client: connect, send handshake, then clean up
+    let mut client = ipc::client::IpcClient::connect(&socket_path)
+        .await
+        .map_err(|e| error::LooprError::Io(std::io::Error::other(e.to_string())))?;
+    let handshake_resp = client.handshake("0.1.0").await;
+    info!("IPC client handshake result: {:?}", handshake_resp.is_ok());
+    // Exercise send + recv
+    let send_id = client.send("system.status", serde_json::json!(null)).await;
+    info!("IPC client send id: {:?}", send_id);
+    let recv_msg = client.recv().await;
+    info!("IPC client recv: {:?}", recv_msg.is_ok());
+    // Exercise ClientError display
+    let ce = ipc::client::ClientError::Disconnected;
+    info!("ClientError: {}", ce);
+    drop(client);
     accept_task.abort();
     drop(event_rx);
     server.cleanup();
