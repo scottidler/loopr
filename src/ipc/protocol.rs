@@ -115,13 +115,7 @@ impl DaemonEvent {
         }
     }
 
-    pub fn transition_completed(
-        collection: &str,
-        id: &str,
-        from: &str,
-        to: &str,
-        role: &str,
-    ) -> Self {
+    pub fn transition_completed(collection: &str, id: &str, from: &str, to: &str, role: &str) -> Self {
         Self::new(
             "transition.completed",
             serde_json::json!({
@@ -230,8 +224,7 @@ mod tests {
 
     #[test]
     fn test_event_transition_completed() {
-        let event =
-            DaemonEvent::transition_completed("work_item", "wi1", "Draft", "Ready", "Coordinator");
+        let event = DaemonEvent::transition_completed("work_item", "wi1", "Draft", "Ready", "Coordinator");
         assert_eq!(event.event, "transition.completed");
         assert_eq!(event.data["collection"], "work_item");
         assert_eq!(event.data["from"], "Draft");

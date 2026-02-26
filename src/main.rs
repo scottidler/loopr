@@ -197,20 +197,20 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     info!("IPC request: method={} id={}", req.method, req.id);
     let resp = ipc::protocol::DaemonResponse::ok(req.id, serde_json::json!({"server_version": "0.1.0"}));
     info!("IPC response: id={} is_error={}", resp.id, resp.is_error());
-    let err_resp = ipc::protocol::DaemonResponse::err(
-        req.id,
-        ipc::protocol::RpcError::method_not_found("bad.method"),
+    let err_resp = ipc::protocol::DaemonResponse::err(req.id, ipc::protocol::RpcError::method_not_found("bad.method"));
+    info!(
+        "IPC error response: id={} is_error={}",
+        err_resp.id,
+        err_resp.is_error()
     );
-    info!("IPC error response: id={} is_error={}", err_resp.id, err_resp.is_error());
     // Exercise all RpcError constructors
     let _ = ipc::protocol::RpcError::invalid_params("missing field");
     let _ = ipc::protocol::RpcError::internal("something broke");
     let _ = ipc::protocol::RpcError::transition_rejected("wrong role");
     let event = ipc::protocol::DaemonEvent::record_created("plan", &plan.id);
     info!("IPC event: {}", event.event);
-    let tc_event = ipc::protocol::DaemonEvent::transition_completed(
-        "work_item", &work_item.id, "Draft", "Ready", "Coordinator",
-    );
+    let tc_event =
+        ipc::protocol::DaemonEvent::transition_completed("work_item", &work_item.id, "Draft", "Ready", "Coordinator");
     info!("IPC transition event: {}", tc_event.event);
     let line = serde_json::to_string(&event).map_err(error::LooprError::SerdeJson)?;
     let msg = ipc::protocol::IpcMessage::from_json(&line).map_err(error::LooprError::SerdeJson)?;
