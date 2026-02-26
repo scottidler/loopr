@@ -113,26 +113,11 @@ mod tests {
 
     #[test]
     fn test_learning_scope_serde_format() {
-        assert_eq!(
-            serde_json::to_string(&LearningScope::WorkItem).unwrap(),
-            "\"workitem\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LearningScope::Phase).unwrap(),
-            "\"phase\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LearningScope::Spec).unwrap(),
-            "\"spec\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LearningScope::Plan).unwrap(),
-            "\"plan\""
-        );
-        assert_eq!(
-            serde_json::to_string(&LearningScope::Global).unwrap(),
-            "\"global\""
-        );
+        assert_eq!(serde_json::to_string(&LearningScope::WorkItem).unwrap(), "\"workitem\"");
+        assert_eq!(serde_json::to_string(&LearningScope::Phase).unwrap(), "\"phase\"");
+        assert_eq!(serde_json::to_string(&LearningScope::Spec).unwrap(), "\"spec\"");
+        assert_eq!(serde_json::to_string(&LearningScope::Plan).unwrap(), "\"plan\"");
+        assert_eq!(serde_json::to_string(&LearningScope::Global).unwrap(), "\"global\"");
     }
 
     // --- Learning struct tests ---
@@ -183,11 +168,7 @@ mod tests {
 
     #[test]
     fn test_learning_reinforce() {
-        let mut learning = Learning::new(
-            "wi-1".to_string(),
-            LearningScope::WorkItem,
-            "insight".to_string(),
-        );
+        let mut learning = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
         assert_eq!(learning.reinforcements, 0);
         learning.reinforce();
         assert_eq!(learning.reinforcements, 1);
@@ -197,11 +178,7 @@ mod tests {
 
     #[test]
     fn test_learning_contradict() {
-        let mut learning = Learning::new(
-            "wi-1".to_string(),
-            LearningScope::WorkItem,
-            "insight".to_string(),
-        );
+        let mut learning = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
         assert_eq!(learning.contradictions, 0);
         learning.contradict();
         assert_eq!(learning.contradictions, 1);
@@ -225,11 +202,7 @@ mod tests {
 
     #[test]
     fn test_learning_source_id_preserved() {
-        let learning = Learning::new(
-            "spec-789".to_string(),
-            LearningScope::Spec,
-            "content".to_string(),
-        );
+        let learning = Learning::new("spec-789".to_string(), LearningScope::Spec, "content".to_string());
         assert_eq!(learning.source_id, "spec-789");
     }
 
