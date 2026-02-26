@@ -7,7 +7,8 @@ This directory contains the design history and reference material for Loopr v3. 
 | File | What It Is | Read When |
 |------|-----------|-----------|
 | `mvps.md` | Matrix comparing MVP1, MVP2, MVP3+ — the phased implementation plan for v3 | You need to understand what each MVP phase delivers and why |
-| `design/2026-02-25-loopr-v3-mvp1.md` | **The design doc.** Full v3 MVP1 specification: architecture, data model, FSMs, IPC, TUI, worktrees, 6-phase implementation plan. 5 review passes completed. | You need to build, review, or understand the current implementation target |
+| `design/2026-02-25-loopr-v3-mvp1.md` | MVP1 design doc. Full v3 MVP1 specification: architecture, data model, FSMs, IPC, TUI, worktrees. 5 review passes completed. **MVP1 is complete.** | You need to understand the existing spine architecture |
+| `design/2026-02-26-loopr-v3-mvp2.md` | **The design doc.** Full v3 MVP2 specification: TaskStore persistence, Doc Validator LLM, TUI event processing. 5 review passes completed. | You need to build, review, or understand the current implementation target |
 | `v2-proven-patterns.md` | 13 infrastructure patterns that worked in v2 (fork-to-daemon, IPC protocol, TUI architecture, crash recovery, etc.) with code examples | You need to understand *how* to implement v3's infrastructure — these patterns are the blueprint |
 | `v2-implementation-status.md` | What v2 actually built vs. what was just designed. Includes full module map of v2's 65+ files. | You need to know what the prior build attempt accomplished |
 | `v2-light-loops-heavy-tools.md` | The "Light Loops, Heavy Tools" design principle: Tokio tasks for LLM loops, OS subprocesses for tool execution | You need to understand the concurrency model (relevant for MVP3+) |
@@ -21,8 +22,8 @@ This directory contains the design history and reference material for Loopr v3. 
 ## Reading Order
 
 1. **`mvps.md`** — 2 minutes. Get the MVP1 → MVP2 → MVP3+ arc.
-2. **`design/2026-02-25-loopr-v3-mvp1.md`** — 30 minutes. This is the spec. Start here for any implementation work.
-3. **`v2-proven-patterns.md`** — 10 minutes. The infrastructure patterns you'll reimplement.
+2. **`design/2026-02-26-loopr-v3-mvp2.md`** — 20 minutes. The current build target. Start here.
+3. **`design/2026-02-25-loopr-v3-mvp1.md`** — Reference for the existing spine architecture (MVP1 is complete).
 4. Everything else is reference material. Read as needed.
 
 ## History

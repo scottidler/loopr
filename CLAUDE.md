@@ -2,11 +2,11 @@
 
 ## Project
 
-Loopr is a TUI-based "dev team in a box" orchestrator. We're building MVP1 — the orchestration spine with zero LLM involvement.
+Loopr is a TUI-based "dev team in a box" orchestrator. MVP1 (orchestration spine) is complete. We're building MVP2 — TaskStore persistence and read-only Doc Validator LLM.
 
 ## Source of Truth
 
-The design doc at `docs/design/2026-02-25-loopr-v3-mvp1.md` is the single source of truth for all architecture, data models, FSMs, IPC protocol, and TUI design. Do not deviate from it without discussion.
+The design doc at `docs/design/2026-02-26-loopr-v3-mvp2.md` is the single source of truth for MVP2. The MVP1 design doc at `docs/design/2026-02-25-loopr-v3-mvp1.md` remains the reference for the existing spine architecture. Do not deviate from them without discussion.
 
 ## Build & Validate
 
