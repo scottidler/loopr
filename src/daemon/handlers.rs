@@ -925,6 +925,14 @@ fn handle_tick_create(
     };
 
     let id = tick.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(tick.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.ticks.write().unwrap().insert(id.clone(), tick);
     let _ = event_tx.send(DaemonEvent::record_created("tick", &id));
 
@@ -3776,6 +3784,24 @@ mod tests {
     }
 
     // --- Tick handler tests ---
+
+    #[test]
+    fn test_tick_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(50, "tick.create", json!({"number": 7}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Tick> = store.get(&tick_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().number, 7);
+    }
 
     #[test]
     fn test_tick_create_success() {
