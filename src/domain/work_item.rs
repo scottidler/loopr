@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
@@ -130,6 +133,27 @@ impl WorkItem {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl Record for WorkItem {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "work_items"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m.insert("phase_id".into(), IndexValue::String(self.phase_id.clone()));
+        m
     }
 }
 
@@ -438,6 +462,45 @@ mod tests {
                 &rules,
             )
             .is_err()
+        );
+    }
+
+    // --- Record trait tests ---
+
+    #[test]
+    fn test_record_id() {
+        let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
+        assert_eq!(Record::id(&wi), wi.id);
+    }
+
+    #[test]
+    fn test_record_updated_at() {
+        let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
+        assert_eq!(Record::updated_at(&wi), wi.updated_at);
+    }
+
+    #[test]
+    fn test_record_collection_name() {
+        assert_eq!(WorkItem::collection_name(), "work_items");
+    }
+
+    #[test]
+    fn test_record_indexed_fields_status() {
+        let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
+        let fields = wi.indexed_fields();
+        assert_eq!(
+            fields.get("status"),
+            Some(&IndexValue::String("Draft".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_record_indexed_fields_phase_id() {
+        let wi = WorkItem::new("phase-abc".into(), "Title".into(), "Desc".into());
+        let fields = wi.indexed_fields();
+        assert_eq!(
+            fields.get("phase_id"),
+            Some(&IndexValue::String("phase-abc".to_string()))
         );
     }
 }
