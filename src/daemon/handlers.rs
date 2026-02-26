@@ -482,6 +482,14 @@ fn handle_phase_create(
     };
 
     let id = phase.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(phase.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.phases.write().unwrap().insert(id.clone(), phase);
     let _ = event_tx.send(DaemonEvent::record_created("phase", &id));
 
@@ -2551,6 +2559,28 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "phase");
+    }
+
+    #[test]
+    fn test_phase_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let req = DaemonRequest::new(
+            20,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Persisted Phase", "description": "desc", "order": 1}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Phase> = store.get(&phase_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().title, "Persisted Phase");
     }
 
     #[test]
