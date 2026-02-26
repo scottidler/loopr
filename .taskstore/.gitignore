@@ -1,0 +1,4 @@
+taskstore.db
+taskstore.db-shm
+taskstore.db-wal
+taskstore.log
