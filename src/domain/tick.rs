@@ -219,7 +219,12 @@ mod tests {
     #[test]
     fn test_invalid_published_to_anything() {
         let rules = tick_transitions();
-        for target in [TickStatus::Open, TickStatus::Sealing, TickStatus::Validating, TickStatus::Failed] {
+        for target in [
+            TickStatus::Open,
+            TickStatus::Sealing,
+            TickStatus::Validating,
+            TickStatus::Failed,
+        ] {
             assert!(
                 validate_transition(TickStatus::Published, target, Role::Integrator, &rules).is_err(),
                 "Expected Published→{:?} to fail",
@@ -231,7 +236,12 @@ mod tests {
     #[test]
     fn test_invalid_failed_to_anything() {
         let rules = tick_transitions();
-        for target in [TickStatus::Open, TickStatus::Sealing, TickStatus::Validating, TickStatus::Published] {
+        for target in [
+            TickStatus::Open,
+            TickStatus::Sealing,
+            TickStatus::Validating,
+            TickStatus::Published,
+        ] {
             assert!(
                 validate_transition(TickStatus::Failed, target, Role::Integrator, &rules).is_err(),
                 "Expected Failed→{:?} to fail",
