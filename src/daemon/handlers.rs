@@ -5,6 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
 use crate::domain::learning::{Learning, LearningScope};
+use crate::domain::lock::Lock;
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
@@ -52,6 +53,11 @@ pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>,
         "learning.contradict" => handle_learning_contradict(stores, event_tx, req),
         "learning.promote" => handle_learning_promote(stores, event_tx, req),
         "learning.demote" => handle_learning_demote(stores, event_tx, req),
+        "lock.create" => handle_lock_create(stores, event_tx, req),
+        "lock.get" => handle_lock_get(stores, req),
+        "lock.list" => handle_lock_list(stores, req),
+        "lock.release" => handle_lock_release(stores, event_tx, req),
+        "lock.expire" => handle_lock_expire(stores, event_tx, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -1072,6 +1078,170 @@ fn handle_learning_demote(
     let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
 
     DaemonResponse::ok(req.id, learning_json)
+}
+
+// --- Lock handlers ---
+
+fn handle_lock_create(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let resource = req
+        .params
+        .get("resource")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let holder_id = req
+        .params
+        .get("holder_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let granted_by = req
+        .params
+        .get("granted_by")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if resource.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("resource is required"));
+    }
+    if holder_id.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("holder_id is required"));
+    }
+    if granted_by.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("granted_by is required"));
+    }
+
+    let lock = Lock::new(resource, holder_id, granted_by);
+    let lock_json = match serde_json::to_value(&lock) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = lock.id.clone();
+    stores.locks.write().unwrap().insert(id.clone(), lock);
+    let _ = event_tx.send(DaemonEvent::record_created("lock", &id));
+
+    DaemonResponse::ok(req.id, lock_json)
+}
+
+fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let locks = stores.locks.read().unwrap();
+    match locks.get(id) {
+        Some(lock) => match serde_json::to_value(lock) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("lock", id)),
+    }
+}
+
+fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let locks = stores.locks.read().unwrap();
+
+    // Optionally filter by resource
+    let resource_filter = req.params.get("resource").and_then(|v| v.as_str());
+
+    // Optionally filter by holder_id
+    let holder_filter = req.params.get("holder_id").and_then(|v| v.as_str());
+
+    // Optionally filter by active-only
+    let active_only = req
+        .params
+        .get("active_only")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let lock_list: Vec<&Lock> = locks
+        .values()
+        .filter(|l| resource_filter.is_none() || Some(l.resource.as_str()) == resource_filter)
+        .filter(|l| holder_filter.is_none() || Some(l.holder_id.as_str()) == holder_filter)
+        .filter(|l| !active_only || l.is_active())
+        .collect();
+
+    match serde_json::to_value(&lock_list) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_lock_release(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut locks = stores.locks.write().unwrap();
+    let lock = match locks.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("lock", &id)),
+    };
+
+    if !lock.is_active() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::invalid_params("lock is not active"),
+        );
+    }
+
+    lock.release();
+
+    let lock_json = match serde_json::to_value(&*lock) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("lock", &id));
+
+    DaemonResponse::ok(req.id, lock_json)
+}
+
+fn handle_lock_expire(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut locks = stores.locks.write().unwrap();
+    let lock = match locks.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("lock", &id)),
+    };
+
+    if !lock.is_active() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::invalid_params("lock is not active"),
+        );
+    }
+
+    lock.expire();
+
+    let lock_json = match serde_json::to_value(&*lock) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("lock", &id));
+
+    DaemonResponse::ok(req.id, lock_json)
 }
 
 #[cfg(test)]
@@ -3107,5 +3277,225 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.updated");
         assert_eq!(event.data["collection"], "learning");
+    }
+
+    // --- Lock handler tests ---
+
+    fn create_lock(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, id: u64) -> String {
+        let resp = dispatch(
+            stores,
+            tx,
+            DaemonRequest::new(
+                id,
+                "lock.create",
+                json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_lock_create() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                1,
+                "lock.create",
+                json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["resource"], "src/main.rs");
+        assert_eq!(result["holder_id"], "wi-1");
+        assert_eq!(result["granted_by"], "coord-1");
+        assert_eq!(result["status"], "active");
+    }
+
+    #[test]
+    fn test_lock_create_missing_resource() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "lock.create", json!({"holder_id": "wi-1", "granted_by": "coord-1"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_create_missing_holder_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "lock.create", json!({"resource": "file.rs", "granted_by": "coord-1"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_get() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let lock_id = create_lock(&stores, &tx, 1);
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "lock.get", json!({"id": lock_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["resource"], "src/main.rs");
+    }
+
+    #[test]
+    fn test_lock_get_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "lock.get", json!({"id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_list() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        create_lock(&stores, &tx, 1);
+        create_lock(&stores, &tx, 2);
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "lock.list", json!({})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_lock_list_filter_active_only() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let lock_id = create_lock(&stores, &tx, 1);
+        create_lock(&stores, &tx, 2);
+
+        // Release the first lock
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "lock.release", json!({"id": lock_id})),
+        );
+
+        // List active only
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(4, "lock.list", json!({"active_only": true})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_lock_release() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let lock_id = create_lock(&stores, &tx, 1);
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "lock.release", json!({"id": lock_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "released");
+    }
+
+    #[test]
+    fn test_lock_release_already_released() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let lock_id = create_lock(&stores, &tx, 1);
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "lock.release", json!({"id": lock_id})),
+        );
+        // Try releasing again
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "lock.release", json!({"id": lock_id})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_expire() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let lock_id = create_lock(&stores, &tx, 1);
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "lock.expire", json!({"id": lock_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "expired");
+    }
+
+    #[test]
+    fn test_lock_expire_already_expired() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let lock_id = create_lock(&stores, &tx, 1);
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "lock.expire", json!({"id": lock_id})),
+        );
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "lock.expire", json!({"id": lock_id})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_create_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        create_lock(&stores, &tx, 1);
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.created");
+        assert_eq!(event.data["collection"], "lock");
+    }
+
+    #[test]
+    fn test_lock_release_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let lock_id = create_lock(&stores, &tx, 1);
+        let _ = rx.try_recv(); // consume create event
+
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "lock.release", json!({"id": lock_id})),
+        );
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.updated");
+        assert_eq!(event.data["collection"], "lock");
     }
 }
