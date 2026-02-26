@@ -916,11 +916,7 @@ fn handle_learning_create(
     };
 
     let id = learning.id.clone();
-    stores
-        .learnings
-        .write()
-        .unwrap()
-        .insert(id.clone(), learning);
+    stores.learnings.write().unwrap().insert(id.clone(), learning);
     let _ = event_tx.send(DaemonEvent::record_created("learning", &id));
 
     DaemonResponse::ok(req.id, learning_json)
@@ -2889,11 +2885,7 @@ mod tests {
         let resp = dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(
-                1,
-                "learning.create",
-                json!({"scope": "global", "content": "insight"}),
-            ),
+            DaemonRequest::new(1, "learning.create", json!({"scope": "global", "content": "insight"})),
         );
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("source_id"));
@@ -2906,11 +2898,7 @@ mod tests {
         let resp = dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(
-                1,
-                "learning.create",
-                json!({"source_id": "wi-1", "scope": "global"}),
-            ),
+            DaemonRequest::new(1, "learning.create", json!({"source_id": "wi-1", "scope": "global"})),
         );
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("content"));
@@ -2988,11 +2976,7 @@ mod tests {
     fn test_learning_list_empty() {
         let stores = test_stores();
         let tx = test_event_tx();
-        let resp = dispatch(
-            &stores,
-            &tx,
-            DaemonRequest::new(1, "learning.list", json!(null)),
-        );
+        let resp = dispatch(&stores, &tx, DaemonRequest::new(1, "learning.list", json!(null)));
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
