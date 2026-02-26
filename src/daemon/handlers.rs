@@ -797,6 +797,14 @@ fn handle_bundle_create(
     };
 
     let id = bundle.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(bundle.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.bundles.write().unwrap().insert(id.clone(), bundle);
     let _ = event_tx.send(DaemonEvent::record_created("bundle", &id));
 
@@ -3213,6 +3221,34 @@ mod tests {
         );
         let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (phase_id, wi_id)
+    }
+
+    #[test]
+    fn test_bundle_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/persist",
+                "base_tick_id": "tick-001",
+                "claims": "Persisted bundle"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Bundle> = store.get(&bundle_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().claims, "Persisted bundle");
     }
 
     #[test]
