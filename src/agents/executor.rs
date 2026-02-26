@@ -124,9 +124,6 @@ async fn run_agent_loop(
     }
     info!("Agent {} bridge health check passed", session_id);
 
-    // Subscribe to events for agent monitoring (Phase 4 will stream these to TUI)
-    let _event_rx = bridge.event_tx().subscribe();
-
     match agent_type {
         AgentType::Implementer => {
             let tool_runner = &stores.tool_runner;

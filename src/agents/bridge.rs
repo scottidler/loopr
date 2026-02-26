@@ -50,6 +50,7 @@ impl AgentIpcBridge {
     }
 
     /// Get a reference to the event broadcast sender for subscribing to events.
+    #[cfg(test)]
     pub fn event_tx(&self) -> &broadcast::Sender<DaemonEvent> {
         &self.event_tx
     }
