@@ -194,9 +194,7 @@ async fn refresh_collection(state: &mut AppState, client: &mut IpcClient, collec
 /// Extract collection name from a daemon event, if applicable.
 fn event_collection(event: &crate::ipc::protocol::DaemonEvent) -> Option<&str> {
     match event.event.as_str() {
-        "record.created" | "record.updated" | "transition.completed" => {
-            event.data["collection"].as_str()
-        }
+        "record.created" | "record.updated" | "transition.completed" => event.data["collection"].as_str(),
         "tick.published" | "tick.validation_failed" => Some("tick"),
         "bundle.rejected_stale" => Some("bundle"),
         _ => None,
