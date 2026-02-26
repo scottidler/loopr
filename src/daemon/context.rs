@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
+use crate::domain::bundle::Bundle;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
@@ -17,6 +18,7 @@ pub struct Stores {
     pub specs: StdRwLock<HashMap<String, Spec>>,
     pub phases: StdRwLock<HashMap<String, Phase>>,
     pub work_items: StdRwLock<HashMap<String, WorkItem>>,
+    pub bundles: StdRwLock<HashMap<String, Bundle>>,
 }
 
 impl Stores {
@@ -26,6 +28,7 @@ impl Stores {
             specs: StdRwLock::new(HashMap::new()),
             phases: StdRwLock::new(HashMap::new()),
             work_items: StdRwLock::new(HashMap::new()),
+            bundles: StdRwLock::new(HashMap::new()),
         }
     }
 }
@@ -131,6 +134,7 @@ mod tests {
         assert!(stores.specs.read().unwrap().is_empty());
         assert!(stores.phases.read().unwrap().is_empty());
         assert!(stores.work_items.read().unwrap().is_empty());
+        assert!(stores.bundles.read().unwrap().is_empty());
     }
 
     #[test]
@@ -175,5 +179,21 @@ mod tests {
         let work_items = stores.work_items.read().unwrap();
         assert_eq!(work_items.len(), 1);
         assert_eq!(work_items[&id].title, "Test WI");
+    }
+
+    #[test]
+    fn test_stores_bundle_insert_and_read() {
+        let stores = Stores::new();
+        let bundle = Bundle::new(
+            "wi-1".into(),
+            Some("tick-1".into()),
+            "feature/test".into(),
+            "Test claims".into(),
+        );
+        let id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(id.clone(), bundle);
+        let bundles = stores.bundles.read().unwrap();
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[&id].branch_name, "feature/test");
     }
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
@@ -34,6 +35,10 @@ pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>,
         "work_item.get" => handle_work_item_get(stores, req),
         "work_item.list" => handle_work_item_list(stores, req),
         "work_item.transition" => handle_work_item_transition(stores, event_tx, req),
+        "bundle.create" => handle_bundle_create(stores, event_tx, req),
+        "bundle.get" => handle_bundle_get(stores, req),
+        "bundle.list" => handle_bundle_list(stores, req),
+        "bundle.transition" => handle_bundle_transition(stores, event_tx, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -581,6 +586,150 @@ fn handle_work_item_transition(
     ));
 
     DaemonResponse::ok(req.id, wi_json)
+}
+
+// --- Bundle handlers ---
+
+fn handle_bundle_create(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let work_item_id = match req.params.get("work_item_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_item_id is required")),
+    };
+
+    // Verify parent work item exists
+    if !stores.work_items.read().unwrap().contains_key(&work_item_id) {
+        return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+    }
+
+    let branch_name = req
+        .params
+        .get("branch_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if branch_name.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("branch_name is required"));
+    }
+
+    let base_tick_id = req
+        .params
+        .get("base_tick_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let claims = req
+        .params
+        .get("claims")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let bundle = Bundle::new(work_item_id, base_tick_id, branch_name, claims);
+    let bundle_json = match serde_json::to_value(&bundle) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = bundle.id.clone();
+    stores.bundles.write().unwrap().insert(id.clone(), bundle);
+    let _ = event_tx.send(DaemonEvent::record_created("bundle", &id));
+
+    DaemonResponse::ok(req.id, bundle_json)
+}
+
+fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let bundles = stores.bundles.read().unwrap();
+    match bundles.get(id) {
+        Some(bundle) => match serde_json::to_value(bundle) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("bundle", id)),
+    }
+}
+
+fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let bundles = stores.bundles.read().unwrap();
+
+    // Optionally filter by work_item_id
+    let wi_filter = req.params.get("work_item_id").and_then(|v| v.as_str());
+
+    let bundle_list: Vec<&Bundle> = bundles
+        .values()
+        .filter(|b| wi_filter.is_none() || Some(b.work_item_id.as_str()) == wi_filter)
+        .collect();
+
+    match serde_json::to_value(&bundle_list) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_bundle_transition(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let target_status: BundleStatus = match req.params.get("target_status") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(s) => s,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
+        },
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
+    };
+
+    let role: Role = match req.params.get("role") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(r) => r,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
+        },
+        None => Role::Coordinator,
+    };
+
+    let mut bundles = stores.bundles.write().unwrap();
+    let bundle = match bundles.get_mut(&id) {
+        Some(b) => b,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("bundle", &id)),
+    };
+
+    let from = bundle.status;
+    let rules = bundle_transitions();
+    if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    bundle.status = target_status;
+    bundle.updated_at = crate::id::now_millis();
+
+    let bundle_json = match serde_json::to_value(&*bundle) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::transition_completed(
+        "bundle",
+        &id,
+        &from.to_string(),
+        &target_status.to_string(),
+        &role.to_string(),
+    ));
+
+    DaemonResponse::ok(req.id, bundle_json)
 }
 
 #[cfg(test)]
@@ -1753,6 +1902,357 @@ mod tests {
             json!({
                 "id": "nonexistent",
                 "target_status": "Ready"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // --- bundle handlers ---
+
+    /// Helper: create plan + spec + phase + work_item and return (phase_id, work_item_id)
+    fn create_test_work_item(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+    ) -> (String, String) {
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(stores, tx);
+        let resp = dispatch(
+            stores,
+            tx,
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id, "title": "Parent WI"}),
+            ),
+        );
+        let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (phase_id, wi_id)
+    }
+
+    #[test]
+    fn test_bundle_create_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/auth",
+                "base_tick_id": "tick-001",
+                "claims": "Add JWT signing"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["work_item_id"], wi_id);
+        assert_eq!(result["branch_name"], "feature/auth");
+        assert_eq!(result["base_tick_id"], "tick-001");
+        assert_eq!(result["claims"], "Add JWT signing");
+        assert_eq!(result["status"], "Proposed");
+        assert_eq!(stores.bundles.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_bundle_create_no_base_tick() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/init"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert!(result["base_tick_id"].is_null());
+    }
+
+    #[test]
+    fn test_bundle_create_missing_work_item_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "bundle.create", json!({"branch_name": "feature/x"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("work_item_id"));
+    }
+
+    #[test]
+    fn test_bundle_create_work_item_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(
+            1,
+            "bundle.create",
+            json!({"work_item_id": "nonexistent", "branch_name": "feature/x"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_bundle_create_missing_branch_name() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({"work_item_id": wi_id, "claims": "stuff"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("branch_name"));
+    }
+
+    #[test]
+    fn test_bundle_create_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+        // Drain plan+spec+phase+work_item create events
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+        );
+        dispatch(&stores, &tx, req);
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.created");
+        assert_eq!(event.data["collection"], "bundle");
+    }
+
+    #[test]
+    fn test_bundle_get_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id, "branch_name": "feature/auth"}),
+            ),
+        );
+        let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let get_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(41, "bundle.get", json!({"id": bundle_id})),
+        );
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["branch_name"], "feature/auth");
+    }
+
+    #[test]
+    fn test_bundle_get_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "bundle.get", json!({"id": "nonexistent"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_bundle_list_empty() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "bundle.list", json!(null));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_bundle_list_filtered_by_work_item_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id_1) = create_test_work_item(&stores, &tx);
+
+        // Create a second work item under the same phase
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(31, "work_item.create", json!({"phase_id": _phase_id, "title": "WI 2"})),
+        );
+        let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create bundles under different work items
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id_1, "branch_name": "feature/a"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                41,
+                "bundle.create",
+                json!({"work_item_id": wi_id_2, "branch_name": "feature/b"}),
+            ),
+        );
+
+        // List all — should have 2
+        let all_resp = dispatch(&stores, &tx, DaemonRequest::new(50, "bundle.list", json!(null)));
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // List filtered by wi_id_1 — should have 1
+        let filtered_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(51, "bundle.list", json!({"work_item_id": wi_id_1})),
+        );
+        let bundles = filtered_resp.result.unwrap();
+        let arr = bundles.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["branch_name"], "feature/a");
+    }
+
+    #[test]
+    fn test_bundle_transition_proposed_to_triaged() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+        // Drain plan+spec+phase+work_item create events
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+            ),
+        );
+        let _ = rx.try_recv(); // consume bundle create event
+        let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req = DaemonRequest::new(
+            41,
+            "bundle.transition",
+            json!({
+                "id": bundle_id,
+                "target_status": "Triaged",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Triaged");
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "transition.completed");
+        assert_eq!(event.data["collection"], "bundle");
+        assert_eq!(event.data["from"], "Proposed");
+        assert_eq!(event.data["to"], "Triaged");
+    }
+
+    #[test]
+    fn test_bundle_transition_invalid_skip_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+            ),
+        );
+        let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Try Proposed → Accepted (invalid: must go through Triaged → Reviewed)
+        let req = DaemonRequest::new(
+            41,
+            "bundle.transition",
+            json!({
+                "id": bundle_id,
+                "target_status": "Accepted",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_bundle_transition_wrong_role() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+            ),
+        );
+        let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Implementer cannot transition Proposed → Triaged
+        let req = DaemonRequest::new(
+            41,
+            "bundle.transition",
+            json!({
+                "id": bundle_id,
+                "target_status": "Triaged",
+                "role": "implementer"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_bundle_transition_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(
+            1,
+            "bundle.transition",
+            json!({
+                "id": "nonexistent",
+                "target_status": "Triaged"
             }),
         );
         let resp = dispatch(&stores, &tx, req);
