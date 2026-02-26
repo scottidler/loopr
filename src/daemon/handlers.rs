@@ -310,6 +310,13 @@ fn handle_plan_transition(
     plan.status = target_status;
     plan.updated_at = crate::id::now_millis();
 
+    // Persist transition to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(plan.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     let plan_json = match serde_json::to_value(&*plan) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -2546,6 +2553,45 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_plan_transition_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create plan (also persisted to TaskStore)
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Transition Plan"})),
+        );
+        assert!(!create_resp.is_error());
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition Draft → Active
+        let req = DaemonRequest::new(
+            2,
+            "plan.transition",
+            json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+
+        // Verify TaskStore has the updated status
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Plan> = store.get(&plan_id).unwrap();
+        assert!(retrieved.is_some());
+        let plan = retrieved.unwrap();
+        assert_eq!(plan.status, PlanStatus::Active);
     }
 
     // --- spec.create tests ---
