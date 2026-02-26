@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
+use taskstore::record::{IndexValue, Record};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
@@ -81,6 +83,26 @@ impl Plan {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl Record for Plan {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "plans"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m
     }
 }
 
@@ -291,5 +313,45 @@ mod tests {
         let p1 = Plan::new("A".to_string(), "".to_string(), "".to_string());
         let p2 = Plan::new("B".to_string(), "".to_string(), "".to_string());
         assert_ne!(p1.id, p2.id);
+    }
+
+    // --- Record trait tests ---
+
+    #[test]
+    fn test_plan_record_id() {
+        let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
+        assert_eq!(Record::id(&plan), plan.id.as_str());
+    }
+
+    #[test]
+    fn test_plan_record_updated_at() {
+        let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
+        assert_eq!(Record::updated_at(&plan), plan.updated_at);
+    }
+
+    #[test]
+    fn test_plan_record_collection_name() {
+        assert_eq!(Plan::collection_name(), "plans");
+    }
+
+    #[test]
+    fn test_plan_record_indexed_fields() {
+        let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
+        let fields = plan.indexed_fields();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields.get("status"),
+            Some(&taskstore::record::IndexValue::String("draft".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_plan_record_roundtrip_json() {
+        let plan = Plan::new("RT".to_string(), "Desc".to_string(), "Crit".to_string());
+        let json = serde_json::to_string(&plan).unwrap();
+        let restored: Plan = serde_json::from_str(&json).unwrap();
+        assert_eq!(Record::id(&restored), Record::id(&plan));
+        assert_eq!(Record::updated_at(&restored), Record::updated_at(&plan));
+        assert_eq!(Plan::collection_name(), "plans");
     }
 }
