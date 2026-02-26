@@ -122,7 +122,11 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             }
             (format!("{collection}.list"), params)
         }
-        CrudCmd::Transition { id, status, skip_validation } => {
+        CrudCmd::Transition {
+            id,
+            status,
+            skip_validation,
+        } => {
             // Plan/Spec/Phase use serde(rename_all = "lowercase"), so normalize
             let normalized_status = match collection {
                 "plan" | "spec" | "phase" => status.to_lowercase(),
