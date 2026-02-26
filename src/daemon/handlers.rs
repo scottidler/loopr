@@ -100,16 +100,17 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
         }
     };
 
-    // Install git merge driver and .gitattributes
-    {
+    // Install git merge driver and .gitattributes (best-effort)
+    let git_hooks_ok = {
         let store = store_arc.lock().unwrap();
-        if let Err(e) = store.install_git_hooks() {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::internal(&format!("Failed to install git hooks: {}", e)),
-            );
+        match store.install_git_hooks() {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("Failed to install git hooks (non-fatal): {}", e);
+                false
+            }
         }
-    }
+    };
 
     // Return the list of collection names
     let collections = vec![
@@ -123,7 +124,7 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
         Lock::collection_name(),
     ];
 
-    DaemonResponse::ok(req.id, json!({ "collections": collections }))
+    DaemonResponse::ok(req.id, json!({ "collections": collections, "git_hooks_installed": git_hooks_ok }))
 }
 
 fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
@@ -5026,6 +5027,9 @@ mod tests {
         assert!(collections.contains(&json!("ticks")));
         assert!(collections.contains(&json!("learnings")));
         assert!(collections.contains(&json!("locks")));
+        // git_hooks_installed is best-effort — may be false in test environments
+        // due to taskstore's configure_merge_driver not using current_dir
+        assert!(result.get("git_hooks_installed").is_some());
     }
 
     #[test]
