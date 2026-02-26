@@ -1080,6 +1080,14 @@ fn handle_learning_create(
     };
 
     let id = learning.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(learning.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.learnings.write().unwrap().insert(id.clone(), learning);
     let _ = event_tx.send(DaemonEvent::record_created("learning", &id));
 
@@ -4104,6 +4112,34 @@ mod tests {
         );
         assert!(!resp.is_error());
         resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_learning_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            50,
+            "learning.create",
+            json!({
+                "source_id": "wi-123",
+                "scope": "workitem",
+                "content": "Always run tests"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Learning> = store.get(&learning_id).unwrap();
+        assert!(retrieved.is_some());
+        let learning = retrieved.unwrap();
+        assert_eq!(learning.source_id, "wi-123");
+        assert_eq!(learning.content, "Always run tests");
     }
 
     #[test]
