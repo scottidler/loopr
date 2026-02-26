@@ -1607,21 +1607,57 @@ fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let locks = stores.locks.read().unwrap();
-
     // Optionally filter by resource
-    let resource_filter = req.params.get("resource").and_then(|v| v.as_str());
+    let resource_filter = req.params.get("resource").and_then(|v| v.as_str()).map(|s| s.to_string());
 
     // Optionally filter by holder_id
-    let holder_filter = req.params.get("holder_id").and_then(|v| v.as_str());
+    let holder_filter = req.params.get("holder_id").and_then(|v| v.as_str()).map(|s| s.to_string());
 
     // Optionally filter by active-only
     let active_only = req.params.get("active_only").and_then(|v| v.as_bool()).unwrap_or(false);
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let mut filters: Vec<Filter> = vec![];
+        if let Some(resource) = &resource_filter {
+            filters.push(Filter {
+                field: "resource".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(resource.clone()),
+            });
+        }
+        if let Some(holder_id) = &holder_filter {
+            filters.push(Filter {
+                field: "holder_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(holder_id.clone()),
+            });
+        }
+        if active_only {
+            filters.push(Filter {
+                field: "status".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String("Active".to_string()),
+            });
+        }
+        match store.lock().unwrap().list::<Lock>(&filters) {
+            Ok(locks) => {
+                return match serde_json::to_value(&locks) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let locks = stores.locks.read().unwrap();
     let lock_list: Vec<&Lock> = locks
         .values()
-        .filter(|l| resource_filter.is_none() || Some(l.resource.as_str()) == resource_filter)
-        .filter(|l| holder_filter.is_none() || Some(l.holder_id.as_str()) == holder_filter)
+        .filter(|l| resource_filter.is_none() || Some(l.resource.as_str()) == resource_filter.as_deref())
+        .filter(|l| holder_filter.is_none() || Some(l.holder_id.as_str()) == holder_filter.as_deref())
         .filter(|l| !active_only || l.is_active())
         .collect();
 
@@ -5499,6 +5535,66 @@ mod tests {
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_lock_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create two locks (writes to both TaskStore and HashMap)
+        create_lock(&stores, &tx, &wm, 1);
+        // Create a second lock with different resource
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "lock.create",
+                json!({"resource": "src/lib.rs", "holder_id": "wi-2", "granted_by": "coord-1"}),
+            ),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.locks.write().unwrap().clear();
+
+        // List all should still return both locks via TaskStore
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(10, "lock.list", json!(null)),
+        );
+        assert!(!all_resp.is_error());
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test active_only filter works from TaskStore (both are Active)
+        let active_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(11, "lock.list", json!({"active_only": true})),
+        );
+        assert!(!active_resp.is_error());
+        assert_eq!(active_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test resource filter works from TaskStore
+        let resource_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(12, "lock.list", json!({"resource": "src/lib.rs"})),
+        );
+        assert!(!resource_resp.is_error());
+        let resource_items = resource_resp.result.unwrap();
+        assert_eq!(resource_items.as_array().unwrap().len(), 1);
+        assert_eq!(resource_items[0]["resource"], "src/lib.rs");
     }
 
     #[test]
