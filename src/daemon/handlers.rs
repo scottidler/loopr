@@ -124,7 +124,10 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
         Lock::collection_name(),
     ];
 
-    DaemonResponse::ok(req.id, json!({ "collections": collections, "git_hooks_installed": git_hooks_ok }))
+    DaemonResponse::ok(
+        req.id,
+        json!({ "collections": collections, "git_hooks_installed": git_hooks_ok }),
+    )
 }
 
 fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
