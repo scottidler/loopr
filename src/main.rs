@@ -12,6 +12,7 @@ mod domain;
 mod error;
 mod id;
 mod ipc;
+mod tools;
 mod tui;
 mod validator;
 mod worktree;
