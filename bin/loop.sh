@@ -133,11 +133,13 @@ $(cat "$PROGRESS_FILE")
     echo -e "${BLUE}Running Claude (timeout: ${TIMEOUT_MINUTES}m)...${NC}"
     echo -e "${BLUE}  Log: $ITER_LOG${NC}"
 
-    OUTPUT=$(timeout "${TIMEOUT_MINUTES}m" env -u CLAUDECODE claude \
+    if timeout "${TIMEOUT_MINUTES}m" env -u CLAUDECODE claude \
         --model "$MODEL" \
         --dangerously-skip-permissions \
         --print \
-        <<<"$CONSTRUCTED_PROMPT" 2>&1 | tee /dev/stderr | tee "$ITER_LOG") || {
+        <<<"$CONSTRUCTED_PROMPT" >"$ITER_LOG" 2>&1; then
+        echo -e "${GREEN}Claude completed successfully${NC}"
+    else
         EXIT_CODE=$?
         if [[ $EXIT_CODE -eq 124 ]]; then
             echo -e "${RED}Timeout! Claude ran for ${TIMEOUT_MINUTES}m without exiting.${NC}"
@@ -145,7 +147,8 @@ $(cat "$PROGRESS_FILE")
         else
             echo -e "${YELLOW}Claude exited with code $EXIT_CODE${NC}"
         fi
-    }
+    fi
+    OUTPUT=$(cat "$ITER_LOG" 2>/dev/null || true)
 
     # Auto-commit any changes made during this iteration
     if [[ -n "$(git status --porcelain)" ]]; then
@@ -155,22 +158,23 @@ $(cat "$PROGRESS_FILE")
     fi
 
     # Run validation EXTERNALLY (not inside LLM session) — capture output
+    # Write to log file directly to avoid pipefail issues with tee chains
     VALIDATION_LOG="$LOG_DIR/iter-$(printf '%03d' $i)-validation.log"
     echo -e "${BLUE}Running external validation: $VALIDATION_CMD${NC}"
     echo -e "${BLUE}  Log: $VALIDATION_LOG${NC}"
     VALIDATION_PASSED=false
-    VALIDATION_OUTPUT=$(eval "$VALIDATION_CMD" 2>&1 | tee /dev/stderr | tee "$VALIDATION_LOG") && {
+    if eval "$VALIDATION_CMD" >"$VALIDATION_LOG" 2>&1; then
         echo -e "${GREEN}Validation PASSED${NC}"
         VALIDATION_PASSED=true
         echo "Iteration $i: PASS" >>"$PROGRESS_FILE"
-    } || {
+    else
         echo -e "${RED}Validation FAILED${NC}"
-        # Append validation output directly to progress.txt — truncate to last 50 lines
+        # Append last 50 lines of validation output to progress.txt
         {
             echo "Iteration $i: FAIL — validation errors:"
-            echo "$VALIDATION_OUTPUT" | tail -50
+            tail -50 "$VALIDATION_LOG"
         } >>"$PROGRESS_FILE"
-    }
+    fi
 
     # Check for completion signal in output (must be on its own line)
     PROMISE_FOUND=false
