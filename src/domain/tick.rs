@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
@@ -73,6 +76,27 @@ impl Tick {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl Record for Tick {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "ticks"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m.insert("number".into(), IndexValue::Int(self.number as i64));
+        m
     }
 }
 
@@ -280,5 +304,41 @@ mod tests {
     fn test_invalid_validating_to_sealing() {
         let rules = tick_transitions();
         assert!(validate_transition(TickStatus::Validating, TickStatus::Sealing, Role::Integrator, &rules).is_err());
+    }
+
+    // --- Record trait tests ---
+
+    #[test]
+    fn test_record_id() {
+        let t = Tick::new(1);
+        assert_eq!(Record::id(&t), t.id);
+    }
+
+    #[test]
+    fn test_record_updated_at() {
+        let t = Tick::new(1);
+        assert_eq!(Record::updated_at(&t), t.updated_at);
+    }
+
+    #[test]
+    fn test_record_collection_name() {
+        assert_eq!(Tick::collection_name(), "ticks");
+    }
+
+    #[test]
+    fn test_record_indexed_fields() {
+        let t = Tick::new(42);
+        let fields = t.indexed_fields();
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Open".to_string())));
+        assert_eq!(fields.get("number"), Some(&IndexValue::Int(42)));
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn test_record_indexed_fields_reflect_status() {
+        let mut t = Tick::new(1);
+        t.status = TickStatus::Published;
+        let fields = t.indexed_fields();
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Published".to_string())));
     }
 }
