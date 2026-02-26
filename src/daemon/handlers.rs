@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::broadcast;
 
-use crate::domain::plan::{hierarchy_transitions, Plan, PlanStatus};
+use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
 use crate::domain::transition::validate_transition;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -12,11 +12,7 @@ use super::context::Stores;
 
 /// Dispatch an IPC request to the appropriate handler.
 /// This is the central routing function for all daemon request handling.
-pub fn dispatch(
-    stores: &Arc<Stores>,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    req: DaemonRequest,
-) -> DaemonResponse {
+pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>, req: DaemonRequest) -> DaemonResponse {
     match req.method.as_str() {
         "system.handshake" => handle_handshake(req),
         "plan.create" => handle_plan_create(stores, event_tx, req),
@@ -116,27 +112,15 @@ fn handle_plan_transition(
     let target_status: PlanStatus = match req.params.get("target_status") {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(s) => s,
-            Err(_) => {
-                return DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("invalid target_status"),
-                )
-            }
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
         },
-        None => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params("target_status is required"),
-            )
-        }
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
     };
 
     let role: Role = match req.params.get("role") {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(r) => r,
-            Err(_) => {
-                return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))
-            }
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
         },
         None => Role::Coordinator,
     };
@@ -214,11 +198,15 @@ mod tests {
     fn test_plan_create_success() {
         let stores = test_stores();
         let tx = test_event_tx();
-        let req = DaemonRequest::new(1, "plan.create", json!({
-            "title": "Test Plan",
-            "description": "A test",
-            "acceptance_criteria": "It works"
-        }));
+        let req = DaemonRequest::new(
+            1,
+            "plan.create",
+            json!({
+                "title": "Test Plan",
+                "description": "A test",
+                "acceptance_criteria": "It works"
+            }),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
@@ -307,8 +295,16 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         // Create two plans
-        dispatch(&stores, &tx, DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})));
-        dispatch(&stores, &tx, DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"})));
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"})),
+        );
 
         let req = DaemonRequest::new(3, "plan.list", json!(null));
         let resp = dispatch(&stores, &tx, req);
@@ -326,16 +322,24 @@ mod tests {
         let mut rx = tx.subscribe();
 
         // Create plan
-        let create_resp = dispatch(&stores, &tx, DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})));
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
+        );
         let _ = rx.try_recv(); // consume create event
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Transition Draft → Active
-        let req = DaemonRequest::new(2, "plan.transition", json!({
-            "id": plan_id,
-            "target_status": "active",
-            "role": "coordinator"
-        }));
+        let req = DaemonRequest::new(
+            2,
+            "plan.transition",
+            json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            }),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -352,15 +356,23 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
 
-        let create_resp = dispatch(&stores, &tx, DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})));
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
+        );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Try to skip Draft → Complete (invalid: must go through Active)
-        let req = DaemonRequest::new(2, "plan.transition", json!({
-            "id": plan_id,
-            "target_status": "complete",
-            "role": "coordinator"
-        }));
+        let req = DaemonRequest::new(
+            2,
+            "plan.transition",
+            json!({
+                "id": plan_id,
+                "target_status": "complete",
+                "role": "coordinator"
+            }),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
@@ -371,15 +383,23 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
 
-        let create_resp = dispatch(&stores, &tx, DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})));
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
+        );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Implementer cannot transition plans
-        let req = DaemonRequest::new(2, "plan.transition", json!({
-            "id": plan_id,
-            "target_status": "active",
-            "role": "implementer"
-        }));
+        let req = DaemonRequest::new(
+            2,
+            "plan.transition",
+            json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "implementer"
+            }),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
@@ -389,10 +409,14 @@ mod tests {
     fn test_plan_transition_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
-        let req = DaemonRequest::new(1, "plan.transition", json!({
-            "id": "nonexistent",
-            "target_status": "active"
-        }));
+        let req = DaemonRequest::new(
+            1,
+            "plan.transition",
+            json!({
+                "id": "nonexistent",
+                "target_status": "active"
+            }),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -418,14 +442,22 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
 
-        let create_resp = dispatch(&stores, &tx, DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})));
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
+        );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // No role specified — defaults to Coordinator, which is valid for hierarchy transitions
-        let req = DaemonRequest::new(2, "plan.transition", json!({
-            "id": plan_id,
-            "target_status": "active"
-        }));
+        let req = DaemonRequest::new(
+            2,
+            "plan.transition",
+            json!({
+                "id": plan_id,
+                "target_status": "active"
+            }),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
