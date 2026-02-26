@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
 use log::{info, warn};
+use taskstore::Store;
 use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
@@ -56,25 +57,44 @@ pub struct DaemonContext {
     pub event_tx: broadcast::Sender<DaemonEvent>,
     pub config: Config,
     pub stores: Arc<Stores>,
+    pub store: Arc<StdMutex<Store>>,
     pub worktree_manager: WorktreeManager,
 }
 
 impl DaemonContext {
     /// Create a new DaemonContext with the given config and event broadcast channel.
-    pub fn new(config: Config, event_tx: broadcast::Sender<DaemonEvent>) -> Self {
+    /// Opens the TaskStore at the project repo_path and rebuilds indexes for all domain types.
+    pub fn new(config: Config, event_tx: broadcast::Sender<DaemonEvent>) -> eyre::Result<Self> {
         let repo_path = config.project.repo_path.clone();
         let worktree_dir = if config.project.worktree_dir.is_absolute() {
             config.project.worktree_dir.clone()
         } else {
             repo_path.join(&config.project.worktree_dir)
         };
-        let worktree_manager = WorktreeManager::new(repo_path, worktree_dir);
-        Self {
+        let worktree_manager = WorktreeManager::new(repo_path.clone(), worktree_dir);
+
+        // Open TaskStore at repo_path (creates .taskstore/ subdirectory)
+        let mut store = Store::open(&repo_path)?;
+
+        // Rebuild indexes for all domain types so queries work after JSONL sync
+        store.rebuild_indexes::<Plan>()?;
+        store.rebuild_indexes::<Spec>()?;
+        store.rebuild_indexes::<Phase>()?;
+        store.rebuild_indexes::<WorkItem>()?;
+        store.rebuild_indexes::<Bundle>()?;
+        store.rebuild_indexes::<Tick>()?;
+        store.rebuild_indexes::<Learning>()?;
+        store.rebuild_indexes::<Lock>()?;
+
+        info!("TaskStore opened at {}", repo_path.display());
+
+        Ok(Self {
             config,
             event_tx,
             stores: Arc::new(Stores::new()),
+            store: Arc::new(StdMutex::new(store)),
             worktree_manager,
-        }
+        })
     }
 
     /// Recover orphaned records after a crash.
@@ -122,32 +142,86 @@ impl DaemonContext {
     }
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
-    pub fn shared(config: Config) -> (Arc<RwLock<Self>>, broadcast::Sender<DaemonEvent>) {
+    pub fn shared(config: Config) -> eyre::Result<(Arc<RwLock<Self>>, broadcast::Sender<DaemonEvent>)> {
         let (event_tx, _) = broadcast::channel::<DaemonEvent>(256);
         let tx = event_tx.clone();
-        let ctx = Self::new(config, event_tx);
-        (Arc::new(RwLock::new(ctx)), tx)
+        let ctx = Self::new(config, event_tx)?;
+        Ok((Arc::new(RwLock::new(ctx)), tx))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ProjectConfig;
+
+    /// Create a test Config with repo_path pointing to a unique temp directory
+    /// so TaskStore doesn't pollute the project or collide between tests.
+    fn test_config() -> Config {
+        let id = crate::id::generate_id();
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-test-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        Config {
+            project: ProjectConfig {
+                repo_path: dir,
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        }
+    }
 
     #[test]
     fn test_context_new() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
         assert_eq!(ctx.config.name, "loopr");
         // Stores are initialized empty
         assert!(ctx.stores.plans.read().unwrap().is_empty());
     }
 
     #[test]
+    fn test_context_new_creates_taskstore() {
+        let config = test_config();
+        let repo_path = config.project.repo_path.clone();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        // TaskStore should have created .taskstore/ directory
+        assert!(repo_path.join(".taskstore").exists());
+
+        // Store should be accessible via the Arc<Mutex>
+        let store = ctx.store.lock().unwrap();
+        // Listing empty collections should return empty vecs
+        let plans: Vec<Plan> = store.list(&[]).unwrap();
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn test_context_taskstore_crud() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        // Create a plan via TaskStore
+        let plan = Plan::new("Test Plan".into(), "Description".into(), "Criteria".into());
+        let plan_id = plan.id.clone();
+        ctx.store.lock().unwrap().create(plan).unwrap();
+
+        // Get it back
+        let retrieved: Option<Plan> = ctx.store.lock().unwrap().get(&plan_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().title, "Test Plan");
+
+        // List should return it
+        let all: Vec<Plan> = ctx.store.lock().unwrap().list(&[]).unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
     fn test_context_shared() {
-        let config = Config::default();
-        let (ctx, tx) = DaemonContext::shared(config);
+        let config = test_config();
+        let (ctx, tx) = DaemonContext::shared(config).unwrap();
         // Can subscribe from the returned sender
         let _rx = tx.subscribe();
         // Can read from the context
@@ -160,9 +234,9 @@ mod tests {
 
     #[test]
     fn test_context_event_broadcast() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
         let mut rx = ctx.event_tx.subscribe();
         let event = DaemonEvent::record_created("plan", "p1");
         ctx.event_tx.send(event.clone()).unwrap();
@@ -172,8 +246,8 @@ mod tests {
 
     #[test]
     fn test_context_shared_event_broadcast() {
-        let config = Config::default();
-        let (ctx, tx) = DaemonContext::shared(config);
+        let config = test_config();
+        let (ctx, tx) = DaemonContext::shared(config).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let c = ctx.read().await;
@@ -297,9 +371,9 @@ mod tests {
 
     #[test]
     fn test_recover_orphaned_work_items() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
 
         // Insert a WorkItem in InProgress state (orphaned)
         let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
@@ -322,9 +396,9 @@ mod tests {
 
     #[test]
     fn test_recover_orphaned_bundles() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
 
         // Insert a Bundle in Integrating state (orphaned)
         let mut bundle = Bundle::new(
@@ -357,9 +431,9 @@ mod tests {
 
     #[test]
     fn test_recover_both_orphaned_types() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
 
         let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
         wi.status = WorkItemStatus::InProgress;
@@ -380,9 +454,9 @@ mod tests {
 
     #[test]
     fn test_recover_no_orphans() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
 
         // Draft WorkItem — not orphaned
         let wi = WorkItem::new("phase-1".into(), "Normal WI".into(), "".into());
@@ -398,9 +472,9 @@ mod tests {
 
     #[test]
     fn test_recover_empty_stores() {
-        let config = Config::default();
+        let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx);
+        let ctx = DaemonContext::new(config, tx).unwrap();
         let recovered = ctx.recover_orphaned_records();
         assert_eq!(recovered, 0);
     }

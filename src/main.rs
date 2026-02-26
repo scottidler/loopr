@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
         // `loopr daemon` — run as daemon
         Some(cli::Command::Daemon) => {
             info!("Starting daemon");
-            let (ctx, _event_tx) = daemon::context::DaemonContext::shared(config);
+            let (ctx, _event_tx) = daemon::context::DaemonContext::shared(config)?;
             daemon::daemon_main(ctx).await.context("daemon exited with error")
         }
 

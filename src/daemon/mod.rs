@@ -142,7 +142,7 @@ mod tests {
     async fn test_write_and_remove_pid_file() {
         let config = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
-        let ctx = context::DaemonContext::new(config.clone(), tx);
+        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
 
         write_pid_file(&ctx).unwrap();
         assert!(config.daemon.pid_path.exists());
@@ -157,7 +157,7 @@ mod tests {
     async fn test_daemon_handshake() {
         let config = test_config();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config);
+        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
         // Start daemon in background
         let daemon_handle = tokio::spawn(daemon_main(ctx));
@@ -186,7 +186,7 @@ mod tests {
         let config = test_config();
         let pid_path = config.daemon.pid_path.clone();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config);
+        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -207,7 +207,7 @@ mod tests {
     async fn test_daemon_multiple_clients() {
         let config = test_config();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config);
+        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -232,7 +232,7 @@ mod tests {
     async fn test_daemon_status() {
         let config = test_config();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config);
+        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -257,7 +257,7 @@ mod tests {
         let config = test_config();
         let socket_path = config.daemon.socket_path.clone();
         let pid_path = config.daemon.pid_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config);
+        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
