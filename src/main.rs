@@ -212,8 +212,8 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         "work_item", &work_item.id, "Draft", "Ready", "Coordinator",
     );
     info!("IPC transition event: {}", tc_event.event);
-    let line = serde_json::to_string(&event).map_err(|e| error::LooprError::SerdeJson(e))?;
-    let msg = ipc::protocol::IpcMessage::from_json(&line).map_err(|e| error::LooprError::SerdeJson(e))?;
+    let line = serde_json::to_string(&event).map_err(error::LooprError::SerdeJson)?;
+    let msg = ipc::protocol::IpcMessage::from_json(&line).map_err(error::LooprError::SerdeJson)?;
     info!("IPC message discrimination: {:?}", std::mem::discriminant(&msg));
 
     // Log some information
