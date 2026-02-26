@@ -1,16 +1,29 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::{error, info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::implementer::{self, LlmClient};
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::{ToolResult, ToolRunner};
 use crate::worktree::manager::WorktreeManager;
+
+/// Stub LLM client — always returns Done action.
+/// Phase 4 replaces this with the real AgentLlmClient (streaming SSE via reqwest).
+struct StubLlmClient;
+
+#[async_trait]
+impl LlmClient for StubLlmClient {
+    async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
+        Ok(r#"[{"action": "done", "summary": "Stub LLM — real client in Phase 4"}]"#.to_string())
+    }
+}
 
 /// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
 ///
@@ -78,10 +91,10 @@ pub async fn run_agent_task(
     );
 }
 
-/// Stub agent loop — Phase 2 will replace this with LLM-driven iteration.
+/// Agent loop — dispatches to the appropriate agent implementation based on type.
 async fn run_agent_loop(
     session_id: &str,
-    _agent_type: AgentType,
+    agent_type: AgentType,
     stores: &Arc<Stores>,
     bridge: &AgentIpcBridge,
 ) -> Result<()> {
@@ -90,34 +103,58 @@ async fn run_agent_loop(
     if status_resp.is_error() {
         return Err(eyre!("bridge health check failed: {:?}", status_resp.error));
     }
-
     info!("Agent {} bridge health check passed", session_id);
 
-    // Subscribe to events via the bridge for monitoring
+    // Subscribe to events for agent monitoring (Phase 4 will stream these to TUI)
     let _event_rx = bridge.event_tx().subscribe();
 
-    // Run a quick tool check if tools are configured
-    let tool_runner = &stores.tool_runner;
-    let available = tool_runner.available_tools();
-    if !available.is_empty() {
-        info!(
-            "Agent {} has {} tools available: {:?}",
-            session_id,
-            available.len(),
-            available
-        );
+    match agent_type {
+        AgentType::Implementer => {
+            let llm = StubLlmClient;
+            let tool_runner = &stores.tool_runner;
+            let config = stores.config.agents.implementer.clone();
+
+            // Clone session out for the implementer loop
+            let mut session = {
+                let sessions = stores.agent_sessions.read().unwrap();
+                sessions
+                    .get(session_id)
+                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
+                    .clone()
+            };
+
+            let result = implementer::run_implementer(
+                &llm,
+                &mut session,
+                stores,
+                tool_runner,
+                bridge,
+                &config,
+            )
+            .await;
+
+            // Write back updated session iteration count
+            {
+                let mut sessions = stores.agent_sessions.write().unwrap();
+                if let Some(s) = sessions.get_mut(session_id) {
+                    s.iteration = session.iteration;
+                }
+            }
+
+            result
+        }
+        AgentType::Reviewer => {
+            // Phase 5 — stub for now, complete immediately
+            info!("Reviewer agent {} — stub, completing immediately", session_id);
+            let worktree_path = std::env::temp_dir();
+            let done_action = AgentAction::Done {
+                summary: format!("Reviewer {} stub complete", session_id),
+            };
+            let result = execute_action(&done_action, &stores.tool_runner, bridge, &worktree_path).await?;
+            log_action_result(session_id, &result);
+            Ok(())
+        }
     }
-
-    // Execute the Done action to complete this stub iteration.
-    // Phase 2 will replace this with the full LLM-driven action loop.
-    let worktree_path = std::env::temp_dir();
-    let done_action = AgentAction::Done {
-        summary: format!("Agent {} startup validation complete", session_id),
-    };
-    let result = execute_action(&done_action, tool_runner, bridge, &worktree_path).await?;
-    log_action_result(session_id, &result);
-
-    Ok(())
 }
 
 /// Log the result of an agent action for diagnostics.

@@ -183,12 +183,12 @@ pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
 
     // Try to find a JSON array in the response (may be wrapped in markdown code blocks)
     let trimmed = response.trim();
-    if let Some(start) = trimmed.find('[') {
-        if let Some(end) = trimmed.rfind(']') {
-            let json_slice = &trimmed[start..=end];
-            if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(json_slice) {
-                return Ok(actions);
-            }
+    if let Some(start) = trimmed.find('[')
+        && let Some(end) = trimmed.rfind(']')
+    {
+        let json_slice = &trimmed[start..=end];
+        if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(json_slice) {
+            return Ok(actions);
         }
     }
 
@@ -203,21 +203,26 @@ pub enum IterationOutcome {
     NeedHelp(String),
 }
 
+/// Shared resources for implementer iterations.
+pub struct IterationParams<'a> {
+    pub llm: &'a dyn LlmClient,
+    pub stores: &'a Arc<Stores>,
+    pub tool_runner: &'a ToolRunner,
+    pub bridge: &'a AgentIpcBridge,
+    pub work_item_id: &'a str,
+    pub worktree_path: &'a Path,
+}
+
 /// Run a single implementer iteration: load context → prompt → call LLM → parse → execute.
 pub async fn run_iteration(
-    llm: &dyn LlmClient,
-    stores: &Arc<Stores>,
-    tool_runner: &ToolRunner,
-    bridge: &AgentIpcBridge,
-    work_item_id: &str,
-    worktree_path: &Path,
+    params: &IterationParams<'_>,
     iteration: u32,
     previous_summary: Option<String>,
 ) -> Result<IterationOutcome> {
-    let ctx = load_context(stores, work_item_id, tool_runner, previous_summary)?;
+    let ctx = load_context(params.stores, params.work_item_id, params.tool_runner, previous_summary)?;
     let user_message = build_user_message(&ctx, iteration);
 
-    let response = llm.call(SYSTEM_PROMPT, &user_message).await?;
+    let response = params.llm.call(SYSTEM_PROMPT, &user_message).await?;
     let actions = parse_actions(&response)?;
 
     if actions.is_empty() {
@@ -226,7 +231,7 @@ pub async fn run_iteration(
 
     let mut last_summary = String::new();
     for action in &actions {
-        let result = execute_action(action, tool_runner, bridge, worktree_path).await?;
+        let result = execute_action(action, params.tool_runner, params.bridge, params.worktree_path).await?;
         match &result {
             ActionResult::Done(summary) => return Ok(IterationOutcome::Done(summary.clone())),
             ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
@@ -256,28 +261,26 @@ pub async fn run_implementer(
     let worktree_path = session
         .worktree_path
         .as_ref()
-        .map(|p| std::path::PathBuf::from(p))
-        .unwrap_or_else(|| std::env::temp_dir());
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
 
     let max_iterations = config.max_iterations;
     let mut previous_summary: Option<String> = None;
+
+    let params = IterationParams {
+        llm,
+        stores,
+        tool_runner,
+        bridge,
+        work_item_id: &work_item_id,
+        worktree_path: &worktree_path,
+    };
 
     for i in 1..=max_iterations {
         session.iteration = i;
         info!("Implementer {} iteration {}/{}", session.id, i, max_iterations);
 
-        match run_iteration(
-            llm,
-            stores,
-            tool_runner,
-            bridge,
-            &work_item_id,
-            &worktree_path,
-            i,
-            previous_summary.clone(),
-        )
-        .await
-        {
+        match run_iteration(&params, i, previous_summary.clone()).await {
             Ok(IterationOutcome::Done(summary)) => {
                 info!("Implementer {} completed: {}", session.id, summary);
                 return Ok(());
@@ -555,10 +558,12 @@ mod tests {
         let bridge = test_bridge(stores.clone(), &dir);
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#);
+        let params = IterationParams {
+            llm: &llm, stores: &stores, tool_runner: &tool_runner,
+            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+        };
 
-        let outcome = run_iteration(&llm, &stores, &tool_runner, &bridge, &wi_id, &dir, 1, None)
-            .await
-            .unwrap();
+        let outcome = run_iteration(&params, 1, None).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "All done"));
     }
 
@@ -572,10 +577,12 @@ mod tests {
         let bridge = test_bridge(stores.clone(), &dir);
 
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#);
+        let params = IterationParams {
+            llm: &llm, stores: &stores, tool_runner: &tool_runner,
+            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+        };
 
-        let outcome = run_iteration(&llm, &stores, &tool_runner, &bridge, &wi_id, &dir, 1, None)
-            .await
-            .unwrap();
+        let outcome = run_iteration(&params, 1, None).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::NeedHelp(ref r) if r == "Ambiguous spec"));
     }
 
@@ -592,10 +599,12 @@ mod tests {
             {"action": "write_file", "path": "test.txt", "content": "hello"},
             {"action": "read_file", "path": "test.txt"}
         ]"#);
+        let params = IterationParams {
+            llm: &llm, stores: &stores, tool_runner: &tool_runner,
+            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+        };
 
-        let outcome = run_iteration(&llm, &stores, &tool_runner, &bridge, &wi_id, &dir, 1, None)
-            .await
-            .unwrap();
+        let outcome = run_iteration(&params, 1, None).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
         // File should have been written
         assert!(dir.join("test.txt").exists());
@@ -611,8 +620,12 @@ mod tests {
         let bridge = test_bridge(stores.clone(), &dir);
 
         let llm = FailingLlm;
+        let params = IterationParams {
+            llm: &llm, stores: &stores, tool_runner: &tool_runner,
+            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+        };
 
-        let result = run_iteration(&llm, &stores, &tool_runner, &bridge, &wi_id, &dir, 1, None).await;
+        let result = run_iteration(&params, 1, None).await;
         assert!(result.is_err());
     }
 
@@ -626,8 +639,12 @@ mod tests {
         let bridge = test_bridge(stores.clone(), &dir);
 
         let llm = MockLlm::new("This is not valid JSON");
+        let params = IterationParams {
+            llm: &llm, stores: &stores, tool_runner: &tool_runner,
+            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+        };
 
-        let result = run_iteration(&llm, &stores, &tool_runner, &bridge, &wi_id, &dir, 1, None).await;
+        let result = run_iteration(&params, 1, None).await;
         assert!(result.is_err());
     }
 
@@ -641,8 +658,12 @@ mod tests {
         let bridge = test_bridge(stores.clone(), &dir);
 
         let llm = MockLlm::new("[]");
+        let params = IterationParams {
+            llm: &llm, stores: &stores, tool_runner: &tool_runner,
+            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+        };
 
-        let result = run_iteration(&llm, &stores, &tool_runner, &bridge, &wi_id, &dir, 1, None).await;
+        let result = run_iteration(&params, 1, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty action list"));
     }
