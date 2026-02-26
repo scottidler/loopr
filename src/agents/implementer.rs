@@ -5,12 +5,15 @@ use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::{info, warn};
 
+use tokio::sync::broadcast;
+
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::{AgentAction, AgentSession};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
 use crate::domain::learning::LearningScope;
+use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
 
 /// Trait for LLM calls — allows mocking in tests.
@@ -211,6 +214,8 @@ pub struct IterationParams<'a> {
     pub bridge: &'a AgentIpcBridge,
     pub work_item_id: &'a str,
     pub worktree_path: &'a Path,
+    pub session_id: &'a str,
+    pub event_tx: &'a broadcast::Sender<DaemonEvent>,
 }
 
 /// Run a single implementer iteration: load context → prompt → call LLM → parse → execute.
@@ -231,13 +236,32 @@ pub async fn run_iteration(
 
     let mut last_summary = String::new();
     for action in &actions {
+        // Broadcast tool_started event for RunTool actions
+        if let AgentAction::RunTool { tool_name, .. } = action {
+            let _ = params.event_tx.send(DaemonEvent::agent_tool_started(params.session_id, tool_name));
+        }
+
         let result = execute_action(action, params.tool_runner, params.bridge, params.worktree_path).await?;
+
+        // Broadcast tool_completed event for RunTool results
+        if let ActionResult::ToolRun(ref tr) = result {
+            let _ = params.event_tx.send(DaemonEvent::agent_tool_completed(
+                params.session_id,
+                &tr.tool_name,
+                tr.exit_code,
+                tr.duration_ms,
+            ));
+        }
+
+        let summary = format_action_summary(action, &result);
+        let _ = params.event_tx.send(DaemonEvent::agent_action_completed(params.session_id, &summary));
+
         match &result {
-            ActionResult::Done(summary) => return Ok(IterationOutcome::Done(summary.clone())),
+            ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
             ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
             _ => {}
         }
-        last_summary = format_action_summary(action, &result);
+        last_summary = summary;
     }
 
     Ok(IterationOutcome::Continue(last_summary))
@@ -251,6 +275,7 @@ pub async fn run_implementer(
     tool_runner: &ToolRunner,
     bridge: &AgentIpcBridge,
     config: &AgentRoleConfig,
+    event_tx: &broadcast::Sender<DaemonEvent>,
 ) -> Result<()> {
     let work_item_id = session
         .work_item_id
@@ -274,6 +299,8 @@ pub async fn run_implementer(
         bridge,
         work_item_id: &work_item_id,
         worktree_path: &worktree_path,
+        session_id: &session.id,
+        event_tx,
     };
 
     for i in 1..=max_iterations {
@@ -282,14 +309,17 @@ pub async fn run_implementer(
 
         match run_iteration(&params, i, previous_summary.clone()).await {
             Ok(IterationOutcome::Done(summary)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &summary));
                 info!("Implementer {} completed: {}", session.id, summary);
                 return Ok(());
             }
             Ok(IterationOutcome::NeedHelp(reason)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &reason));
                 warn!("Implementer {} needs help: {}", session.id, reason);
                 return Err(eyre!("agent needs help: {}", reason));
             }
             Ok(IterationOutcome::Continue(summary)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &summary));
                 info!("Implementer {} iteration {} done: {}", session.id, i, summary);
                 previous_summary = Some(summary);
             }
@@ -407,10 +437,11 @@ mod tests {
         stores.work_items.read().unwrap().keys().next().unwrap().clone()
     }
 
-    fn test_bridge(stores: Arc<Stores>, dir: &Path) -> AgentIpcBridge {
+    fn test_bridge_with_tx(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default())
+        let bridge = AgentIpcBridge::new(stores, event_tx.clone(), worktree_mgr, Config::default());
+        (bridge, event_tx)
     }
 
     // --- parse_actions tests ---
@@ -552,7 +583,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#);
         let params = IterationParams {
@@ -562,6 +593,8 @@ mod tests {
             bridge: &bridge,
             work_item_id: &wi_id,
             worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
         };
 
         let outcome = run_iteration(&params, 1, None).await.unwrap();
@@ -575,7 +608,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#);
         let params = IterationParams {
@@ -585,6 +618,8 @@ mod tests {
             bridge: &bridge,
             work_item_id: &wi_id,
             worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
         };
 
         let outcome = run_iteration(&params, 1, None).await.unwrap();
@@ -598,7 +633,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
         let llm = MockLlm::new(
             r#"[
@@ -613,6 +648,8 @@ mod tests {
             bridge: &bridge,
             work_item_id: &wi_id,
             worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
         };
 
         let outcome = run_iteration(&params, 1, None).await.unwrap();
@@ -628,7 +665,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
         let llm = FailingLlm;
         let params = IterationParams {
@@ -638,6 +675,8 @@ mod tests {
             bridge: &bridge,
             work_item_id: &wi_id,
             worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
         };
 
         let result = run_iteration(&params, 1, None).await;
@@ -651,7 +690,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
         let llm = MockLlm::new("This is not valid JSON");
         let params = IterationParams {
@@ -661,6 +700,8 @@ mod tests {
             bridge: &bridge,
             work_item_id: &wi_id,
             worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
         };
 
         let result = run_iteration(&params, 1, None).await;
@@ -674,7 +715,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
         let llm = MockLlm::new("[]");
         let params = IterationParams {
@@ -684,6 +725,8 @@ mod tests {
             bridge: &bridge,
             work_item_id: &wi_id,
             worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
         };
 
         let result = run_iteration(&params, 1, None).await;
@@ -700,7 +743,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let config = AgentRoleConfig::default_implementer();
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "Complete"}]"#);
@@ -709,7 +752,7 @@ mod tests {
         session.work_item_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config).await;
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
         assert!(result.is_ok());
         assert_eq!(session.iteration, 1);
     }
@@ -721,7 +764,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
 
@@ -732,7 +775,7 @@ mod tests {
         session.work_item_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config).await;
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max iterations"));
         assert_eq!(session.iteration, 3);
@@ -744,14 +787,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = MockLlm::new("[]");
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
         // No work_item_id set
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config).await;
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing work_item_id"));
     }
@@ -763,7 +806,7 @@ mod tests {
         let stores = setup_stores(&dir);
         let wi_id = get_work_item_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
-        let bridge = test_bridge(stores.clone(), &dir);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let config = AgentRoleConfig::default_implementer();
 
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Stuck"}]"#);
@@ -772,7 +815,7 @@ mod tests {
         session.work_item_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config).await;
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("needs help"));
     }

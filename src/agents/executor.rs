@@ -143,7 +143,7 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = implementer::run_implementer(llm.as_ref(), &mut session, stores, tool_runner, bridge, &config).await;
+            let result = implementer::run_implementer(llm.as_ref(), &mut session, stores, tool_runner, bridge, &config, event_tx).await;
 
             // Write back updated session iteration count
             {
