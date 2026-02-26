@@ -220,14 +220,8 @@ mod tests {
     fn test_phase_record_indexed_fields() {
         let phase = Phase::new("spec-42".into(), "T".into(), "D".into(), 1);
         let fields = phase.indexed_fields();
-        assert_eq!(
-            fields.get("status"),
-            Some(&IndexValue::String("draft".to_string()))
-        );
-        assert_eq!(
-            fields.get("spec_id"),
-            Some(&IndexValue::String("spec-42".to_string()))
-        );
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
+        assert_eq!(fields.get("spec_id"), Some(&IndexValue::String("spec-42".to_string())));
         assert_eq!(fields.len(), 2);
     }
 
