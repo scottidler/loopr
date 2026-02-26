@@ -2308,7 +2308,14 @@ mod tests {
 
         // Create a plan via TaskStore directly
         let plan = Plan::new("TS Plan".into(), "".into(), "".into());
-        stores.store.as_ref().unwrap().lock().unwrap().create(plan.clone()).unwrap();
+        stores
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .create(plan.clone())
+            .unwrap();
 
         // Create a spec via TaskStore directly
         let spec = Spec::new(plan.id.clone(), "TS Spec".into(), "".into());
