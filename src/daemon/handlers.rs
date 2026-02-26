@@ -1295,6 +1295,14 @@ fn handle_worktree_create(
         }
     }
 
+    // Check if worktree already exists before attempting git operations
+    if worktree_mgr.exists(&work_item_id) {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::invalid_params(&format!("worktree already exists for work item {work_item_id}")),
+        );
+    }
+
     match worktree_mgr.create(&work_item_id, &base_ref) {
         Ok(path) => {
             let _ = event_tx.send(DaemonEvent::new(
@@ -1339,13 +1347,14 @@ fn handle_worktree_cleanup(
         }
     }
 
+    let path = worktree_mgr.worktree_path(&work_item_id);
     match worktree_mgr.cleanup(&work_item_id) {
         Ok(()) => {
             let _ = event_tx.send(DaemonEvent::new(
                 "worktree.cleaned",
-                json!({ "work_item_id": work_item_id }),
+                json!({ "work_item_id": work_item_id, "path": path.to_string_lossy() }),
             ));
-            DaemonResponse::ok(req.id, json!({ "work_item_id": work_item_id, "status": "cleaned" }))
+            DaemonResponse::ok(req.id, json!({ "work_item_id": work_item_id, "path": path.to_string_lossy(), "status": "cleaned" }))
         }
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }

@@ -11,33 +11,24 @@ use super::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 /// Unix socket IPC server for the daemon.
 /// Accepts client connections, frames them with NDJSON, and dispatches
-/// requests to a handler function. Events are broadcast to all connected clients.
+/// requests to a handler function. Events are broadcast to all connected clients
+/// via an externally-owned broadcast channel.
 pub struct IpcServer {
     socket_path: PathBuf,
-    event_tx: broadcast::Sender<DaemonEvent>,
 }
 
 impl IpcServer {
     /// Create a new IPC server bound to the given socket path.
-    /// Returns the server and a broadcast sender for pushing events to clients.
-    pub fn new(socket_path: impl Into<PathBuf>) -> (Self, broadcast::Sender<DaemonEvent>) {
-        let (event_tx, _) = broadcast::channel::<DaemonEvent>(256);
-        let tx = event_tx.clone();
-        let server = Self {
+    /// The event broadcast channel is owned externally (by DaemonContext).
+    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+        Self {
             socket_path: socket_path.into(),
-            event_tx,
-        };
-        (server, tx)
+        }
     }
 
     /// Get the socket path.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
-    }
-
-    /// Get a clone of the event broadcast sender.
-    pub fn event_sender(&self) -> broadcast::Sender<DaemonEvent> {
-        self.event_tx.clone()
     }
 
     /// Bind the Unix socket listener.
@@ -133,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_bind_and_cleanup() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
 
         let listener = server.bind().await.unwrap();
         assert!(path.exists());
@@ -152,7 +143,7 @@ mod tests {
         std::fs::write(&path, "stale").unwrap();
         assert!(path.exists());
 
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let _listener = server.bind().await.unwrap();
         // Should have removed stale file and bound successfully
         assert!(path.exists());
@@ -163,26 +154,18 @@ mod tests {
     #[tokio::test]
     async fn test_socket_path_accessor() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         assert_eq!(server.socket_path(), path);
-    }
-
-    #[tokio::test]
-    async fn test_event_sender() {
-        let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
-        let tx = server.event_sender();
-        // Should be able to subscribe
-        let _rx = tx.subscribe();
     }
 
     #[tokio::test]
     async fn test_handle_client_request_response() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
 
-        let event_rx = server.event_sender().subscribe();
+        let (tx, _) = broadcast::channel::<DaemonEvent>(16);
+        let event_rx = tx.subscribe();
 
         // Spawn the client handler
         let server_task = tokio::spawn(async move {
@@ -224,9 +207,10 @@ mod tests {
     #[tokio::test]
     async fn test_handle_client_malformed_request() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_rx = server.event_sender().subscribe();
+        let (tx, _) = broadcast::channel::<DaemonEvent>(16);
+        let event_rx = tx.subscribe();
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -256,9 +240,10 @@ mod tests {
     #[tokio::test]
     async fn test_handle_client_receives_broadcast_events() {
         let path = temp_socket_path();
-        let (server, tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_rx = server.event_sender().subscribe();
+        let (tx, _) = broadcast::channel::<DaemonEvent>(16);
+        let event_rx = tx.subscribe();
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -292,9 +277,10 @@ mod tests {
     #[tokio::test]
     async fn test_handle_client_disconnect() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_rx = server.event_sender().subscribe();
+        let (tx, _) = broadcast::channel::<DaemonEvent>(16);
+        let event_rx = tx.subscribe();
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -308,15 +294,17 @@ mod tests {
 
         // Server task should complete without error
         server_task.await.unwrap();
+        drop(tx);
         server.cleanup();
     }
 
     #[tokio::test]
     async fn test_multiple_requests_on_same_connection() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_rx = server.event_sender().subscribe();
+        let (tx, _) = broadcast::channel::<DaemonEvent>(16);
+        let event_rx = tx.subscribe();
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();

@@ -22,6 +22,14 @@ pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()
     }
 
     let (method, params) = command_to_ipc(command, role);
+
+    // Shutdown is fire-and-forget — the daemon may not respond
+    if method == "system.shutdown" {
+        client.send(&method, params).await.context("failed to send shutdown")?;
+        println!("Shutdown signal sent.");
+        return Ok(());
+    }
+
     let (resp, _events) = client.request(&method, params).await.context("IPC request failed")?;
 
     if resp.is_error() {

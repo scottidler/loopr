@@ -39,10 +39,10 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         c.config.daemon.socket_path.clone()
     };
 
-    let (ipc_server, _) = IpcServer::new(&socket_path);
+    let ipc_server = IpcServer::new(&socket_path);
     let listener = ipc_server.bind().await?;
     info!("Daemon listening on {}", ipc_server.socket_path().display());
-    let event_tx = ipc_server.event_sender();
+    let event_tx = ctx.read().await.event_tx.clone();
 
     let result = accept_loop(listener, ctx.clone(), event_tx).await;
 

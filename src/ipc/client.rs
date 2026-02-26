@@ -137,9 +137,10 @@ mod tests {
     async fn start_echo_server(
         path: &PathBuf,
     ) -> (tokio::task::JoinHandle<()>, tokio::sync::broadcast::Sender<DaemonEvent>) {
-        let (server, tx) = IpcServer::new(path);
+        let server = IpcServer::new(path);
         let listener = server.bind().await.unwrap();
-        let event_tx = server.event_sender();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
 
         let handle = tokio::spawn(async move {
             // Accept one client
@@ -217,15 +218,15 @@ mod tests {
     #[tokio::test]
     async fn test_client_receives_events_during_request() {
         let path = temp_socket_path();
-        let (server, tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_tx_for_handler = server.event_sender();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_rx = tx.subscribe();
 
         // Server that broadcasts an event before responding
         let tx_clone = tx.clone();
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
-                let event_rx = event_tx_for_handler.subscribe();
                 // Use a handler that triggers an event broadcast
                 handle_client(
                     stream,
@@ -262,9 +263,10 @@ mod tests {
     #[tokio::test]
     async fn test_client_recv() {
         let path = temp_socket_path();
-        let (server, tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_tx = server.event_sender();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
 
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
@@ -310,9 +312,8 @@ mod tests {
     #[tokio::test]
     async fn test_client_disconnected() {
         let path = temp_socket_path();
-        let (server, _tx) = IpcServer::new(&path);
+        let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
-        let event_tx = server.event_sender();
 
         // Server that immediately closes after accepting
         let server_handle = tokio::spawn(async move {
@@ -325,7 +326,6 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let mut client = IpcClient::connect(&path).await.unwrap();
-        drop(event_tx);
 
         // recv should return None when server disconnects
         let result = client.recv().await.unwrap();
