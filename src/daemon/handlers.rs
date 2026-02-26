@@ -1025,6 +1025,22 @@ fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<Tick>(id) {
+            Ok(Some(tick)) => {
+                return match serde_json::to_value(&tick) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let ticks = stores.ticks.read().unwrap();
     match ticks.get(id) {
         Some(tick) => match serde_json::to_value(tick) {
@@ -4111,6 +4127,33 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_tick_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a tick (writes to both TaskStore and HashMap)
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(50, "tick.create", json!({"number": 99})),
+        );
+        assert!(!create_resp.is_error());
+        let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.ticks.write().unwrap().remove(&tick_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(51, "tick.get", json!({"id": tick_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["number"], 99);
     }
 
     #[test]
