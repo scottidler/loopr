@@ -118,21 +118,25 @@ mod tests {
     fn test_spec_valid_transition_to_abandoned() {
         let rules = hierarchy_transitions();
         // From Draft
-        assert!(validate_transition(
-            HierarchyStatus::Draft,
-            HierarchyStatus::Abandoned,
-            Role::Coordinator,
-            &rules,
-        )
-        .is_ok());
+        assert!(
+            validate_transition(
+                HierarchyStatus::Draft,
+                HierarchyStatus::Abandoned,
+                Role::Coordinator,
+                &rules,
+            )
+            .is_ok()
+        );
         // From Active
-        assert!(validate_transition(
-            HierarchyStatus::Active,
-            HierarchyStatus::Abandoned,
-            Role::Coordinator,
-            &rules,
-        )
-        .is_ok());
+        assert!(
+            validate_transition(
+                HierarchyStatus::Active,
+                HierarchyStatus::Abandoned,
+                Role::Coordinator,
+                &rules,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -70,7 +70,10 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         "Bootstrap spec".to_string(),
         "Detailed specification".to_string(),
     );
-    info!("Created spec: {} (plan={}, status={})", spec.id, spec.plan_id, spec.status);
+    info!(
+        "Created spec: {} (plan={}, status={})",
+        spec.id, spec.plan_id, spec.status
+    );
 
     // Validate hierarchy FSM is wired up
     let hierarchy_rules = domain::plan::hierarchy_transitions();
