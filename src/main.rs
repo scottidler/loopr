@@ -12,6 +12,7 @@ mod domain;
 mod error;
 mod id;
 mod ipc;
+mod tui;
 mod worktree;
 
 use cli::Cli;
@@ -342,6 +343,73 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     let _ = daemon_handle.await;
     let _ = std::fs::remove_file(&daemon_test_sock);
     let _ = std::fs::remove_file(&daemon_test_pid);
+
+    // Validate TUI module is wired up
+    let mut tui_app = tui::app::App::new();
+    info!("TUI app: view={} role={}", tui_app.current_view, tui_app.current_role);
+    tui_app.next_view();
+    tui_app.cycle_role();
+    tui_app.select_next();
+    tui_app.select_prev();
+    tui_app.toggle_help();
+    info!(
+        "TUI app after actions: view={} role={} help={} list_len={}",
+        tui_app.current_view, tui_app.current_role, tui_app.show_help, tui_app.current_list_len()
+    );
+    // Validate View cycling
+    let v = tui::app::View::Dashboard;
+    info!("TUI view cycle: {} -> {} -> prev={}", v, v.next(), v.prev());
+    // Validate ConnectionStatus display
+    info!("TUI connection: {}", tui::app::ConnectionStatus::Connected);
+    info!("TUI connection: {}", tui::app::ConnectionStatus::Disconnected);
+    info!("TUI connection: {}", tui::app::ConnectionStatus::Reconnecting);
+    // Validate input handling
+    let key_event = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('q'),
+        crossterm::event::KeyModifiers::NONE,
+    );
+    let action = tui::input::handle_key(key_event);
+    info!("TUI input: q -> {:?}", action);
+    tui::input::apply_action(&mut tui_app, action);
+    info!("TUI should_quit after q: {}", tui_app.should_quit);
+    // Validate view rendering with TestBackend
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            tui::views::dashboard::render(&tui_app, frame, area);
+        })
+        .unwrap();
+    info!("TUI dashboard render OK");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            tui::views::work_items::render(&tui_app, frame, area);
+        })
+        .unwrap();
+    info!("TUI work_items render OK");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            tui::views::bundles::render(&tui_app, frame, area);
+        })
+        .unwrap();
+    info!("TUI bundles render OK");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            tui::views::ticks::render(&tui_app, frame, area);
+        })
+        .unwrap();
+    info!("TUI ticks render OK");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            tui::views::learnings::render(&tui_app, frame, area);
+        })
+        .unwrap();
+    info!("TUI learnings render OK");
 
     // Log some information
     info!("Application started at ts={}", id::now_millis());
