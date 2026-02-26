@@ -695,6 +695,22 @@ fn handle_work_item_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespo
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<WorkItem>(id) {
+            Ok(Some(wi)) => {
+                return match serde_json::to_value(&wi) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let work_items = stores.work_items.read().unwrap();
     match work_items.get(id) {
         Some(wi) => match serde_json::to_value(wi) {
@@ -3151,6 +3167,33 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_work_item_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        // Create a work item (writes to both TaskStore and HashMap)
+        let create_req = DaemonRequest::new(
+            30,
+            "work_item.create",
+            json!({"phase_id": phase_id, "title": "TaskStore WI"}),
+        );
+        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
+        assert!(!create_resp.is_error());
+        let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.work_items.write().unwrap().remove(&wi_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(31, "work_item.get", json!({"id": wi_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["title"], "TaskStore WI");
     }
 
     #[test]
