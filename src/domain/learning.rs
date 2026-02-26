@@ -265,7 +265,10 @@ mod tests {
         let l = Learning::new("phase-42".to_string(), LearningScope::Phase, "insight".to_string());
         let fields = l.indexed_fields();
         assert_eq!(fields.get("scope"), Some(&IndexValue::String("Phase".to_string())));
-        assert_eq!(fields.get("source_id"), Some(&IndexValue::String("phase-42".to_string())));
+        assert_eq!(
+            fields.get("source_id"),
+            Some(&IndexValue::String("phase-42".to_string()))
+        );
         assert_eq!(fields.len(), 2);
     }
 
