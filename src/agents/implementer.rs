@@ -921,7 +921,13 @@ mod tests {
     fn test_drain_tick_published_ignores_other_events() {
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::record_created("work_item", "wi-1"));
-        let _ = tx.send(DaemonEvent::transition_completed("bundle", "b-1", "draft", "proposed", "implementer"));
+        let _ = tx.send(DaemonEvent::transition_completed(
+            "bundle",
+            "b-1",
+            "draft",
+            "proposed",
+            "implementer",
+        ));
         let result = drain_tick_published(&mut rx);
         assert!(result.is_none());
     }
