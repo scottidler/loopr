@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::id;
 
@@ -63,6 +66,31 @@ impl Lock {
     /// Check if this lock is currently active.
     pub fn is_active(&self) -> bool {
         self.status == LockStatus::Active
+    }
+}
+
+impl Record for Lock {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "locks"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m.insert("resource".into(), IndexValue::String(self.resource.clone()));
+        m.insert(
+            "holder_id".into(),
+            IndexValue::String(self.holder_id.clone()),
+        );
+        m
     }
 }
 
@@ -177,5 +205,48 @@ mod tests {
     fn test_lock_granted_by_preserved() {
         let lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-special".to_string());
         assert_eq!(lock.granted_by, "coord-special");
+    }
+
+    // --- Record trait tests ---
+
+    #[test]
+    fn test_record_id() {
+        let lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        assert_eq!(Record::id(&lock), lock.id);
+    }
+
+    #[test]
+    fn test_record_updated_at() {
+        let lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        assert_eq!(Record::updated_at(&lock), lock.updated_at);
+    }
+
+    #[test]
+    fn test_record_collection_name() {
+        assert_eq!(Lock::collection_name(), "locks");
+    }
+
+    #[test]
+    fn test_record_indexed_fields() {
+        let lock = Lock::new("src/main.rs".to_string(), "wi-42".to_string(), "coord-1".to_string());
+        let fields = lock.indexed_fields();
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Active".to_string())));
+        assert_eq!(
+            fields.get("resource"),
+            Some(&IndexValue::String("src/main.rs".to_string()))
+        );
+        assert_eq!(
+            fields.get("holder_id"),
+            Some(&IndexValue::String("wi-42".to_string()))
+        );
+        assert_eq!(fields.len(), 3);
+    }
+
+    #[test]
+    fn test_record_indexed_fields_reflect_status() {
+        let mut lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        lock.release();
+        let fields = lock.indexed_fields();
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Released".to_string())));
     }
 }
