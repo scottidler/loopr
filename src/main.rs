@@ -166,6 +166,22 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         learning.id, learning.source_id, learning.scope, learning.promoted
     );
 
+    // Validate lock record is wired up
+    let mut lock = domain::lock::Lock::new(
+        "src/main.rs".to_string(),
+        work_item.id.clone(),
+        "coordinator".to_string(),
+    );
+    info!(
+        "Created lock: {} (resource={}, holder={}, status={})",
+        lock.id, lock.resource, lock.holder_id, lock.status
+    );
+    assert!(lock.is_active());
+    lock.release();
+    info!("Lock released: status={}", lock.status);
+    lock.expire();
+    info!("Lock expired: status={}", lock.status);
+
     // Validate that the transition engine is wired up
     let rules: Vec<domain::transition::TransitionRule<&str>> = vec![domain::transition::TransitionRule {
         from: "init",

@@ -1,5 +1,6 @@
 pub mod bundle;
 pub mod learning;
+pub mod lock;
 pub mod phase;
 pub mod plan;
 pub mod role;
