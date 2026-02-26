@@ -1349,8 +1349,6 @@ fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespon
 }
 
 fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let learnings = stores.learnings.read().unwrap();
-
     // Optionally filter by scope
     let scope_filter: Option<LearningScope> = req
         .params
@@ -1358,12 +1356,43 @@ fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespo
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     // Optionally filter by source_id
-    let source_id_filter = req.params.get("source_id").and_then(|v| v.as_str());
+    let source_id_filter = req.params.get("source_id").and_then(|v| v.as_str()).map(|s| s.to_string());
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let mut filters: Vec<Filter> = vec![];
+        if let Some(scope) = &scope_filter {
+            filters.push(Filter {
+                field: "scope".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(scope.to_string()),
+            });
+        }
+        if let Some(source_id) = &source_id_filter {
+            filters.push(Filter {
+                field: "source_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(source_id.clone()),
+            });
+        }
+        match store.lock().unwrap().list::<Learning>(&filters) {
+            Ok(learnings) => {
+                return match serde_json::to_value(&learnings) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let learnings = stores.learnings.read().unwrap();
     let learning_list: Vec<&Learning> = learnings
         .values()
         .filter(|l| scope_filter.is_none() || Some(l.scope) == scope_filter)
-        .filter(|l| source_id_filter.is_none() || Some(l.source_id.as_str()) == source_id_filter)
+        .filter(|l| source_id_filter.is_none() || Some(l.source_id.as_str()) == source_id_filter.as_deref())
         .collect();
 
     match serde_json::to_value(&learning_list) {
@@ -5096,6 +5125,55 @@ mod tests {
         let list = resp.result.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
         assert_eq!(list[0]["scope"], "global");
+    }
+
+    #[test]
+    fn test_learning_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a workitem-scoped learning (writes to both TaskStore and HashMap)
+        create_learning(&stores, &tx, &wm, 1);
+        // Create a global-scoped learning
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "learning.create",
+                json!({"source_id": "global-src", "scope": "global", "content": "global insight"}),
+            ),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.learnings.write().unwrap().clear();
+
+        // List all should still return both learnings via TaskStore
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(10, "learning.list", json!(null)),
+        );
+        assert!(!all_resp.is_error());
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test filtered list by scope works from TaskStore
+        let filtered_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(11, "learning.list", json!({"scope": "global"})),
+        );
+        assert!(!filtered_resp.is_error());
+        let filtered_items = filtered_resp.result.unwrap();
+        assert_eq!(filtered_items.as_array().unwrap().len(), 1);
+        assert_eq!(filtered_items[0]["scope"], "global");
     }
 
     // --- learning.reinforce tests ---
