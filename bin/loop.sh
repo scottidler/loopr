@@ -58,7 +58,7 @@ fi
 if [[ ! -f "$PROGRESS_FILE" ]]; then
     echo -e "${YELLOW}Initializing progress file...${NC}"
     cat >"$PROGRESS_FILE" <<EOF
-# Loopr v3 MVP1 — Ralph Progress Log
+# Loopr v3 MVP3 — Ralph Progress Log
 Started: $(date)
 Branch: $CURRENT_BRANCH
 Prompt: $PROMPT_FILE
