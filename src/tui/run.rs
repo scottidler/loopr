@@ -369,8 +369,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_connect_succeeds_with_daemon() {
-        use crate::ipc::server::{IpcServer, handle_client};
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
         use serde_json::json;
 
         let dir = std::env::temp_dir().join("loopr-test");
@@ -408,8 +408,8 @@ mod tests {
     async fn test_reconnect_after_disconnect() {
         // Verify the app transitions from Disconnected back to Connected
         // when a new daemon becomes available
-        use crate::ipc::server::{IpcServer, handle_client};
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
         use serde_json::json;
 
         let dir = std::env::temp_dir().join("loopr-test");
