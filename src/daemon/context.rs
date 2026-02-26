@@ -389,12 +389,7 @@ mod tests {
         ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
 
         // Proposed Bundle — not orphaned
-        let bundle = Bundle::new(
-            "wi-1".into(),
-            None,
-            "feature/ok".into(),
-            "claims".into(),
-        );
+        let bundle = Bundle::new("wi-1".into(), None, "feature/ok".into(), "claims".into());
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let recovered = ctx.recover_orphaned_records();
