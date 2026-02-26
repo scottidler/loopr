@@ -43,7 +43,7 @@ fn setup_logging() -> Result<()> {
     Ok(())
 }
 
-fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
+async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     info!("Starting application with session_id={}", id::generate_id());
 
     // Load and display configuration
@@ -227,13 +227,38 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     let encoded_event = ipc::codec::encode_event(&event).map_err(error::LooprError::SerdeJson)?;
     info!("IPC codec event encoded: {} bytes", encoded_event.len());
 
+    // Validate IPC server types are wired up
+    let socket_path = std::env::temp_dir().join("loopr-test-main.sock");
+    let (server, event_tx) = ipc::server::IpcServer::new(&socket_path);
+    info!("IPC server socket_path={}", server.socket_path().display());
+    let event_rx = event_tx.subscribe();
+    let _ = server.event_sender();
+    // Exercise bind (creates socket) then cleanup
+    let listener = server.bind().await.map_err(error::LooprError::Io)?;
+    // Exercise handle_client: accept a connection then immediately abort the task
+    let event_rx2 = event_tx.subscribe();
+    let accept_task = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            ipc::server::handle_client(
+                stream,
+                |req| ipc::protocol::DaemonResponse::ok(req.id, serde_json::json!(null)),
+                event_rx2,
+            )
+            .await;
+        }
+    });
+    accept_task.abort();
+    drop(event_rx);
+    server.cleanup();
+
     // Log some information
     info!("Application started at ts={}", id::now_millis());
 
     Ok(())
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Setup logging first
     setup_logging().context("Failed to setup logging")?;
 
@@ -246,7 +271,7 @@ fn main() -> Result<()> {
     info!("Starting with config from: {:?}", cli.config);
 
     // Run the main application logic
-    run_application(&cli, &config).context("Application failed")?;
+    run_application(&cli, &config).await.context("Application failed")?;
 
     Ok(())
 }
