@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod cli;
 mod config;
+mod domain;
 mod error;
 mod id;
 
@@ -45,15 +46,27 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     info!("Starting application with session_id={}", id::generate_id());
 
     // Load and display configuration
-    println!("{}", "✓ Configuration loaded successfully".green());
+    println!("{}", "Configuration loaded successfully".green());
     if config.debug {
-        println!("{}", "🔍 Debug mode enabled".yellow());
+        println!("{}", "Debug mode enabled".yellow());
     }
 
-    // Demonstrate colored output
-    println!("{} Hello from {}!", "🎉".green(), "loopr".cyan());
-    println!("{} Author: {}", "👤".blue(), config.name);
-    println!("{} Age: {}", "📅".blue(), config.age);
+    // Display current role
+    let role = domain::role::Role::Coordinator;
+    println!("Hello from {}!", "loopr".cyan());
+    println!("Current role: {}", role);
+    println!("Author: {}", config.name);
+
+    // Validate that the transition engine is wired up
+    let rules: Vec<domain::transition::TransitionRule<&str>> = vec![
+        domain::transition::TransitionRule {
+            from: "init",
+            to: "running",
+            role: Some(role),
+        },
+    ];
+    domain::transition::validate_transition("init", "running", role, &rules)?;
+    info!("Transition engine validated");
 
     // Log some information
     info!("Application started at ts={}", id::now_millis());
