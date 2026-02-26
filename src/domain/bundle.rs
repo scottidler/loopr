@@ -155,10 +155,7 @@ impl Record for Bundle {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
-        m.insert(
-            "work_item_id".into(),
-            IndexValue::String(self.work_item_id.clone()),
-        );
+        m.insert("work_item_id".into(), IndexValue::String(self.work_item_id.clone()));
         m
     }
 }
@@ -488,10 +485,7 @@ mod tests {
     fn test_record_indexed_fields() {
         let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
         let fields = b.indexed_fields();
-        assert_eq!(
-            fields.get("status"),
-            Some(&IndexValue::String("Proposed".to_string()))
-        );
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Proposed".to_string())));
         assert_eq!(
             fields.get("work_item_id"),
             Some(&IndexValue::String("wi-1".to_string()))
@@ -504,9 +498,6 @@ mod tests {
         let mut b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
         b.status = BundleStatus::Merged;
         let fields = b.indexed_fields();
-        assert_eq!(
-            fields.get("status"),
-            Some(&IndexValue::String("Merged".to_string()))
-        );
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Merged".to_string())));
     }
 }
