@@ -1450,6 +1450,14 @@ fn handle_learning_reinforce(
     };
 
     learning.reinforce();
+    learning.updated_at = crate::id::now_millis();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(learning.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let learning_json = match serde_json::to_value(&*learning) {
         Ok(v) => v,
@@ -1478,6 +1486,14 @@ fn handle_learning_contradict(
     };
 
     learning.contradict();
+    learning.updated_at = crate::id::now_millis();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(learning.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let learning_json = match serde_json::to_value(&*learning) {
         Ok(v) => v,
@@ -1506,6 +1522,14 @@ fn handle_learning_promote(
     };
 
     learning.promote();
+    learning.updated_at = crate::id::now_millis();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(learning.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let learning_json = match serde_json::to_value(&*learning) {
         Ok(v) => v,
@@ -1534,6 +1558,14 @@ fn handle_learning_demote(
     };
 
     learning.demote();
+    learning.updated_at = crate::id::now_millis();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(learning.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let learning_json = match serde_json::to_value(&*learning) {
         Ok(v) => v,
@@ -1724,6 +1756,14 @@ fn handle_lock_release(
     }
 
     lock.release();
+    lock.updated_at = crate::id::now_millis();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(lock.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let lock_json = match serde_json::to_value(&*lock) {
         Ok(v) => v,
@@ -1756,6 +1796,14 @@ fn handle_lock_expire(
     }
 
     lock.expire();
+    lock.updated_at = crate::id::now_millis();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(lock.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let lock_json = match serde_json::to_value(&*lock) {
         Ok(v) => v,
@@ -1966,6 +2014,13 @@ fn handle_integrator_validate(
         let tick = ticks.get_mut(&tick_id).unwrap();
         tick.status = TickStatus::Validating;
         tick.updated_at = crate::id::now_millis();
+
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store.lock().unwrap().update(tick.clone())
+        {
+            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        }
     }
     let _ = event_tx.send(DaemonEvent::transition_completed(
         "tick",
@@ -1990,6 +2045,13 @@ fn handle_integrator_validate(
 
         if all_passed {
             tick.integration_sha = get_git_head_sha();
+        }
+
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store.lock().unwrap().update(tick.clone())
+        {
+            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
         }
 
         match serde_json::to_value(&*tick) {
@@ -2040,6 +2102,14 @@ fn handle_integrator_publish(
         let tick = ticks.get_mut(&tick_id).unwrap();
         tick.status = TickStatus::Sealing;
         tick.updated_at = crate::id::now_millis();
+
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store.lock().unwrap().update(tick.clone())
+        {
+            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        }
+
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "tick",
             &tick_id,
@@ -5541,6 +5611,103 @@ mod tests {
         assert_eq!(event.data["collection"], "learning");
     }
 
+    #[test]
+    fn test_learning_reinforce_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let learning_id = create_learning(&stores, &tx, &wm, 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.reinforce", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let learning: Option<Learning> = store.get(&learning_id).unwrap();
+        assert!(learning.is_some());
+        assert_eq!(learning.unwrap().reinforcements, 1);
+    }
+
+    #[test]
+    fn test_learning_contradict_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let learning_id = create_learning(&stores, &tx, &wm, 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.contradict", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let learning: Option<Learning> = store.get(&learning_id).unwrap();
+        assert!(learning.is_some());
+        assert_eq!(learning.unwrap().contradictions, 1);
+    }
+
+    #[test]
+    fn test_learning_promote_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let learning_id = create_learning(&stores, &tx, &wm, 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let learning: Option<Learning> = store.get(&learning_id).unwrap();
+        assert!(learning.is_some());
+        assert!(learning.unwrap().promoted);
+    }
+
+    #[test]
+    fn test_learning_demote_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let learning_id = create_learning(&stores, &tx, &wm, 1);
+
+        // Promote first so we can demote
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
+        );
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "learning.demote", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let learning: Option<Learning> = store.get(&learning_id).unwrap();
+        assert!(learning.is_some());
+        assert!(!learning.unwrap().promoted);
+    }
+
     // --- Lock handler tests ---
 
     fn create_lock(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager, id: u64) -> String {
@@ -5883,6 +6050,74 @@ mod tests {
             DaemonRequest::new(3, "lock.expire", json!({"id": lock_id})),
         );
         assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_release_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            50,
+            "lock.create",
+            json!({
+                "resource": "src/main.rs",
+                "holder_id": "wi-1",
+                "granted_by": "coord-1"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let lock_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(51, "lock.release", json!({"id": lock_id})),
+        );
+        assert!(!resp.is_error());
+
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let lock: Option<Lock> = store.get(&lock_id).unwrap();
+        assert!(lock.is_some());
+        assert_eq!(lock.unwrap().status.to_string(), "Released");
+    }
+
+    #[test]
+    fn test_lock_expire_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            50,
+            "lock.create",
+            json!({
+                "resource": "src/main.rs",
+                "holder_id": "wi-1",
+                "granted_by": "coord-1"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let lock_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(51, "lock.expire", json!({"id": lock_id})),
+        );
+        assert!(!resp.is_error());
+
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let lock: Option<Lock> = store.get(&lock_id).unwrap();
+        assert!(lock.is_some());
+        assert_eq!(lock.unwrap().status.to_string(), "Expired");
     }
 
     #[test]
