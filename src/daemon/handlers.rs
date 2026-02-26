@@ -18,7 +18,7 @@ use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
-use taskstore::Record;
+use taskstore::{Filter, FilterOp, IndexValue, Record};
 
 use super::context::Stores;
 
@@ -414,11 +414,33 @@ fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let specs = stores.specs.read().unwrap();
-
-    // Optionally filter by plan_id
     let plan_id_filter = req.params.get("plan_id").and_then(|v| v.as_str());
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let filters: Vec<Filter> = if let Some(pid) = plan_id_filter {
+            vec![Filter {
+                field: "plan_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(pid.to_string()),
+            }]
+        } else {
+            vec![]
+        };
+        match store.lock().unwrap().list::<Spec>(&filters) {
+            Ok(specs) => {
+                return match serde_json::to_value(&specs) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let specs = stores.specs.read().unwrap();
     let spec_list: Vec<&Spec> = specs
         .values()
         .filter(|s| plan_id_filter.is_none() || Some(s.plan_id.as_str()) == plan_id_filter)
@@ -2602,6 +2624,56 @@ mod tests {
         let arr = specs.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["title"], "Spec A");
+    }
+
+    #[test]
+    fn test_spec_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan first
+        let plan_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan X"})),
+        );
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create two specs under that plan (writes to both TaskStore and HashMap)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec A"})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "spec.create", json!({"plan_id": plan_id, "title": "Spec B"})),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.specs.write().unwrap().clear();
+
+        // List should still return both specs via TaskStore
+        let req = DaemonRequest::new(4, "spec.list", json!(null));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let specs = resp.result.unwrap();
+        assert_eq!(specs.as_array().unwrap().len(), 2);
+
+        // Test filtered list also works from TaskStore
+        let filtered_req = DaemonRequest::new(5, "spec.list", json!({"plan_id": plan_id}));
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        assert!(!filtered_resp.is_error());
+        let filtered_specs = filtered_resp.result.unwrap();
+        assert_eq!(filtered_specs.as_array().unwrap().len(), 2);
     }
 
     // --- spec.transition tests ---
