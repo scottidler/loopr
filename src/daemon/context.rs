@@ -8,6 +8,7 @@ use crate::domain::bundle::Bundle;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
+use crate::domain::tick::Tick;
 use crate::domain::work_item::WorkItem;
 use crate::ipc::protocol::DaemonEvent;
 
@@ -19,6 +20,7 @@ pub struct Stores {
     pub phases: StdRwLock<HashMap<String, Phase>>,
     pub work_items: StdRwLock<HashMap<String, WorkItem>>,
     pub bundles: StdRwLock<HashMap<String, Bundle>>,
+    pub ticks: StdRwLock<HashMap<String, Tick>>,
 }
 
 impl Stores {
@@ -29,6 +31,7 @@ impl Stores {
             phases: StdRwLock::new(HashMap::new()),
             work_items: StdRwLock::new(HashMap::new()),
             bundles: StdRwLock::new(HashMap::new()),
+            ticks: StdRwLock::new(HashMap::new()),
         }
     }
 }
@@ -135,6 +138,7 @@ mod tests {
         assert!(stores.phases.read().unwrap().is_empty());
         assert!(stores.work_items.read().unwrap().is_empty());
         assert!(stores.bundles.read().unwrap().is_empty());
+        assert!(stores.ticks.read().unwrap().is_empty());
     }
 
     #[test]
@@ -195,5 +199,16 @@ mod tests {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(bundles.len(), 1);
         assert_eq!(bundles[&id].branch_name, "feature/test");
+    }
+
+    #[test]
+    fn test_stores_tick_insert_and_read() {
+        let stores = Stores::new();
+        let tick = Tick::new(1);
+        let id = tick.id.clone();
+        stores.ticks.write().unwrap().insert(id.clone(), tick);
+        let ticks = stores.ticks.read().unwrap();
+        assert_eq!(ticks.len(), 1);
+        assert_eq!(ticks[&id].number, 1);
     }
 }

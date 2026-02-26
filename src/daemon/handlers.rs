@@ -8,6 +8,7 @@ use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
+use crate::domain::tick::{Tick, TickStatus, tick_transitions};
 use crate::domain::transition::validate_transition;
 use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -39,6 +40,10 @@ pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>,
         "bundle.get" => handle_bundle_get(stores, req),
         "bundle.list" => handle_bundle_list(stores, req),
         "bundle.transition" => handle_bundle_transition(stores, event_tx, req),
+        "tick.create" => handle_tick_create(stores, event_tx, req),
+        "tick.get" => handle_tick_get(stores, req),
+        "tick.list" => handle_tick_list(stores, req),
+        "tick.transition" => handle_tick_transition(stores, event_tx, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -730,6 +735,124 @@ fn handle_bundle_transition(
     ));
 
     DaemonResponse::ok(req.id, bundle_json)
+}
+
+// --- Tick handlers ---
+
+fn handle_tick_create(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let number = match req.params.get("number").and_then(|v| v.as_u64()) {
+        Some(n) => n as u32,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("number is required (positive integer)")),
+    };
+
+    let tick = Tick::new(number);
+    let tick_json = match serde_json::to_value(&tick) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = tick.id.clone();
+    stores.ticks.write().unwrap().insert(id.clone(), tick);
+    let _ = event_tx.send(DaemonEvent::record_created("tick", &id));
+
+    DaemonResponse::ok(req.id, tick_json)
+}
+
+fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let ticks = stores.ticks.read().unwrap();
+    match ticks.get(id) {
+        Some(tick) => match serde_json::to_value(tick) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("tick", id)),
+    }
+}
+
+fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let ticks = stores.ticks.read().unwrap();
+
+    // Optionally filter by status
+    let status_filter: Option<TickStatus> = req
+        .params
+        .get("status")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    let tick_list: Vec<&Tick> = ticks
+        .values()
+        .filter(|t| status_filter.is_none() || Some(t.status) == status_filter)
+        .collect();
+
+    match serde_json::to_value(&tick_list) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_tick_transition(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let target_status: TickStatus = match req.params.get("target_status") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(s) => s,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
+        },
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
+    };
+
+    let role: Role = match req.params.get("role") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(r) => r,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
+        },
+        None => Role::Integrator,
+    };
+
+    let mut ticks = stores.ticks.write().unwrap();
+    let tick = match ticks.get_mut(&id) {
+        Some(t) => t,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("tick", &id)),
+    };
+
+    let from = tick.status;
+    let rules = tick_transitions();
+    if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    tick.status = target_status;
+    tick.updated_at = crate::id::now_millis();
+
+    let tick_json = match serde_json::to_value(&*tick) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::transition_completed(
+        "tick",
+        &id,
+        &from.to_string(),
+        &target_status.to_string(),
+        &role.to_string(),
+    ));
+
+    DaemonResponse::ok(req.id, tick_json)
 }
 
 #[cfg(test)]
@@ -2251,5 +2374,233 @@ mod tests {
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // --- Tick handler tests ---
+
+    #[test]
+    fn test_tick_create_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+
+        let req = DaemonRequest::new(50, "tick.create", json!({"number": 1}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["number"], 1);
+        assert_eq!(result["status"], "Open");
+        assert!(result["integration_sha"].is_null());
+        assert_eq!(result["bundle_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(stores.ticks.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_tick_create_missing_number() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "tick.create", json!({}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("number"));
+    }
+
+    #[test]
+    fn test_tick_create_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+
+        let req = DaemonRequest::new(50, "tick.create", json!({"number": 1}));
+        dispatch(&stores, &tx, req);
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.created");
+        assert_eq!(event.data["collection"], "tick");
+    }
+
+    #[test]
+    fn test_tick_get_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(50, "tick.create", json!({"number": 42})),
+        );
+        let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let get_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(51, "tick.get", json!({"id": tick_id})),
+        );
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["number"], 42);
+    }
+
+    #[test]
+    fn test_tick_get_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "tick.get", json!({"id": "nonexistent"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_tick_list_empty() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "tick.list", json!(null));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_tick_list_filtered_by_status() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+
+        // Create two ticks
+        dispatch(&stores, &tx, DaemonRequest::new(50, "tick.create", json!({"number": 1})));
+        let create2 = dispatch(&stores, &tx, DaemonRequest::new(51, "tick.create", json!({"number": 2})));
+        let tick2_id = create2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition tick 2 to Sealing
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(52, "tick.transition", json!({"id": tick2_id, "target_status": "Sealing", "role": "integrator"})),
+        );
+
+        // List all — should have 2
+        let all_resp = dispatch(&stores, &tx, DaemonRequest::new(60, "tick.list", json!(null)));
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // List filtered by Open — should have 1
+        let filtered_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(61, "tick.list", json!({"status": "Open"})),
+        );
+        let ticks = filtered_resp.result.unwrap();
+        let arr = ticks.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["number"], 1);
+    }
+
+    #[test]
+    fn test_tick_transition_open_to_sealing() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let _ = rx.try_recv(); // consume create event
+        let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req = DaemonRequest::new(
+            51,
+            "tick.transition",
+            json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Sealing");
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "transition.completed");
+        assert_eq!(event.data["collection"], "tick");
+        assert_eq!(event.data["from"], "Open");
+        assert_eq!(event.data["to"], "Sealing");
+    }
+
+    #[test]
+    fn test_tick_transition_invalid_skip_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Try Open → Published (invalid: must go through Sealing → Validating)
+        let req = DaemonRequest::new(
+            51,
+            "tick.transition",
+            json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_tick_transition_wrong_role() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Coordinator cannot transition tick (Integrator-only)
+        let req = DaemonRequest::new(
+            51,
+            "tick.transition",
+            json!({"id": tick_id, "target_status": "Sealing", "role": "coordinator"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_tick_transition_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(
+            1,
+            "tick.transition",
+            json!({"id": "nonexistent", "target_status": "Sealing"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_tick_transition_default_role_is_integrator() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Omit role — should default to Integrator and succeed
+        let req = DaemonRequest::new(
+            51,
+            "tick.transition",
+            json!({"id": tick_id, "target_status": "Sealing"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Sealing");
     }
 }
