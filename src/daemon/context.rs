@@ -111,10 +111,16 @@ impl DaemonContext {
         // Recover InProgress WorkItems → Blocked
         {
             let mut work_items = self.stores.work_items.write().unwrap();
+            let mut store = self.store.lock().unwrap();
             for (id, wi) in work_items.iter_mut() {
                 if wi.status == WorkItemStatus::InProgress {
                     warn!("Recovering orphaned InProgress WorkItem: {}", id);
                     wi.status = WorkItemStatus::Blocked;
+                    wi.updated_at = crate::id::now_millis();
+                    // Persist recovery to TaskStore
+                    if let Err(e) = store.update(wi.clone()) {
+                        warn!("Failed to persist WorkItem recovery to TaskStore: {}", e);
+                    }
                     recovered += 1;
                 }
             }
@@ -123,10 +129,16 @@ impl DaemonContext {
         // Recover Integrating Bundles → Accepted
         {
             let mut bundles = self.stores.bundles.write().unwrap();
+            let mut store = self.store.lock().unwrap();
             for (id, bundle) in bundles.iter_mut() {
                 if bundle.status == BundleStatus::Integrating {
                     warn!("Recovering orphaned Integrating Bundle: {}", id);
                     bundle.status = BundleStatus::Accepted;
+                    bundle.updated_at = crate::id::now_millis();
+                    // Persist recovery to TaskStore
+                    if let Err(e) = store.update(bundle.clone()) {
+                        warn!("Failed to persist Bundle recovery to TaskStore: {}", e);
+                    }
                     recovered += 1;
                 }
             }
