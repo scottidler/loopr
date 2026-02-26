@@ -127,11 +127,13 @@ $(cat "$PROGRESS_FILE")
     fi
 
     # Run Claude with timeout — capture output to both variable and log file
+    # Unset CLAUDECODE to allow nested Claude Code invocations (the loop is
+    # typically launched from within a Claude Code session)
     ITER_LOG="$LOG_DIR/iter-$(printf '%03d' $i)-claude.log"
     echo -e "${BLUE}Running Claude (timeout: ${TIMEOUT_MINUTES}m)...${NC}"
     echo -e "${BLUE}  Log: $ITER_LOG${NC}"
 
-    OUTPUT=$(timeout "${TIMEOUT_MINUTES}m" claude \
+    OUTPUT=$(timeout "${TIMEOUT_MINUTES}m" env -u CLAUDECODE claude \
         --model "$MODEL" \
         --dangerously-skip-permissions \
         --print \
