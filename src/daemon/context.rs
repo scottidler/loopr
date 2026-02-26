@@ -97,6 +97,47 @@ impl DaemonContext {
         info!("TaskStore opened at {}", repo_path.display());
 
         let mut stores = Stores::new();
+
+        // Hydrate in-memory HashMaps from TaskStore so all code paths
+        // (parent validation, crash recovery, transitions) work after restart.
+        {
+            for plan in store.list::<Plan>(&[])? {
+                stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+            }
+            for spec in store.list::<Spec>(&[])? {
+                stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+            }
+            for phase in store.list::<Phase>(&[])? {
+                stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+            }
+            for wi in store.list::<WorkItem>(&[])? {
+                stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+            }
+            for bundle in store.list::<Bundle>(&[])? {
+                stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+            }
+            for tick in store.list::<Tick>(&[])? {
+                stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+            }
+            for learning in store.list::<Learning>(&[])? {
+                stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
+            }
+            for lock in store.list::<Lock>(&[])? {
+                stores.locks.write().unwrap().insert(lock.id.clone(), lock);
+            }
+            let hydrated: usize = stores.plans.read().unwrap().len()
+                + stores.specs.read().unwrap().len()
+                + stores.phases.read().unwrap().len()
+                + stores.work_items.read().unwrap().len()
+                + stores.bundles.read().unwrap().len()
+                + stores.ticks.read().unwrap().len()
+                + stores.learnings.read().unwrap().len()
+                + stores.locks.read().unwrap().len();
+            if hydrated > 0 {
+                info!("Hydrated {} records from TaskStore into memory", hydrated);
+            }
+        }
+
         stores.store = Some(Arc::new(StdMutex::new(store)));
 
         // Create DocValidator if enabled in config
@@ -213,8 +254,29 @@ mod tests {
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
         assert_eq!(ctx.config.name, "loopr");
-        // Stores are initialized empty
+        // Fresh TaskStore has no records, so HashMaps are empty after hydration
         assert!(ctx.stores.plans.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_context_hydrates_from_taskstore() {
+        let config = test_config();
+        let repo_path = config.project.repo_path.clone();
+
+        // First: create records directly via TaskStore
+        {
+            let mut store = Store::open(&repo_path).unwrap();
+            let plan = Plan::new("Hydration Test".into(), "Desc".into(), "Criteria".into());
+            store.create(plan).unwrap();
+            let spec = Spec::new("plan-1".into(), "Spec".into(), "Desc".into());
+            store.create(spec).unwrap();
+        }
+
+        // Second: open DaemonContext — should hydrate HashMaps from TaskStore
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+        assert_eq!(ctx.stores.plans.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.specs.read().unwrap().len(), 1);
     }
 
     #[test]

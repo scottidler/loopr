@@ -122,20 +122,21 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             }
             (format!("{collection}.list"), params)
         }
-        CrudCmd::Transition { id, status } => {
+        CrudCmd::Transition { id, status, skip_validation } => {
             // Plan/Spec/Phase use serde(rename_all = "lowercase"), so normalize
             let normalized_status = match collection {
                 "plan" | "spec" | "phase" => status.to_lowercase(),
                 _ => status.clone(),
             };
-            (
-                format!("{collection}.transition"),
-                json!({
-                    "id": id,
-                    "target_status": normalized_status,
-                    "role": role.to_string(),
-                }),
-            )
+            let mut params = json!({
+                "id": id,
+                "target_status": normalized_status,
+                "role": role.to_string(),
+            });
+            if *skip_validation {
+                params["skip_validation"] = json!(true);
+            }
+            (format!("{collection}.transition"), params)
         }
     }
 }
@@ -327,6 +328,7 @@ mod tests {
             cmd: CrudCmd::Transition {
                 id: "wi-1".to_string(),
                 status: "Ready".to_string(),
+                skip_validation: false,
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -458,6 +460,7 @@ mod tests {
                 cmd: CrudCmd::Transition {
                     id: "p-1".to_string(),
                     status: "active".to_string(),
+                    skip_validation: false,
                 },
             };
             let (_, params) = command_to_ipc(&cmd, role);
@@ -478,6 +481,7 @@ mod tests {
                 cmd: CrudCmd::Transition {
                     id: "p-1".to_string(),
                     status: input.to_string(),
+                    skip_validation: false,
                 },
             };
             let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -495,6 +499,7 @@ mod tests {
             cmd: CrudCmd::Transition {
                 id: "s-1".to_string(),
                 status: "Active".to_string(),
+                skip_validation: false,
             },
         };
         let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -507,6 +512,7 @@ mod tests {
             cmd: CrudCmd::Transition {
                 id: "ph-1".to_string(),
                 status: "Complete".to_string(),
+                skip_validation: false,
             },
         };
         let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -520,6 +526,7 @@ mod tests {
             cmd: CrudCmd::Transition {
                 id: "wi-1".to_string(),
                 status: "InProgress".to_string(),
+                skip_validation: false,
             },
         };
         let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -582,9 +589,7 @@ mod tests {
 
     #[test]
     fn test_report_mapping() {
-        let cmd = Command::Report {
-            id: "vr-1".to_string(),
-        };
+        let cmd = Command::Report { id: "vr-1".to_string() };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "validator.report");
         assert_eq!(params["id"], "vr-1");

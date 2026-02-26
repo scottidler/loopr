@@ -2308,7 +2308,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
     };
 
     let report = match collection.as_str() {
-        "plans" => {
+        "plan" | "plans" => {
             let plans = stores.plans.read().unwrap();
             let plan = match plans.get(&target_id) {
                 Some(p) => p.clone(),
@@ -2319,7 +2319,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
             drop(plans);
             validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
         }
-        "specs" => {
+        "spec" | "specs" => {
             let specs = stores.specs.read().unwrap();
             let spec = match specs.get(&target_id) {
                 Some(s) => s.clone(),
@@ -2338,7 +2338,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
                 .unwrap_or_default();
             validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
         }
-        "phases" => {
+        "phase" | "phases" => {
             let phases = stores.phases.read().unwrap();
             let phase = match phases.get(&target_id) {
                 Some(p) => p.clone(),

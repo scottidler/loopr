@@ -39,6 +39,9 @@ pub enum CrudCmd {
         id: String,
         /// Target status
         status: String,
+        /// Skip validation gate (Coordinator only)
+        #[arg(long)]
+        skip_validation: bool,
     },
 }
 
@@ -403,7 +406,7 @@ mod tests {
         let cli = Cli::parse_from(["loopr", "plan", "transition", "p1", "Active"]);
         match cli.command {
             Some(Command::Plan {
-                cmd: CrudCmd::Transition { id, status },
+                cmd: CrudCmd::Transition { id, status, .. },
             }) => {
                 assert_eq!(id, "p1");
                 assert_eq!(status, "Active");
