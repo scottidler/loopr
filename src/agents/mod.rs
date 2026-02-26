@@ -452,7 +452,7 @@ mod tests {
             fields.get("work_item_id"),
             Some(&IndexValue::String("wi-1".to_string()))
         );
-        assert!(fields.get("bundle_id").is_none());
+        assert!(!fields.contains_key("bundle_id"));
     }
 
     #[test]
@@ -469,7 +469,7 @@ mod tests {
             fields.get("bundle_id"),
             Some(&IndexValue::String("b-1".to_string()))
         );
-        assert!(fields.get("work_item_id").is_none());
+        assert!(!fields.contains_key("work_item_id"));
     }
 
     // --- AgentAction tests ---
