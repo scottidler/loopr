@@ -598,11 +598,33 @@ fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse 
 }
 
 fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let phases = stores.phases.read().unwrap();
-
-    // Optionally filter by spec_id
     let spec_id_filter = req.params.get("spec_id").and_then(|v| v.as_str());
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let filters: Vec<Filter> = if let Some(sid) = spec_id_filter {
+            vec![Filter {
+                field: "spec_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(sid.to_string()),
+            }]
+        } else {
+            vec![]
+        };
+        match store.lock().unwrap().list::<Phase>(&filters) {
+            Ok(phases) => {
+                return match serde_json::to_value(&phases) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let phases = stores.phases.read().unwrap();
     let phase_list: Vec<&Phase> = phases
         .values()
         .filter(|p| spec_id_filter.is_none() || Some(p.spec_id.as_str()) == spec_id_filter)
@@ -3064,6 +3086,74 @@ mod tests {
         );
         let phases = filtered_resp.result.unwrap();
         let arr = phases.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["title"], "Phase A");
+    }
+
+    #[test]
+    fn test_phase_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+
+        // Create a second spec under the same plan
+        let plan_id = _plan_id;
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(11, "spec.create", json!({"plan_id": plan_id, "title": "Spec 2"})),
+        );
+        let spec_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create phases under different specs (writes to both TaskStore and HashMap)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                20,
+                "phase.create",
+                json!({"spec_id": spec_id_1, "title": "Phase A", "order": 1}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                21,
+                "phase.create",
+                json!({"spec_id": spec_id_2, "title": "Phase B", "order": 1}),
+            ),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.phases.write().unwrap().clear();
+
+        // List all should still return both phases via TaskStore
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(30, "phase.list", json!(null)),
+        );
+        assert!(!all_resp.is_error());
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test filtered list also works from TaskStore
+        let filtered_req =
+            DaemonRequest::new(31, "phase.list", json!({"spec_id": spec_id_1}));
+        let filtered_resp =
+            dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        assert!(!filtered_resp.is_error());
+        let filtered_phases = filtered_resp.result.unwrap();
+        let arr = filtered_phases.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["title"], "Phase A");
     }
