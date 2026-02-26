@@ -9,12 +9,12 @@ use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::lock::Lock;
 use crate::domain::phase::{Phase, PhaseStatus};
-use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
+use crate::domain::plan::{HierarchyStatus, Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::tick::{Tick, TickStatus, tick_transitions};
 use crate::domain::transition::validate_transition;
-use crate::domain::validation::ValidationReport;
+use crate::domain::validation::{ValidationReport, ValidationVerdict};
 use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
@@ -22,6 +22,70 @@ use crate::worktree::manager::WorktreeManager;
 use taskstore::{Filter, FilterOp, IndexValue, Record};
 
 use super::context::Stores;
+
+/// Check the validation gate for Draft → Active transitions.
+/// Returns `Some(RpcError)` if the gate blocks the transition, `None` if allowed.
+/// Gate only applies when:
+/// 1. Validator is enabled (stores.validator is Some)
+/// 2. Transition is Draft → Active
+/// 3. skip_validation param is not true
+fn check_validation_gate(
+    stores: &Arc<Stores>,
+    from: HierarchyStatus,
+    target: HierarchyStatus,
+    collection: &str,
+    id: &str,
+    skip_validation: bool,
+) -> Option<RpcError> {
+    // Gate only applies to Draft → Active
+    if from != HierarchyStatus::Draft || target != HierarchyStatus::Active {
+        return None;
+    }
+
+    // Gate only applies when validator is enabled
+    if stores.validator.is_none() {
+        return None;
+    }
+
+    // Coordinator can skip validation with explicit flag
+    if skip_validation {
+        return None;
+    }
+
+    // Check for a passing ValidationReport in TaskStore
+    if let Some(store) = &stores.store {
+        let store = store.lock().unwrap();
+        let reports: Vec<ValidationReport> = store
+            .list(&[
+                Filter {
+                    field: "target_id".into(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(id.to_string()),
+                },
+            ])
+            .unwrap_or_default();
+
+        // Find the latest report (highest updated_at)
+        let latest = reports.iter().max_by_key(|r| r.created_at);
+
+        match latest {
+            Some(report) => {
+                if report.verdict == ValidationVerdict::Fail {
+                    return Some(RpcError::validation_required(collection, id));
+                }
+                // Pass or Warn → allowed
+                None
+            }
+            None => {
+                // No report exists → block
+                Some(RpcError::validation_required(collection, id))
+            }
+        }
+    } else {
+        // No TaskStore → no gate (shouldn't happen when validator is enabled, but be safe)
+        None
+    }
+}
 
 /// Dispatch an IPC request to the appropriate handler.
 /// This is the central routing function for all daemon request handling.
@@ -329,6 +393,12 @@ fn handle_plan_transition(
         None => Role::Coordinator,
     };
 
+    let skip_validation = req
+        .params
+        .get("skip_validation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let mut plans = stores.plans.write().unwrap();
     let plan = match plans.get_mut(&id) {
         Some(p) => p,
@@ -339,6 +409,11 @@ fn handle_plan_transition(
     let rules = hierarchy_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    // Validation gate: Draft → Active requires passing validation report
+    if let Some(err) = check_validation_gate(stores, from, target_status, "plan", &id, skip_validation) {
+        return DaemonResponse::err(req.id, err);
     }
 
     plan.status = target_status;
@@ -519,6 +594,12 @@ fn handle_spec_transition(
         None => Role::Coordinator,
     };
 
+    let skip_validation = req
+        .params
+        .get("skip_validation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let mut specs = stores.specs.write().unwrap();
     let spec = match specs.get_mut(&id) {
         Some(s) => s,
@@ -529,6 +610,11 @@ fn handle_spec_transition(
     let rules = hierarchy_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    // Validation gate: Draft → Active requires passing validation report
+    if let Some(err) = check_validation_gate(stores, from, target_status, "spec", &id, skip_validation) {
+        return DaemonResponse::err(req.id, err);
     }
 
     spec.status = target_status;
@@ -710,6 +796,12 @@ fn handle_phase_transition(
         None => Role::Coordinator,
     };
 
+    let skip_validation = req
+        .params
+        .get("skip_validation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let mut phases = stores.phases.write().unwrap();
     let phase = match phases.get_mut(&id) {
         Some(p) => p,
@@ -720,6 +812,11 @@ fn handle_phase_transition(
     let rules = hierarchy_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    // Validation gate: Draft → Active requires passing validation report
+    if let Some(err) = check_validation_gate(stores, from, target_status, "phase", &id, skip_validation) {
+        return DaemonResponse::err(req.id, err);
     }
 
     phase.status = target_status;
@@ -2370,8 +2467,43 @@ mod tests {
         store.rebuild_indexes::<Tick>().unwrap();
         store.rebuild_indexes::<Learning>().unwrap();
         store.rebuild_indexes::<Lock>().unwrap();
+        store.rebuild_indexes::<ValidationReport>().unwrap();
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
+        Arc::new(stores)
+    }
+
+    /// Creates stores with TaskStore AND a validator (DocValidator placeholder via Arc).
+    /// This activates the validation gate for Draft → Active transitions.
+    fn test_stores_with_validator() -> Arc<Stores> {
+        let id = crate::id::generate_id();
+        let dir = std::env::temp_dir().join(format!("loopr-handler-test-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .expect("git init failed");
+        let mut store = taskstore::Store::open(&dir).unwrap();
+        store.rebuild_indexes::<Plan>().unwrap();
+        store.rebuild_indexes::<Spec>().unwrap();
+        store.rebuild_indexes::<Phase>().unwrap();
+        store.rebuild_indexes::<WorkItem>().unwrap();
+        store.rebuild_indexes::<Bundle>().unwrap();
+        store.rebuild_indexes::<Tick>().unwrap();
+        store.rebuild_indexes::<Learning>().unwrap();
+        store.rebuild_indexes::<Lock>().unwrap();
+        store.rebuild_indexes::<ValidationReport>().unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
+        // Create a DocValidator to enable the validation gate.
+        // Tests don't call the LLM — they only check that the gate logic works.
+        let validator_config = crate::config::ValidatorConfig {
+            enabled: true,
+            api_key_env: "NONEXISTENT_TEST_KEY".to_string(),
+            ..crate::config::ValidatorConfig::default()
+        };
+        stores.validator = Some(Arc::new(crate::validator::DocValidator::new(validator_config)));
         Arc::new(stores)
     }
 
@@ -6946,5 +7078,436 @@ mod tests {
         let req2 = DaemonRequest::new(2, "system.init", json!({}));
         let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
         assert!(!resp2.is_error());
+    }
+
+    // --- Validation gate tests (Phase 4) ---
+
+    #[test]
+    fn test_plan_transition_blocked_no_report_when_validator_enabled() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Try Draft → Active without any validation report — should be blocked
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(resp.is_error());
+        assert_eq!(resp.error.as_ref().unwrap().code, -32003);
+        assert!(resp.error.unwrap().message.contains("validator.validate"));
+    }
+
+    #[test]
+    fn test_plan_transition_allowed_with_pass_report() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Insert a passing validation report into TaskStore
+        let report = ValidationReport::new(
+            "plans".to_string(),
+            plan_id.clone(),
+            crate::domain::validation::ValidationVerdict::Pass,
+            vec![],
+            "All criteria met".to_string(),
+            "test-model".to_string(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Draft → Active should succeed
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_plan_transition_allowed_with_warn_report() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Insert a Warn validation report
+        let report = ValidationReport::new(
+            "plans".to_string(),
+            plan_id.clone(),
+            crate::domain::validation::ValidationVerdict::Warn,
+            vec![],
+            "Passes with warnings".to_string(),
+            "test-model".to_string(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Draft → Active should succeed (Warn allows transition)
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_plan_transition_blocked_with_fail_report() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Insert a Fail validation report
+        let report = ValidationReport::new(
+            "plans".to_string(),
+            plan_id.clone(),
+            crate::domain::validation::ValidationVerdict::Fail,
+            vec![],
+            "Missing criteria".to_string(),
+            "test-model".to_string(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Draft → Active should be blocked
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32003);
+    }
+
+    #[test]
+    fn test_plan_transition_skip_validation_override() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Draft → Active with skip_validation=true — should succeed even without report
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator",
+                "skip_validation": true
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_plan_transition_no_gate_when_validator_disabled() {
+        // test_stores_with_taskstore has no validator → gate should not apply
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "No Gate Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Draft → Active should succeed without any validation report
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_spec_transition_blocked_no_report_when_validator_enabled() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create parent plan
+        let plan_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
+        );
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create spec
+        let spec_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Gate Test Spec"})),
+        );
+        let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Draft → Active without report — blocked
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(3, "spec.transition", json!({
+                "id": spec_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32003);
+    }
+
+    #[test]
+    fn test_spec_transition_allowed_with_pass_report() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let plan_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
+        );
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let spec_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Gate Test Spec"})),
+        );
+        let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Insert passing report
+        let report = ValidationReport::new(
+            "specs".to_string(),
+            spec_id.clone(),
+            crate::domain::validation::ValidationVerdict::Pass,
+            vec![],
+            "ok".to_string(),
+            "test-model".to_string(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Draft → Active should succeed
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(3, "spec.transition", json!({
+                "id": spec_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_phase_transition_blocked_no_report_when_validator_enabled() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create parent plan → spec → phase
+        let plan_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
+        );
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let spec_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+        );
+        let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let phase_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(3, "phase.create", json!({
+                "spec_id": spec_id, "title": "Gate Test Phase", "order": 1
+            })),
+        );
+        let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Draft → Active without report — blocked
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(4, "phase.transition", json!({
+                "id": phase_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32003);
+    }
+
+    #[test]
+    fn test_phase_transition_skip_validation_override() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let plan_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
+        );
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let spec_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+        );
+        let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let phase_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(3, "phase.create", json!({
+                "spec_id": spec_id, "title": "Gate Test Phase", "order": 1
+            })),
+        );
+        let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Draft → Active with skip_validation — should succeed
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(4, "phase.transition", json!({
+                "id": phase_id,
+                "target_status": "active",
+                "role": "coordinator",
+                "skip_validation": true
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    #[test]
+    fn test_non_draft_to_active_transition_no_gate() {
+        // Active → Complete should NOT trigger the validation gate
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // First, skip validation to get to Active
+        dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator",
+                "skip_validation": true
+            })),
+        );
+
+        // Active → Complete should work without any validation report
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(3, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "complete",
+                "role": "coordinator"
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "complete");
+    }
+
+    #[test]
+    fn test_latest_report_wins_for_validation_gate() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let create_resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
+        );
+        let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Insert a Fail report first (older)
+        let fail_report = ValidationReport::new(
+            "plans".to_string(),
+            plan_id.clone(),
+            crate::domain::validation::ValidationVerdict::Fail,
+            vec![],
+            "Failed".to_string(),
+            "test-model".to_string(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(fail_report).unwrap();
+
+        // Sleep briefly to ensure different timestamps
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        // Insert a Pass report (newer — should win)
+        let pass_report = ValidationReport::new(
+            "plans".to_string(),
+            plan_id.clone(),
+            crate::domain::validation::ValidationVerdict::Pass,
+            vec![],
+            "Passed".to_string(),
+            "test-model".to_string(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(pass_report).unwrap();
+
+        // Draft → Active should succeed (latest report is Pass)
+        let resp = dispatch(
+            &stores, &tx, &wm, &test_integrator_config(),
+            DaemonRequest::new(2, "plan.transition", json!({
+                "id": plan_id,
+                "target_status": "active",
+                "role": "coordinator"
+            })),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
     }
 }

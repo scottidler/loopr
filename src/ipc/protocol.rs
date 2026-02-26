@@ -87,6 +87,15 @@ impl RpcError {
             ),
         }
     }
+
+    pub fn validation_required(collection: &str, id: &str) -> Self {
+        Self {
+            code: -32003,
+            message: format!(
+                "Draft → Active requires a passing validation report for {collection}/{id}. Run 'validator.validate' first."
+            ),
+        }
+    }
 }
 
 // --- Convenience constructors ---
@@ -301,6 +310,9 @@ mod tests {
         assert_eq!(RpcError::transition_rejected("x").code, -32000);
         assert_eq!(RpcError::not_found("plan", "p1").code, -32001);
         assert!(RpcError::not_found("plan", "p1").message.contains("plan/p1"));
+        assert_eq!(RpcError::validation_required("plan", "p1").code, -32003);
+        assert!(RpcError::validation_required("plan", "p1").message.contains("plan/p1"));
+        assert!(RpcError::validation_required("plan", "p1").message.contains("validator.validate"));
     }
 
     #[test]
