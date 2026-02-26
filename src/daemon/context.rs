@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock as StdRwLock};
 
+use log::{info, warn};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
-use crate::domain::bundle::Bundle;
+use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
-use crate::domain::work_item::WorkItem;
+use crate::domain::work_item::{WorkItem, WorkItemStatus};
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
 
@@ -74,6 +75,50 @@ impl DaemonContext {
             stores: Arc::new(Stores::new()),
             worktree_manager,
         }
+    }
+
+    /// Recover orphaned records after a crash.
+    ///
+    /// On daemon startup (especially after crash recovery from persistent storage),
+    /// this scans for records stuck in transient states:
+    /// - InProgress WorkItems → reset to Blocked
+    /// - Integrating Bundles → reset to Accepted
+    ///
+    /// Returns the number of records recovered.
+    pub fn recover_orphaned_records(&self) -> usize {
+        let mut recovered = 0;
+
+        // Recover InProgress WorkItems → Blocked
+        {
+            let mut work_items = self.stores.work_items.write().unwrap();
+            for (id, wi) in work_items.iter_mut() {
+                if wi.status == WorkItemStatus::InProgress {
+                    warn!("Recovering orphaned InProgress WorkItem: {}", id);
+                    wi.status = WorkItemStatus::Blocked;
+                    recovered += 1;
+                }
+            }
+        }
+
+        // Recover Integrating Bundles → Accepted
+        {
+            let mut bundles = self.stores.bundles.write().unwrap();
+            for (id, bundle) in bundles.iter_mut() {
+                if bundle.status == BundleStatus::Integrating {
+                    warn!("Recovering orphaned Integrating Bundle: {}", id);
+                    bundle.status = BundleStatus::Accepted;
+                    recovered += 1;
+                }
+            }
+        }
+
+        if recovered > 0 {
+            info!("Crash recovery: reset {} orphaned record(s)", recovered);
+        } else {
+            info!("Crash recovery: no orphaned records found");
+        }
+
+        recovered
     }
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
@@ -248,5 +293,120 @@ mod tests {
         let learnings = stores.learnings.read().unwrap();
         assert_eq!(learnings.len(), 1);
         assert_eq!(learnings[&id].content, "Test insight");
+    }
+
+    #[test]
+    fn test_recover_orphaned_work_items() {
+        let config = Config::default();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx);
+
+        // Insert a WorkItem in InProgress state (orphaned)
+        let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.status = WorkItemStatus::InProgress;
+        let wi_id = wi.id.clone();
+        ctx.stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
+
+        // Insert a WorkItem in Draft state (not orphaned)
+        let wi2 = WorkItem::new("phase-1".into(), "Normal WI".into(), "".into());
+        let wi2_id = wi2.id.clone();
+        ctx.stores.work_items.write().unwrap().insert(wi2_id.clone(), wi2);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 1);
+
+        let work_items = ctx.stores.work_items.read().unwrap();
+        assert_eq!(work_items[&wi_id].status, WorkItemStatus::Blocked);
+        assert_eq!(work_items[&wi2_id].status, WorkItemStatus::Draft);
+    }
+
+    #[test]
+    fn test_recover_orphaned_bundles() {
+        let config = Config::default();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx);
+
+        // Insert a Bundle in Integrating state (orphaned)
+        let mut bundle = Bundle::new(
+            "wi-1".into(),
+            Some("tick-1".into()),
+            "feature/orphaned".into(),
+            "claims".into(),
+        );
+        bundle.status = BundleStatus::Integrating;
+        let b_id = bundle.id.clone();
+        ctx.stores.bundles.write().unwrap().insert(b_id.clone(), bundle);
+
+        // Insert a Bundle in Proposed state (not orphaned)
+        let bundle2 = Bundle::new(
+            "wi-2".into(),
+            Some("tick-1".into()),
+            "feature/normal".into(),
+            "claims".into(),
+        );
+        let b2_id = bundle2.id.clone();
+        ctx.stores.bundles.write().unwrap().insert(b2_id.clone(), bundle2);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 1);
+
+        let bundles = ctx.stores.bundles.read().unwrap();
+        assert_eq!(bundles[&b_id].status, BundleStatus::Accepted);
+        assert_eq!(bundles[&b2_id].status, BundleStatus::Proposed);
+    }
+
+    #[test]
+    fn test_recover_both_orphaned_types() {
+        let config = Config::default();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx);
+
+        let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.status = WorkItemStatus::InProgress;
+        ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut bundle = Bundle::new(
+            "wi-1".into(),
+            Some("tick-1".into()),
+            "feature/orphaned".into(),
+            "claims".into(),
+        );
+        bundle.status = BundleStatus::Integrating;
+        ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 2);
+    }
+
+    #[test]
+    fn test_recover_no_orphans() {
+        let config = Config::default();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx);
+
+        // Draft WorkItem — not orphaned
+        let wi = WorkItem::new("phase-1".into(), "Normal WI".into(), "".into());
+        ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        // Proposed Bundle — not orphaned
+        let bundle = Bundle::new(
+            "wi-1".into(),
+            None,
+            "feature/ok".into(),
+            "claims".into(),
+        );
+        ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 0);
+    }
+
+    #[test]
+    fn test_recover_empty_stores() {
+        let config = Config::default();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx);
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 0);
     }
 }

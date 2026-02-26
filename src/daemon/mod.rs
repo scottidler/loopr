@@ -36,6 +36,8 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     let socket_path = {
         let c = ctx.read().await;
         write_pid_file(&c)?;
+        // Crash recovery: reset any orphaned InProgress/Integrating records
+        c.recover_orphaned_records();
         c.config.daemon.socket_path.clone()
     };
 
