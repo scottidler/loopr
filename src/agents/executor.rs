@@ -6,6 +6,7 @@ use log::{error, info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::implementer;
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
