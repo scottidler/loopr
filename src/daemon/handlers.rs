@@ -1155,14 +1155,37 @@ fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let ticks = stores.ticks.read().unwrap();
-
     // Optionally filter by status
     let status_filter: Option<TickStatus> = req
         .params
         .get("status")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let filters: Vec<Filter> = if let Some(status) = &status_filter {
+            vec![Filter {
+                field: "status".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(status.to_string()),
+            }]
+        } else {
+            vec![]
+        };
+        match store.lock().unwrap().list::<Tick>(&filters) {
+            Ok(ticks) => {
+                return match serde_json::to_value(&ticks) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let ticks = stores.ticks.read().unwrap();
     let tick_list: Vec<&Tick> = ticks
         .values()
         .filter(|t| status_filter.is_none() || Some(t.status) == status_filter)
@@ -4635,6 +4658,52 @@ mod tests {
         let arr = ticks.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["number"], 1);
+    }
+
+    #[test]
+    fn test_tick_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create two ticks (writes to both TaskStore and HashMap)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(51, "tick.create", json!({"number": 2})),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.ticks.write().unwrap().clear();
+
+        // List all should still return both ticks via TaskStore
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(60, "tick.list", json!(null)),
+        );
+        assert!(!all_resp.is_error());
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test filtered list by status also works from TaskStore
+        // Both ticks are Open (created in Open status)
+        let filtered_req = DaemonRequest::new(61, "tick.list", json!({"status": "Open"}));
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        assert!(!filtered_resp.is_error());
+        let filtered_items = filtered_resp.result.unwrap();
+        let arr = filtered_items.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
     }
 
     #[test]
