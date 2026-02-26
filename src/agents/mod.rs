@@ -41,7 +41,10 @@ pub enum AgentStatus {
 impl AgentStatus {
     /// Returns true if this is a terminal status (no further transitions possible).
     pub fn is_terminal(&self) -> bool {
-        matches!(self, AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Cancelled)
+        matches!(
+            self,
+            AgentStatus::Completed | AgentStatus::Failed | AgentStatus::Cancelled
+        )
     }
 
     /// Validate whether a status transition is allowed.
@@ -121,10 +124,7 @@ impl AgentSession {
     /// Returns Err if the transition is not allowed.
     pub fn transition_to(&mut self, target: AgentStatus) -> Result<(), String> {
         if !self.status.can_transition_to(target) {
-            return Err(format!(
-                "invalid agent status transition: {} → {}",
-                self.status, target
-            ));
+            return Err(format!("invalid agent status transition: {} → {}", self.status, target));
         }
         self.status = target;
         self.updated_at = id::now_millis();
@@ -148,10 +148,7 @@ impl Record for AgentSession {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
-        m.insert(
-            "agent_type".into(),
-            IndexValue::String(self.agent_type.to_string()),
-        );
+        m.insert("agent_type".into(), IndexValue::String(self.agent_type.to_string()));
         if let Some(ref wi_id) = self.work_item_id {
             m.insert("work_item_id".into(), IndexValue::String(wi_id.clone()));
         }
@@ -441,10 +438,7 @@ mod tests {
         session.work_item_id = Some("wi-1".to_string());
 
         let fields = session.indexed_fields();
-        assert_eq!(
-            fields.get("status"),
-            Some(&IndexValue::String("starting".to_string()))
-        );
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("starting".to_string())));
         assert_eq!(
             fields.get("agent_type"),
             Some(&IndexValue::String("implementer".to_string()))
@@ -466,10 +460,7 @@ mod tests {
             fields.get("agent_type"),
             Some(&IndexValue::String("reviewer".to_string()))
         );
-        assert_eq!(
-            fields.get("bundle_id"),
-            Some(&IndexValue::String("b-1".to_string()))
-        );
+        assert_eq!(fields.get("bundle_id"), Some(&IndexValue::String("b-1".to_string())));
         assert!(!fields.contains_key("work_item_id"));
     }
 

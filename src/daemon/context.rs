@@ -137,7 +137,11 @@ impl DaemonContext {
                 stores.locks.write().unwrap().insert(lock.id.clone(), lock);
             }
             for session in store.list::<AgentSession>(&[])? {
-                stores.agent_sessions.write().unwrap().insert(session.id.clone(), session);
+                stores
+                    .agent_sessions
+                    .write()
+                    .unwrap()
+                    .insert(session.id.clone(), session);
             }
             let hydrated: usize = stores.plans.read().unwrap().len()
                 + stores.specs.read().unwrap().len()

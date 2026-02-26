@@ -2549,14 +2549,8 @@ fn handle_agent_start(
     let task_worktree_mgr = worktree_mgr.clone();
     let task_id = id.clone();
     tokio::spawn(async move {
-        crate::agents::executor::run_agent_task(
-            task_id,
-            agent_type,
-            task_stores,
-            task_event_tx,
-            task_worktree_mgr,
-        )
-        .await;
+        crate::agents::executor::run_agent_task(task_id, agent_type, task_stores, task_event_tx, task_worktree_mgr)
+            .await;
     });
 
     DaemonResponse::ok(req.id, session_json)

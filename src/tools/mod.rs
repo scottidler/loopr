@@ -30,10 +30,7 @@ pub struct ToolRunner {
 impl ToolRunner {
     /// Create a ToolRunner from a list of configured tool entries.
     pub fn new(entries: &[ToolEntry]) -> Self {
-        let tools = entries
-            .iter()
-            .map(|e| (e.name.clone(), e.clone()))
-            .collect();
+        let tools = entries.iter().map(|e| (e.name.clone(), e.clone())).collect();
         Self { tools }
     }
 
@@ -53,12 +50,7 @@ impl ToolRunner {
     /// If the tool has `worktree: true`, the command runs in `working_dir`.
     /// Timeout is enforced: SIGTERM first, then SIGKILL after a grace period.
     /// Output is truncated to MAX_OUTPUT bytes per stream.
-    pub async fn run(
-        &self,
-        tool_name: &str,
-        args: &[String],
-        working_dir: &Path,
-    ) -> Result<ToolResult> {
+    pub async fn run(&self, tool_name: &str, args: &[String], working_dir: &Path) -> Result<ToolResult> {
         let entry = self
             .tools
             .get(tool_name)
@@ -92,10 +84,7 @@ impl ToolRunner {
                     tool_name: tool_name.to_string(),
                     exit_code: -1,
                     stdout: String::new(),
-                    stderr: format!(
-                        "tool '{}' timed out after {}s",
-                        tool_name, entry.timeout_secs
-                    ),
+                    stderr: format!("tool '{}' timed out after {}s", tool_name, entry.timeout_secs),
                     duration_ms: duration.as_millis() as u64,
                     truncated: false,
                 });
@@ -341,5 +330,4 @@ mod tests {
     fn test_max_output_constant() {
         assert_eq!(MAX_OUTPUT, 32_000);
     }
-
 }

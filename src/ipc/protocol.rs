@@ -205,10 +205,7 @@ impl DaemonEvent {
             session_id: session_id.to_string(),
             status,
         };
-        Self::new(
-            "agent.status_changed",
-            serde_json::to_value(event).unwrap_or_default(),
-        )
+        Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
     }
 }
 

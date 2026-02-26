@@ -26,12 +26,7 @@ pub async fn run_agent_task(
     info!("Agent task started: {} ({})", session_id, agent_type);
 
     // Create the in-process IPC bridge for this agent
-    let bridge = AgentIpcBridge::new(
-        stores.clone(),
-        event_tx.clone(),
-        worktree_mgr,
-        stores.config.clone(),
-    );
+    let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
     // Transition to Running
     {
@@ -44,10 +39,7 @@ pub async fn run_agent_task(
             persist_session(&stores, session);
         }
     }
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(
-        &session_id,
-        AgentStatus::Running,
-    ));
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
 
     // Phase 2 TODO: implement full agent loop (LLM calls, action parsing, tool execution).
     // For now, mark as Completed after startup validation.
@@ -78,10 +70,7 @@ pub async fn run_agent_task(
             persist_session(&stores, session);
         }
     }
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(
-        &session_id,
-        terminal_status,
-    ));
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
 
     info!(
         "Agent task finished: {} ({}) → {:?}",
@@ -99,10 +88,7 @@ async fn run_agent_loop(
     // Verify the bridge works by checking system status
     let status_resp = bridge.request("system.status", serde_json::json!(null));
     if status_resp.is_error() {
-        return Err(eyre!(
-            "bridge health check failed: {:?}",
-            status_resp.error
-        ));
+        return Err(eyre!("bridge health check failed: {:?}", status_resp.error));
     }
 
     info!("Agent {} bridge health check passed", session_id);
@@ -186,17 +172,12 @@ pub async fn execute_action(
         AgentAction::WriteFile { path, content } => {
             // Validate path stays within worktree (sandbox)
             let full_path = worktree_path.join(path);
-            let canonical = full_path
-                .canonicalize()
-                .unwrap_or_else(|_| full_path.clone());
+            let canonical = full_path.canonicalize().unwrap_or_else(|_| full_path.clone());
             let worktree_canonical = worktree_path
                 .canonicalize()
                 .unwrap_or_else(|_| worktree_path.to_path_buf());
             if !canonical.starts_with(&worktree_canonical) {
-                return Err(eyre!(
-                    "path escapes worktree: {}",
-                    path
-                ));
+                return Err(eyre!("path escapes worktree: {}", path));
             }
             if let Some(parent) = full_path.parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -220,10 +201,7 @@ pub async fn execute_action(
             }
             Ok(ActionResult::Committed(message.clone()))
         }
-        AgentAction::ProposeBundle {
-            description,
-            claims,
-        } => {
+        AgentAction::ProposeBundle { description, claims } => {
             let resp = bridge.request(
                 "system.status",
                 serde_json::json!({ "description": description, "claims": claims }),
@@ -239,10 +217,7 @@ pub async fn execute_action(
             target_state,
         } => {
             let method = format!("{}.transition", collection);
-            let resp = bridge.request(
-                &method,
-                serde_json::json!({ "id": id, "target": target_state }),
-            );
+            let resp = bridge.request(&method, serde_json::json!({ "id": id, "target": target_state }));
             if resp.is_error() {
                 return Err(eyre!("transition failed: {:?}", resp.error));
             }
@@ -292,10 +267,7 @@ fn persist_session(stores: &Stores, session: &AgentSession) {
     if let Some(store) = &stores.store
         && let Err(e) = store.lock().unwrap().update(session.clone())
     {
-        warn!(
-            "Failed to persist agent session {} to TaskStore: {}",
-            session.id, e
-        );
+        warn!("Failed to persist agent session {} to TaskStore: {}", session.id, e);
     }
 }
 
@@ -323,10 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_run_tool() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-exec-test-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-exec-test-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let entries = vec![ToolEntry {
@@ -356,10 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_write_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-exec-write-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-exec-write-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let runner = ToolRunner::new(&[]);
@@ -381,10 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_read_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-exec-read-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-exec-read-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("read-me.txt"), "file content").unwrap();
 
@@ -407,10 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_done() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-exec-done-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-exec-done-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let runner = ToolRunner::new(&[]);
@@ -432,10 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_need_help() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-exec-help-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-exec-help-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let runner = ToolRunner::new(&[]);
@@ -457,10 +414,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_unknown_tool() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-exec-unk-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-exec-unk-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let runner = ToolRunner::new(&[]);
@@ -479,10 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_agent_task_lifecycle() {
-        let dir = std::env::temp_dir().join(format!(
-            "loopr-agent-task-{}",
-            crate::id::generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("loopr-agent-task-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let stores = test_stores(&dir);
