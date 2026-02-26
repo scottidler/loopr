@@ -13,8 +13,10 @@ use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
+use crate::domain::validation::ValidationReport;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
 use crate::ipc::protocol::DaemonEvent;
+use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
 
 /// In-memory record stores, each behind a std::sync::RwLock for synchronous access
@@ -61,6 +63,7 @@ pub struct DaemonContext {
     pub config: Config,
     pub stores: Arc<Stores>,
     pub worktree_manager: WorktreeManager,
+    pub validator: Option<Arc<DocValidator>>,
 }
 
 impl DaemonContext {
@@ -87,17 +90,28 @@ impl DaemonContext {
         store.rebuild_indexes::<Tick>()?;
         store.rebuild_indexes::<Learning>()?;
         store.rebuild_indexes::<Lock>()?;
+        store.rebuild_indexes::<ValidationReport>()?;
 
         info!("TaskStore opened at {}", repo_path.display());
 
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(StdMutex::new(store)));
 
+        // Create DocValidator if enabled in config
+        let validator = if config.validator.enabled {
+            info!("Doc Validator enabled: provider={}, model={}", config.validator.provider, config.validator.model);
+            Some(Arc::new(DocValidator::new(config.validator.clone())))
+        } else {
+            info!("Doc Validator disabled");
+            None
+        };
+
         Ok(Self {
             config,
             event_tx,
             stores: Arc::new(stores),
             worktree_manager,
+            validator,
         })
     }
 

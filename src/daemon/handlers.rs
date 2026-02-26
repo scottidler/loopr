@@ -14,8 +14,10 @@ use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::tick::{Tick, TickStatus, tick_transitions};
 use crate::domain::transition::validate_transition;
+use crate::domain::validation::ValidationReport;
 use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
+use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
 
 use taskstore::{Filter, FilterOp, IndexValue, Record};

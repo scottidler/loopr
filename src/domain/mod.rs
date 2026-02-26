@@ -7,4 +7,5 @@ pub mod role;
 pub mod spec;
 pub mod tick;
 pub mod transition;
+pub mod validation;
 pub mod work_item;

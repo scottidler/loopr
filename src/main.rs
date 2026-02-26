@@ -12,6 +12,7 @@ mod error;
 mod id;
 mod ipc;
 mod tui;
+mod validator;
 mod worktree;
 
 use cli::Cli;

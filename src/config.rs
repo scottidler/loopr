@@ -38,6 +38,31 @@ pub struct IntegratorConfig {
     pub validation_commands: Vec<String>,
 }
 
+/// Doc Validator configuration — LLM-powered document validation for quality gates.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ValidatorConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub model: String,
+    pub api_key_env: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+impl Default for ValidatorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 4096,
+            temperature: 0.0,
+        }
+    }
+}
+
 impl Default for IntegratorConfig {
     fn default() -> Self {
         Self {
@@ -67,6 +92,7 @@ pub struct Config {
     pub daemon: DaemonConfig,
     pub project: ProjectConfig,
     pub integrator: IntegratorConfig,
+    pub validator: ValidatorConfig,
 }
 
 impl Default for Config {
@@ -77,6 +103,7 @@ impl Default for Config {
             daemon: DaemonConfig::default(),
             project: ProjectConfig::default(),
             integrator: IntegratorConfig::default(),
+            validator: ValidatorConfig::default(),
         }
     }
 }
