@@ -75,6 +75,8 @@ Loopr is a TUI-based "dev team in a box" orchestrator. MVP1 proves the orchestra
 
 The project has been scaffolded with a basic Rust skeleton (`Cargo.toml`, `build.rs`, `src/main.rs`, `src/cli.rs`, `src/config.rs`). This scaffold is **placeholder code** — it compiles but does not implement any Loopr functionality. Replace it incrementally with the real architecture from the design doc as you work through the phases. Do not preserve scaffold code that doesn't serve the design.
 
+**Bootstrap tests are included** in `src/config.rs` so that `otto ci` passes the `ensure-tests-exist` gate from the start. The validation pipeline (`otto ci`) requires at least one test to be wired into the crate — without this, every iteration would fail before any real work begins. As you add new modules, add tests to those modules and the bootstrap tests can eventually be replaced.
+
 ### Adding Dependencies
 
 **ALWAYS use `cargo add` to add dependencies.** Never hand-write version numbers in `Cargo.toml`. This ensures you get the latest published version of each crate, not a stale version from training data.

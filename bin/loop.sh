@@ -3,6 +3,8 @@
 # Fresh context each iteration — state persists in progress.txt
 # Validation runs OUTSIDE the LLM session
 # https://ghuntley.com/ralph/
+# pipefail is critical: without it, `cmd 2>&1 | tee` swallows cmd's exit code
+# and validation always appears to pass regardless of otto ci result
 set -eo pipefail
 
 # Configuration (override via environment variables or first positional arg)

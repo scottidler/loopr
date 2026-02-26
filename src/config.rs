@@ -69,3 +69,22 @@ impl Config {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.name, "John Doe");
+        assert_eq!(config.age, 30);
+        assert!(!config.debug);
+    }
+
+    #[test]
+    fn test_config_load_defaults_when_no_file() {
+        let config = Config::load(None).expect("should load defaults");
+        assert_eq!(config.name, "John Doe");
+    }
+}
