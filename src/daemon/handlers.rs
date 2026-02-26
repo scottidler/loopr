@@ -4,6 +4,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
+use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
@@ -44,6 +45,13 @@ pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>,
         "tick.get" => handle_tick_get(stores, req),
         "tick.list" => handle_tick_list(stores, req),
         "tick.transition" => handle_tick_transition(stores, event_tx, req),
+        "learning.create" => handle_learning_create(stores, event_tx, req),
+        "learning.get" => handle_learning_get(stores, req),
+        "learning.list" => handle_learning_list(stores, req),
+        "learning.reinforce" => handle_learning_reinforce(stores, event_tx, req),
+        "learning.contradict" => handle_learning_contradict(stores, event_tx, req),
+        "learning.promote" => handle_learning_promote(stores, event_tx, req),
+        "learning.demote" => handle_learning_demote(stores, event_tx, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -858,6 +866,216 @@ fn handle_tick_transition(
     ));
 
     DaemonResponse::ok(req.id, tick_json)
+}
+
+// --- Learning handlers ---
+
+fn handle_learning_create(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let source_id = req
+        .params
+        .get("source_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let scope: LearningScope = match req.params.get("scope") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(s) => s,
+            Err(_) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("invalid scope (workitem|phase|spec|plan|global)"),
+                );
+            }
+        },
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("scope is required"));
+        }
+    };
+    let content = req
+        .params
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if source_id.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("source_id is required"));
+    }
+    if content.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("content is required"));
+    }
+
+    let learning = Learning::new(source_id, scope, content);
+    let learning_json = match serde_json::to_value(&learning) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = learning.id.clone();
+    stores
+        .learnings
+        .write()
+        .unwrap()
+        .insert(id.clone(), learning);
+    let _ = event_tx.send(DaemonEvent::record_created("learning", &id));
+
+    DaemonResponse::ok(req.id, learning_json)
+}
+
+fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let learnings = stores.learnings.read().unwrap();
+    match learnings.get(id) {
+        Some(learning) => match serde_json::to_value(learning) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("learning", id)),
+    }
+}
+
+fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let learnings = stores.learnings.read().unwrap();
+
+    // Optionally filter by scope
+    let scope_filter: Option<LearningScope> = req
+        .params
+        .get("scope")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    // Optionally filter by source_id
+    let source_id_filter = req.params.get("source_id").and_then(|v| v.as_str());
+
+    let learning_list: Vec<&Learning> = learnings
+        .values()
+        .filter(|l| scope_filter.is_none() || Some(l.scope) == scope_filter)
+        .filter(|l| source_id_filter.is_none() || Some(l.source_id.as_str()) == source_id_filter)
+        .collect();
+
+    match serde_json::to_value(&learning_list) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_learning_reinforce(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut learnings = stores.learnings.write().unwrap();
+    let learning = match learnings.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
+    };
+
+    learning.reinforce();
+
+    let learning_json = match serde_json::to_value(&*learning) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+
+    DaemonResponse::ok(req.id, learning_json)
+}
+
+fn handle_learning_contradict(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut learnings = stores.learnings.write().unwrap();
+    let learning = match learnings.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
+    };
+
+    learning.contradict();
+
+    let learning_json = match serde_json::to_value(&*learning) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+
+    DaemonResponse::ok(req.id, learning_json)
+}
+
+fn handle_learning_promote(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut learnings = stores.learnings.write().unwrap();
+    let learning = match learnings.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
+    };
+
+    learning.promote();
+
+    let learning_json = match serde_json::to_value(&*learning) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+
+    DaemonResponse::ok(req.id, learning_json)
+}
+
+fn handle_learning_demote(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut learnings = stores.learnings.write().unwrap();
+    let learning = match learnings.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
+    };
+
+    learning.demote();
+
+    let learning_json = match serde_json::to_value(&*learning) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+
+    DaemonResponse::ok(req.id, learning_json)
 }
 
 #[cfg(test)]
@@ -2615,5 +2833,295 @@ mod tests {
         let resp = dispatch(&stores, &tx, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Sealing");
+    }
+
+    // --- learning.create tests ---
+
+    fn create_learning(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, id: u64) -> String {
+        let resp = dispatch(
+            stores,
+            tx,
+            DaemonRequest::new(
+                id,
+                "learning.create",
+                json!({
+                    "source_id": "wi-123",
+                    "scope": "workitem",
+                    "content": "Always run tests"
+                }),
+            ),
+        );
+        assert!(!resp.is_error());
+        resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_learning_create_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({
+                    "source_id": "wi-123",
+                    "scope": "workitem",
+                    "content": "Always run tests before committing"
+                }),
+            ),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["source_id"], "wi-123");
+        assert_eq!(result["scope"], "workitem");
+        assert_eq!(result["content"], "Always run tests before committing");
+        assert_eq!(result["reinforcements"], 0);
+        assert!(!result["promoted"].as_bool().unwrap());
+        assert_eq!(stores.learnings.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_learning_create_missing_source_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"scope": "global", "content": "insight"}),
+            ),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("source_id"));
+    }
+
+    #[test]
+    fn test_learning_create_missing_content() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "global"}),
+            ),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("content"));
+    }
+
+    #[test]
+    fn test_learning_create_invalid_scope() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "invalid", "content": "test"}),
+            ),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("scope"));
+    }
+
+    #[test]
+    fn test_learning_create_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+            ),
+        );
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.created");
+        assert_eq!(event.data["collection"], "learning");
+    }
+
+    // --- learning.get tests ---
+
+    #[test]
+    fn test_learning_get_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let learning_id = create_learning(&stores, &tx, 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "learning.get", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["source_id"], "wi-123");
+    }
+
+    #[test]
+    fn test_learning_get_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "learning.get", json!({"id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // --- learning.list tests ---
+
+    #[test]
+    fn test_learning_list_empty() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "learning.list", json!(null)),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_learning_list_with_scope_filter() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        // Create a workitem-scoped learning
+        create_learning(&stores, &tx, 1);
+        // Create a global-scoped learning
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(
+                2,
+                "learning.create",
+                json!({"source_id": "global", "scope": "global", "content": "global insight"}),
+            ),
+        );
+
+        // Filter by global scope
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "learning.list", json!({"scope": "global"})),
+        );
+        assert!(!resp.is_error());
+        let list = resp.result.unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+        assert_eq!(list[0]["scope"], "global");
+    }
+
+    // --- learning.reinforce tests ---
+
+    #[test]
+    fn test_learning_reinforce() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let learning_id = create_learning(&stores, &tx, 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "learning.reinforce", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["reinforcements"], 1);
+
+        // Reinforce again
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "learning.reinforce", json!({"id": learning_id})),
+        );
+        assert_eq!(resp2.result.unwrap()["reinforcements"], 2);
+    }
+
+    #[test]
+    fn test_learning_reinforce_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(1, "learning.reinforce", json!({"id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // --- learning.contradict tests ---
+
+    #[test]
+    fn test_learning_contradict() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let learning_id = create_learning(&stores, &tx, 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "learning.contradict", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["contradictions"], 1);
+    }
+
+    // --- learning.promote / demote tests ---
+
+    #[test]
+    fn test_learning_promote_and_demote() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let learning_id = create_learning(&stores, &tx, 1);
+
+        // Promote
+        let resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert!(resp.result.unwrap()["promoted"].as_bool().unwrap());
+
+        // Demote
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(3, "learning.demote", json!({"id": learning_id})),
+        );
+        assert!(!resp2.is_error());
+        assert!(!resp2.result.unwrap()["promoted"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_learning_promote_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let learning_id = create_learning(&stores, &tx, 1);
+        let _ = rx.try_recv(); // consume create event
+
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
+        );
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.updated");
+        assert_eq!(event.data["collection"], "learning");
     }
 }

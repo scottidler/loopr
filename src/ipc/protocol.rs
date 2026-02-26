@@ -141,6 +141,13 @@ impl DaemonEvent {
             serde_json::json!({ "collection": collection, "id": id }),
         )
     }
+
+    pub fn record_updated(collection: &str, id: &str) -> Self {
+        Self::new(
+            "record.updated",
+            serde_json::json!({ "collection": collection, "id": id }),
+        )
+    }
 }
 
 /// Parse a raw JSON line into an IpcMessage.

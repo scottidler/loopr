@@ -5,6 +5,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
 use crate::domain::bundle::Bundle;
+use crate::domain::learning::Learning;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
@@ -21,6 +22,7 @@ pub struct Stores {
     pub work_items: StdRwLock<HashMap<String, WorkItem>>,
     pub bundles: StdRwLock<HashMap<String, Bundle>>,
     pub ticks: StdRwLock<HashMap<String, Tick>>,
+    pub learnings: StdRwLock<HashMap<String, Learning>>,
 }
 
 impl Stores {
@@ -32,6 +34,7 @@ impl Stores {
             work_items: StdRwLock::new(HashMap::new()),
             bundles: StdRwLock::new(HashMap::new()),
             ticks: StdRwLock::new(HashMap::new()),
+            learnings: StdRwLock::new(HashMap::new()),
         }
     }
 }
@@ -139,6 +142,7 @@ mod tests {
         assert!(stores.work_items.read().unwrap().is_empty());
         assert!(stores.bundles.read().unwrap().is_empty());
         assert!(stores.ticks.read().unwrap().is_empty());
+        assert!(stores.learnings.read().unwrap().is_empty());
     }
 
     #[test]
@@ -210,5 +214,20 @@ mod tests {
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks.len(), 1);
         assert_eq!(ticks[&id].number, 1);
+    }
+
+    #[test]
+    fn test_stores_learning_insert_and_read() {
+        let stores = Stores::new();
+        let learning = Learning::new(
+            "wi-1".into(),
+            crate::domain::learning::LearningScope::WorkItem,
+            "Test insight".into(),
+        );
+        let id = learning.id.clone();
+        stores.learnings.write().unwrap().insert(id.clone(), learning);
+        let learnings = stores.learnings.read().unwrap();
+        assert_eq!(learnings.len(), 1);
+        assert_eq!(learnings[&id].content, "Test insight");
     }
 }
