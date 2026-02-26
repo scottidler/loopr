@@ -123,7 +123,7 @@ pub enum ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::server::{handle_client, IpcServer};
+    use crate::ipc::server::{IpcServer, handle_client};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -134,7 +134,9 @@ mod tests {
     }
 
     /// Helper: start a server that echoes the method back.
-    async fn start_echo_server(path: &PathBuf) -> (tokio::task::JoinHandle<()>, tokio::sync::broadcast::Sender<DaemonEvent>) {
+    async fn start_echo_server(
+        path: &PathBuf,
+    ) -> (tokio::task::JoinHandle<()>, tokio::sync::broadcast::Sender<DaemonEvent>) {
         let (server, tx) = IpcServer::new(path);
         let listener = server.bind().await.unwrap();
         let event_tx = server.event_sender();
@@ -267,12 +269,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
                 let event_rx = event_tx.subscribe();
-                handle_client(
-                    stream,
-                    |req| DaemonResponse::ok(req.id, json!(null)),
-                    event_rx,
-                )
-                .await;
+                handle_client(stream, |req| DaemonResponse::ok(req.id, json!(null)), event_rx).await;
             }
             server.cleanup();
         });
