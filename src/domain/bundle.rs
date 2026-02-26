@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
@@ -133,6 +136,30 @@ impl Bundle {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl Record for Bundle {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "bundles"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m.insert(
+            "work_item_id".into(),
+            IndexValue::String(self.work_item_id.clone()),
+        );
+        m
     }
 }
 
@@ -435,6 +462,51 @@ mod tests {
                 &rules,
             )
             .is_err()
+        );
+    }
+
+    // --- Record trait tests ---
+
+    #[test]
+    fn test_record_id() {
+        let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        assert_eq!(Record::id(&b), b.id);
+    }
+
+    #[test]
+    fn test_record_updated_at() {
+        let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        assert_eq!(Record::updated_at(&b), b.updated_at);
+    }
+
+    #[test]
+    fn test_record_collection_name() {
+        assert_eq!(Bundle::collection_name(), "bundles");
+    }
+
+    #[test]
+    fn test_record_indexed_fields() {
+        let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        let fields = b.indexed_fields();
+        assert_eq!(
+            fields.get("status"),
+            Some(&IndexValue::String("Proposed".to_string()))
+        );
+        assert_eq!(
+            fields.get("work_item_id"),
+            Some(&IndexValue::String("wi-1".to_string()))
+        );
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn test_record_indexed_fields_reflect_status() {
+        let mut b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        b.status = BundleStatus::Merged;
+        let fields = b.indexed_fields();
+        assert_eq!(
+            fields.get("status"),
+            Some(&IndexValue::String("Merged".to_string()))
         );
     }
 }
