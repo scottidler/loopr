@@ -17,9 +17,9 @@ pub fn validate_transition<S: PartialEq + Copy + Debug>(
     role: Role,
     rules: &[TransitionRule<S>],
 ) -> crate::error::Result<()> {
-    let allowed = rules.iter().any(|r| {
-        r.from == current && r.to == target && r.role.is_none_or(|required| required == role)
-    });
+    let allowed = rules
+        .iter()
+        .any(|r| r.from == current && r.to == target && r.role.is_none_or(|required| required == role));
     if !allowed {
         return Err(LooprError::InvalidTransition {
             from: format!("{:?}", current),

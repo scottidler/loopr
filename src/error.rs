@@ -9,11 +9,7 @@ pub enum LooprError {
     SerdeJson(#[from] serde_json::Error),
 
     #[error("invalid transition from {from} to {to} for role {role}")]
-    InvalidTransition {
-        from: String,
-        to: String,
-        role: String,
-    },
+    InvalidTransition { from: String, to: String, role: String },
 }
 
 pub type Result<T> = std::result::Result<T, LooprError>;

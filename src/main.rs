@@ -58,13 +58,11 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     println!("Author: {}", config.name);
 
     // Validate that the transition engine is wired up
-    let rules: Vec<domain::transition::TransitionRule<&str>> = vec![
-        domain::transition::TransitionRule {
-            from: "init",
-            to: "running",
-            role: Some(role),
-        },
-    ];
+    let rules: Vec<domain::transition::TransitionRule<&str>> = vec![domain::transition::TransitionRule {
+        from: "init",
+        to: "running",
+        role: Some(role),
+    }];
     domain::transition::validate_transition("init", "running", role, &rules)?;
     info!("Transition engine validated");
 
