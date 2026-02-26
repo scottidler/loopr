@@ -534,6 +534,22 @@ fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse 
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<Phase>(id) {
+            Ok(Some(phase)) => {
+                return match serde_json::to_value(&phase) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let phases = stores.phases.read().unwrap();
     match phases.get(id) {
         Some(phase) => match serde_json::to_value(phase) {
@@ -2746,6 +2762,29 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_phase_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
+
+        // Create a phase (writes to both TaskStore and HashMap)
+        let create_req = DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "TaskStore Phase", "order": 1}));
+        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
+        assert!(!create_resp.is_error());
+        let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.phases.write().unwrap().remove(&phase_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(21, "phase.get", json!({"id": phase_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["title"], "TaskStore Phase");
     }
 
     #[test]
