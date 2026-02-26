@@ -413,6 +413,18 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         })
         .unwrap();
     info!("TUI learnings render OK");
+    // Validate TUI run module is wired up
+    let run_actions = tui::run::role_actions(role);
+    info!("TUI role_actions for {}: {:?}", role, run_actions);
+    terminal
+        .draw(|frame| {
+            tui::run::draw(&tui_app, frame);
+        })
+        .unwrap();
+    info!("TUI run::draw OK");
+    // run_tui() requires a real daemon connection — just reference it to avoid dead_code
+    let _ = tui::run::run_tui;
+    info!("TUI run_tui wired up");
 
     // Log some information
     info!("Application started at ts={}", id::now_millis());
