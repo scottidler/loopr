@@ -229,7 +229,15 @@ mod tests {
         ctx.stores.store.as_ref().unwrap().lock().unwrap().create(plan).unwrap();
 
         // Get it back
-        let retrieved: Option<Plan> = ctx.stores.store.as_ref().unwrap().lock().unwrap().get(&plan_id).unwrap();
+        let retrieved: Option<Plan> = ctx
+            .stores
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .get(&plan_id)
+            .unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().title, "Test Plan");
 

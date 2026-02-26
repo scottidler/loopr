@@ -96,10 +96,7 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
     let store_arc = match &stores.store {
         Some(s) => s,
         None => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::internal("TaskStore not initialized"),
-            );
+            return DaemonResponse::err(req.id, RpcError::internal("TaskStore not initialized"));
         }
     };
 
