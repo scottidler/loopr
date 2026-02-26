@@ -627,6 +627,14 @@ fn handle_work_item_create(
     };
 
     let id = work_item.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(work_item.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.work_items.write().unwrap().insert(id.clone(), work_item);
     let _ = event_tx.send(DaemonEvent::record_created("work_item", &id));
 
@@ -2870,6 +2878,28 @@ mod tests {
         assert_eq!(result["phase_id"], phase_id);
         assert_eq!(result["status"], "Draft");
         assert_eq!(stores.work_items.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_work_item_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
+        let req = DaemonRequest::new(
+            30,
+            "work_item.create",
+            json!({"phase_id": phase_id, "title": "Persisted WI", "description": "desc"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<WorkItem> = store.get(&wi_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().title, "Persisted WI");
     }
 
     #[test]
