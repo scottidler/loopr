@@ -34,11 +34,7 @@ impl AgentLlmClient {
     /// Create a new AgentLlmClient.
     ///
     /// Reads the API key from the environment variable specified in `config.api_key_env`.
-    pub fn new(
-        config: AgentRoleConfig,
-        session_id: String,
-        event_tx: broadcast::Sender<DaemonEvent>,
-    ) -> Result<Self> {
+    pub fn new(config: AgentRoleConfig, session_id: String, event_tx: broadcast::Sender<DaemonEvent>) -> Result<Self> {
         let api_key = std::env::var(&config.api_key_env)
             .map_err(|_| eyre!("API key not found in env var: {}", config.api_key_env))?;
 
@@ -216,11 +212,7 @@ fn parse_sse_text_delta(line: &str) -> Option<String> {
         return None;
     }
 
-    let text = value
-        .get("delta")?
-        .get("text")?
-        .as_str()?
-        .to_string();
+    let text = value.get("delta")?.get("text")?.as_str()?.to_string();
 
     Some(text)
 }
@@ -233,16 +225,14 @@ mod tests {
 
     #[test]
     fn test_parse_sse_text_delta_valid() {
-        let line =
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
         let result = parse_sse_text_delta(line);
         assert_eq!(result, Some("Hello".to_string()));
     }
 
     #[test]
     fn test_parse_sse_text_delta_multiword() {
-        let line =
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}"#;
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}"#;
         let result = parse_sse_text_delta(line);
         assert_eq!(result, Some(" world".to_string()));
     }
@@ -305,16 +295,14 @@ mod tests {
 
     #[test]
     fn test_parse_sse_text_delta_empty_text() {
-        let line =
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}"#;
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}"#;
         let result = parse_sse_text_delta(line);
         assert_eq!(result, Some(String::new()));
     }
 
     #[test]
     fn test_parse_sse_text_delta_special_chars() {
-        let line =
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fn main() {\n    println!(\"hello\");\n}"}}"#;
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fn main() {\n    println!(\"hello\");\n}"}}"#;
         let result = parse_sse_text_delta(line);
         assert!(result.is_some());
         assert!(result.unwrap().contains("fn main()"));
@@ -358,12 +346,7 @@ mod tests {
     fn test_agent_llm_client_emit_chunk() {
         let config = AgentRoleConfig::default_implementer();
         let (event_tx, mut event_rx) = broadcast::channel(16);
-        let client = AgentLlmClient::with_api_key(
-            config,
-            "s1".to_string(),
-            event_tx,
-            "key".to_string(),
-        );
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string());
 
         client.emit_chunk("Hello", false);
 
@@ -388,12 +371,7 @@ mod tests {
     fn test_agent_llm_client_emit_final_chunk() {
         let config = AgentRoleConfig::default_implementer();
         let (event_tx, mut event_rx) = broadcast::channel(16);
-        let client = AgentLlmClient::with_api_key(
-            config,
-            "s1".to_string(),
-            event_tx,
-            "key".to_string(),
-        );
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string());
 
         client.emit_chunk("", true);
 
@@ -410,12 +388,7 @@ mod tests {
     fn test_agent_llm_client_emit_status() {
         let config = AgentRoleConfig::default_implementer();
         let (event_tx, mut event_rx) = broadcast::channel(16);
-        let client = AgentLlmClient::with_api_key(
-            config,
-            "s1".to_string(),
-            event_tx,
-            "key".to_string(),
-        );
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string());
 
         client.emit_status(AgentStatus::WaitingForLlm);
 

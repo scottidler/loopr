@@ -231,7 +231,10 @@ impl DaemonEvent {
             session_id: session_id.to_string(),
             action_summary: action_summary.to_string(),
         };
-        Self::new("agent.action_completed", serde_json::to_value(event).unwrap_or_default())
+        Self::new(
+            "agent.action_completed",
+            serde_json::to_value(event).unwrap_or_default(),
+        )
     }
 
     pub fn agent_iteration_completed(session_id: &str, iteration: u32, summary: &str) -> Self {
@@ -240,7 +243,10 @@ impl DaemonEvent {
             iteration,
             summary: summary.to_string(),
         };
-        Self::new("agent.iteration_completed", serde_json::to_value(event).unwrap_or_default())
+        Self::new(
+            "agent.iteration_completed",
+            serde_json::to_value(event).unwrap_or_default(),
+        )
     }
 }
 

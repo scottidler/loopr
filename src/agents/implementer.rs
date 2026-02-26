@@ -238,7 +238,9 @@ pub async fn run_iteration(
     for action in &actions {
         // Broadcast tool_started event for RunTool actions
         if let AgentAction::RunTool { tool_name, .. } = action {
-            let _ = params.event_tx.send(DaemonEvent::agent_tool_started(params.session_id, tool_name));
+            let _ = params
+                .event_tx
+                .send(DaemonEvent::agent_tool_started(params.session_id, tool_name));
         }
 
         let result = execute_action(action, params.tool_runner, params.bridge, params.worktree_path).await?;
@@ -254,7 +256,9 @@ pub async fn run_iteration(
         }
 
         let summary = format_action_summary(action, &result);
-        let _ = params.event_tx.send(DaemonEvent::agent_action_completed(params.session_id, &summary));
+        let _ = params
+            .event_tx
+            .send(DaemonEvent::agent_action_completed(params.session_id, &summary));
 
         match &result {
             ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
