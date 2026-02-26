@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
+use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
 use crate::ipc::protocol::DaemonEvent;
@@ -13,6 +14,7 @@ use crate::ipc::protocol::DaemonEvent;
 pub struct Stores {
     pub plans: StdRwLock<HashMap<String, Plan>>,
     pub specs: StdRwLock<HashMap<String, Spec>>,
+    pub phases: StdRwLock<HashMap<String, Phase>>,
 }
 
 impl Stores {
@@ -20,6 +22,7 @@ impl Stores {
         Self {
             plans: StdRwLock::new(HashMap::new()),
             specs: StdRwLock::new(HashMap::new()),
+            phases: StdRwLock::new(HashMap::new()),
         }
     }
 }
@@ -123,6 +126,7 @@ mod tests {
         let stores = Stores::default();
         assert!(stores.plans.read().unwrap().is_empty());
         assert!(stores.specs.read().unwrap().is_empty());
+        assert!(stores.phases.read().unwrap().is_empty());
     }
 
     #[test]
@@ -145,5 +149,16 @@ mod tests {
         let specs = stores.specs.read().unwrap();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[&id].title, "Test Spec");
+    }
+
+    #[test]
+    fn test_stores_phase_insert_and_read() {
+        let stores = Stores::new();
+        let phase = Phase::new("spec-1".into(), "Test Phase".into(), "Desc".into(), 1);
+        let id = phase.id.clone();
+        stores.phases.write().unwrap().insert(id.clone(), phase);
+        let phases = stores.phases.read().unwrap();
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[&id].title, "Test Phase");
     }
 }

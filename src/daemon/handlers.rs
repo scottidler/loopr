@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
@@ -24,6 +25,10 @@ pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>,
         "spec.get" => handle_spec_get(stores, req),
         "spec.list" => handle_spec_list(stores, req),
         "spec.transition" => handle_spec_transition(stores, event_tx, req),
+        "phase.create" => handle_phase_create(stores, event_tx, req),
+        "phase.get" => handle_phase_get(stores, req),
+        "phase.list" => handle_phase_list(stores, req),
+        "phase.transition" => handle_phase_transition(stores, event_tx, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -296,6 +301,148 @@ fn handle_spec_transition(
     ));
 
     DaemonResponse::ok(req.id, spec_json)
+}
+
+// --- Phase handlers ---
+
+fn handle_phase_create(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let spec_id = match req.params.get("spec_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("spec_id is required")),
+    };
+
+    // Verify parent spec exists
+    if !stores.specs.read().unwrap().contains_key(&spec_id) {
+        return DaemonResponse::err(req.id, RpcError::not_found("spec", &spec_id));
+    }
+
+    let title = req
+        .params
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = req
+        .params
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let order = req
+        .params
+        .get("order")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    if title.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
+    }
+
+    let phase = Phase::new(spec_id, title, description, order);
+    let phase_json = match serde_json::to_value(&phase) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = phase.id.clone();
+    stores.phases.write().unwrap().insert(id.clone(), phase);
+    let _ = event_tx.send(DaemonEvent::record_created("phase", &id));
+
+    DaemonResponse::ok(req.id, phase_json)
+}
+
+fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let phases = stores.phases.read().unwrap();
+    match phases.get(id) {
+        Some(phase) => match serde_json::to_value(phase) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("phase", id)),
+    }
+}
+
+fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let phases = stores.phases.read().unwrap();
+
+    // Optionally filter by spec_id
+    let spec_id_filter = req.params.get("spec_id").and_then(|v| v.as_str());
+
+    let phase_list: Vec<&Phase> = phases
+        .values()
+        .filter(|p| spec_id_filter.is_none() || Some(p.spec_id.as_str()) == spec_id_filter)
+        .collect();
+
+    match serde_json::to_value(&phase_list) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_phase_transition(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let target_status: PhaseStatus = match req.params.get("target_status") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(s) => s,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
+        },
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
+    };
+
+    let role: Role = match req.params.get("role") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(r) => r,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
+        },
+        None => Role::Coordinator,
+    };
+
+    let mut phases = stores.phases.write().unwrap();
+    let phase = match phases.get_mut(&id) {
+        Some(p) => p,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("phase", &id)),
+    };
+
+    let from = phase.status;
+    let rules = hierarchy_transitions();
+    if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    phase.status = target_status;
+    phase.updated_at = crate::id::now_millis();
+
+    let phase_json = match serde_json::to_value(&*phase) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::transition_completed(
+        "phase",
+        &id,
+        &from.to_string(),
+        &target_status.to_string(),
+        &role.to_string(),
+    ));
+
+    DaemonResponse::ok(req.id, phase_json)
 }
 
 #[cfg(test)]
@@ -870,6 +1017,286 @@ mod tests {
         let req = DaemonRequest::new(
             1,
             "spec.transition",
+            json!({
+                "id": "nonexistent",
+                "target_status": "active"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // --- phase handlers ---
+
+    /// Helper: create a plan + spec and return (plan_id, spec_id)
+    fn create_test_spec(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>) -> (String, String) {
+        let plan_id = create_test_plan(stores, tx);
+        let resp = dispatch(
+            stores,
+            tx,
+            DaemonRequest::new(10, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+        );
+        let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (plan_id, spec_id)
+    }
+
+    #[test]
+    fn test_phase_create_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+
+        let req = DaemonRequest::new(
+            20,
+            "phase.create",
+            json!({
+                "spec_id": spec_id,
+                "title": "Test Phase",
+                "description": "A phase",
+                "order": 1
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Test Phase");
+        assert_eq!(result["spec_id"], spec_id);
+        assert_eq!(result["status"], "draft");
+        assert_eq!(result["order"], 1);
+        assert_eq!(stores.phases.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_phase_create_missing_spec_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "phase.create", json!({"title": "Phase"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("spec_id"));
+    }
+
+    #[test]
+    fn test_phase_create_spec_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "phase.create", json!({"spec_id": "nonexistent", "title": "Phase"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_phase_create_missing_title() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+        let req = DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "description": "no title"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("title"));
+    }
+
+    #[test]
+    fn test_phase_create_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+        // Drain plan+spec create events
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+
+        let req = DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Phase"}));
+        dispatch(&stores, &tx, req);
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.created");
+        assert_eq!(event.data["collection"], "phase");
+    }
+
+    #[test]
+    fn test_phase_get_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "My Phase", "order": 3})),
+        );
+        let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let get_resp = dispatch(&stores, &tx, DaemonRequest::new(21, "phase.get", json!({"id": phase_id})));
+        assert!(!get_resp.is_error());
+        let result = get_resp.result.unwrap();
+        assert_eq!(result["title"], "My Phase");
+        assert_eq!(result["order"], 3);
+    }
+
+    #[test]
+    fn test_phase_get_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "phase.get", json!({"id": "nonexistent"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_phase_list_empty() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "phase.list", json!(null));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_phase_list_filtered_by_spec_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id_1) = create_test_spec(&stores, &tx);
+
+        // Create a second spec under the same plan
+        let plan_id = _plan_id;
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(11, "spec.create", json!({"plan_id": plan_id, "title": "Spec 2"})),
+        );
+        let spec_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create phases under different specs
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id_1, "title": "Phase A", "order": 1})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(21, "phase.create", json!({"spec_id": spec_id_2, "title": "Phase B", "order": 1})),
+        );
+
+        // List all — should have 2
+        let all_resp = dispatch(&stores, &tx, DaemonRequest::new(30, "phase.list", json!(null)));
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // List filtered by spec_id_1 — should have 1
+        let filtered_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(31, "phase.list", json!({"spec_id": spec_id_1})),
+        );
+        let phases = filtered_resp.result.unwrap();
+        let arr = phases.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["title"], "Phase A");
+    }
+
+    #[test]
+    fn test_phase_transition_draft_to_active() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+        // Drain plan+spec create events
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Phase"})),
+        );
+        let _ = rx.try_recv(); // consume phase create event
+        let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req = DaemonRequest::new(
+            21,
+            "phase.transition",
+            json!({
+                "id": phase_id,
+                "target_status": "active",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "transition.completed");
+        assert_eq!(event.data["collection"], "phase");
+        assert_eq!(event.data["from"], "Draft");
+        assert_eq!(event.data["to"], "Active");
+    }
+
+    #[test]
+    fn test_phase_transition_invalid_skip_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Phase"})),
+        );
+        let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req = DaemonRequest::new(
+            21,
+            "phase.transition",
+            json!({
+                "id": phase_id,
+                "target_status": "complete",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_phase_transition_wrong_role() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Phase"})),
+        );
+        let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req = DaemonRequest::new(
+            21,
+            "phase.transition",
+            json!({
+                "id": phase_id,
+                "target_status": "active",
+                "role": "implementer"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_phase_transition_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(
+            1,
+            "phase.transition",
             json!({
                 "id": "nonexistent",
                 "target_status": "active"
