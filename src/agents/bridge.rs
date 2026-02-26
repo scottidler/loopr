@@ -1,0 +1,136 @@
+use std::sync::Arc;
+
+use tokio::sync::broadcast;
+
+use crate::config::Config;
+use crate::daemon::context::Stores;
+use crate::daemon::handlers;
+use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse};
+use crate::worktree::manager::WorktreeManager;
+
+/// In-process channel for agent ↔ daemon communication.
+/// Avoids the overhead of Unix socket for same-process agents.
+/// Uses the same dispatch() function as socket-based IPC — same FSM
+/// validation, role guards, and parent checks apply.
+pub struct AgentIpcBridge {
+    stores: Arc<Stores>,
+    event_tx: broadcast::Sender<DaemonEvent>,
+    worktree_mgr: WorktreeManager,
+    config: Config,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl AgentIpcBridge {
+    pub fn new(
+        stores: Arc<Stores>,
+        event_tx: broadcast::Sender<DaemonEvent>,
+        worktree_mgr: WorktreeManager,
+        config: Config,
+    ) -> Self {
+        Self {
+            stores,
+            event_tx,
+            worktree_mgr,
+            config,
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+
+    /// Send a request through the handler pipeline, same as socket-based IPC.
+    pub fn request(&self, method: &str, params: serde_json::Value) -> DaemonResponse {
+        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let req = DaemonRequest::new(id, method, params);
+        handlers::dispatch(
+            &self.stores,
+            &self.event_tx,
+            &self.worktree_mgr,
+            &self.config.integrator,
+            req,
+        )
+    }
+
+    /// Get a reference to the event broadcast sender for subscribing to events.
+    pub fn event_tx(&self) -> &broadcast::Sender<DaemonEvent> {
+        &self.event_tx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, ProjectConfig};
+    use taskstore::Store;
+
+    fn test_bridge() -> AgentIpcBridge {
+        let id = crate::id::generate_id();
+        let dir = std::env::temp_dir().join(format!("loopr-bridge-test-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.clone(),
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let (event_tx, _) = broadcast::channel(16);
+
+        // Open TaskStore and rebuild indexes like DaemonContext does
+        let store = Store::open(&dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
+
+        AgentIpcBridge::new(Arc::new(stores), event_tx, worktree_mgr, config)
+    }
+
+    #[test]
+    fn test_bridge_handshake() {
+        let bridge = test_bridge();
+        let resp = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
+        assert!(!resp.is_error());
+        assert!(resp.result.unwrap()["protocol"].is_string());
+    }
+
+    #[test]
+    fn test_bridge_unknown_method() {
+        let bridge = test_bridge();
+        let resp = bridge.request("nonexistent.method", serde_json::json!(null));
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("nonexistent.method"));
+    }
+
+    #[test]
+    fn test_bridge_plan_create() {
+        let bridge = test_bridge();
+        let resp = bridge.request(
+            "plan.create",
+            serde_json::json!({
+                "title": "Bridge Test Plan",
+                "description": "Test description",
+                "acceptance_criteria": "Test criteria"
+            }),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Bridge Test Plan");
+        assert!(result["id"].is_string());
+    }
+
+    #[test]
+    fn test_bridge_increments_request_ids() {
+        let bridge = test_bridge();
+        let resp1 = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
+        let resp2 = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
+        assert_ne!(resp1.id, resp2.id);
+    }
+
+    #[test]
+    fn test_bridge_event_tx() {
+        let bridge = test_bridge();
+        let mut rx = bridge.event_tx().subscribe();
+        let event = DaemonEvent::record_created("test", "t1");
+        bridge.event_tx().send(event).unwrap();
+        let received = rx.try_recv().unwrap();
+        assert_eq!(received.event, "record.created");
+    }
+}

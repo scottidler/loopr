@@ -4,6 +4,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::agents::{AgentSession, AgentStatus, AgentType};
 use crate::config::IntegratorConfig;
 use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
 use crate::domain::learning::{Learning, LearningScope};
@@ -142,6 +143,12 @@ pub fn dispatch(
         "validator.validate" => handle_validator_validate(stores, req),
         "validator.report" => handle_validator_report(stores, req),
         "validator.reports" => handle_validator_reports(stores, req),
+        "agent.start" => handle_agent_start(stores, event_tx, req),
+        "agent.stop" => handle_agent_stop(stores, event_tx, req),
+        "agent.pause" => handle_agent_pause(stores, event_tx, req),
+        "agent.resume" => handle_agent_resume(stores, event_tx, req),
+        "agent.status" => handle_agent_status(stores, req),
+        "agent.list" => handle_agent_list(stores, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -186,6 +193,7 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
         Tick::collection_name(),
         Learning::collection_name(),
         Lock::collection_name(),
+        AgentSession::collection_name(),
     ];
 
     DaemonResponse::ok(
@@ -203,6 +211,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     let ticks = stores.ticks.read().unwrap().len();
     let learnings = stores.learnings.read().unwrap().len();
     let locks = stores.locks.read().unwrap().len();
+    let agent_sessions = stores.agent_sessions.read().unwrap().len();
 
     // TaskStore stats (when available)
     let taskstore_stats = if let Some(store) = &stores.store {
@@ -246,6 +255,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
                 "ticks": ticks,
                 "learnings": learnings,
                 "locks": locks,
+                "agent_sessions": agent_sessions,
             },
             "taskstore": taskstore_stats,
         }),
@@ -2431,6 +2441,274 @@ fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
         }
     } else {
         DaemonResponse::ok(req.id, json!([]))
+    }
+}
+
+// --- Agent handlers ---
+
+fn handle_agent_start(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let agent_type: AgentType = match req.params.get("agent_type") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(t) => t,
+            Err(_) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("invalid agent_type (implementer|reviewer)"),
+                );
+            }
+        },
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("agent_type is required"));
+        }
+    };
+
+    let work_item_id = req
+        .params
+        .get("work_item_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let bundle_id = req
+        .params
+        .get("bundle_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Validate: Implementer needs work_item_id, Reviewer needs bundle_id
+    match agent_type {
+        AgentType::Implementer => {
+            if work_item_id.is_none() {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("work_item_id is required for implementer agents"),
+                );
+            }
+        }
+        AgentType::Reviewer => {
+            if bundle_id.is_none() {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("bundle_id is required for reviewer agents"),
+                );
+            }
+        }
+    }
+
+    // Create agent session with model from config (placeholder — will be wired up in Phase 2)
+    let mut session = AgentSession::new(agent_type, "claude-sonnet-4-6".to_string());
+    session.work_item_id = work_item_id;
+    session.bundle_id = bundle_id;
+
+    let session_json = match serde_json::to_value(&session) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = session.id.clone();
+
+    // Persist to TaskStore
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(session.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    stores.agent_sessions.write().unwrap().insert(id.clone(), session);
+    let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
+
+    DaemonResponse::ok(req.id, session_json)
+}
+
+fn handle_agent_stop(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
+    };
+
+    let mut sessions = stores.agent_sessions.write().unwrap();
+    let session = match sessions.get_mut(session_id) {
+        Some(s) => s,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
+    };
+
+    if let Err(e) = session.transition_to(AgentStatus::Cancelled) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
+    }
+
+    // Persist to TaskStore
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(session.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let session_json = match serde_json::to_value(&*session) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+    DaemonResponse::ok(req.id, session_json)
+}
+
+fn handle_agent_pause(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
+    };
+
+    let mut sessions = stores.agent_sessions.write().unwrap();
+    let session = match sessions.get_mut(session_id) {
+        Some(s) => s,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
+    };
+
+    if let Err(e) = session.transition_to(AgentStatus::Paused) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
+    }
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(session.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let session_json = match serde_json::to_value(&*session) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+    DaemonResponse::ok(req.id, session_json)
+}
+
+fn handle_agent_resume(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
+    };
+
+    let mut sessions = stores.agent_sessions.write().unwrap();
+    let session = match sessions.get_mut(session_id) {
+        Some(s) => s,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
+    };
+
+    if let Err(e) = session.transition_to(AgentStatus::Running) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
+    }
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(session.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let session_json = match serde_json::to_value(&*session) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+    DaemonResponse::ok(req.id, session_json)
+}
+
+fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
+    };
+
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<AgentSession>(session_id) {
+            Ok(Some(session)) => {
+                return match serde_json::to_value(&session) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let sessions = stores.agent_sessions.read().unwrap();
+    match sessions.get(session_id) {
+        Some(session) => match serde_json::to_value(session) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
+    }
+}
+
+fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let status_filter: Option<AgentStatus> = req
+        .params
+        .get("status")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let type_filter: Option<AgentType> = req
+        .params
+        .get("agent_type")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    if let Some(store) = &stores.store {
+        let mut filters: Vec<Filter> = vec![];
+        if let Some(status) = &status_filter {
+            filters.push(Filter {
+                field: "status".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(status.to_string()),
+            });
+        }
+        if let Some(agent_type) = &type_filter {
+            filters.push(Filter {
+                field: "agent_type".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(agent_type.to_string()),
+            });
+        }
+        match store.lock().unwrap().list::<AgentSession>(&filters) {
+            Ok(sessions) => match serde_json::to_value(&sessions) {
+                Ok(v) => return DaemonResponse::ok(req.id, v),
+                Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+            },
+            Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        }
+    }
+
+    // Fallback to HashMap
+    let sessions = stores.agent_sessions.read().unwrap();
+    let mut result: Vec<&AgentSession> = sessions.values().collect();
+
+    if let Some(status) = status_filter {
+        result.retain(|s| s.status == status);
+    }
+    if let Some(agent_type) = type_filter {
+        result.retain(|s| s.agent_type == agent_type);
+    }
+
+    match serde_json::to_value(&result) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
 }
 

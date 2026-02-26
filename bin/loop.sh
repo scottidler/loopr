@@ -112,6 +112,9 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         git commit -m "ralph: iteration $((i - 1)) changes" || true
     fi
 
+    # Log iteration start to progress.txt so tail -f shows activity
+    echo "Iteration $i: STARTED at $(date '+%H:%M:%S')" >>"$PROGRESS_FILE"
+
     # Build prompt: PROMPT.md + progress.txt injected directly
     CONSTRUCTED_PROMPT=$(cat "$PROMPT_FILE")
     if [[ -f "$PROGRESS_FILE" ]]; then
@@ -156,6 +159,8 @@ $(cat "$PROGRESS_FILE")
         git add -A
         git commit -m "ralph: iteration $i complete on $CURRENT_BRANCH" || true
     fi
+
+    echo "Iteration $i: VALIDATING at $(date '+%H:%M:%S')" >>"$PROGRESS_FILE"
 
     # Run validation EXTERNALLY (not inside LLM session) — capture output
     # Write to log file directly to avoid pipefail issues with tee chains

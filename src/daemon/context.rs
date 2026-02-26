@@ -5,6 +5,7 @@ use log::{info, warn};
 use taskstore::Store;
 use tokio::sync::{RwLock, broadcast};
 
+use crate::agents::AgentSession;
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::learning::Learning;
@@ -30,6 +31,7 @@ pub struct Stores {
     pub ticks: StdRwLock<HashMap<String, Tick>>,
     pub learnings: StdRwLock<HashMap<String, Learning>>,
     pub locks: StdRwLock<HashMap<String, Lock>>,
+    pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
     pub store: Option<Arc<StdMutex<Store>>>,
     /// Doc Validator (LLM-based). None when validator.enabled = false or in legacy contexts.
@@ -47,6 +49,7 @@ impl Stores {
             ticks: StdRwLock::new(HashMap::new()),
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
+            agent_sessions: StdRwLock::new(HashMap::new()),
             store: None,
             validator: None,
         }
@@ -93,6 +96,7 @@ impl DaemonContext {
         store.rebuild_indexes::<Learning>()?;
         store.rebuild_indexes::<Lock>()?;
         store.rebuild_indexes::<ValidationReport>()?;
+        store.rebuild_indexes::<AgentSession>()?;
 
         info!("TaskStore opened at {}", repo_path.display());
 
@@ -125,6 +129,9 @@ impl DaemonContext {
             for lock in store.list::<Lock>(&[])? {
                 stores.locks.write().unwrap().insert(lock.id.clone(), lock);
             }
+            for session in store.list::<AgentSession>(&[])? {
+                stores.agent_sessions.write().unwrap().insert(session.id.clone(), session);
+            }
             let hydrated: usize = stores.plans.read().unwrap().len()
                 + stores.specs.read().unwrap().len()
                 + stores.phases.read().unwrap().len()
@@ -132,7 +139,8 @@ impl DaemonContext {
                 + stores.bundles.read().unwrap().len()
                 + stores.ticks.read().unwrap().len()
                 + stores.learnings.read().unwrap().len()
-                + stores.locks.read().unwrap().len();
+                + stores.locks.read().unwrap().len()
+                + stores.agent_sessions.read().unwrap().len();
             if hydrated > 0 {
                 info!("Hydrated {} records from TaskStore into memory", hydrated);
             }
@@ -377,6 +385,7 @@ mod tests {
         assert!(stores.ticks.read().unwrap().is_empty());
         assert!(stores.learnings.read().unwrap().is_empty());
         assert!(stores.locks.read().unwrap().is_empty());
+        assert!(stores.agent_sessions.read().unwrap().is_empty());
     }
 
     #[test]
