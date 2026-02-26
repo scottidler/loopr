@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use taskstore::record::{IndexValue, Record};
 
 use crate::domain::plan::HierarchyStatus;
 use crate::id;
@@ -33,12 +35,34 @@ impl Spec {
     }
 }
 
+impl Record for Spec {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "specs"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m.insert("plan_id".into(), IndexValue::String(self.plan_id.clone()));
+        m
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::plan::hierarchy_transitions;
     use crate::domain::role::Role;
     use crate::domain::transition::validate_transition;
+    use taskstore::record::{IndexValue, Record};
 
     #[test]
     fn test_spec_new() {
@@ -173,5 +197,56 @@ mod tests {
             &rules,
         );
         assert!(result.is_err());
+    }
+
+    // Record trait tests
+
+    #[test]
+    fn test_spec_record_id() {
+        let spec = Spec::new("plan-1".to_string(), "T".to_string(), "D".to_string());
+        assert_eq!(Record::id(&spec), spec.id);
+    }
+
+    #[test]
+    fn test_spec_record_updated_at() {
+        let spec = Spec::new("plan-1".to_string(), "T".to_string(), "D".to_string());
+        assert_eq!(Record::updated_at(&spec), spec.updated_at);
+    }
+
+    #[test]
+    fn test_spec_record_collection_name() {
+        assert_eq!(Spec::collection_name(), "specs");
+    }
+
+    #[test]
+    fn test_spec_record_indexed_fields() {
+        let spec = Spec::new("plan-42".to_string(), "T".to_string(), "D".to_string());
+        let fields = spec.indexed_fields();
+        assert_eq!(
+            fields.get("status"),
+            Some(&IndexValue::String("draft".to_string()))
+        );
+        assert_eq!(
+            fields.get("plan_id"),
+            Some(&IndexValue::String("plan-42".to_string()))
+        );
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn test_spec_record_roundtrip_via_serde() {
+        let spec = Spec::new("plan-99".to_string(), "RT".to_string(), "Desc".to_string());
+        let json = serde_json::to_string(&spec).unwrap();
+        let deserialized: Spec = serde_json::from_str(&json).unwrap();
+        assert_eq!(Record::id(&spec), Record::id(&deserialized));
+        assert_eq!(Record::updated_at(&spec), Record::updated_at(&deserialized));
+        assert_eq!(
+            spec.indexed_fields().get("status"),
+            deserialized.indexed_fields().get("status")
+        );
+        assert_eq!(
+            spec.indexed_fields().get("plan_id"),
+            deserialized.indexed_fields().get("plan_id")
+        );
     }
 }
