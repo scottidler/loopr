@@ -41,6 +41,11 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
             role: Some(Role::Coordinator),
         },
         TransitionRule {
+            from: Triaged,
+            to: Reviewed,
+            role: Some(Role::Reviewer),
+        },
+        TransitionRule {
             from: Reviewed,
             to: Accepted,
             role: Some(Role::Coordinator),
@@ -71,6 +76,11 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
             from: Triaged,
             to: Rejected,
             role: Some(Role::Coordinator),
+        },
+        TransitionRule {
+            from: Triaged,
+            to: Rejected,
+            role: Some(Role::Reviewer),
         },
         TransitionRule {
             from: Reviewed,

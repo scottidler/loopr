@@ -277,6 +277,7 @@ pub fn role_actions(role: Role) -> Vec<&'static str> {
         Role::Coordinator => vec!["n:New Plan", "t:Transition", "r:Switch Role"],
         Role::Integrator => vec!["n:New Tick", "t:Transition", "r:Switch Role"],
         Role::Implementer => vec!["n:New WorkItem", "t:Transition", "r:Switch Role"],
+        Role::Reviewer => vec!["t:Transition", "r:Switch Role"],
     }
 }
 

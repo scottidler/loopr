@@ -341,7 +341,7 @@ fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String
     match result {
         ActionResult::ToolRun(tr) => format!("ran {} (exit {})", tr.tool_name, tr.exit_code),
         ActionResult::FileWritten(p) => format!("wrote {}", p),
-        ActionResult::FileRead(_) => "read file".to_string(),
+        ActionResult::FileRead(content) => format!("read file ({} bytes)", content.len()),
         ActionResult::Committed(m) => format!("committed: {}", m),
         ActionResult::BundleProposed(d) => format!("proposed bundle: {}", d),
         ActionResult::Transitioned(d) => format!("transitioned: {}", d),

@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::implementer::{self, LlmClient};
 use crate::agents::llm_client::AgentLlmClient;
+use crate::agents::reviewer;
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
@@ -165,51 +166,37 @@ async fn run_agent_loop(
             result
         }
         AgentType::Reviewer => {
-            // Phase 5 — stub for now, complete immediately
-            info!("Reviewer agent {} — stub, completing immediately", session_id);
-            let worktree_path = std::env::temp_dir();
-            let done_action = AgentAction::Done {
-                summary: format!("Reviewer {} stub complete", session_id),
-            };
-            let result = execute_action(&done_action, &stores.tool_runner, bridge, &worktree_path).await?;
-            log_action_result(session_id, &result);
-            Ok(())
-        }
-    }
-}
+            let config = stores.config.agents.reviewer.clone();
+            let llm = create_llm_client(&config, session_id, event_tx);
 
-/// Log the result of an agent action for diagnostics.
-fn log_action_result(session_id: &str, result: &ActionResult) {
-    match result {
-        ActionResult::ToolRun(tool_result) => {
-            info!(
-                "Agent {} tool result: {} exit={} duration={}ms",
-                session_id, tool_result.tool_name, tool_result.exit_code, tool_result.duration_ms
-            );
-        }
-        ActionResult::FileWritten(path) => {
-            info!("Agent {} wrote file: {}", session_id, path);
-        }
-        ActionResult::FileRead(content) => {
-            info!("Agent {} read file ({} bytes)", session_id, content.len());
-        }
-        ActionResult::Committed(msg) => {
-            info!("Agent {} committed: {}", session_id, msg);
-        }
-        ActionResult::BundleProposed(desc) => {
-            info!("Agent {} proposed bundle: {}", session_id, desc);
-        }
-        ActionResult::Transitioned(desc) => {
-            info!("Agent {} transitioned: {}", session_id, desc);
-        }
-        ActionResult::LearningCreated(content) => {
-            info!("Agent {} created learning: {}", session_id, content);
-        }
-        ActionResult::Done(summary) => {
-            info!("Agent {} done: {}", session_id, summary);
-        }
-        ActionResult::NeedHelp(reason) => {
-            warn!("Agent {} needs help: {}", session_id, reason);
+            // Clone session out for the reviewer loop
+            let mut session = {
+                let sessions = stores.agent_sessions.read().unwrap();
+                sessions
+                    .get(session_id)
+                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
+                    .clone()
+            };
+
+            let result = reviewer::run_reviewer(
+                llm.as_ref(),
+                &mut session,
+                stores,
+                bridge,
+                &config,
+                event_tx,
+            )
+            .await;
+
+            // Write back updated session iteration count
+            {
+                let mut sessions = stores.agent_sessions.write().unwrap();
+                if let Some(s) = sessions.get_mut(session_id) {
+                    s.iteration = session.iteration;
+                }
+            }
+
+            result
         }
     }
 }
