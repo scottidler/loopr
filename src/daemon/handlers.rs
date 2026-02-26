@@ -500,6 +500,13 @@ fn handle_spec_transition(
     spec.status = target_status;
     spec.updated_at = crate::id::now_millis();
 
+    // Persist transition to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(spec.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     let spec_json = match serde_json::to_value(&*spec) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -3005,6 +3012,46 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_spec_transition_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+
+        // Create spec (also persisted to TaskStore)
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Transition Spec"})),
+        );
+        assert!(!create_resp.is_error());
+        let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition Draft → Active
+        let req = DaemonRequest::new(
+            3,
+            "spec.transition",
+            json!({
+                "id": spec_id,
+                "target_status": "active",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+
+        // Verify TaskStore has the updated status
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Spec> = store.get(&spec_id).unwrap();
+        assert!(retrieved.is_some());
+        let spec = retrieved.unwrap();
+        assert_eq!(spec.status, SpecStatus::Active);
     }
 
     // --- phase handlers ---
