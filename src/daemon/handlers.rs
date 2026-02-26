@@ -199,6 +199,14 @@ fn handle_plan_create(
     };
 
     let id = plan.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store {
+        if let Err(e) = store.lock().unwrap().create(plan.clone()) {
+            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        }
+    }
+
     stores.plans.write().unwrap().insert(id.clone(), plan);
     let _ = event_tx.send(DaemonEvent::record_created("plan", &id));
 
@@ -1823,6 +1831,27 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "plan");
+    }
+
+    #[test]
+    fn test_plan_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(
+            1,
+            "plan.create",
+            json!({"title": "Persisted Plan", "description": "desc"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let plan_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Plan> = store.get(&plan_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().title, "Persisted Plan");
     }
 
     // --- plan.get tests ---
