@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
-use ratatui::Frame;
 
 use crate::tui::app::App;
 
@@ -11,25 +11,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .state
         .work_items
         .iter()
-        .map(|wi| {
-            ListItem::new(Line::from(format!(
-                "[{}] {} ({})",
-                wi.status, wi.title, wi.id
-            )))
-        })
+        .map(|wi| ListItem::new(Line::from(format!("[{}] {} ({})", wi.status, wi.title, wi.id))))
         .collect();
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Work Items"),
-        )
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .block(Block::default().borders(Borders::ALL).title("Work Items"))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         .highlight_symbol("> ");
 
     let mut state = ListState::default();

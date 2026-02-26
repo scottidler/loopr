@@ -354,7 +354,10 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     tui_app.toggle_help();
     info!(
         "TUI app after actions: view={} role={} help={} list_len={}",
-        tui_app.current_view, tui_app.current_role, tui_app.show_help, tui_app.current_list_len()
+        tui_app.current_view,
+        tui_app.current_role,
+        tui_app.show_help,
+        tui_app.current_list_len()
     );
     // Validate View cycling
     let v = tui::app::View::Dashboard;

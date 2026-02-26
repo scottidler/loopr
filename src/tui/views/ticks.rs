@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
-use ratatui::Frame;
 
 use crate::tui::app::App;
 
@@ -12,24 +12,14 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .ticks
         .iter()
         .map(|t| {
-            let sha = t
-                .integration_sha
-                .as_deref()
-                .unwrap_or("none");
-            ListItem::new(Line::from(format!(
-                "Tick #{} [{}] SHA: {}",
-                t.number, t.status, sha
-            )))
+            let sha = t.integration_sha.as_deref().unwrap_or("none");
+            ListItem::new(Line::from(format!("Tick #{} [{}] SHA: {}", t.number, t.status, sha)))
         })
         .collect();
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title("Ticks"))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         .highlight_symbol("> ");
 
     let mut state = ListState::default();

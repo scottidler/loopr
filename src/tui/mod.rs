@@ -1,3 +1,3 @@
 pub mod app;
-pub mod views;
 pub mod input;
+pub mod views;

@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 
 use crate::tui::app::App;
 
@@ -11,7 +11,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Role + connection status
-            Constraint::Min(5),   // Queue counts
+            Constraint::Min(5),    // Queue counts
         ])
         .split(area);
 
@@ -20,9 +20,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled("Role: ", Style::default().fg(Color::Gray)),
         Span::styled(
             app.current_role.to_string(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  |  "),
         Span::styled("Connection: ", Style::default().fg(Color::Gray)),
@@ -35,8 +33,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             }),
         ),
     ]);
-    let status_block = Paragraph::new(status_line)
-        .block(Block::default().borders(Borders::ALL).title("Status"));
+    let status_block = Paragraph::new(status_line).block(Block::default().borders(Borders::ALL).title("Status"));
     frame.render_widget(status_block, chunks[0]);
 
     // Queue counts
@@ -59,8 +56,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             app.state.locks.len(),
         )),
     ];
-    let counts_block = Paragraph::new(counts)
-        .block(Block::default().borders(Borders::ALL).title("Overview"));
+    let counts_block = Paragraph::new(counts).block(Block::default().borders(Borders::ALL).title("Overview"));
     frame.render_widget(counts_block, chunks[1]);
 }
 
