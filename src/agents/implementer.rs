@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::{info, warn};
 
-use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::{AgentAction, AgentSession};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
@@ -300,10 +300,7 @@ pub async fn run_implementer(
         }
     }
 
-    Err(eyre!(
-        "implementer reached max iterations ({})",
-        max_iterations
-    ))
+    Err(eyre!("implementer reached max iterations ({})", max_iterations))
 }
 
 fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String {
@@ -559,8 +556,12 @@ mod tests {
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#);
         let params = IterationParams {
-            llm: &llm, stores: &stores, tool_runner: &tool_runner,
-            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
         };
 
         let outcome = run_iteration(&params, 1, None).await.unwrap();
@@ -578,8 +579,12 @@ mod tests {
 
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#);
         let params = IterationParams {
-            llm: &llm, stores: &stores, tool_runner: &tool_runner,
-            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
         };
 
         let outcome = run_iteration(&params, 1, None).await.unwrap();
@@ -595,13 +600,19 @@ mod tests {
         let tool_runner = ToolRunner::new(&[]);
         let bridge = test_bridge(stores.clone(), &dir);
 
-        let llm = MockLlm::new(r#"[
+        let llm = MockLlm::new(
+            r#"[
             {"action": "write_file", "path": "test.txt", "content": "hello"},
             {"action": "read_file", "path": "test.txt"}
-        ]"#);
+        ]"#,
+        );
         let params = IterationParams {
-            llm: &llm, stores: &stores, tool_runner: &tool_runner,
-            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
         };
 
         let outcome = run_iteration(&params, 1, None).await.unwrap();
@@ -621,8 +632,12 @@ mod tests {
 
         let llm = FailingLlm;
         let params = IterationParams {
-            llm: &llm, stores: &stores, tool_runner: &tool_runner,
-            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
         };
 
         let result = run_iteration(&params, 1, None).await;
@@ -640,8 +655,12 @@ mod tests {
 
         let llm = MockLlm::new("This is not valid JSON");
         let params = IterationParams {
-            llm: &llm, stores: &stores, tool_runner: &tool_runner,
-            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
         };
 
         let result = run_iteration(&params, 1, None).await;
@@ -659,8 +678,12 @@ mod tests {
 
         let llm = MockLlm::new("[]");
         let params = IterationParams {
-            llm: &llm, stores: &stores, tool_runner: &tool_runner,
-            bridge: &bridge, work_item_id: &wi_id, worktree_path: &dir,
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
         };
 
         let result = run_iteration(&params, 1, None).await;
