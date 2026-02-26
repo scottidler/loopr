@@ -1,6 +1,7 @@
 pub mod bridge;
 pub mod executor;
 pub mod implementer;
+pub mod llm_client;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

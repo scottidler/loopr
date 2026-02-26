@@ -1,0 +1,480 @@
+use async_trait::async_trait;
+use eyre::{Result, eyre};
+use log::{debug, info, warn};
+use reqwest::Client;
+use tokio::sync::broadcast;
+
+use crate::agents::implementer::LlmClient;
+use crate::agents::{AgentEvent, AgentStatus};
+use crate::config::AgentRoleConfig;
+use crate::ipc::protocol::DaemonEvent;
+
+/// Real LLM client using reqwest async HTTP with SSE streaming for the Anthropic Messages API.
+///
+/// Implements `LlmClient` for use by agents. Streams tokens through the broadcast channel
+/// as `AgentEvent::LlmOutput` events for real-time TUI display.
+pub struct AgentLlmClient {
+    client: Client,
+    config: AgentRoleConfig,
+    api_key: String,
+    session_id: String,
+    event_tx: broadcast::Sender<DaemonEvent>,
+}
+
+impl std::fmt::Debug for AgentLlmClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentLlmClient")
+            .field("session_id", &self.session_id)
+            .field("model", &self.config.model)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentLlmClient {
+    /// Create a new AgentLlmClient.
+    ///
+    /// Reads the API key from the environment variable specified in `config.api_key_env`.
+    pub fn new(
+        config: AgentRoleConfig,
+        session_id: String,
+        event_tx: broadcast::Sender<DaemonEvent>,
+    ) -> Result<Self> {
+        let api_key = std::env::var(&config.api_key_env)
+            .map_err(|_| eyre!("API key not found in env var: {}", config.api_key_env))?;
+
+        let client = Client::new();
+
+        Ok(Self {
+            client,
+            config,
+            api_key,
+            session_id,
+            event_tx,
+        })
+    }
+
+    /// Create with an explicit API key (used in tests).
+    #[cfg(test)]
+    pub fn with_api_key(
+        config: AgentRoleConfig,
+        session_id: String,
+        event_tx: broadcast::Sender<DaemonEvent>,
+        api_key: String,
+    ) -> Self {
+        Self {
+            client: Client::new(),
+            config,
+            api_key,
+            session_id,
+            event_tx,
+        }
+    }
+
+    /// Emit an LlmOutput event through the broadcast channel.
+    fn emit_chunk(&self, chunk: &str, is_final: bool) {
+        let event = DaemonEvent::new(
+            "agent.llm_output",
+            serde_json::json!(AgentEvent::LlmOutput {
+                session_id: self.session_id.clone(),
+                chunk: chunk.to_string(),
+                is_final,
+            }),
+        );
+        // Ignore send errors — no subscribers is fine
+        let _ = self.event_tx.send(event);
+    }
+
+    /// Emit a status change event.
+    fn emit_status(&self, status: AgentStatus) {
+        let _ = self
+            .event_tx
+            .send(DaemonEvent::agent_status_changed(&self.session_id, status));
+    }
+
+    /// Call the Anthropic Messages API with SSE streaming.
+    /// Returns the accumulated full response text.
+    async fn call_streaming(&self, system_prompt: &str, user_message: &str) -> Result<String> {
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "stream": true,
+            "system": system_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": user_message,
+                }
+            ]
+        });
+
+        self.emit_status(AgentStatus::WaitingForLlm);
+
+        let response = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| eyre!("HTTP request failed: {}", e))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            warn!("Rate limited (429) — backing off");
+            return Err(eyre!("rate limited (429) — retry with backoff"));
+        }
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(eyre!("API error {}: {}", status, error_body));
+        }
+
+        self.emit_status(AgentStatus::Running);
+
+        // Read SSE stream
+        let full_text = self.read_sse_stream(response).await?;
+
+        // Emit final chunk marker
+        self.emit_chunk("", true);
+
+        Ok(full_text)
+    }
+
+    /// Read an SSE stream from the response and accumulate text.
+    async fn read_sse_stream(&self, response: reqwest::Response) -> Result<String> {
+        use futures::StreamExt;
+
+        let mut accumulated = String::new();
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|e| eyre!("stream read error: {}", e))?;
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            // Process complete SSE lines from buffer
+            while let Some(line_end) = buffer.find('\n') {
+                let line = buffer[..line_end].trim_end_matches('\r').to_string();
+                buffer = buffer[line_end + 1..].to_string();
+
+                if let Some(text) = parse_sse_text_delta(&line) {
+                    accumulated.push_str(&text);
+                    self.emit_chunk(&text, false);
+                    debug!("LLM chunk: {} bytes", text.len());
+                }
+            }
+        }
+
+        // Process any remaining data in buffer
+        if !buffer.is_empty() {
+            for line in buffer.lines() {
+                if let Some(text) = parse_sse_text_delta(line) {
+                    accumulated.push_str(&text);
+                    self.emit_chunk(&text, false);
+                }
+            }
+        }
+
+        info!(
+            "LLM response complete: {} chars for session {}",
+            accumulated.len(),
+            self.session_id
+        );
+        Ok(accumulated)
+    }
+}
+
+#[async_trait]
+impl LlmClient for AgentLlmClient {
+    async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String> {
+        self.call_streaming(system_prompt, user_message).await
+    }
+}
+
+/// Parse an SSE data line for a content_block_delta text chunk.
+///
+/// Anthropic SSE format:
+/// ```text
+/// event: content_block_delta
+/// data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+/// ```
+fn parse_sse_text_delta(line: &str) -> Option<String> {
+    let data = line.strip_prefix("data: ")?;
+
+    // Skip non-JSON lines
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+
+    // Only extract text from content_block_delta events
+    if value.get("type")?.as_str()? != "content_block_delta" {
+        return None;
+    }
+
+    let text = value
+        .get("delta")?
+        .get("text")?
+        .as_str()?
+        .to_string();
+
+    Some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- SSE parsing tests ---
+
+    #[test]
+    fn test_parse_sse_text_delta_valid() {
+        let line =
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_multiword() {
+        let line =
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, Some(" world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_message_start() {
+        let line = r#"data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[]}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_message_stop() {
+        let line = r#"data: {"type":"message_stop"}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_content_block_start() {
+        let line = r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_content_block_stop() {
+        let line = r#"data: {"type":"content_block_stop","index":0}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_done() {
+        let line = "data: [DONE]";
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_not_data_line() {
+        let line = "event: content_block_delta";
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_empty_data() {
+        let line = "data: ";
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_invalid_json() {
+        let line = "data: not json at all";
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_empty_text() {
+        let line =
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, Some(String::new()));
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_special_chars() {
+        let line =
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fn main() {\n    println!(\"hello\");\n}"}}"#;
+        let result = parse_sse_text_delta(line);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("fn main()"));
+    }
+
+    #[test]
+    fn test_parse_sse_text_delta_message_delta() {
+        let line = r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    // --- AgentLlmClient construction tests ---
+
+    #[test]
+    fn test_agent_llm_client_with_api_key() {
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(
+            config.clone(),
+            "session-1".to_string(),
+            event_tx,
+            "test-key".to_string(),
+        );
+        assert_eq!(client.session_id, "session-1");
+        assert_eq!(client.api_key, "test-key");
+        assert_eq!(client.config.model, config.model);
+    }
+
+    #[test]
+    fn test_agent_llm_client_new_missing_env() {
+        let mut config = AgentRoleConfig::default_implementer();
+        config.api_key_env = "LOOPR_TEST_NONEXISTENT_KEY_12345".to_string();
+        let (event_tx, _) = broadcast::channel(16);
+        let result = AgentLlmClient::new(config, "s1".to_string(), event_tx);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("API key not found"));
+    }
+
+    #[test]
+    fn test_agent_llm_client_emit_chunk() {
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(
+            config,
+            "s1".to_string(),
+            event_tx,
+            "key".to_string(),
+        );
+
+        client.emit_chunk("Hello", false);
+
+        let event = event_rx.try_recv().unwrap();
+        assert_eq!(event.event, "agent.llm_output");
+        let agent_event: AgentEvent = serde_json::from_value(event.data).unwrap();
+        if let AgentEvent::LlmOutput {
+            session_id,
+            chunk,
+            is_final,
+        } = agent_event
+        {
+            assert_eq!(session_id, "s1");
+            assert_eq!(chunk, "Hello");
+            assert!(!is_final);
+        } else {
+            panic!("expected LlmOutput event");
+        }
+    }
+
+    #[test]
+    fn test_agent_llm_client_emit_final_chunk() {
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(
+            config,
+            "s1".to_string(),
+            event_tx,
+            "key".to_string(),
+        );
+
+        client.emit_chunk("", true);
+
+        let event = event_rx.try_recv().unwrap();
+        let agent_event: AgentEvent = serde_json::from_value(event.data).unwrap();
+        if let AgentEvent::LlmOutput { is_final, .. } = agent_event {
+            assert!(is_final);
+        } else {
+            panic!("expected LlmOutput event");
+        }
+    }
+
+    #[test]
+    fn test_agent_llm_client_emit_status() {
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(
+            config,
+            "s1".to_string(),
+            event_tx,
+            "key".to_string(),
+        );
+
+        client.emit_status(AgentStatus::WaitingForLlm);
+
+        let event = event_rx.try_recv().unwrap();
+        assert_eq!(event.event, "agent.status_changed");
+    }
+
+    // --- Streaming accumulation tests ---
+
+    /// Simulate SSE lines and verify accumulated text.
+    #[test]
+    fn test_accumulate_sse_chunks() {
+        let sse_lines = vec![
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[]}}"#,
+            "",
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "",
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            "",
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}"#,
+            "",
+            r#"event: content_block_stop"#,
+            r#"data: {"type":"content_block_stop","index":0}"#,
+            "",
+            r#"event: message_delta"#,
+            r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}}"#,
+            "",
+            r#"event: message_stop"#,
+            r#"data: {"type":"message_stop"}"#,
+        ];
+
+        let mut accumulated = String::new();
+        for line in &sse_lines {
+            if let Some(text) = parse_sse_text_delta(line) {
+                accumulated.push_str(&text);
+            }
+        }
+        assert_eq!(accumulated, "Hello world");
+    }
+
+    /// Full SSE stream with JSON action output.
+    #[test]
+    fn test_accumulate_sse_json_response() {
+        let lines = vec![
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"[{\"action\""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":": \"done\", \"summary\""}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":": \"All complete\"}]"}}"#,
+        ];
+
+        let mut accumulated = String::new();
+        for line in &lines {
+            if let Some(text) = parse_sse_text_delta(line) {
+                accumulated.push_str(&text);
+            }
+        }
+        assert_eq!(accumulated, r#"[{"action": "done", "summary": "All complete"}]"#);
+    }
+}

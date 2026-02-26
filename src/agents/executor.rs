@@ -8,20 +8,39 @@ use tokio::sync::broadcast;
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::implementer::{self, LlmClient};
+use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::{ToolResult, ToolRunner};
 use crate::worktree::manager::WorktreeManager;
 
-/// Stub LLM client — always returns Done action.
-/// Phase 4 replaces this with the real AgentLlmClient (streaming SSE via reqwest).
+/// Stub LLM client — used when no API key is available (testing, development).
 struct StubLlmClient;
 
 #[async_trait]
 impl LlmClient for StubLlmClient {
     async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-        Ok(r#"[{"action": "done", "summary": "Stub LLM — real client in Phase 4"}]"#.to_string())
+        Ok(r#"[{"action": "done", "summary": "Stub LLM — no API key configured"}]"#.to_string())
+    }
+}
+
+/// Create the appropriate LLM client based on configuration.
+/// Returns a real `AgentLlmClient` if the API key env var is set, otherwise falls back to `StubLlmClient`.
+fn create_llm_client(
+    config: &crate::config::AgentRoleConfig,
+    session_id: &str,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+) -> Box<dyn LlmClient> {
+    match AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone()) {
+        Ok(client) => {
+            info!("Agent {} using real LLM client (model: {})", session_id, config.model);
+            Box::new(client)
+        }
+        Err(e) => {
+            warn!("Agent {} falling back to stub LLM client: {}", session_id, e);
+            Box::new(StubLlmClient)
+        }
     }
 }
 
@@ -56,7 +75,7 @@ pub async fn run_agent_task(
 
     // Phase 2 TODO: implement full agent loop (LLM calls, action parsing, tool execution).
     // For now, mark as Completed after startup validation.
-    let result = run_agent_loop(&session_id, agent_type, &stores, &bridge).await;
+    let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
 
     // Transition to terminal state based on result
     let terminal_status = match result {
@@ -97,6 +116,7 @@ async fn run_agent_loop(
     agent_type: AgentType,
     stores: &Arc<Stores>,
     bridge: &AgentIpcBridge,
+    event_tx: &broadcast::Sender<DaemonEvent>,
 ) -> Result<()> {
     // Verify the bridge works by checking system status
     let status_resp = bridge.request("system.status", serde_json::json!(null));
@@ -110,9 +130,9 @@ async fn run_agent_loop(
 
     match agent_type {
         AgentType::Implementer => {
-            let llm = StubLlmClient;
             let tool_runner = &stores.tool_runner;
             let config = stores.config.agents.implementer.clone();
+            let llm = create_llm_client(&config, session_id, event_tx);
 
             // Clone session out for the implementer loop
             let mut session = {
@@ -123,7 +143,7 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = implementer::run_implementer(&llm, &mut session, stores, tool_runner, bridge, &config).await;
+            let result = implementer::run_implementer(llm.as_ref(), &mut session, stores, tool_runner, bridge, &config).await;
 
             // Write back updated session iteration count
             {
