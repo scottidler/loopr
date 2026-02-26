@@ -57,6 +57,24 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     println!("Current role: {}", role);
     println!("Author: {}", config.name);
 
+    // Validate hierarchy status transitions are wired up
+    let plan = domain::plan::Plan::new(
+        "bootstrap".to_string(),
+        "Bootstrap plan".to_string(),
+        "Compiles and passes tests".to_string(),
+    );
+    info!("Created plan: {} (status={})", plan.id, plan.status);
+
+    // Validate hierarchy FSM is wired up
+    let hierarchy_rules = domain::plan::hierarchy_transitions();
+    domain::transition::validate_transition(
+        domain::plan::HierarchyStatus::Draft,
+        domain::plan::HierarchyStatus::Active,
+        role,
+        &hierarchy_rules,
+    )?;
+    info!("Hierarchy FSM validated ({} rules)", hierarchy_rules.len());
+
     // Validate that the transition engine is wired up
     let rules: Vec<domain::transition::TransitionRule<&str>> = vec![domain::transition::TransitionRule {
         from: "init",
