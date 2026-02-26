@@ -1,16 +1,19 @@
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use futures::StreamExt;
+use log::info;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
+use tokio::time::Interval;
 
 use crate::domain::role::Role;
 use crate::ipc::client::IpcClient;
@@ -19,6 +22,9 @@ use crate::ipc::protocol::IpcMessage;
 use super::app::{App, ConnectionStatus, View};
 use super::input::{apply_action, handle_key};
 use super::views;
+
+/// Reconnect interval when disconnected from daemon.
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Run the TUI, connecting to the daemon at the given socket path.
 pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
@@ -43,7 +49,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     app.connection = ConnectionStatus::Connected;
 
     // Run event loop; capture result so we always restore the terminal
-    let result = event_loop(&mut terminal, &mut app, &mut client).await;
+    let result = event_loop(&mut terminal, &mut app, Some(client), socket_path).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -52,13 +58,24 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     result
 }
 
-/// Main select! loop: keyboard events + IPC messages.
+/// Try to connect and handshake with the daemon.
+async fn try_connect(socket_path: &Path) -> Option<IpcClient> {
+    let mut client = IpcClient::connect(socket_path).await.ok()?;
+    client.handshake(env!("CARGO_PKG_VERSION")).await.ok()?;
+    Some(client)
+}
+
+/// Main select! loop: keyboard events + IPC messages + reconnection.
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
-    client: &mut IpcClient,
+    mut client: Option<IpcClient>,
+    socket_path: &Path,
 ) -> eyre::Result<()> {
     let mut events = EventStream::new();
+    let mut reconnect_timer: Interval = tokio::time::interval(RECONNECT_INTERVAL);
+    // Consume the first immediate tick so we don't reconnect on startup
+    reconnect_timer.tick().await;
 
     loop {
         terminal.draw(|frame| draw(app, frame))?;
@@ -76,17 +93,26 @@ async fn event_loop(
                     apply_action(app, action);
                 }
             }
-            ipc_msg = client.recv() => {
+            ipc_msg = async { client.as_mut().unwrap().recv().await }, if client.is_some() => {
                 match ipc_msg {
                     Ok(Some(IpcMessage::Event(_event))) => {
                         // TODO: update app.state based on daemon events
                     }
                     Ok(None) | Err(_) => {
+                        info!("Lost connection to daemon, will attempt reconnection");
                         app.connection = ConnectionStatus::Disconnected;
+                        client = None;
                     }
                     Ok(Some(IpcMessage::Response(_))) => {
                         // Unsolicited response — ignore
                     }
+                }
+            }
+            _ = reconnect_timer.tick(), if client.is_none() => {
+                if let Some(new_client) = try_connect(socket_path).await {
+                    info!("Reconnected to daemon");
+                    app.connection = ConnectionStatus::Connected;
+                    client = Some(new_client);
                 }
             }
         }
@@ -325,5 +351,103 @@ mod tests {
         let backend = TestBackend::new(30, 15);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn test_reconnect_interval_is_reasonable() {
+        // Reconnect interval should be between 1 and 10 seconds
+        assert!(RECONNECT_INTERVAL >= Duration::from_secs(1));
+        assert!(RECONNECT_INTERVAL <= Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn test_try_connect_nonexistent_socket() {
+        // try_connect should return None for a nonexistent socket
+        let result = try_connect(Path::new("/tmp/nonexistent-loopr-reconnect-test.sock")).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_try_connect_succeeds_with_daemon() {
+        use crate::ipc::server::{IpcServer, handle_client};
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("reconnect-{}.sock", crate::id::generate_id()));
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                handle_client(
+                    stream,
+                    |req| DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"})),
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let result = try_connect(&path).await;
+        assert!(result.is_some());
+
+        drop(result);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_after_disconnect() {
+        // Verify the app transitions from Disconnected back to Connected
+        // when a new daemon becomes available
+        use crate::ipc::server::{IpcServer, handle_client};
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("reconnect2-{}.sock", crate::id::generate_id()));
+
+        // Start disconnected, then start a daemon
+        let mut app = App::new();
+        app.connection = ConnectionStatus::Disconnected;
+        assert_eq!(app.connection, ConnectionStatus::Disconnected);
+
+        // Start a daemon
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                handle_client(
+                    stream,
+                    |req| DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"})),
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Simulate reconnect logic: try_connect succeeds → update app state
+        if let Some(_client) = try_connect(&path).await {
+            app.connection = ConnectionStatus::Connected;
+        }
+        assert_eq!(app.connection, ConnectionStatus::Connected);
+
+        let _ = server_handle.await;
     }
 }
