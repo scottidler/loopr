@@ -655,11 +655,7 @@ mod tests {
     fn test_spec_create_plan_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
-        let req = DaemonRequest::new(
-            1,
-            "spec.create",
-            json!({"plan_id": "nonexistent", "title": "Spec"}),
-        );
+        let req = DaemonRequest::new(1, "spec.create", json!({"plan_id": "nonexistent", "title": "Spec"}));
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -670,11 +666,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let plan_id = create_test_plan(&stores, &tx);
-        let req = DaemonRequest::new(
-            2,
-            "spec.create",
-            json!({"plan_id": plan_id, "description": "no title"}),
-        );
+        let req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "description": "no title"}));
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -688,11 +680,7 @@ mod tests {
         let plan_id = create_test_plan(&stores, &tx);
         let _ = rx.try_recv(); // consume plan create event
 
-        let req = DaemonRequest::new(
-            2,
-            "spec.create",
-            json!({"plan_id": plan_id, "title": "Spec"}),
-        );
+        let req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec"}));
         dispatch(&stores, &tx, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
@@ -714,11 +702,7 @@ mod tests {
         );
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        let get_resp = dispatch(
-            &stores,
-            &tx,
-            DaemonRequest::new(3, "spec.get", json!({"id": spec_id})),
-        );
+        let get_resp = dispatch(&stores, &tx, DaemonRequest::new(3, "spec.get", json!({"id": spec_id})));
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "My Spec");
     }
