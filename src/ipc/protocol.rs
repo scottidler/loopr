@@ -78,6 +78,15 @@ impl RpcError {
             message: format!("not found: {collection}/{id}"),
         }
     }
+
+    pub fn stale_bundle(base_tick_id: &str, latest_tick_id: &str) -> Self {
+        Self {
+            code: -32002,
+            message: format!(
+                "staleness guard: base_tick_id '{base_tick_id}' is behind latest Published Tick '{latest_tick_id}' — refresh worktree and re-propose"
+            ),
+        }
+    }
 }
 
 // --- Convenience constructors ---
@@ -146,6 +155,17 @@ impl DaemonEvent {
         Self::new(
             "record.updated",
             serde_json::json!({ "collection": collection, "id": id }),
+        )
+    }
+
+    pub fn bundle_rejected_stale(work_item_id: &str, base_tick_id: &str, latest_tick_id: &str) -> Self {
+        Self::new(
+            "bundle.rejected_stale",
+            serde_json::json!({
+                "bundle_work_item_id": work_item_id,
+                "base_tick_id": base_tick_id,
+                "latest_tick_id": latest_tick_id,
+            }),
         )
     }
 }

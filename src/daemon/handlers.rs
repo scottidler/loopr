@@ -651,6 +651,38 @@ fn handle_bundle_create(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Staleness guard: reject if base_tick_id is behind the latest Published Tick
+    let latest_published = find_latest_published_tick(stores);
+    match (&base_tick_id, &latest_published) {
+        // Published tick exists but bundle has no base_tick_id
+        (None, Some(latest)) => {
+            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(
+                &work_item_id,
+                "(none)",
+                &latest.id,
+            ));
+            return DaemonResponse::err(
+                req.id,
+                RpcError::stale_bundle("(none)", &latest.id),
+            );
+        }
+        // Published tick exists and bundle's base_tick_id doesn't match it
+        (Some(base_id), Some(latest)) if base_id != &latest.id => {
+            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(
+                &work_item_id,
+                base_id,
+                &latest.id,
+            ));
+            return DaemonResponse::err(
+                req.id,
+                RpcError::stale_bundle(base_id, &latest.id),
+            );
+        }
+        // No published tick and no base_tick_id: bootstrap case, OK
+        // base_tick_id matches latest published: OK
+        _ => {}
+    }
+
     let claims = req
         .params
         .get("claims")
@@ -1345,6 +1377,16 @@ fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -
         Ok(()) => DaemonResponse::ok(req.id, json!({ "work_item_id": work_item_id, "status": "refreshed" })),
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
+}
+
+/// Find the latest Published Tick (by highest tick number).
+fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
+    let ticks = stores.ticks.read().unwrap();
+    ticks
+        .values()
+        .filter(|t| t.status == TickStatus::Published)
+        .max_by_key(|t| t.number)
+        .cloned()
 }
 
 #[cfg(test)]
@@ -3005,6 +3047,166 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // --- Staleness guard tests ---
+
+    /// Helper: insert a Published Tick into the store and return its ID.
+    fn insert_published_tick(stores: &Arc<Stores>, number: u32) -> String {
+        use crate::domain::tick::Tick;
+        let mut tick = Tick::new(number);
+        tick.status = TickStatus::Published;
+        tick.integration_sha = Some(format!("sha-{number}"));
+        let id = tick.id.clone();
+        stores.ticks.write().unwrap().insert(id.clone(), tick);
+        id
+    }
+
+    #[test]
+    fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_exists() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let _tick_id = insert_published_tick(&stores, 1);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/auth"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, req);
+        assert!(resp.is_error());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32002);
+        assert!(err.message.contains("staleness guard"));
+    }
+
+    #[test]
+    fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let _old_tick_id = insert_published_tick(&stores, 1);
+        let latest_tick_id = insert_published_tick(&stores, 2);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/auth",
+                "base_tick_id": "old-stale-tick-id"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, req);
+        assert!(resp.is_error());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32002);
+        assert!(err.message.contains("staleness guard"));
+        assert!(err.message.contains(&latest_tick_id));
+    }
+
+    #[test]
+    fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let tick_id = insert_published_tick(&stores, 1);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/auth",
+                "base_tick_id": tick_id,
+                "claims": "Add auth"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, req);
+        assert!(!resp.is_error(), "Expected success but got: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["base_tick_id"], tick_id);
+        assert_eq!(result["status"], "Proposed");
+    }
+
+    #[test]
+    fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let _tick1_id = insert_published_tick(&stores, 1);
+        let tick2_id = insert_published_tick(&stores, 2);
+
+        // Using tick1's ID should be rejected (tick2 is latest)
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/auth",
+                "base_tick_id": _tick1_id,
+                "claims": "Add auth"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains(&tick2_id));
+    }
+
+    #[test]
+    fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let mut rx = tx.subscribe();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        // Drain create events
+        while rx.try_recv().is_ok() {}
+
+        let _tick_id = insert_published_tick(&stores, 1);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/auth",
+                "base_tick_id": "stale-id"
+            }),
+        );
+        dispatch(&stores, &tx, &wm, req);
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "bundle.rejected_stale");
+        assert_eq!(event.data["bundle_work_item_id"], wi_id.as_str());
+        assert_eq!(event.data["base_tick_id"], "stale-id");
+    }
+
+    #[test]
+    fn test_bundle_create_bootstrap_no_published_tick_no_base() {
+        // Bootstrap case: no published tick, no base_tick_id → OK
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+
+        let req = DaemonRequest::new(
+            40,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/init"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, req);
+        assert!(!resp.is_error());
     }
 
     // --- Tick handler tests ---
