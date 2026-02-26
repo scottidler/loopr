@@ -2518,6 +2518,7 @@ fn handle_agent_start(
 
     stores.agent_sessions.write().unwrap().insert(id.clone(), session);
     let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));
 
     DaemonResponse::ok(req.id, session_json)
 }
@@ -2538,6 +2539,13 @@ fn handle_agent_stop(
         None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
     };
 
+    if session.status.is_terminal() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
+        );
+    }
+
     if let Err(e) = session.transition_to(AgentStatus::Cancelled) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
     }
@@ -2555,6 +2563,7 @@ fn handle_agent_stop(
     };
 
     let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Cancelled));
     DaemonResponse::ok(req.id, session_json)
 }
 
@@ -2574,6 +2583,13 @@ fn handle_agent_pause(
         None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
     };
 
+    if session.status.is_terminal() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
+        );
+    }
+
     if let Err(e) = session.transition_to(AgentStatus::Paused) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
     }
@@ -2590,6 +2606,7 @@ fn handle_agent_pause(
     };
 
     let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Paused));
     DaemonResponse::ok(req.id, session_json)
 }
 
@@ -2625,6 +2642,7 @@ fn handle_agent_resume(
     };
 
     let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Running));
     DaemonResponse::ok(req.id, session_json)
 }
 
@@ -7314,7 +7332,7 @@ mod tests {
         assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let collections = result["collections"].as_array().unwrap();
-        assert_eq!(collections.len(), 8);
+        assert_eq!(collections.len(), 9);
         assert!(collections.contains(&json!("plans")));
         assert!(collections.contains(&json!("specs")));
         assert!(collections.contains(&json!("phases")));
@@ -7323,6 +7341,7 @@ mod tests {
         assert!(collections.contains(&json!("ticks")));
         assert!(collections.contains(&json!("learnings")));
         assert!(collections.contains(&json!("locks")));
+        assert!(collections.contains(&json!("agent_sessions")));
         // git_hooks_installed is best-effort — may be false in test environments
         // due to taskstore's configure_merge_driver not using current_dir
         assert!(result.get("git_hooks_installed").is_some());

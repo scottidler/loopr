@@ -17,6 +17,7 @@ use crate::domain::tick::Tick;
 use crate::domain::validation::ValidationReport;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
 use crate::ipc::protocol::DaemonEvent;
+use crate::tools::ToolRunner;
 use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
 
@@ -36,6 +37,8 @@ pub struct Stores {
     pub store: Option<Arc<StdMutex<Store>>>,
     /// Doc Validator (LLM-based). None when validator.enabled = false or in legacy contexts.
     pub validator: Option<Arc<DocValidator>>,
+    /// Tool runner for agent subprocess execution. Shared across agent tasks.
+    pub tool_runner: Arc<ToolRunner>,
 }
 
 impl Stores {
@@ -52,6 +55,7 @@ impl Stores {
             agent_sessions: StdRwLock::new(HashMap::new()),
             store: None,
             validator: None,
+            tool_runner: Arc::new(ToolRunner::new(&[])),
         }
     }
 }
@@ -147,6 +151,13 @@ impl DaemonContext {
         }
 
         stores.store = Some(Arc::new(StdMutex::new(store)));
+
+        // Create ToolRunner from agent config
+        stores.tool_runner = Arc::new(ToolRunner::new(&config.agents.tools));
+        info!(
+            "Tool runner initialized with {} tools",
+            stores.tool_runner.available_tools().len()
+        );
 
         // Create DocValidator if enabled in config
         if config.validator.enabled {

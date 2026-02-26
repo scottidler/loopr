@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{AgentEvent, AgentStatus};
+
 /// Client → Daemon request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DaemonRequest {
@@ -195,6 +197,17 @@ impl DaemonEvent {
                 "base_tick_id": base_tick_id,
                 "latest_tick_id": latest_tick_id,
             }),
+        )
+    }
+
+    pub fn agent_status_changed(session_id: &str, status: AgentStatus) -> Self {
+        let event = AgentEvent::StatusChange {
+            session_id: session_id.to_string(),
+            status,
+        };
+        Self::new(
+            "agent.status_changed",
+            serde_json::to_value(event).unwrap_or_default(),
         )
     }
 }
