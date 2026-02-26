@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -101,7 +101,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tab bar
-            Constraint::Min(5),   // Main content
+            Constraint::Min(5),    // Main content
             Constraint::Length(3), // Action bar
         ])
         .split(frame.area());
