@@ -1289,6 +1289,14 @@ fn handle_lock_create(
     };
 
     let id = lock.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(lock.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.locks.write().unwrap().insert(id.clone(), lock);
     let _ = event_tx.send(DaemonEvent::record_created("lock", &id));
 
@@ -4468,6 +4476,35 @@ mod tests {
         );
         assert!(!resp.is_error());
         resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_lock_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            50,
+            "lock.create",
+            json!({
+                "resource": "src/main.rs",
+                "holder_id": "wi-1",
+                "granted_by": "coord-1"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let lock_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Lock> = store.get(&lock_id).unwrap();
+        assert!(retrieved.is_some());
+        let lock = retrieved.unwrap();
+        assert_eq!(lock.resource, "src/main.rs");
+        assert_eq!(lock.holder_id, "wi-1");
+        assert_eq!(lock.granted_by, "coord-1");
     }
 
     #[test]
