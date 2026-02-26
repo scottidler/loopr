@@ -19,6 +19,7 @@ ratatui = "0.30.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml = "0.9.34"
+taskstore = { git = "https://github.com/scottidler/taskstore.git", version = "0.2.1" }
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-stream = "0.1.18"
