@@ -3,7 +3,7 @@
 # Fresh context each iteration — state persists in progress.txt
 # Validation runs OUTSIDE the LLM session
 # https://ghuntley.com/ralph/
-set -e
+set -eo pipefail
 
 # Configuration (override via environment variables or first positional arg)
 PROMPT_FILE=${1:-${PROMPT_FILE:-PROMPT.md}}
