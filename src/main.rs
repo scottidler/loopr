@@ -151,6 +151,21 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     )?;
     info!("Hierarchy FSM validated ({} rules)", hierarchy_rules.len());
 
+    // Validate learning record is wired up
+    let mut learning = domain::learning::Learning::new(
+        work_item.id.clone(),
+        domain::learning::LearningScope::WorkItem,
+        "Bootstrap learning".to_string(),
+    );
+    learning.reinforce();
+    learning.contradict();
+    learning.promote();
+    learning.demote();
+    info!(
+        "Created learning: {} (source={}, scope={}, promoted={})",
+        learning.id, learning.source_id, learning.scope, learning.promoted
+    );
+
     // Validate that the transition engine is wired up
     let rules: Vec<domain::transition::TransitionRule<&str>> = vec![domain::transition::TransitionRule {
         from: "init",
