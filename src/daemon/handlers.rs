@@ -3027,7 +3027,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Transition Spec"})),
+            DaemonRequest::new(
+                2,
+                "spec.create",
+                json!({"plan_id": plan_id, "title": "Transition Spec"}),
+            ),
         );
         assert!(!create_resp.is_error());
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
