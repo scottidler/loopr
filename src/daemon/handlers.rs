@@ -691,6 +691,13 @@ fn handle_phase_transition(
     phase.status = target_status;
     phase.updated_at = crate::id::now_millis();
 
+    // Persist transition to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(phase.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     let phase_json = match serde_json::to_value(&*phase) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -873,6 +880,13 @@ fn handle_work_item_transition(
 
     wi.status = target_status;
     wi.updated_at = crate::id::now_millis();
+
+    // Persist transition to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(wi.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let wi_json = match serde_json::to_value(&*wi) {
         Ok(v) => v,
@@ -3516,6 +3530,50 @@ mod tests {
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
+    #[test]
+    fn test_phase_transition_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+
+        // Create phase (also persisted to TaskStore)
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "phase.create",
+                json!({"spec_id": spec_id, "title": "Transition Phase"}),
+            ),
+        );
+        assert!(!create_resp.is_error());
+        let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition Draft → Active
+        let req = DaemonRequest::new(
+            3,
+            "phase.transition",
+            json!({
+                "id": phase_id,
+                "target_status": "active",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "active");
+
+        // Verify TaskStore has the updated status
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Phase> = store.get(&phase_id).unwrap();
+        assert!(retrieved.is_some());
+        let phase = retrieved.unwrap();
+        assert_eq!(phase.status, PhaseStatus::Active);
+    }
+
     // --- work_item handlers ---
 
     /// Helper: create a plan + spec + phase and return (plan_id, spec_id, phase_id)
@@ -3962,6 +4020,50 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_work_item_transition_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        // Create work item (also persisted to TaskStore)
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "work_item.create",
+                json!({"phase_id": phase_id, "title": "Transition WI", "description": "Test"}),
+            ),
+        );
+        assert!(!create_resp.is_error());
+        let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition Draft → Ready
+        let req = DaemonRequest::new(
+            3,
+            "work_item.transition",
+            json!({
+                "id": wi_id,
+                "target_status": "Ready",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Ready");
+
+        // Verify TaskStore has the updated status
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<WorkItem> = store.get(&wi_id).unwrap();
+        assert!(retrieved.is_some());
+        let wi = retrieved.unwrap();
+        assert_eq!(wi.status, WorkItemStatus::Ready);
     }
 
     // --- bundle handlers ---
