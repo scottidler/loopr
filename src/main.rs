@@ -86,6 +86,26 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         phase.id, phase.spec_id, phase.order, phase.status
     );
 
+    let work_item = domain::work_item::WorkItem::new(
+        phase.id.clone(),
+        "Bootstrap work item".to_string(),
+        "First concrete task".to_string(),
+    );
+    info!(
+        "Created work_item: {} (phase={}, status={})",
+        work_item.id, work_item.phase_id, work_item.status
+    );
+
+    // Validate work item FSM is wired up
+    let wi_rules = domain::work_item::work_item_transitions();
+    domain::transition::validate_transition(
+        domain::work_item::WorkItemStatus::Draft,
+        domain::work_item::WorkItemStatus::Ready,
+        role,
+        &wi_rules,
+    )?;
+    info!("WorkItem FSM validated ({} rules)", wi_rules.len());
+
     // Validate hierarchy FSM is wired up
     let hierarchy_rules = domain::plan::hierarchy_transitions();
     domain::transition::validate_transition(
