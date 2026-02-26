@@ -1421,6 +1421,22 @@ fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<Lock>(id) {
+            Ok(Some(lock)) => {
+                return match serde_json::to_value(&lock) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let locks = stores.locks.read().unwrap();
     match locks.get(id) {
         Some(lock) => match serde_json::to_value(lock) {
@@ -4888,6 +4904,25 @@ mod tests {
             DaemonRequest::new(1, "lock.get", json!({"id": "nonexistent"})),
         );
         assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_lock_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a lock (writes to both TaskStore and HashMap)
+        let lock_id = create_lock(&stores, &tx, &wm, 50);
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.locks.write().unwrap().remove(&lock_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(51, "lock.get", json!({"id": lock_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["resource"], "src/main.rs");
     }
 
     #[test]
