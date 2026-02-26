@@ -18,6 +18,8 @@ use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
+use taskstore::Record;
+
 use super::context::Stores;
 
 /// Dispatch an IPC request to the appropriate handler.
@@ -31,6 +33,7 @@ pub fn dispatch(
 ) -> DaemonResponse {
     match req.method.as_str() {
         "system.handshake" => handle_handshake(req),
+        "system.init" => handle_system_init(stores, req),
         "system.status" => handle_status(stores, req),
         "system.shutdown" => handle_shutdown(event_tx, req),
         "plan.create" => handle_plan_create(stores, event_tx, req),
@@ -87,6 +90,43 @@ fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
             "protocol": "ndjson/1"
         }),
     )
+}
+
+fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let store_arc = match &stores.store {
+        Some(s) => s,
+        None => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::internal("TaskStore not initialized"),
+            );
+        }
+    };
+
+    // Install git merge driver and .gitattributes
+    {
+        let store = store_arc.lock().unwrap();
+        if let Err(e) = store.install_git_hooks() {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::internal(&format!("Failed to install git hooks: {}", e)),
+            );
+        }
+    }
+
+    // Return the list of collection names
+    let collections = vec![
+        Plan::collection_name(),
+        Spec::collection_name(),
+        Phase::collection_name(),
+        WorkItem::collection_name(),
+        Bundle::collection_name(),
+        Tick::collection_name(),
+        Learning::collection_name(),
+        Lock::collection_name(),
+    ];
+
+    DaemonResponse::ok(req.id, json!({ "collections": collections }))
 }
 
 fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
@@ -1616,6 +1656,30 @@ mod tests {
 
     fn test_stores() -> Arc<Stores> {
         Arc::new(Stores::new())
+    }
+
+    fn test_stores_with_taskstore() -> Arc<Stores> {
+        let id = crate::id::generate_id();
+        let dir = std::env::temp_dir().join(format!("loopr-handler-test-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Initialize a git repo so install_git_hooks works
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .expect("git init failed");
+        let mut store = taskstore::Store::open(&dir).unwrap();
+        store.rebuild_indexes::<Plan>().unwrap();
+        store.rebuild_indexes::<Spec>().unwrap();
+        store.rebuild_indexes::<Phase>().unwrap();
+        store.rebuild_indexes::<WorkItem>().unwrap();
+        store.rebuild_indexes::<Bundle>().unwrap();
+        store.rebuild_indexes::<Tick>().unwrap();
+        store.rebuild_indexes::<Learning>().unwrap();
+        store.rebuild_indexes::<Lock>().unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
+        Arc::new(stores)
     }
 
     fn test_event_tx() -> broadcast::Sender<DaemonEvent> {
@@ -4942,5 +5006,54 @@ mod tests {
         assert!(log.contains("first"));
         assert!(log.contains("FAILED"));
         assert!(!log.contains("should-not-run"));
+    }
+
+    // --- system.init tests ---
+
+    #[test]
+    fn test_dispatch_system_init() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "system.init", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        let collections = result["collections"].as_array().unwrap();
+        assert_eq!(collections.len(), 8);
+        assert!(collections.contains(&json!("plans")));
+        assert!(collections.contains(&json!("specs")));
+        assert!(collections.contains(&json!("phases")));
+        assert!(collections.contains(&json!("work_items")));
+        assert!(collections.contains(&json!("bundles")));
+        assert!(collections.contains(&json!("ticks")));
+        assert!(collections.contains(&json!("learnings")));
+        assert!(collections.contains(&json!("locks")));
+    }
+
+    #[test]
+    fn test_dispatch_system_init_without_store() {
+        let stores = test_stores(); // No TaskStore
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "system.init", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        let err = resp.error.unwrap();
+        assert!(err.message.contains("TaskStore not initialized"));
+    }
+
+    #[test]
+    fn test_dispatch_system_init_idempotent() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // Call init twice — should succeed both times
+        let req1 = DaemonRequest::new(1, "system.init", json!({}));
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        assert!(!resp1.is_error());
+        let req2 = DaemonRequest::new(2, "system.init", json!({}));
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp2.is_error());
     }
 }

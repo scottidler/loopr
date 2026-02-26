@@ -28,6 +28,8 @@ pub struct Stores {
     pub ticks: StdRwLock<HashMap<String, Tick>>,
     pub learnings: StdRwLock<HashMap<String, Learning>>,
     pub locks: StdRwLock<HashMap<String, Lock>>,
+    /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
+    pub store: Option<Arc<StdMutex<Store>>>,
 }
 
 impl Stores {
@@ -41,6 +43,7 @@ impl Stores {
             ticks: StdRwLock::new(HashMap::new()),
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
+            store: None,
         }
     }
 }
@@ -57,7 +60,6 @@ pub struct DaemonContext {
     pub event_tx: broadcast::Sender<DaemonEvent>,
     pub config: Config,
     pub stores: Arc<Stores>,
-    pub store: Arc<StdMutex<Store>>,
     pub worktree_manager: WorktreeManager,
 }
 
@@ -88,11 +90,13 @@ impl DaemonContext {
 
         info!("TaskStore opened at {}", repo_path.display());
 
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(StdMutex::new(store)));
+
         Ok(Self {
             config,
             event_tx,
-            stores: Arc::new(Stores::new()),
-            store: Arc::new(StdMutex::new(store)),
+            stores: Arc::new(stores),
             worktree_manager,
         })
     }
@@ -111,14 +115,16 @@ impl DaemonContext {
         // Recover InProgress WorkItems → Blocked
         {
             let mut work_items = self.stores.work_items.write().unwrap();
-            let mut store = self.store.lock().unwrap();
+            let store_lock = self.stores.store.as_ref();
             for (id, wi) in work_items.iter_mut() {
                 if wi.status == WorkItemStatus::InProgress {
                     warn!("Recovering orphaned InProgress WorkItem: {}", id);
                     wi.status = WorkItemStatus::Blocked;
                     wi.updated_at = crate::id::now_millis();
                     // Persist recovery to TaskStore
-                    if let Err(e) = store.update(wi.clone()) {
+                    if let Some(store_arc) = store_lock
+                        && let Err(e) = store_arc.lock().unwrap().update(wi.clone())
+                    {
                         warn!("Failed to persist WorkItem recovery to TaskStore: {}", e);
                     }
                     recovered += 1;
@@ -129,14 +135,16 @@ impl DaemonContext {
         // Recover Integrating Bundles → Accepted
         {
             let mut bundles = self.stores.bundles.write().unwrap();
-            let mut store = self.store.lock().unwrap();
+            let store_lock = self.stores.store.as_ref();
             for (id, bundle) in bundles.iter_mut() {
                 if bundle.status == BundleStatus::Integrating {
                     warn!("Recovering orphaned Integrating Bundle: {}", id);
                     bundle.status = BundleStatus::Accepted;
                     bundle.updated_at = crate::id::now_millis();
                     // Persist recovery to TaskStore
-                    if let Err(e) = store.update(bundle.clone()) {
+                    if let Some(store_arc) = store_lock
+                        && let Err(e) = store_arc.lock().unwrap().update(bundle.clone())
+                    {
                         warn!("Failed to persist Bundle recovery to TaskStore: {}", e);
                     }
                     recovered += 1;
@@ -203,7 +211,7 @@ mod tests {
         assert!(repo_path.join(".taskstore").exists());
 
         // Store should be accessible via the Arc<Mutex>
-        let store = ctx.store.lock().unwrap();
+        let store = ctx.stores.store.as_ref().unwrap().lock().unwrap();
         // Listing empty collections should return empty vecs
         let plans: Vec<Plan> = store.list(&[]).unwrap();
         assert!(plans.is_empty());
@@ -218,15 +226,15 @@ mod tests {
         // Create a plan via TaskStore
         let plan = Plan::new("Test Plan".into(), "Description".into(), "Criteria".into());
         let plan_id = plan.id.clone();
-        ctx.store.lock().unwrap().create(plan).unwrap();
+        ctx.stores.store.as_ref().unwrap().lock().unwrap().create(plan).unwrap();
 
         // Get it back
-        let retrieved: Option<Plan> = ctx.store.lock().unwrap().get(&plan_id).unwrap();
+        let retrieved: Option<Plan> = ctx.stores.store.as_ref().unwrap().lock().unwrap().get(&plan_id).unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().title, "Test Plan");
 
         // List should return it
-        let all: Vec<Plan> = ctx.store.lock().unwrap().list(&[]).unwrap();
+        let all: Vec<Plan> = ctx.stores.store.as_ref().unwrap().lock().unwrap().list(&[]).unwrap();
         assert_eq!(all.len(), 1);
     }
 
