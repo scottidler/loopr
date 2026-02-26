@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_project_config_default() {
         let pc = ProjectConfig::default();
-        assert!(pc.repo_path.is_absolute() || pc.repo_path == PathBuf::from("."));
+        assert!(pc.repo_path.is_absolute() || pc.repo_path == std::path::Path::new("."));
     }
 
     #[test]
