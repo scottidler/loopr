@@ -332,11 +332,7 @@ fn handle_phase_create(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let order = req
-        .params
-        .get("order")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let order = req.params.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     if title.is_empty() {
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
@@ -1092,7 +1088,11 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let (_plan_id, spec_id) = create_test_spec(&stores, &tx);
-        let req = DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "description": "no title"}));
+        let req = DaemonRequest::new(
+            20,
+            "phase.create",
+            json!({"spec_id": spec_id, "description": "no title"}),
+        );
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -1124,11 +1124,19 @@ mod tests {
         let create_resp = dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "My Phase", "order": 3})),
+            DaemonRequest::new(
+                20,
+                "phase.create",
+                json!({"spec_id": spec_id, "title": "My Phase", "order": 3}),
+            ),
         );
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        let get_resp = dispatch(&stores, &tx, DaemonRequest::new(21, "phase.get", json!({"id": phase_id})));
+        let get_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(21, "phase.get", json!({"id": phase_id})),
+        );
         assert!(!get_resp.is_error());
         let result = get_resp.result.unwrap();
         assert_eq!(result["title"], "My Phase");
@@ -1174,12 +1182,20 @@ mod tests {
         dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id_1, "title": "Phase A", "order": 1})),
+            DaemonRequest::new(
+                20,
+                "phase.create",
+                json!({"spec_id": spec_id_1, "title": "Phase A", "order": 1}),
+            ),
         );
         dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(21, "phase.create", json!({"spec_id": spec_id_2, "title": "Phase B", "order": 1})),
+            DaemonRequest::new(
+                21,
+                "phase.create",
+                json!({"spec_id": spec_id_2, "title": "Phase B", "order": 1}),
+            ),
         );
 
         // List all — should have 2
