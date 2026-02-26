@@ -1,4 +1,5 @@
 pub mod context;
+pub mod handlers;
 
 use std::sync::Arc;
 
@@ -6,7 +7,7 @@ use log::info;
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
-use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+use crate::ipc::protocol::DaemonEvent;
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::DaemonContext;
@@ -67,28 +68,17 @@ async fn accept_loop(
                 match accept_result {
                     Ok((stream, _addr)) => {
                         let event_rx = event_tx.subscribe();
-                        let ctx = ctx.clone();
+                        // Extract stores and event_tx for the handler closure
+                        let stores = {
+                            let c = ctx.read().await;
+                            c.stores.clone()
+                        };
+                        let handler_event_tx = event_tx.clone();
                         tokio::spawn(async move {
                             server::handle_client(
                                 stream,
                                 move |req| {
-                                    // Placeholder handler: echo method back
-                                    // Real handlers will be added in Phase 3
-                                    let _ = &ctx;
-                                    match req.method.as_str() {
-                                        "system.handshake" => {
-                                            DaemonResponse::ok(req.id, serde_json::json!({
-                                                "server_version": env!("CARGO_PKG_VERSION"),
-                                                "protocol": "ndjson/1"
-                                            }))
-                                        }
-                                        _ => {
-                                            DaemonResponse::err(
-                                                req.id,
-                                                crate::ipc::protocol::RpcError::method_not_found(&req.method),
-                                            )
-                                        }
-                                    }
+                                    handlers::dispatch(&stores, &handler_event_tx, req)
                                 },
                                 event_rx,
                             ).await;

@@ -1,21 +1,48 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
+use crate::domain::plan::Plan;
 use crate::ipc::protocol::DaemonEvent;
+
+/// In-memory record stores, each behind a std::sync::RwLock for synchronous access
+/// from IPC request handlers (no async needed for in-memory HashMap operations).
+pub struct Stores {
+    pub plans: StdRwLock<HashMap<String, Plan>>,
+}
+
+impl Stores {
+    pub fn new() -> Self {
+        Self {
+            plans: StdRwLock::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for Stores {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Shared state hub for the daemon.
 /// All mutable state access goes through DaemonContext behind Arc<RwLock>.
 pub struct DaemonContext {
     pub event_tx: broadcast::Sender<DaemonEvent>,
     pub config: Config,
+    pub stores: Arc<Stores>,
 }
 
 impl DaemonContext {
     /// Create a new DaemonContext with the given config and event broadcast channel.
     pub fn new(config: Config, event_tx: broadcast::Sender<DaemonEvent>) -> Self {
-        Self { config, event_tx }
+        Self {
+            config,
+            event_tx,
+            stores: Arc::new(Stores::new()),
+        }
     }
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
@@ -42,6 +69,8 @@ mod tests {
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx);
         assert_eq!(ctx.config.name, "loopr");
+        // Stores are initialized empty
+        assert!(ctx.stores.plans.read().unwrap().is_empty());
     }
 
     #[test]
@@ -84,5 +113,22 @@ mod tests {
             let received = rx.try_recv().unwrap();
             assert_eq!(received.data["collection"], "spec");
         });
+    }
+
+    #[test]
+    fn test_stores_default() {
+        let stores = Stores::default();
+        assert!(stores.plans.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_stores_plan_insert_and_read() {
+        let stores = Stores::new();
+        let plan = Plan::new("Test".into(), "Desc".into(), "Criteria".into());
+        let id = plan.id.clone();
+        stores.plans.write().unwrap().insert(id.clone(), plan);
+        let plans = stores.plans.read().unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[&id].title, "Test");
     }
 }

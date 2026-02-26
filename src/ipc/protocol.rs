@@ -71,6 +71,13 @@ impl RpcError {
             message: format!("transition rejected: {detail}"),
         }
     }
+
+    pub fn not_found(collection: &str, id: &str) -> Self {
+        Self {
+            code: -32001,
+            message: format!("not found: {collection}/{id}"),
+        }
+    }
 }
 
 // --- Convenience constructors ---
@@ -245,6 +252,8 @@ mod tests {
         assert_eq!(RpcError::invalid_params("x").code, -32602);
         assert_eq!(RpcError::internal("x").code, -32603);
         assert_eq!(RpcError::transition_rejected("x").code, -32000);
+        assert_eq!(RpcError::not_found("plan", "p1").code, -32001);
+        assert!(RpcError::not_found("plan", "p1").message.contains("plan/p1"));
     }
 
     #[test]
