@@ -6,7 +6,7 @@ use log::info;
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
-use crate::ipc::protocol::{DaemonResponse, DaemonEvent};
+use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::DaemonContext;

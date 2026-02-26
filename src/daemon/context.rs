@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
 use crate::ipc::protocol::DaemonEvent;
@@ -51,9 +51,7 @@ mod tests {
         // Can subscribe from the returned sender
         let _rx = tx.subscribe();
         // Can read from the context
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let c = ctx.read().await;
             assert_eq!(c.config.name, "loopr");
@@ -77,9 +75,7 @@ mod tests {
     fn test_context_shared_event_broadcast() {
         let config = Config::default();
         let (ctx, tx) = DaemonContext::shared(config);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let c = ctx.read().await;
             let mut rx = c.subscribe();

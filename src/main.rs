@@ -282,10 +282,7 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
             .unwrap();
         let evt = rx.try_recv().unwrap();
         info!("DaemonContext event: {}", evt.event);
-        info!(
-            "DaemonContext socket_path={}",
-            c.config.daemon.socket_path.display()
-        );
+        info!("DaemonContext socket_path={}", c.config.daemon.socket_path.display());
     }
     // Start daemon briefly to validate wiring, then abort
     let daemon_handle = tokio::spawn(daemon::daemon_main(daemon_ctx));
