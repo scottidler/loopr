@@ -5,9 +5,9 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+use crate::agents::AgentSession;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::implementer::LlmClient;
-use crate::agents::AgentSession;
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
 use crate::domain::learning::LearningScope;
@@ -297,7 +297,10 @@ pub async fn run_reviewer(
                 );
                 return Err(eyre!("failed to transition bundle: {:?}", resp.error));
             }
-            info!("Reviewer {} verdict={} on bundle {}", session.id, review.verdict, bundle_id);
+            info!(
+                "Reviewer {} verdict={} on bundle {}",
+                session.id, review.verdict, bundle_id
+            );
         }
         ReviewVerdict::Reject => {
             let resp = bridge.request(
@@ -309,10 +312,7 @@ pub async fn run_reviewer(
                 }),
             );
             if resp.is_error() {
-                warn!(
-                    "Reviewer {} failed to reject bundle: {:?}",
-                    session.id, resp.error
-                );
+                warn!("Reviewer {} failed to reject bundle: {:?}", session.id, resp.error);
                 return Err(eyre!("failed to reject bundle: {:?}", resp.error));
             }
             info!("Reviewer {} rejected bundle {}", session.id, bundle_id);
@@ -331,7 +331,6 @@ pub async fn run_reviewer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::agents::{AgentSession, AgentType};
     use crate::config::{Config, ProjectConfig};
     use crate::domain::bundle::{Bundle, BundleStatus};
@@ -341,6 +340,7 @@ mod tests {
     use crate::domain::spec::Spec;
     use crate::domain::work_item::WorkItem;
     use crate::worktree::manager::WorktreeManager;
+    use async_trait::async_trait;
     use std::path::Path;
     use std::sync::Mutex as StdMutex;
     use taskstore::Store;
@@ -445,7 +445,11 @@ mod tests {
 
     #[test]
     fn test_review_verdict_serde_roundtrip() {
-        for verdict in [ReviewVerdict::Approve, ReviewVerdict::RequestChanges, ReviewVerdict::Reject] {
+        for verdict in [
+            ReviewVerdict::Approve,
+            ReviewVerdict::RequestChanges,
+            ReviewVerdict::Reject,
+        ] {
             let json = serde_json::to_string(&verdict).unwrap();
             let deserialized: ReviewVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(verdict, deserialized);
@@ -519,7 +523,8 @@ mod tests {
 
     #[test]
     fn test_parse_review_result_wrapped_in_code_block() {
-        let response = "Here is my review:\n```json\n{\"verdict\": \"approve\", \"issues\": [], \"summary\": \"LGTM\"}\n```";
+        let response =
+            "Here is my review:\n```json\n{\"verdict\": \"approve\", \"issues\": [], \"summary\": \"LGTM\"}\n```";
         let result = parse_review_result(response).unwrap();
         assert_eq!(result.verdict, ReviewVerdict::Approve);
         assert_eq!(result.summary, "LGTM");

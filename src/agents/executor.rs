@@ -178,15 +178,7 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = reviewer::run_reviewer(
-                llm.as_ref(),
-                &mut session,
-                stores,
-                bridge,
-                &config,
-                event_tx,
-            )
-            .await;
+            let result = reviewer::run_reviewer(llm.as_ref(), &mut session, stores, bridge, &config, event_tx).await;
 
             // Write back updated session iteration count
             {
