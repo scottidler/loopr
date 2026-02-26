@@ -143,7 +143,8 @@ pub fn dispatch(
         "validator.validate" => handle_validator_validate(stores, req),
         "validator.report" => handle_validator_report(stores, req),
         "validator.reports" => handle_validator_reports(stores, req),
-        "agent.start" => handle_agent_start(stores, event_tx, req),
+        "tool.list" => handle_tool_list(stores, req),
+        "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
         "agent.resume" => handle_agent_resume(stores, event_tx, req),
@@ -2444,11 +2445,33 @@ fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
     }
 }
 
+// --- Tool handlers ---
+
+fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let tool_runner = &stores.tool_runner;
+    let names = tool_runner.available_tools();
+    let tools: Vec<serde_json::Value> = names
+        .iter()
+        .filter_map(|name| {
+            tool_runner.get_tool(name).map(|entry| {
+                json!({
+                    "name": entry.name,
+                    "command": entry.command,
+                    "timeout_secs": entry.timeout_secs,
+                    "worktree": entry.worktree,
+                })
+            })
+        })
+        .collect();
+    DaemonResponse::ok(req.id, json!({ "tools": tools }))
+}
+
 // --- Agent handlers ---
 
 fn handle_agent_start(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
     let agent_type: AgentType = match req.params.get("agent_type") {
@@ -2519,6 +2542,22 @@ fn handle_agent_start(
     stores.agent_sessions.write().unwrap().insert(id.clone(), session);
     let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));
+
+    // Spawn agent task as a Tokio background task
+    let task_stores = stores.clone();
+    let task_event_tx = event_tx.clone();
+    let task_worktree_mgr = worktree_mgr.clone();
+    let task_id = id.clone();
+    tokio::spawn(async move {
+        crate::agents::executor::run_agent_task(
+            task_id,
+            agent_type,
+            task_stores,
+            task_event_tx,
+            task_worktree_mgr,
+        )
+        .await;
+    });
 
     DaemonResponse::ok(req.id, session_json)
 }

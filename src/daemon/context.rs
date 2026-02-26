@@ -39,6 +39,8 @@ pub struct Stores {
     pub validator: Option<Arc<DocValidator>>,
     /// Tool runner for agent subprocess execution. Shared across agent tasks.
     pub tool_runner: Arc<ToolRunner>,
+    /// Full config, available to handlers for agent spawning.
+    pub config: Config,
 }
 
 impl Stores {
@@ -56,6 +58,7 @@ impl Stores {
             store: None,
             validator: None,
             tool_runner: Arc::new(ToolRunner::new(&[])),
+            config: Config::default(),
         }
     }
 }
@@ -151,6 +154,9 @@ impl DaemonContext {
         }
 
         stores.store = Some(Arc::new(StdMutex::new(store)));
+
+        // Store config for handler access (agent spawning, etc.)
+        stores.config = config.clone();
 
         // Create ToolRunner from agent config
         stores.tool_runner = Arc::new(ToolRunner::new(&config.agents.tools));

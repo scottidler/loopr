@@ -22,9 +22,6 @@ pub struct ToolResult {
 /// Maximum output size per stream (stdout/stderr) in bytes (~8K tokens).
 const MAX_OUTPUT: usize = 32_000;
 
-/// Grace period between SIGTERM and SIGKILL in seconds.
-const KILL_GRACE_SECS: u64 = 5;
-
 /// Executes configured tools as async subprocesses with timeout and output truncation.
 pub struct ToolRunner {
     tools: HashMap<String, ToolEntry>,
@@ -345,8 +342,4 @@ mod tests {
         assert_eq!(MAX_OUTPUT, 32_000);
     }
 
-    #[test]
-    fn test_kill_grace_constant() {
-        assert_eq!(KILL_GRACE_SECS, 5);
-    }
 }
