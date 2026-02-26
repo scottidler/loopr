@@ -54,13 +54,11 @@ fn check_validation_gate(
     if let Some(store) = &stores.store {
         let store = store.lock().unwrap();
         let reports: Vec<ValidationReport> = store
-            .list(&[
-                Filter {
-                    field: "target_id".into(),
-                    op: FilterOp::Eq,
-                    value: IndexValue::String(id.to_string()),
-                },
-            ])
+            .list(&[Filter {
+                field: "target_id".into(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(id.to_string()),
+            }])
             .unwrap_or_default();
 
         // Find the latest report (highest updated_at)
@@ -7088,19 +7086,29 @@ mod tests {
 
         // Create a plan
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Try Draft → Active without any validation report — should be blocked
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(resp.is_error());
         assert_eq!(resp.error.as_ref().unwrap().code, -32003);
@@ -7114,7 +7122,10 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -7132,12 +7143,19 @@ mod tests {
 
         // Draft → Active should succeed
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -7150,7 +7168,10 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -7168,12 +7189,19 @@ mod tests {
 
         // Draft → Active should succeed (Warn allows transition)
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -7186,7 +7214,10 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -7204,12 +7235,19 @@ mod tests {
 
         // Draft → Active should be blocked
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32003);
@@ -7222,20 +7260,30 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft → Active with skip_validation=true — should succeed even without report
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator",
-                "skip_validation": true
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator",
+                    "skip_validation": true
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -7249,19 +7297,29 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "No Gate Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft → Active should succeed without any validation report
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -7275,26 +7333,39 @@ mod tests {
 
         // Create parent plan
         let plan_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
         );
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Create spec
         let spec_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Gate Test Spec"})),
         );
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft → Active without report — blocked
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(3, "spec.transition", json!({
-                "id": spec_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "spec.transition",
+                json!({
+                    "id": spec_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32003);
@@ -7307,13 +7378,19 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let plan_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
         );
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let spec_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Gate Test Spec"})),
         );
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -7331,12 +7408,19 @@ mod tests {
 
         // Draft → Active should succeed
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(3, "spec.transition", json!({
-                "id": spec_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "spec.transition",
+                json!({
+                    "id": spec_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -7350,33 +7434,53 @@ mod tests {
 
         // Create parent plan → spec → phase
         let plan_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
         );
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let spec_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
         );
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let phase_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(3, "phase.create", json!({
-                "spec_id": spec_id, "title": "Gate Test Phase", "order": 1
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "phase.create",
+                json!({
+                    "spec_id": spec_id, "title": "Gate Test Phase", "order": 1
+                }),
+            ),
         );
         let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft → Active without report — blocked
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(4, "phase.transition", json!({
-                "id": phase_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                4,
+                "phase.transition",
+                json!({
+                    "id": phase_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32003);
@@ -7389,34 +7493,54 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let plan_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
         );
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let spec_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
         );
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let phase_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(3, "phase.create", json!({
-                "spec_id": spec_id, "title": "Gate Test Phase", "order": 1
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "phase.create",
+                json!({
+                    "spec_id": spec_id, "title": "Gate Test Phase", "order": 1
+                }),
+            ),
         );
         let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft → Active with skip_validation — should succeed
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(4, "phase.transition", json!({
-                "id": phase_id,
-                "target_status": "active",
-                "role": "coordinator",
-                "skip_validation": true
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                4,
+                "phase.transition",
+                json!({
+                    "id": phase_id,
+                    "target_status": "active",
+                    "role": "coordinator",
+                    "skip_validation": true
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
@@ -7430,30 +7554,47 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // First, skip validation to get to Active
         dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator",
-                "skip_validation": true
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator",
+                    "skip_validation": true
+                }),
+            ),
         );
 
         // Active → Complete should work without any validation report
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(3, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "complete",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "complete",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "complete");
@@ -7466,7 +7607,10 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let create_resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
         );
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -7480,7 +7624,14 @@ mod tests {
             "Failed".to_string(),
             "test-model".to_string(),
         );
-        stores.store.as_ref().unwrap().lock().unwrap().create(fail_report).unwrap();
+        stores
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .create(fail_report)
+            .unwrap();
 
         // Sleep briefly to ensure different timestamps
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -7494,16 +7645,30 @@ mod tests {
             "Passed".to_string(),
             "test-model".to_string(),
         );
-        stores.store.as_ref().unwrap().lock().unwrap().create(pass_report).unwrap();
+        stores
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .create(pass_report)
+            .unwrap();
 
         // Draft → Active should succeed (latest report is Pass)
         let resp = dispatch(
-            &stores, &tx, &wm, &test_integrator_config(),
-            DaemonRequest::new(2, "plan.transition", json!({
-                "id": plan_id,
-                "target_status": "active",
-                "role": "coordinator"
-            })),
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.transition",
+                json!({
+                    "id": plan_id,
+                    "target_status": "active",
+                    "role": "coordinator"
+                }),
+            ),
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");

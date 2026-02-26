@@ -312,7 +312,11 @@ mod tests {
         assert!(RpcError::not_found("plan", "p1").message.contains("plan/p1"));
         assert_eq!(RpcError::validation_required("plan", "p1").code, -32003);
         assert!(RpcError::validation_required("plan", "p1").message.contains("plan/p1"));
-        assert!(RpcError::validation_required("plan", "p1").message.contains("validator.validate"));
+        assert!(
+            RpcError::validation_required("plan", "p1")
+                .message
+                .contains("validator.validate")
+        );
     }
 
     #[test]
