@@ -989,11 +989,33 @@ fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
 }
 
 fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let bundles = stores.bundles.read().unwrap();
-
-    // Optionally filter by work_item_id
     let wi_filter = req.params.get("work_item_id").and_then(|v| v.as_str());
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let filters: Vec<Filter> = if let Some(wid) = wi_filter {
+            vec![Filter {
+                field: "work_item_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(wid.to_string()),
+            }]
+        } else {
+            vec![]
+        };
+        match store.lock().unwrap().list::<Bundle>(&filters) {
+            Ok(bundles) => {
+                return match serde_json::to_value(&bundles) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let bundles = stores.bundles.read().unwrap();
     let bundle_list: Vec<&Bundle> = bundles
         .values()
         .filter(|b| wi_filter.is_none() || Some(b.work_item_id.as_str()) == wi_filter)
@@ -4054,6 +4076,71 @@ mod tests {
         );
         let bundles = filtered_resp.result.unwrap();
         let arr = bundles.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["branch_name"], "feature/a");
+    }
+
+    #[test]
+    fn test_bundle_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id_1) = create_test_work_item(&stores, &tx, &wm);
+
+        // Create a second work item under the same phase
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(31, "work_item.create", json!({"phase_id": _phase_id, "title": "WI 2"})),
+        );
+        let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create bundles under different work items (writes to both TaskStore and HashMap)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id_1, "branch_name": "feature/a"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                41,
+                "bundle.create",
+                json!({"work_item_id": wi_id_2, "branch_name": "feature/b"}),
+            ),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.bundles.write().unwrap().clear();
+
+        // List all should still return both bundles via TaskStore
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(50, "bundle.list", json!(null)),
+        );
+        assert!(!all_resp.is_error());
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test filtered list also works from TaskStore
+        let filtered_req = DaemonRequest::new(51, "bundle.list", json!({"work_item_id": wi_id_1}));
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        assert!(!filtered_resp.is_error());
+        let filtered_items = filtered_resp.result.unwrap();
+        let arr = filtered_items.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["branch_name"], "feature/a");
     }
