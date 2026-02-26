@@ -1342,10 +1342,7 @@ fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -
         .to_string();
 
     match worktree_mgr.refresh(&work_item_id, &new_base_ref) {
-        Ok(()) => DaemonResponse::ok(
-            req.id,
-            json!({ "work_item_id": work_item_id, "status": "refreshed" }),
-        ),
+        Ok(()) => DaemonResponse::ok(req.id, json!({ "work_item_id": work_item_id, "status": "refreshed" })),
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
 }
@@ -1380,7 +1377,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "unknown.method", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("unknown.method"));
     }
@@ -1391,7 +1388,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.handshake", json!({"client_version": "0.1.0"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["protocol"], "ndjson/1");
     }
@@ -1412,7 +1409,7 @@ mod tests {
                 "acceptance_criteria": "It works"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Test Plan");
@@ -1427,7 +1424,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.create", json!({"description": "no title"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
     }
@@ -1439,7 +1436,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
         let req = DaemonRequest::new(1, "plan.create", json!({"title": "Plan"}));
-        dispatch(&stores, &tx, &wm,req);
+        dispatch(&stores, &tx, &wm, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "plan");
@@ -1454,12 +1451,12 @@ mod tests {
         let wm = test_worktree_mgr();
         // Create a plan first
         let create_req = DaemonRequest::new(1, "plan.create", json!({"title": "My Plan"}));
-        let create_resp = dispatch(&stores, &tx, &wm,create_req);
+        let create_resp = dispatch(&stores, &tx, &wm, create_req);
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Get it
         let get_req = DaemonRequest::new(2, "plan.get", json!({"id": plan_id}));
-        let get_resp = dispatch(&stores, &tx, &wm,get_req);
+        let get_resp = dispatch(&stores, &tx, &wm, get_req);
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "My Plan");
     }
@@ -1470,7 +1467,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -1481,7 +1478,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.get", json!({}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("id"));
     }
@@ -1494,7 +1491,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let plans = resp.result.unwrap();
         assert!(plans.is_array());
@@ -1521,7 +1518,7 @@ mod tests {
         );
 
         let req = DaemonRequest::new(3, "plan.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let plans = resp.result.unwrap();
         assert_eq!(plans.as_array().unwrap().len(), 2);
@@ -1556,7 +1553,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -1591,7 +1588,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -1620,7 +1617,7 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -1638,7 +1635,7 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -1650,12 +1647,12 @@ mod tests {
         let wm = test_worktree_mgr();
         // Missing id
         let req = DaemonRequest::new(1, "plan.transition", json!({"target_status": "active"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
 
         // Missing target_status
         let req = DaemonRequest::new(2, "plan.transition", json!({"id": "x"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
     }
 
@@ -1682,7 +1679,7 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
@@ -1716,7 +1713,7 @@ mod tests {
                 "description": "A spec"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Test Spec");
@@ -1731,7 +1728,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.create", json!({"title": "Spec"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("plan_id"));
     }
@@ -1742,7 +1739,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.create", json!({"plan_id": "nonexistent", "title": "Spec"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -1754,7 +1751,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm);
         let req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "description": "no title"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
     }
@@ -1769,7 +1766,7 @@ mod tests {
         let _ = rx.try_recv(); // consume plan create event
 
         let req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec"}));
-        dispatch(&stores, &tx, &wm,req);
+        dispatch(&stores, &tx, &wm, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "spec");
@@ -1792,7 +1789,12 @@ mod tests {
         );
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        let get_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(3, "spec.get", json!({"id": spec_id})));
+        let get_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            DaemonRequest::new(3, "spec.get", json!({"id": spec_id})),
+        );
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "My Spec");
     }
@@ -1803,7 +1805,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -1816,7 +1818,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -1852,7 +1854,7 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(4, "spec.list", json!(null)));
+        let all_resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(4, "spec.list", json!(null)));
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by plan_id_1 — should have 1
@@ -1897,7 +1899,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -1932,7 +1934,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -1961,7 +1963,7 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -1979,7 +1981,7 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -1987,7 +1989,11 @@ mod tests {
     // --- phase handlers ---
 
     /// Helper: create a plan + spec and return (plan_id, spec_id)
-    fn create_test_spec(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> (String, String) {
+    fn create_test_spec(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String) {
         let plan_id = create_test_plan(stores, tx, wm);
         let resp = dispatch(
             stores,
@@ -2016,7 +2022,7 @@ mod tests {
                 "order": 1
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Test Phase");
@@ -2032,7 +2038,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.create", json!({"title": "Phase"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("spec_id"));
     }
@@ -2043,7 +2049,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.create", json!({"spec_id": "nonexistent", "title": "Phase"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2059,7 +2065,7 @@ mod tests {
             "phase.create",
             json!({"spec_id": spec_id, "description": "no title"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
     }
@@ -2076,7 +2082,7 @@ mod tests {
         let _ = rx.try_recv();
 
         let req = DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Phase"}));
-        dispatch(&stores, &tx, &wm,req);
+        dispatch(&stores, &tx, &wm, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "phase");
@@ -2119,7 +2125,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2130,7 +2136,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -2175,7 +2181,7 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(30, "phase.list", json!(null)));
+        let all_resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(30, "phase.list", json!(null)));
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by spec_id_1 — should have 1
@@ -2220,7 +2226,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -2255,7 +2261,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -2284,7 +2290,7 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -2302,7 +2308,7 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2310,7 +2316,11 @@ mod tests {
     // --- work_item handlers ---
 
     /// Helper: create a plan + spec + phase and return (plan_id, spec_id, phase_id)
-    fn create_test_phase(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> (String, String, String) {
+    fn create_test_phase(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String, String) {
         let (plan_id, spec_id) = create_test_spec(stores, tx, wm);
         let resp = dispatch(
             stores,
@@ -2342,7 +2352,7 @@ mod tests {
                 "description": "Add JWT signing"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Implement auth");
@@ -2357,7 +2367,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "work_item.create", json!({"title": "WI"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("phase_id"));
     }
@@ -2368,7 +2378,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "work_item.create", json!({"phase_id": "nonexistent", "title": "WI"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2384,7 +2394,7 @@ mod tests {
             "work_item.create",
             json!({"phase_id": phase_id, "description": "no title"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
     }
@@ -2402,7 +2412,7 @@ mod tests {
         let _ = rx.try_recv();
 
         let req = DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"}));
-        dispatch(&stores, &tx, &wm,req);
+        dispatch(&stores, &tx, &wm, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "work_item");
@@ -2439,7 +2449,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "work_item.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2450,7 +2460,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "work_item.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -2490,7 +2500,7 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(40, "work_item.list", json!(null)));
+        let all_resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(40, "work_item.list", json!(null)));
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by phase_id_1 — should have 1
@@ -2536,7 +2546,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Ready");
 
@@ -2572,7 +2582,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -2602,7 +2612,7 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -2620,7 +2630,7 @@ mod tests {
                 "target_status": "Ready"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2628,7 +2638,11 @@ mod tests {
     // --- bundle handlers ---
 
     /// Helper: create plan + spec + phase + work_item and return (phase_id, work_item_id)
-    fn create_test_work_item(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> (String, String) {
+    fn create_test_work_item(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String) {
         let (_plan_id, _spec_id, phase_id) = create_test_phase(stores, tx, wm);
         let resp = dispatch(
             stores,
@@ -2661,7 +2675,7 @@ mod tests {
                 "claims": "Add JWT signing"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["work_item_id"], wi_id);
@@ -2687,7 +2701,7 @@ mod tests {
                 "branch_name": "feature/init"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert!(result["base_tick_id"].is_null());
@@ -2699,7 +2713,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "bundle.create", json!({"branch_name": "feature/x"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("work_item_id"));
     }
@@ -2714,7 +2728,7 @@ mod tests {
             "bundle.create",
             json!({"work_item_id": "nonexistent", "branch_name": "feature/x"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2726,7 +2740,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
         let req = DaemonRequest::new(40, "bundle.create", json!({"work_item_id": wi_id, "claims": "stuff"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("branch_name"));
     }
@@ -2749,7 +2763,7 @@ mod tests {
             "bundle.create",
             json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
         );
-        dispatch(&stores, &tx, &wm,req);
+        dispatch(&stores, &tx, &wm, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "bundle");
@@ -2790,7 +2804,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "bundle.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -2801,7 +2815,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "bundle.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -2845,7 +2859,7 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(50, "bundle.list", json!(null)));
+        let all_resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(50, "bundle.list", json!(null)));
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by wi_id_1 — should have 1
@@ -2896,7 +2910,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Triaged");
 
@@ -2936,7 +2950,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -2970,7 +2984,7 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -2988,7 +3002,7 @@ mod tests {
                 "target_status": "Triaged"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -3002,7 +3016,7 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let req = DaemonRequest::new(50, "tick.create", json!({"number": 1}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["number"], 1);
@@ -3018,7 +3032,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.create", json!({}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("number"));
     }
@@ -3031,7 +3045,7 @@ mod tests {
         let mut rx = tx.subscribe();
 
         let req = DaemonRequest::new(50, "tick.create", json!({"number": 1}));
-        dispatch(&stores, &tx, &wm,req);
+        dispatch(&stores, &tx, &wm, req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "tick");
@@ -3051,7 +3065,12 @@ mod tests {
         );
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        let get_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(51, "tick.get", json!({"id": tick_id})));
+        let get_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            DaemonRequest::new(51, "tick.get", json!({"id": tick_id})),
+        );
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["number"], 42);
     }
@@ -3062,7 +3081,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -3073,7 +3092,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -3112,7 +3131,7 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(60, "tick.list", json!(null)));
+        let all_resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(60, "tick.list", json!(null)));
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by Open — should have 1
@@ -3149,7 +3168,7 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Sealing");
 
@@ -3180,7 +3199,7 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -3205,7 +3224,7 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Sealing", "role": "coordinator"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
@@ -3220,7 +3239,7 @@ mod tests {
             "tick.transition",
             json!({"id": "nonexistent", "target_status": "Sealing"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -3245,14 +3264,19 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Sealing"}),
         );
-        let resp = dispatch(&stores, &tx, &wm,req);
+        let resp = dispatch(&stores, &tx, &wm, req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Sealing");
     }
 
     // --- learning.create tests ---
 
-    fn create_learning(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager, id: u64) -> String {
+    fn create_learning(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+        id: u64,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,
@@ -3411,7 +3435,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(1, "learning.list", json!(null)));
+        let resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(1, "learning.list", json!(null)));
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -3637,7 +3661,12 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1);
-        let resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(2, "lock.get", json!({"id": lock_id})));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            DaemonRequest::new(2, "lock.get", json!({"id": lock_id})),
+        );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["resource"], "src/main.rs");
     }
@@ -3663,7 +3692,7 @@ mod tests {
         let wm = test_worktree_mgr();
         create_lock(&stores, &tx, &wm, 1);
         create_lock(&stores, &tx, &wm, 2);
-        let resp = dispatch(&stores, &tx, &wm,DaemonRequest::new(3, "lock.list", json!({})));
+        let resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(3, "lock.list", json!({})));
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 2);
     }
@@ -3847,7 +3876,11 @@ mod tests {
         // The error should be from git, not from "not found"
         assert!(resp.is_error());
         let msg = &resp.error.as_ref().unwrap().message;
-        assert!(!msg.contains("not found"), "error should be from git, not from validation: {}", msg);
+        assert!(
+            !msg.contains("not found"),
+            "error should be from git, not from validation: {}",
+            msg
+        );
     }
 
     #[test]
@@ -3917,16 +3950,21 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Verify all 4 worktree methods are routed (not method_not_found)
-        for method in &["worktree.create", "worktree.list", "worktree.cleanup", "worktree.refresh"] {
-            let resp = dispatch(
-                &stores,
-                &tx,
-                &wm,
-                DaemonRequest::new(1, *method, json!({})),
-            );
+        for method in &[
+            "worktree.create",
+            "worktree.list",
+            "worktree.cleanup",
+            "worktree.refresh",
+        ] {
+            let resp = dispatch(&stores, &tx, &wm, DaemonRequest::new(1, *method, json!({})));
             // Even if they error, they should NOT be method_not_found (-32601)
             if resp.is_error() {
-                assert_ne!(resp.error.as_ref().unwrap().code, -32601, "method {} should be routed", method);
+                assert_ne!(
+                    resp.error.as_ref().unwrap().code,
+                    -32601,
+                    "method {} should be routed",
+                    method
+                );
             }
         }
     }
