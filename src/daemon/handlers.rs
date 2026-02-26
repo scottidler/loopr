@@ -1608,10 +1608,18 @@ fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 
 fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     // Optionally filter by resource
-    let resource_filter = req.params.get("resource").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let resource_filter = req
+        .params
+        .get("resource")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // Optionally filter by holder_id
-    let holder_filter = req.params.get("holder_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let holder_filter = req
+        .params
+        .get("holder_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // Optionally filter by active-only
     let active_only = req.params.get("active_only").and_then(|v| v.as_bool()).unwrap_or(false);
