@@ -488,10 +488,7 @@ mod tests {
     fn test_record_indexed_fields_status() {
         let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
         let fields = wi.indexed_fields();
-        assert_eq!(
-            fields.get("status"),
-            Some(&IndexValue::String("Draft".to_string()))
-        );
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Draft".to_string())));
     }
 
     #[test]
