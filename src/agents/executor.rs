@@ -58,6 +58,46 @@ pub async fn run_agent_task(
 ) {
     info!("Agent task started: {} ({})", session_id, agent_type);
 
+    // Create a worktree for the agent before starting the loop.
+    // Implementers key on work_item_id, Reviewers on bundle_id.
+    let worktree_key = {
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = match sessions.get(&session_id) {
+            Some(s) => s,
+            None => {
+                error!("Agent {} session not found in stores", session_id);
+                return;
+            }
+        };
+        match agent_type {
+            AgentType::Implementer => session.work_item_id.clone(),
+            AgentType::Reviewer => session.bundle_id.clone(),
+        }
+    };
+
+    if let Some(ref key) = worktree_key {
+        let worktree_path = match worktree_mgr.create(key, "HEAD") {
+            Ok(path) => Some(path),
+            Err(crate::worktree::manager::WorktreeError::AlreadyExists(_)) => {
+                info!("Agent {} worktree already exists for {}", session_id, key);
+                Some(worktree_mgr.worktree_path(key))
+            }
+            Err(e) => {
+                warn!("Agent {} failed to create worktree: {}", session_id, e);
+                None
+            }
+        };
+
+        if let Some(ref path) = worktree_path {
+            let mut sessions = stores.agent_sessions.write().unwrap();
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.worktree_path = Some(path.to_string_lossy().to_string());
+                persist_session(&stores, session);
+            }
+            info!("Agent {} worktree created at {}", session_id, path.display());
+        }
+    }
+
     // Create the in-process IPC bridge for this agent
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 

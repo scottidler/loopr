@@ -322,7 +322,7 @@ pub async fn run_implementer(
         .worktree_path
         .as_ref()
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+        .ok_or_else(|| eyre!("implementer session missing worktree_path — was the worktree created?"))?;
 
     let max_iterations = config.max_iterations;
     let mut previous_summary: Option<String> = None;

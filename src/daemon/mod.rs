@@ -126,13 +126,17 @@ mod tests {
     use serde_json::json;
 
     fn test_config() -> Config {
-        let dir = std::env::temp_dir().join("loopr-daemon-test");
-        std::fs::create_dir_all(&dir).unwrap();
         let id = crate::id::generate_id();
+        let dir = std::env::temp_dir().join(format!("loopr-daemon-test-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
         Config {
             daemon: crate::config::DaemonConfig {
-                socket_path: dir.join(format!("test-{id}.sock")),
-                pid_path: dir.join(format!("test-{id}.pid")),
+                socket_path: dir.join("test.sock"),
+                pid_path: dir.join("test.pid"),
+            },
+            project: crate::config::ProjectConfig {
+                repo_path: dir.clone(),
+                ..crate::config::ProjectConfig::default()
             },
             ..Config::default()
         }

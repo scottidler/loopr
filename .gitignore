@@ -35,6 +35,10 @@ lcov.info
 tarpaulin-report.html
 examples/_test_broken/
 
+# Loopr runtime data
+.taskstore/
+.worktrees/
+
 # Ralph Wiggum loop control files
 progress.txt
 .loopr-progress
