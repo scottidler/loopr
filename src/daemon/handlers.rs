@@ -1377,10 +1377,7 @@ fn run_validation_commands(commands: &[String]) -> (bool, String) {
     let mut log = String::new();
     for cmd in commands {
         log.push_str(&format!("=== Running: {cmd} ===\n"));
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .output();
+        let output = Command::new("sh").arg("-c").arg(cmd).output();
         match output {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1459,18 +1456,18 @@ fn handle_integrator_validate(
         tick.updated_at = crate::id::now_millis();
     }
     let _ = event_tx.send(DaemonEvent::transition_completed(
-        "tick", &tick_id, "Sealing", "Validating", "Integrator",
+        "tick",
+        &tick_id,
+        "Sealing",
+        "Validating",
+        "Integrator",
     ));
 
     // Run validation commands
     let (all_passed, validation_log) = run_validation_commands(&integrator_config.validation_commands);
 
     // Transition to Published or Failed based on results
-    let final_status = if all_passed {
-        TickStatus::Published
-    } else {
-        TickStatus::Failed
-    };
+    let final_status = if all_passed { TickStatus::Published } else { TickStatus::Failed };
 
     let tick_json = {
         let mut ticks = stores.ticks.write().unwrap();
@@ -1490,12 +1487,16 @@ fn handle_integrator_validate(
     };
 
     if all_passed {
-        let sha = tick_json.get("integration_sha")
+        let sha = tick_json
+            .get("integration_sha")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         let _ = event_tx.send(DaemonEvent::tick_published(&tick_id, sha));
     } else {
-        let _ = event_tx.send(DaemonEvent::tick_validation_failed(&tick_id, "validation commands failed"));
+        let _ = event_tx.send(DaemonEvent::tick_validation_failed(
+            &tick_id,
+            "validation commands failed",
+        ));
     }
 
     DaemonResponse::ok(req.id, tick_json)
@@ -1528,7 +1529,11 @@ fn handle_integrator_publish(
         tick.status = TickStatus::Sealing;
         tick.updated_at = crate::id::now_millis();
         let _ = event_tx.send(DaemonEvent::transition_completed(
-            "tick", &tick_id, "Open", "Sealing", "Integrator",
+            "tick",
+            &tick_id,
+            "Open",
+            "Sealing",
+            "Integrator",
         ));
     } else if current_status != TickStatus::Sealing {
         return DaemonResponse::err(
@@ -2080,7 +2085,13 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(4, "spec.list", json!(null)));
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(4, "spec.list", json!(null)),
+        );
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by plan_id_1 — should have 1
@@ -2417,7 +2428,13 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(30, "phase.list", json!(null)));
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(30, "phase.list", json!(null)),
+        );
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by spec_id_1 — should have 1
@@ -2746,7 +2763,13 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(40, "work_item.list", json!(null)));
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(40, "work_item.list", json!(null)),
+        );
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by phase_id_1 — should have 1
@@ -3115,7 +3138,13 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(50, "bundle.list", json!(null)));
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(50, "bundle.list", json!(null)),
+        );
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by wi_id_1 — should have 1
@@ -3556,7 +3585,13 @@ mod tests {
         );
 
         // List all — should have 2
-        let all_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(60, "tick.list", json!(null)));
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(60, "tick.list", json!(null)),
+        );
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by Open — should have 1
@@ -3873,7 +3908,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, "learning.list", json!(null)));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "learning.list", json!(null)),
+        );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -4145,7 +4186,13 @@ mod tests {
         let wm = test_worktree_mgr();
         create_lock(&stores, &tx, &wm, 1);
         create_lock(&stores, &tx, &wm, 2);
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(3, "lock.list", json!({})));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "lock.list", json!({})),
+        );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 2);
     }
@@ -4300,7 +4347,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, "worktree.create", json!({})));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.create", json!({})),
+        );
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("work_item_id"));
     }
@@ -4353,7 +4406,13 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // list on nonexistent repo will error, but it routes correctly
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, "worktree.list", json!(null)));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.list", json!(null)),
+        );
         // Will be an error since the repo doesn't exist, but the method routes
         assert!(resp.is_error());
     }
@@ -4363,7 +4422,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, "worktree.cleanup", json!({})));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.cleanup", json!({})),
+        );
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("work_item_id"));
     }
@@ -4389,7 +4454,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, "worktree.refresh", json!({})));
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.refresh", json!({})),
+        );
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("work_item_id"));
     }
@@ -4422,7 +4493,13 @@ mod tests {
             "worktree.cleanup",
             "worktree.refresh",
         ] {
-            let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, *method, json!({})));
+            let resp = dispatch(
+                &stores,
+                &tx,
+                &wm,
+                &test_integrator_config(),
+                DaemonRequest::new(1, *method, json!({})),
+            );
             // Even if they error, they should NOT be method_not_found (-32601)
             if resp.is_error() {
                 assert_ne!(
@@ -4453,7 +4530,11 @@ mod tests {
             tx,
             wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "tick.transition", json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"})),
+            DaemonRequest::new(
+                2,
+                "tick.transition",
+                json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+            ),
         );
         assert!(!tr.is_error(), "transition failed: {:?}", tr.error);
         tick_id
@@ -4664,7 +4745,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(3, "tick.transition", json!({"id": tick_id, "target_status": "Validating", "role": "integrator"})),
+            DaemonRequest::new(
+                3,
+                "tick.transition",
+                json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
+            ),
         );
 
         let resp = dispatch(
@@ -4713,7 +4798,13 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         for method in &["integrator.validate", "integrator.publish"] {
-            let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), DaemonRequest::new(1, *method, json!({})));
+            let resp = dispatch(
+                &stores,
+                &tx,
+                &wm,
+                &test_integrator_config(),
+                DaemonRequest::new(1, *method, json!({})),
+            );
             if resp.is_error() {
                 assert_ne!(
                     resp.error.as_ref().unwrap().code,
