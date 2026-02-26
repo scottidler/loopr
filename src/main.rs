@@ -10,6 +10,7 @@ mod config;
 mod domain;
 mod error;
 mod id;
+mod ipc;
 
 use cli::Cli;
 use config::Config;
@@ -190,6 +191,30 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     }];
     domain::transition::validate_transition("init", "running", role, &rules)?;
     info!("Transition engine validated");
+
+    // Validate IPC protocol types are wired up
+    let req = ipc::protocol::DaemonRequest::new(1, "system.handshake", serde_json::json!({"client_version": "0.1.0"}));
+    info!("IPC request: method={} id={}", req.method, req.id);
+    let resp = ipc::protocol::DaemonResponse::ok(req.id, serde_json::json!({"server_version": "0.1.0"}));
+    info!("IPC response: id={} is_error={}", resp.id, resp.is_error());
+    let err_resp = ipc::protocol::DaemonResponse::err(
+        req.id,
+        ipc::protocol::RpcError::method_not_found("bad.method"),
+    );
+    info!("IPC error response: id={} is_error={}", err_resp.id, err_resp.is_error());
+    // Exercise all RpcError constructors
+    let _ = ipc::protocol::RpcError::invalid_params("missing field");
+    let _ = ipc::protocol::RpcError::internal("something broke");
+    let _ = ipc::protocol::RpcError::transition_rejected("wrong role");
+    let event = ipc::protocol::DaemonEvent::record_created("plan", &plan.id);
+    info!("IPC event: {}", event.event);
+    let tc_event = ipc::protocol::DaemonEvent::transition_completed(
+        "work_item", &work_item.id, "Draft", "Ready", "Coordinator",
+    );
+    info!("IPC transition event: {}", tc_event.event);
+    let line = serde_json::to_string(&event).map_err(|e| error::LooprError::SerdeJson(e))?;
+    let msg = ipc::protocol::IpcMessage::from_json(&line).map_err(|e| error::LooprError::SerdeJson(e))?;
+    info!("IPC message discrimination: {:?}", std::mem::discriminant(&msg));
 
     // Log some information
     info!("Application started at ts={}", id::now_millis());
