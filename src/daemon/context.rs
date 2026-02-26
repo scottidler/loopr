@@ -223,11 +223,7 @@ mod tests {
     #[test]
     fn test_stores_lock_insert_and_read() {
         let stores = Stores::new();
-        let lock = crate::domain::lock::Lock::new(
-            "src/main.rs".into(),
-            "wi-1".into(),
-            "coord-1".into(),
-        );
+        let lock = crate::domain::lock::Lock::new("src/main.rs".into(), "wi-1".into(), "coord-1".into());
         let id = lock.id.clone();
         stores.locks.write().unwrap().insert(id.clone(), lock);
         let locks = stores.locks.read().unwrap();

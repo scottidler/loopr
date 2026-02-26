@@ -1155,11 +1155,7 @@ fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse 
     let holder_filter = req.params.get("holder_id").and_then(|v| v.as_str());
 
     // Optionally filter by active-only
-    let active_only = req
-        .params
-        .get("active_only")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let active_only = req.params.get("active_only").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let lock_list: Vec<&Lock> = locks
         .values()
@@ -1191,10 +1187,7 @@ fn handle_lock_release(
     };
 
     if !lock.is_active() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::invalid_params("lock is not active"),
-        );
+        return DaemonResponse::err(req.id, RpcError::invalid_params("lock is not active"));
     }
 
     lock.release();
@@ -1226,10 +1219,7 @@ fn handle_lock_expire(
     };
 
     if !lock.is_active() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::invalid_params("lock is not active"),
-        );
+        return DaemonResponse::err(req.id, RpcError::invalid_params("lock is not active"));
     }
 
     lock.expire();
@@ -3335,7 +3325,11 @@ mod tests {
         let resp = dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(1, "lock.create", json!({"resource": "file.rs", "granted_by": "coord-1"})),
+            DaemonRequest::new(
+                1,
+                "lock.create",
+                json!({"resource": "file.rs", "granted_by": "coord-1"}),
+            ),
         );
         assert!(resp.is_error());
     }
@@ -3345,11 +3339,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let lock_id = create_lock(&stores, &tx, 1);
-        let resp = dispatch(
-            &stores,
-            &tx,
-            DaemonRequest::new(2, "lock.get", json!({"id": lock_id})),
-        );
+        let resp = dispatch(&stores, &tx, DaemonRequest::new(2, "lock.get", json!({"id": lock_id})));
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["resource"], "src/main.rs");
     }
@@ -3372,11 +3362,7 @@ mod tests {
         let tx = test_event_tx();
         create_lock(&stores, &tx, 1);
         create_lock(&stores, &tx, 2);
-        let resp = dispatch(
-            &stores,
-            &tx,
-            DaemonRequest::new(3, "lock.list", json!({})),
-        );
+        let resp = dispatch(&stores, &tx, DaemonRequest::new(3, "lock.list", json!({})));
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 2);
     }
