@@ -1473,7 +1473,11 @@ mod tests {
         let resp = dispatch(
             stores,
             tx,
-            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Parent Phase", "order": 1})),
+            DaemonRequest::new(
+                20,
+                "phase.create",
+                json!({"spec_id": spec_id, "title": "Parent Phase", "order": 1}),
+            ),
         );
         let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id, phase_id)
@@ -1608,7 +1612,11 @@ mod tests {
         let resp2 = dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(21, "phase.create", json!({"spec_id": spec_id, "title": "Phase 2", "order": 2})),
+            DaemonRequest::new(
+                21,
+                "phase.create",
+                json!({"spec_id": spec_id, "title": "Phase 2", "order": 2}),
+            ),
         );
         let phase_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 
