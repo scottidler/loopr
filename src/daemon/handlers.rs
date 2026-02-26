@@ -2375,11 +2375,7 @@ mod tests {
         let plan_id = create_test_plan(&stores, &tx, &wm);
 
         // Create a spec (writes to both TaskStore and HashMap)
-        let create_req = DaemonRequest::new(
-            2,
-            "spec.create",
-            json!({"plan_id": plan_id, "title": "TaskStore Spec"}),
-        );
+        let create_req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "TaskStore Spec"}));
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
         assert!(!create_resp.is_error());
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
