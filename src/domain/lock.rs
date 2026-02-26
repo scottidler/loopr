@@ -86,10 +86,7 @@ impl Record for Lock {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
         m.insert("resource".into(), IndexValue::String(self.resource.clone()));
-        m.insert(
-            "holder_id".into(),
-            IndexValue::String(self.holder_id.clone()),
-        );
+        m.insert("holder_id".into(), IndexValue::String(self.holder_id.clone()));
         m
     }
 }
@@ -235,10 +232,7 @@ mod tests {
             fields.get("resource"),
             Some(&IndexValue::String("src/main.rs".to_string()))
         );
-        assert_eq!(
-            fields.get("holder_id"),
-            Some(&IndexValue::String("wi-42".to_string()))
-        );
+        assert_eq!(fields.get("holder_id"), Some(&IndexValue::String("wi-42".to_string())));
         assert_eq!(fields.len(), 3);
     }
 
