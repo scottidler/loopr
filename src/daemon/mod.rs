@@ -271,10 +271,7 @@ mod tests {
         assert_eq!(resp.result.unwrap()["status"], "shutting_down");
 
         // Daemon should exit on its own
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            daemon_handle,
-        ).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), daemon_handle).await;
         assert!(result.is_ok(), "daemon should have shut down");
 
         // Cleanup

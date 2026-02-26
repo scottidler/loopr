@@ -117,10 +117,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     )
 }
 
-fn handle_shutdown(
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    req: DaemonRequest,
-) -> DaemonResponse {
+fn handle_shutdown(event_tx: &broadcast::Sender<DaemonEvent>, req: DaemonRequest) -> DaemonResponse {
     // Broadcast a shutdown event so the accept loop can pick it up
     let _ = event_tx.send(DaemonEvent::new("system.shutdown", json!({})));
     DaemonResponse::ok(req.id, json!({ "status": "shutting_down" }))
