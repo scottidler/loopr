@@ -139,6 +139,35 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     let ticks = stores.ticks.read().unwrap().len();
     let learnings = stores.learnings.read().unwrap().len();
     let locks = stores.locks.read().unwrap().len();
+
+    // TaskStore stats (when available)
+    let taskstore_stats = if let Some(store) = &stores.store {
+        let s = store.lock().unwrap();
+        let ts_plans = s.list::<Plan>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_specs = s.list::<Spec>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_phases = s.list::<Phase>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_work_items = s.list::<WorkItem>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_bundles = s.list::<Bundle>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_ticks = s.list::<Tick>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_learnings = s.list::<Learning>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_locks = s.list::<Lock>(&[]).map(|v| v.len()).unwrap_or(0);
+        json!({
+            "enabled": true,
+            "counts": {
+                "plans": ts_plans,
+                "specs": ts_specs,
+                "phases": ts_phases,
+                "work_items": ts_work_items,
+                "bundles": ts_bundles,
+                "ticks": ts_ticks,
+                "learnings": ts_learnings,
+                "locks": ts_locks,
+            }
+        })
+    } else {
+        json!({ "enabled": false })
+    };
+
     DaemonResponse::ok(
         req.id,
         json!({
@@ -153,7 +182,8 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
                 "ticks": ticks,
                 "learnings": learnings,
                 "locks": locks,
-            }
+            },
+            "taskstore": taskstore_stats,
         }),
     )
 }
@@ -1835,11 +1865,18 @@ fn handle_worktree_create(
         .unwrap_or("HEAD")
         .to_string();
 
-    // Validate the work item exists
+    // Validate the work item exists (TaskStore first, fallback to HashMap)
     {
-        let work_items = stores.work_items.read().unwrap();
-        if !work_items.contains_key(&work_item_id) {
-            return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+        let found = if let Some(store) = &stores.store {
+            store.lock().unwrap().get::<WorkItem>(&work_item_id).ok().is_some()
+        } else {
+            false
+        };
+        if !found {
+            let work_items = stores.work_items.read().unwrap();
+            if !work_items.contains_key(&work_item_id) {
+                return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+            }
         }
     }
 
@@ -1887,11 +1924,18 @@ fn handle_worktree_cleanup(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_item_id is required")),
     };
 
-    // Validate the work item exists
+    // Validate the work item exists (TaskStore first, fallback to HashMap)
     {
-        let work_items = stores.work_items.read().unwrap();
-        if !work_items.contains_key(&work_item_id) {
-            return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+        let found = if let Some(store) = &stores.store {
+            store.lock().unwrap().get::<WorkItem>(&work_item_id).ok().is_some()
+        } else {
+            false
+        };
+        if !found {
+            let work_items = stores.work_items.read().unwrap();
+            if !work_items.contains_key(&work_item_id) {
+                return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+            }
         }
     }
 
@@ -2231,6 +2275,8 @@ mod tests {
         assert!(result["pid"].is_number());
         assert_eq!(result["counts"]["plans"], 0);
         assert_eq!(result["counts"]["work_items"], 0);
+        // Without TaskStore, reports disabled
+        assert_eq!(result["taskstore"]["enabled"], false);
     }
 
     #[test]
@@ -2252,6 +2298,36 @@ mod tests {
         assert_eq!(result["counts"]["plans"], 1);
         assert_eq!(result["counts"]["work_items"], 1);
         assert_eq!(result["counts"]["specs"], 0);
+    }
+
+    #[test]
+    fn test_dispatch_status_with_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan via TaskStore directly
+        let plan = Plan::new("TS Plan".into(), "".into(), "".into());
+        stores.store.as_ref().unwrap().lock().unwrap().create(plan.clone()).unwrap();
+
+        // Create a spec via TaskStore directly
+        let spec = Spec::new(plan.id.clone(), "TS Spec".into(), "".into());
+        stores.store.as_ref().unwrap().lock().unwrap().create(spec).unwrap();
+
+        let req = DaemonRequest::new(1, "system.status", json!(null));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+
+        // TaskStore should be enabled and show counts
+        assert_eq!(result["taskstore"]["enabled"], true);
+        assert_eq!(result["taskstore"]["counts"]["plans"], 1);
+        assert_eq!(result["taskstore"]["counts"]["specs"], 1);
+        assert_eq!(result["taskstore"]["counts"]["phases"], 0);
+        assert_eq!(result["taskstore"]["counts"]["work_items"], 0);
+
+        // HashMap counts should be 0 (we only wrote to TaskStore)
+        assert_eq!(result["counts"]["plans"], 0);
     }
 
     #[test]
