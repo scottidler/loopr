@@ -3147,10 +3147,8 @@ mod tests {
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
-        let filtered_req =
-            DaemonRequest::new(31, "phase.list", json!({"spec_id": spec_id_1}));
-        let filtered_resp =
-            dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        let filtered_req = DaemonRequest::new(31, "phase.list", json!({"spec_id": spec_id_1}));
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
         assert!(!filtered_resp.is_error());
         let filtered_phases = filtered_resp.result.unwrap();
         let arr = filtered_phases.as_array().unwrap();
