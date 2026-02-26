@@ -6,7 +6,7 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use futures::StreamExt;
-use log::info;
+use log::{info, warn};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -15,11 +15,19 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::{Frame, Terminal};
 use tokio::time::Interval;
 
+use crate::domain::bundle::Bundle;
+use crate::domain::learning::Learning;
+use crate::domain::lock::Lock;
+use crate::domain::phase::Phase;
+use crate::domain::plan::Plan;
 use crate::domain::role::Role;
+use crate::domain::spec::Spec;
+use crate::domain::tick::Tick;
+use crate::domain::work_item::WorkItem;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::IpcMessage;
 
-use super::app::{App, ConnectionStatus, View};
+use super::app::{App, AppState, ConnectionStatus, View};
 use super::input::{apply_action, handle_key};
 use super::views;
 
@@ -95,8 +103,13 @@ async fn event_loop(
             }
             ipc_msg = async { client.as_mut().unwrap().recv().await }, if client.is_some() => {
                 match ipc_msg {
-                    Ok(Some(IpcMessage::Event(_event))) => {
-                        // TODO: update app.state based on daemon events
+                    Ok(Some(IpcMessage::Event(event))) => {
+                        if let Some(collection) = event_collection(&event) {
+                            let collection = collection.to_string();
+                            if let Some(c) = client.as_mut() {
+                                refresh_collection(&mut app.state, c, &collection).await;
+                            }
+                        }
                     }
                     Ok(None) | Err(_) => {
                         info!("Lost connection to daemon, will attempt reconnection");
@@ -119,6 +132,75 @@ async fn event_loop(
     }
 
     Ok(())
+}
+
+/// Refresh a collection in AppState by fetching the latest list from the daemon.
+async fn refresh_collection(state: &mut AppState, client: &mut IpcClient, collection: &str) {
+    let method = format!("{collection}.list");
+    match client.request(&method, serde_json::json!({})).await {
+        Ok((resp, _events)) => {
+            if let Some(result) = resp.result {
+                match collection {
+                    "plan" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Plan>>(result) {
+                            state.plans = items;
+                        }
+                    }
+                    "spec" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Spec>>(result) {
+                            state.specs = items;
+                        }
+                    }
+                    "phase" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Phase>>(result) {
+                            state.phases = items;
+                        }
+                    }
+                    "work_item" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<WorkItem>>(result) {
+                            state.work_items = items;
+                        }
+                    }
+                    "bundle" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Bundle>>(result) {
+                            state.bundles = items;
+                        }
+                    }
+                    "tick" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Tick>>(result) {
+                            state.ticks = items;
+                        }
+                    }
+                    "learning" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Learning>>(result) {
+                            state.learnings = items;
+                        }
+                    }
+                    "lock" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Lock>>(result) {
+                            state.locks = items;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to refresh collection {collection}: {e}");
+        }
+    }
+}
+
+/// Extract collection name from a daemon event, if applicable.
+fn event_collection(event: &crate::ipc::protocol::DaemonEvent) -> Option<&str> {
+    match event.event.as_str() {
+        "record.created" | "record.updated" | "transition.completed" => {
+            event.data["collection"].as_str()
+        }
+        "tick.published" | "tick.validation_failed" => Some("tick"),
+        "bundle.rejected_stale" => Some("bundle"),
+        _ => None,
+    }
 }
 
 /// Draw the full TUI frame: tab bar, content area, action bar, and optional help overlay.
@@ -448,6 +530,210 @@ mod tests {
         }
         assert_eq!(app.connection, ConnectionStatus::Connected);
 
+        let _ = server_handle.await;
+    }
+
+    #[test]
+    fn test_event_collection_record_created() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::record_created("plan", "p1");
+        assert_eq!(event_collection(&event), Some("plan"));
+    }
+
+    #[test]
+    fn test_event_collection_record_updated() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::record_updated("learning", "l1");
+        assert_eq!(event_collection(&event), Some("learning"));
+    }
+
+    #[test]
+    fn test_event_collection_transition_completed() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::transition_completed("work_item", "wi1", "Draft", "Ready", "Coordinator");
+        assert_eq!(event_collection(&event), Some("work_item"));
+    }
+
+    #[test]
+    fn test_event_collection_tick_published() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::tick_published("t1", "abc123");
+        assert_eq!(event_collection(&event), Some("tick"));
+    }
+
+    #[test]
+    fn test_event_collection_bundle_rejected_stale() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::bundle_rejected_stale("wi1", "t1", "t2");
+        assert_eq!(event_collection(&event), Some("bundle"));
+    }
+
+    #[test]
+    fn test_event_collection_unknown_event() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::new("some.unknown.event", serde_json::json!({}));
+        assert_eq!(event_collection(&event), None);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_plans() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-{}.sock", crate::id::generate_id()));
+
+        // Create a mock plan to return
+        let mock_plan = Plan::new("Test Plan".into(), "A test plan".into(), "Criteria".into());
+        let plans_json = serde_json::to_value(vec![mock_plan.clone()]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let plans = plans_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else if req.method == "plan.list" {
+                            DaemonResponse::ok(req.id, plans.clone())
+                        } else {
+                            DaemonResponse::ok(req.id, json!(null))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        assert!(state.plans.is_empty());
+
+        refresh_collection(&mut state, &mut client, "plan").await;
+        assert_eq!(state.plans.len(), 1);
+        assert_eq!(state.plans[0].title, "Test Plan");
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_work_items() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-wi-{}.sock", crate::id::generate_id()));
+
+        let mock_wi = WorkItem::new("ph1".into(), "Task 1".into(), "desc".into());
+        let wis_json = serde_json::to_value(vec![mock_wi.clone()]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let wis = wis_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else if req.method == "work_item.list" {
+                            DaemonResponse::ok(req.id, wis.clone())
+                        } else {
+                            DaemonResponse::ok(req.id, json!(null))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        assert!(state.work_items.is_empty());
+
+        refresh_collection(&mut state, &mut client, "work_item").await;
+        assert_eq!(state.work_items.len(), 1);
+        assert_eq!(state.work_items[0].title, "Task 1");
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_unknown_collection_is_noop() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-unk-{}.sock", crate::id::generate_id()));
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            DaemonResponse::ok(req.id, json!([]))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        // Refreshing an unknown collection should not panic or modify state
+        refresh_collection(&mut state, &mut client, "unknown_collection").await;
+        assert!(state.plans.is_empty());
+        assert!(state.work_items.is_empty());
+
+        drop(client);
         let _ = server_handle.await;
     }
 }
