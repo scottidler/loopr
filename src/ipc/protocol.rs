@@ -207,6 +207,41 @@ impl DaemonEvent {
         };
         Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
     }
+
+    pub fn agent_tool_started(session_id: &str, tool_name: &str) -> Self {
+        let event = AgentEvent::ToolStarted {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+        };
+        Self::new("agent.tool_started", serde_json::to_value(event).unwrap_or_default())
+    }
+
+    pub fn agent_tool_completed(session_id: &str, tool_name: &str, exit_code: i32, duration_ms: u64) -> Self {
+        let event = AgentEvent::ToolCompleted {
+            session_id: session_id.to_string(),
+            tool_name: tool_name.to_string(),
+            exit_code,
+            duration_ms,
+        };
+        Self::new("agent.tool_completed", serde_json::to_value(event).unwrap_or_default())
+    }
+
+    pub fn agent_action_completed(session_id: &str, action_summary: &str) -> Self {
+        let event = AgentEvent::ActionCompleted {
+            session_id: session_id.to_string(),
+            action_summary: action_summary.to_string(),
+        };
+        Self::new("agent.action_completed", serde_json::to_value(event).unwrap_or_default())
+    }
+
+    pub fn agent_iteration_completed(session_id: &str, iteration: u32, summary: &str) -> Self {
+        let event = AgentEvent::IterationCompleted {
+            session_id: session_id.to_string(),
+            iteration,
+            summary: summary.to_string(),
+        };
+        Self::new("agent.iteration_completed", serde_json::to_value(event).unwrap_or_default())
+    }
 }
 
 /// Parse a raw JSON line into an IpcMessage.
