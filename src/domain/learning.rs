@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
+use taskstore::{IndexValue, Record};
 
 use crate::id;
 
@@ -78,6 +81,27 @@ impl Learning {
     pub fn demote(&mut self) {
         self.promoted = false;
         self.updated_at = id::now_millis();
+    }
+}
+
+impl Record for Learning {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+    }
+
+    fn collection_name() -> &'static str {
+        "learnings"
+    }
+
+    fn indexed_fields(&self) -> HashMap<String, IndexValue> {
+        let mut m = HashMap::new();
+        m.insert("scope".into(), IndexValue::String(self.scope.to_string()));
+        m.insert("source_id".into(), IndexValue::String(self.source_id.clone()));
+        m
     }
 }
 
@@ -215,5 +239,40 @@ mod tests {
         );
         assert_eq!(learning.scope, LearningScope::Global);
         assert_eq!(learning.scope.to_string(), "Global");
+    }
+
+    // --- Record trait tests ---
+
+    #[test]
+    fn test_record_id() {
+        let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        assert_eq!(Record::id(&l), l.id);
+    }
+
+    #[test]
+    fn test_record_updated_at() {
+        let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        assert_eq!(Record::updated_at(&l), l.updated_at);
+    }
+
+    #[test]
+    fn test_record_collection_name() {
+        assert_eq!(Learning::collection_name(), "learnings");
+    }
+
+    #[test]
+    fn test_record_indexed_fields() {
+        let l = Learning::new("phase-42".to_string(), LearningScope::Phase, "insight".to_string());
+        let fields = l.indexed_fields();
+        assert_eq!(fields.get("scope"), Some(&IndexValue::String("Phase".to_string())));
+        assert_eq!(fields.get("source_id"), Some(&IndexValue::String("phase-42".to_string())));
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn test_record_indexed_fields_reflect_scope() {
+        let l = Learning::new("g".to_string(), LearningScope::Global, "global insight".to_string());
+        let fields = l.indexed_fields();
+        assert_eq!(fields.get("scope"), Some(&IndexValue::String("Global".to_string())));
     }
 }
