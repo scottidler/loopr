@@ -99,11 +99,7 @@ mod tests {
 
     #[test]
     fn test_lock_new() {
-        let lock = Lock::new(
-            "src/main.rs".to_string(),
-            "wi-123".to_string(),
-            "coord-456".to_string(),
-        );
+        let lock = Lock::new("src/main.rs".to_string(), "wi-123".to_string(), "coord-456".to_string());
         assert_eq!(lock.resource, "src/main.rs");
         assert_eq!(lock.holder_id, "wi-123");
         assert_eq!(lock.granted_by, "coord-456");
@@ -116,11 +112,7 @@ mod tests {
 
     #[test]
     fn test_lock_serde_roundtrip() {
-        let lock = Lock::new(
-            "src/lib.rs".to_string(),
-            "wi-789".to_string(),
-            "coord-101".to_string(),
-        );
+        let lock = Lock::new("src/lib.rs".to_string(), "wi-789".to_string(), "coord-101".to_string());
         let json = serde_json::to_string(&lock).unwrap();
         let deserialized: Lock = serde_json::from_str(&json).unwrap();
         assert_eq!(lock.id, deserialized.id);
@@ -167,7 +159,11 @@ mod tests {
 
     #[test]
     fn test_lock_resource_preserved() {
-        let lock = Lock::new("src/domain/mod.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        let lock = Lock::new(
+            "src/domain/mod.rs".to_string(),
+            "wi-1".to_string(),
+            "coord-1".to_string(),
+        );
         assert_eq!(lock.resource, "src/domain/mod.rs");
     }
 
