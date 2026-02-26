@@ -8,6 +8,7 @@ use crate::domain::plan::{Plan, PlanStatus, hierarchy_transitions};
 use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::transition::validate_transition;
+use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 use super::context::Stores;
@@ -29,6 +30,10 @@ pub fn dispatch(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>,
         "phase.get" => handle_phase_get(stores, req),
         "phase.list" => handle_phase_list(stores, req),
         "phase.transition" => handle_phase_transition(stores, event_tx, req),
+        "work_item.create" => handle_work_item_create(stores, event_tx, req),
+        "work_item.get" => handle_work_item_get(stores, req),
+        "work_item.list" => handle_work_item_list(stores, req),
+        "work_item.transition" => handle_work_item_transition(stores, event_tx, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -439,6 +444,143 @@ fn handle_phase_transition(
     ));
 
     DaemonResponse::ok(req.id, phase_json)
+}
+
+// --- WorkItem handlers ---
+
+fn handle_work_item_create(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let phase_id = match req.params.get("phase_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("phase_id is required")),
+    };
+
+    // Verify parent phase exists
+    if !stores.phases.read().unwrap().contains_key(&phase_id) {
+        return DaemonResponse::err(req.id, RpcError::not_found("phase", &phase_id));
+    }
+
+    let title = req
+        .params
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = req
+        .params
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if title.is_empty() {
+        return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
+    }
+
+    let work_item = WorkItem::new(phase_id, title, description);
+    let wi_json = match serde_json::to_value(&work_item) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = work_item.id.clone();
+    stores.work_items.write().unwrap().insert(id.clone(), work_item);
+    let _ = event_tx.send(DaemonEvent::record_created("work_item", &id));
+
+    DaemonResponse::ok(req.id, wi_json)
+}
+
+fn handle_work_item_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let work_items = stores.work_items.read().unwrap();
+    match work_items.get(id) {
+        Some(wi) => match serde_json::to_value(wi) {
+            Ok(v) => DaemonResponse::ok(req.id, v),
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        },
+        None => DaemonResponse::err(req.id, RpcError::not_found("work_item", id)),
+    }
+}
+
+fn handle_work_item_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let work_items = stores.work_items.read().unwrap();
+
+    // Optionally filter by phase_id
+    let phase_id_filter = req.params.get("phase_id").and_then(|v| v.as_str());
+
+    let wi_list: Vec<&WorkItem> = work_items
+        .values()
+        .filter(|wi| phase_id_filter.is_none() || Some(wi.phase_id.as_str()) == phase_id_filter)
+        .collect();
+
+    match serde_json::to_value(&wi_list) {
+        Ok(v) => DaemonResponse::ok(req.id, v),
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_work_item_transition(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let target_status: WorkItemStatus = match req.params.get("target_status") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(s) => s,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
+        },
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
+    };
+
+    let role: Role = match req.params.get("role") {
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(r) => r,
+            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
+        },
+        None => Role::Coordinator,
+    };
+
+    let mut work_items = stores.work_items.write().unwrap();
+    let wi = match work_items.get_mut(&id) {
+        Some(w) => w,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("work_item", &id)),
+    };
+
+    let from = wi.status;
+    let rules = work_item_transitions();
+    if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    wi.status = target_status;
+    wi.updated_at = crate::id::now_millis();
+
+    let wi_json = match serde_json::to_value(&*wi) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let _ = event_tx.send(DaemonEvent::transition_completed(
+        "work_item",
+        &id,
+        &from.to_string(),
+        &target_status.to_string(),
+        &role.to_string(),
+    ));
+
+    DaemonResponse::ok(req.id, wi_json)
 }
 
 #[cfg(test)]
@@ -1316,6 +1458,293 @@ mod tests {
             json!({
                 "id": "nonexistent",
                 "target_status": "active"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    // --- work_item handlers ---
+
+    /// Helper: create a plan + spec + phase and return (plan_id, spec_id, phase_id)
+    fn create_test_phase(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>) -> (String, String, String) {
+        let (plan_id, spec_id) = create_test_spec(stores, tx);
+        let resp = dispatch(
+            stores,
+            tx,
+            DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "Parent Phase", "order": 1})),
+        );
+        let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (plan_id, spec_id, phase_id)
+    }
+
+    #[test]
+    fn test_work_item_create_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+
+        let req = DaemonRequest::new(
+            30,
+            "work_item.create",
+            json!({
+                "phase_id": phase_id,
+                "title": "Implement auth",
+                "description": "Add JWT signing"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Implement auth");
+        assert_eq!(result["phase_id"], phase_id);
+        assert_eq!(result["status"], "Draft");
+        assert_eq!(stores.work_items.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_work_item_create_missing_phase_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "work_item.create", json!({"title": "WI"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("phase_id"));
+    }
+
+    #[test]
+    fn test_work_item_create_phase_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "work_item.create", json!({"phase_id": "nonexistent", "title": "WI"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_work_item_create_missing_title() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+        let req = DaemonRequest::new(
+            30,
+            "work_item.create",
+            json!({"phase_id": phase_id, "description": "no title"}),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("title"));
+    }
+
+    #[test]
+    fn test_work_item_create_broadcasts_event() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+        // Drain plan+spec+phase create events
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+
+        let req = DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"}));
+        dispatch(&stores, &tx, req);
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "record.created");
+        assert_eq!(event.data["collection"], "work_item");
+    }
+
+    #[test]
+    fn test_work_item_get_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "My WI"})),
+        );
+        let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let get_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(31, "work_item.get", json!({"id": wi_id})),
+        );
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["title"], "My WI");
+    }
+
+    #[test]
+    fn test_work_item_get_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "work_item.get", json!({"id": "nonexistent"}));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_work_item_list_empty() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(1, "work_item.list", json!(null));
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_work_item_list_filtered_by_phase_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, spec_id, phase_id_1) = create_test_phase(&stores, &tx);
+
+        // Create a second phase under the same spec
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(21, "phase.create", json!({"spec_id": spec_id, "title": "Phase 2", "order": 2})),
+        );
+        let phase_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create work items under different phases
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id_1, "title": "WI A"})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(31, "work_item.create", json!({"phase_id": phase_id_2, "title": "WI B"})),
+        );
+
+        // List all — should have 2
+        let all_resp = dispatch(&stores, &tx, DaemonRequest::new(40, "work_item.list", json!(null)));
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // List filtered by phase_id_1 — should have 1
+        let filtered_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(41, "work_item.list", json!({"phase_id": phase_id_1})),
+        );
+        let items = filtered_resp.result.unwrap();
+        let arr = items.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["title"], "WI A");
+    }
+
+    #[test]
+    fn test_work_item_transition_draft_to_ready() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+        // Drain plan+spec+phase create events
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+        let _ = rx.try_recv();
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"})),
+        );
+        let _ = rx.try_recv(); // consume work_item create event
+        let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req = DaemonRequest::new(
+            31,
+            "work_item.transition",
+            json!({
+                "id": wi_id,
+                "target_status": "Ready",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Ready");
+
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "transition.completed");
+        assert_eq!(event.data["collection"], "work_item");
+        assert_eq!(event.data["from"], "Draft");
+        assert_eq!(event.data["to"], "Ready");
+    }
+
+    #[test]
+    fn test_work_item_transition_invalid_skip_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"})),
+        );
+        let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Try Draft → InProgress (invalid: must go through Ready)
+        let req = DaemonRequest::new(
+            31,
+            "work_item.transition",
+            json!({
+                "id": wi_id,
+                "target_status": "InProgress",
+                "role": "coordinator"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_work_item_transition_wrong_role() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx);
+
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"})),
+        );
+        let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Implementer cannot transition Draft → Ready
+        let req = DaemonRequest::new(
+            31,
+            "work_item.transition",
+            json!({
+                "id": wi_id,
+                "target_status": "Ready",
+                "role": "implementer"
+            }),
+        );
+        let resp = dispatch(&stores, &tx, req);
+        assert!(resp.is_error());
+        assert_eq!(resp.error.unwrap().code, -32000);
+    }
+
+    #[test]
+    fn test_work_item_transition_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let req = DaemonRequest::new(
+            1,
+            "work_item.transition",
+            json!({
+                "id": "nonexistent",
+                "target_status": "Ready"
             }),
         );
         let resp = dispatch(&stores, &tx, req);

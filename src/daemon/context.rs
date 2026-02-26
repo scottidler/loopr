@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
+use crate::domain::work_item::WorkItem;
 use crate::ipc::protocol::DaemonEvent;
 
 /// In-memory record stores, each behind a std::sync::RwLock for synchronous access
@@ -15,6 +16,7 @@ pub struct Stores {
     pub plans: StdRwLock<HashMap<String, Plan>>,
     pub specs: StdRwLock<HashMap<String, Spec>>,
     pub phases: StdRwLock<HashMap<String, Phase>>,
+    pub work_items: StdRwLock<HashMap<String, WorkItem>>,
 }
 
 impl Stores {
@@ -23,6 +25,7 @@ impl Stores {
             plans: StdRwLock::new(HashMap::new()),
             specs: StdRwLock::new(HashMap::new()),
             phases: StdRwLock::new(HashMap::new()),
+            work_items: StdRwLock::new(HashMap::new()),
         }
     }
 }
@@ -127,6 +130,7 @@ mod tests {
         assert!(stores.plans.read().unwrap().is_empty());
         assert!(stores.specs.read().unwrap().is_empty());
         assert!(stores.phases.read().unwrap().is_empty());
+        assert!(stores.work_items.read().unwrap().is_empty());
     }
 
     #[test]
@@ -160,5 +164,16 @@ mod tests {
         let phases = stores.phases.read().unwrap();
         assert_eq!(phases.len(), 1);
         assert_eq!(phases[&id].title, "Test Phase");
+    }
+
+    #[test]
+    fn test_stores_work_item_insert_and_read() {
+        let stores = Stores::new();
+        let wi = WorkItem::new("phase-1".into(), "Test WI".into(), "Desc".into());
+        let id = wi.id.clone();
+        stores.work_items.write().unwrap().insert(id.clone(), wi);
+        let work_items = stores.work_items.read().unwrap();
+        assert_eq!(work_items.len(), 1);
+        assert_eq!(work_items[&id].title, "Test WI");
     }
 }
