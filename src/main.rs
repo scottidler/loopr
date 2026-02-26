@@ -216,6 +216,17 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     let msg = ipc::protocol::IpcMessage::from_json(&line).map_err(error::LooprError::SerdeJson)?;
     info!("IPC message discrimination: {:?}", std::mem::discriminant(&msg));
 
+    // Validate IPC codec is wired up
+    let _codec = ipc::codec::ndjson_codec();
+    let encoded_req = ipc::codec::encode_request(&req).map_err(error::LooprError::SerdeJson)?;
+    let decoded_req = ipc::codec::decode_request(&encoded_req).map_err(error::LooprError::SerdeJson)?;
+    info!("IPC codec roundtrip: method={}", decoded_req.method);
+    let encoded_resp = ipc::codec::encode_response(&resp).map_err(error::LooprError::SerdeJson)?;
+    let decoded_msg = ipc::codec::decode_client_message(&encoded_resp).map_err(error::LooprError::SerdeJson)?;
+    info!("IPC codec client msg: {:?}", std::mem::discriminant(&decoded_msg));
+    let encoded_event = ipc::codec::encode_event(&event).map_err(error::LooprError::SerdeJson)?;
+    info!("IPC codec event encoded: {} bytes", encoded_event.len());
+
     // Log some information
     info!("Application started at ts={}", id::now_millis());
 
