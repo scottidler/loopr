@@ -781,11 +781,33 @@ fn handle_work_item_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespo
 }
 
 fn handle_work_item_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let work_items = stores.work_items.read().unwrap();
-
-    // Optionally filter by phase_id
     let phase_id_filter = req.params.get("phase_id").and_then(|v| v.as_str());
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        let filters: Vec<Filter> = if let Some(pid) = phase_id_filter {
+            vec![Filter {
+                field: "phase_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(pid.to_string()),
+            }]
+        } else {
+            vec![]
+        };
+        match store.lock().unwrap().list::<WorkItem>(&filters) {
+            Ok(work_items) => {
+                return match serde_json::to_value(&work_items) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let work_items = stores.work_items.read().unwrap();
     let wi_list: Vec<&WorkItem> = work_items
         .values()
         .filter(|wi| phase_id_filter.is_none() || Some(wi.phase_id.as_str()) == phase_id_filter)
@@ -3536,6 +3558,67 @@ mod tests {
         );
         let items = filtered_resp.result.unwrap();
         let arr = items.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["title"], "WI A");
+    }
+
+    #[test]
+    fn test_work_item_list_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, _spec_id, phase_id_1) = create_test_phase(&stores, &tx, &wm);
+
+        // Create a second phase under the same spec
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                21,
+                "phase.create",
+                json!({"spec_id": _spec_id, "title": "Phase 2", "order": 2}),
+            ),
+        );
+        let phase_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create work items under different phases (writes to both TaskStore and HashMap)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id_1, "title": "WI A"})),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(31, "work_item.create", json!({"phase_id": phase_id_2, "title": "WI B"})),
+        );
+
+        // Clear HashMap to prove list reads from TaskStore
+        stores.work_items.write().unwrap().clear();
+
+        // List all should still return both work items via TaskStore
+        let all_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(40, "work_item.list", json!(null)),
+        );
+        assert!(!all_resp.is_error());
+        assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
+
+        // Test filtered list also works from TaskStore
+        let filtered_req = DaemonRequest::new(41, "work_item.list", json!({"phase_id": phase_id_1}));
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        assert!(!filtered_resp.is_error());
+        let filtered_items = filtered_resp.result.unwrap();
+        let arr = filtered_items.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["title"], "WI A");
     }
