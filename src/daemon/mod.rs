@@ -69,16 +69,16 @@ async fn accept_loop(
                     Ok((stream, _addr)) => {
                         let event_rx = event_tx.subscribe();
                         // Extract stores, worktree_manager, and event_tx for the handler closure
-                        let (stores, worktree_mgr) = {
+                        let (stores, worktree_mgr, integrator_config) = {
                             let c = ctx.read().await;
-                            (c.stores.clone(), c.worktree_manager.clone())
+                            (c.stores.clone(), c.worktree_manager.clone(), c.config.integrator.clone())
                         };
                         let handler_event_tx = event_tx.clone();
                         tokio::spawn(async move {
                             server::handle_client(
                                 stream,
                                 move |req| {
-                                    handlers::dispatch(&stores, &handler_event_tx, &worktree_mgr, req)
+                                    handlers::dispatch(&stores, &handler_event_tx, &worktree_mgr, &integrator_config, req)
                                 },
                                 event_rx,
                             ).await;

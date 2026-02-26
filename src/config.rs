@@ -31,6 +31,25 @@ pub struct ProjectConfig {
     pub worktree_dir: PathBuf,
 }
 
+/// Integrator configuration — validation commands run during tick validation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct IntegratorConfig {
+    pub validation_commands: Vec<String>,
+}
+
+impl Default for IntegratorConfig {
+    fn default() -> Self {
+        Self {
+            validation_commands: vec![
+                "cargo fmt --check".to_string(),
+                "cargo clippy -- -D warnings".to_string(),
+                "cargo test".to_string(),
+            ],
+        }
+    }
+}
+
 impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
@@ -47,6 +66,7 @@ pub struct Config {
     pub debug: bool,
     pub daemon: DaemonConfig,
     pub project: ProjectConfig,
+    pub integrator: IntegratorConfig,
 }
 
 impl Default for Config {
@@ -56,6 +76,7 @@ impl Default for Config {
             debug: false,
             daemon: DaemonConfig::default(),
             project: ProjectConfig::default(),
+            integrator: IntegratorConfig::default(),
         }
     }
 }
@@ -144,5 +165,18 @@ mod tests {
         let config = Config::default();
         assert!(config.daemon.socket_path.ends_with("daemon.sock"));
         assert!(!config.project.repo_path.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_integrator_config_default() {
+        let ic = IntegratorConfig::default();
+        assert!(!ic.validation_commands.is_empty());
+        assert!(ic.validation_commands.iter().any(|c| c.contains("cargo test")));
+    }
+
+    #[test]
+    fn test_config_has_integrator() {
+        let config = Config::default();
+        assert!(!config.integrator.validation_commands.is_empty());
     }
 }

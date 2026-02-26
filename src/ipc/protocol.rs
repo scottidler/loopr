@@ -158,6 +158,26 @@ impl DaemonEvent {
         )
     }
 
+    pub fn tick_published(tick_id: &str, sha: &str) -> Self {
+        Self::new(
+            "tick.published",
+            serde_json::json!({
+                "tick_id": tick_id,
+                "sha": sha,
+            }),
+        )
+    }
+
+    pub fn tick_validation_failed(tick_id: &str, reason: &str) -> Self {
+        Self::new(
+            "tick.validation_failed",
+            serde_json::json!({
+                "tick_id": tick_id,
+                "reason": reason,
+            }),
+        )
+    }
+
     pub fn bundle_rejected_stale(work_item_id: &str, base_tick_id: &str, latest_tick_id: &str) -> Self {
         Self::new(
             "bundle.rejected_stale",
