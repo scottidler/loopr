@@ -881,6 +881,22 @@ fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<Bundle>(id) {
+            Ok(Some(bundle)) => {
+                return match serde_json::to_value(&bundle) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let bundles = stores.bundles.read().unwrap();
     match bundles.get(id) {
         Some(bundle) => match serde_json::to_value(bundle) {
@@ -3593,6 +3609,38 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_bundle_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+
+        // Create a bundle (writes to both TaskStore and HashMap)
+        let create_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_item_id": wi_id, "branch_name": "feature/ts-read"}),
+            ),
+        );
+        assert!(!create_resp.is_error());
+        let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.bundles.write().unwrap().remove(&bundle_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(41, "bundle.get", json!({"id": bundle_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["branch_name"], "feature/ts-read");
     }
 
     #[test]
