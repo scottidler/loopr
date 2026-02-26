@@ -59,9 +59,10 @@ echo "<promise>COMPLETE</promise>"
 
 If the injected context below shows a FAIL or validation output with errors:
 1. Read the validation/quality gate output (injected below — you already have it)
-2. Fix that ONE thing
-3. Record what you fixed
-4. EXIT immediately
+2. For more detail, read `logs/iter-NNN-validation.log` and `logs/iter-NNN-claude.log` for the failing iteration
+3. Fix that ONE thing
+4. Record what you fixed
+5. EXIT immediately
 
 ---
 
@@ -302,11 +303,21 @@ The bash loop verifies this externally. If validation fails, you'll be restarted
 
 ---
 
+## Logs
+
+Per-iteration logs are saved in `logs/`:
+- `logs/iter-NNN-claude.log` — Full Claude output for iteration NNN
+- `logs/iter-NNN-validation.log` — Full `otto ci` validation output for iteration NNN
+
+If you need to investigate what happened in a previous iteration (e.g., why a change didn't work, what code was generated), read the relevant log files. These contain the complete output that's too large for progress.txt.
+
 ## Quick Reference
 
 | File | Purpose |
 |------|---------|
 | `progress.txt` | Your memory between iterations |
+| `logs/iter-NNN-claude.log` | Full Claude output for iteration NNN |
+| `logs/iter-NNN-validation.log` | Full validation output for iteration NNN |
 | `docs/design/2026-02-25-loopr-v3-mvp1.md` | **The design doc** — single source of truth |
 | `docs/AGENT.md` | Doc map and reading order |
 | `docs/v2-proven-patterns.md` | Infrastructure patterns from v2 |

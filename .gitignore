@@ -40,3 +40,4 @@ progress.txt
 .loopr-progress
 .loopr-complete
 .loopr-iter*.log
+logs/

@@ -16,6 +16,7 @@ SLEEP_BETWEEN=${SLEEP_BETWEEN:-2}
 TIMEOUT_MINUTES=${TIMEOUT_MINUTES:-10}
 COMPLETION_SIGNAL="<promise>COMPLETE</promise>"
 VALIDATION_CMD=${VALIDATION_CMD:-"otto ci"}
+LOG_DIR=${LOG_DIR:-logs}
 
 # Colors
 RED='\033[0;31m'
@@ -41,7 +42,11 @@ echo "Timeout:    ${TIMEOUT_MINUTES}m per iteration"
 echo "Max:        $MAX_ITERATIONS iterations"
 echo "Branch:     $CURRENT_BRANCH (committing directly)"
 echo "Validation: $VALIDATION_CMD"
+echo "Logs:       $LOG_DIR/"
 echo ""
+
+# Create log directory
+mkdir -p "$LOG_DIR"
 
 # Check prompt file exists
 if [[ ! -f "$PROMPT_FILE" ]]; then
@@ -121,14 +126,16 @@ $(cat "$PROGRESS_FILE")
 \`\`\`"
     fi
 
-    # Run Claude with timeout — capture output
+    # Run Claude with timeout — capture output to both variable and log file
+    ITER_LOG="$LOG_DIR/iter-$(printf '%03d' $i)-claude.log"
     echo -e "${BLUE}Running Claude (timeout: ${TIMEOUT_MINUTES}m)...${NC}"
+    echo -e "${BLUE}  Log: $ITER_LOG${NC}"
 
     OUTPUT=$(timeout "${TIMEOUT_MINUTES}m" claude \
         --model "$MODEL" \
         --dangerously-skip-permissions \
         --print \
-        <<<"$CONSTRUCTED_PROMPT" 2>&1 | tee /dev/stderr) || {
+        <<<"$CONSTRUCTED_PROMPT" 2>&1 | tee /dev/stderr | tee "$ITER_LOG") || {
         EXIT_CODE=$?
         if [[ $EXIT_CODE -eq 124 ]]; then
             echo -e "${RED}Timeout! Claude ran for ${TIMEOUT_MINUTES}m without exiting.${NC}"
@@ -146,9 +153,11 @@ $(cat "$PROGRESS_FILE")
     fi
 
     # Run validation EXTERNALLY (not inside LLM session) — capture output
+    VALIDATION_LOG="$LOG_DIR/iter-$(printf '%03d' $i)-validation.log"
     echo -e "${BLUE}Running external validation: $VALIDATION_CMD${NC}"
+    echo -e "${BLUE}  Log: $VALIDATION_LOG${NC}"
     VALIDATION_PASSED=false
-    VALIDATION_OUTPUT=$(eval "$VALIDATION_CMD" 2>&1 | tee /dev/stderr) && {
+    VALIDATION_OUTPUT=$(eval "$VALIDATION_CMD" 2>&1 | tee /dev/stderr | tee "$VALIDATION_LOG") && {
         echo -e "${GREEN}Validation PASSED${NC}"
         VALIDATION_PASSED=true
         echo "Iteration $i: PASS" >>"$PROGRESS_FILE"
