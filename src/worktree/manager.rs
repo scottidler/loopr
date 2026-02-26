@@ -56,14 +56,7 @@ impl WorktreeManager {
 
         let branch = format!("agent/{}", work_item_id);
         let output = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                &path.to_string_lossy(),
-                "-b",
-                &branch,
-                base_ref,
-            ])
+            .args(["worktree", "add", &path.to_string_lossy(), "-b", &branch, base_ref])
             .current_dir(&self.repo_path)
             .output()?;
 
@@ -78,11 +71,7 @@ impl WorktreeManager {
     /// Refresh a worktree to the latest Published Tick's SHA (clears staleness).
     ///
     /// Runs: `git -C <worktree> rebase <new_base_ref>`
-    pub fn refresh(
-        &self,
-        work_item_id: &str,
-        new_base_ref: &str,
-    ) -> Result<(), WorktreeError> {
+    pub fn refresh(&self, work_item_id: &str, new_base_ref: &str) -> Result<(), WorktreeError> {
         let path = self.worktree_dir.join(work_item_id);
         if !path.exists() {
             return Err(WorktreeError::NotFound(work_item_id.to_string()));
@@ -179,10 +168,7 @@ fn parse_worktree_list(output: &str, worktree_dir: &Path) -> Vec<WorktreeInfo> {
             current_head = head.to_string();
         } else if let Some(branch) = line.strip_prefix("branch ") {
             // branch refs/heads/agent/wi-xxx → agent/wi-xxx
-            current_branch = branch
-                .strip_prefix("refs/heads/")
-                .unwrap_or(branch)
-                .to_string();
+            current_branch = branch.strip_prefix("refs/heads/").unwrap_or(branch).to_string();
         }
     }
 
@@ -206,24 +192,15 @@ mod tests {
 
     #[test]
     fn test_worktree_manager_new() {
-        let mgr = WorktreeManager::new(
-            PathBuf::from("/repo"),
-            PathBuf::from("/repo/.worktrees"),
-        );
+        let mgr = WorktreeManager::new(PathBuf::from("/repo"), PathBuf::from("/repo/.worktrees"));
         assert_eq!(mgr.repo_path, PathBuf::from("/repo"));
         assert_eq!(mgr.worktree_dir, PathBuf::from("/repo/.worktrees"));
     }
 
     #[test]
     fn test_worktree_path() {
-        let mgr = WorktreeManager::new(
-            PathBuf::from("/repo"),
-            PathBuf::from("/repo/.worktrees"),
-        );
-        assert_eq!(
-            mgr.worktree_path("wi-001"),
-            PathBuf::from("/repo/.worktrees/wi-001")
-        );
+        let mgr = WorktreeManager::new(PathBuf::from("/repo"), PathBuf::from("/repo/.worktrees"));
+        assert_eq!(mgr.worktree_path("wi-001"), PathBuf::from("/repo/.worktrees/wi-001"));
     }
 
     #[test]
@@ -301,10 +278,7 @@ branch refs/heads/agent/wi-001
         assert_eq!(err.to_string(), "worktree not found for work item: wi-001");
 
         let err = WorktreeError::AlreadyExists("wi-001".to_string());
-        assert_eq!(
-            err.to_string(),
-            "worktree already exists for work item: wi-001"
-        );
+        assert_eq!(err.to_string(), "worktree already exists for work item: wi-001");
     }
 
     #[test]
@@ -339,20 +313,14 @@ branch refs/heads/agent/wi-001
 
     #[test]
     fn test_refresh_rejects_missing_worktree() {
-        let mgr = WorktreeManager::new(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent/wt"),
-        );
+        let mgr = WorktreeManager::new(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent/wt"));
         let result = mgr.refresh("wi-missing", "HEAD");
         assert!(matches!(result, Err(WorktreeError::NotFound(_))));
     }
 
     #[test]
     fn test_cleanup_rejects_missing_worktree() {
-        let mgr = WorktreeManager::new(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent/wt"),
-        );
+        let mgr = WorktreeManager::new(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent/wt"));
         let result = mgr.cleanup("wi-missing");
         assert!(matches!(result, Err(WorktreeError::NotFound(_))));
     }

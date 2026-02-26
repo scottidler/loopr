@@ -195,7 +195,10 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         wt_mgr.repo_path.display(),
         wt_mgr.worktree_dir.display()
     );
-    info!("WorktreeManager worktree_path(wi-test)={}", wt_mgr.worktree_path("wi-test").display());
+    info!(
+        "WorktreeManager worktree_path(wi-test)={}",
+        wt_mgr.worktree_path("wi-test").display()
+    );
     info!("WorktreeManager exists(wi-test)={}", wt_mgr.exists("wi-test"));
     // Exercise WorktreeInfo serde
     let wt_info = worktree::manager::WorktreeInfo {
