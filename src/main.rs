@@ -40,7 +40,7 @@ fn setup_logging() -> Result<()> {
     Ok(())
 }
 
-fn run_application(_cli: &Cli, config: &Config) -> Result<()> {
+fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     info!("Starting application");
 
     // Load and display configuration
