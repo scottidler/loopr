@@ -219,15 +219,20 @@ mod tests {
         }
     }
 
-    fn test_config() -> ValidatorConfig {
-        ValidatorConfig {
+    /// Generate a unique env var name and set it, returning a config that uses it.
+    /// Returns (config, env_var_name) — caller must clean up the env var.
+    fn test_config_with_key(key_value: &str) -> (ValidatorConfig, String) {
+        let env_var = format!("TEST_ANTHROPIC_API_KEY_{}", crate::id::generate_id());
+        unsafe { std::env::set_var(&env_var, key_value) };
+        let config = ValidatorConfig {
             enabled: true,
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "TEST_ANTHROPIC_API_KEY".to_string(),
+            api_key_env: env_var.clone(),
             max_tokens: 4096,
             temperature: 0.0,
-        }
+        };
+        (config, env_var)
     }
 
     fn mock_anthropic_response(text: &str) -> String {
@@ -241,24 +246,29 @@ mod tests {
 
     #[test]
     fn test_llm_client_call_success() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "test-key-123");
+        let (config, env_var) = test_config_with_key("test-key-123");
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"Looks good"}"#;
         let mock = MockHttpClient::new(&mock_anthropic_response(response_json));
-        let client = LlmClient::new(test_config(), Box::new(mock));
+        let client = LlmClient::new(config, Box::new(mock));
 
         let result = client.call("test prompt").unwrap();
         assert_eq!(result, response_json);
 
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_missing_api_key() {
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY_MISSING");
+        let missing_var = format!("TEST_ANTHROPIC_MISSING_{}", crate::id::generate_id());
+        unsafe { std::env::remove_var(&missing_var) };
         let config = ValidatorConfig {
-            api_key_env: "TEST_ANTHROPIC_API_KEY_MISSING".to_string(),
-            ..test_config()
+            enabled: true,
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            api_key_env: missing_var,
+            max_tokens: 4096,
+            temperature: 0.0,
         };
         let mock = MockHttpClient::new("{}");
         let client = LlmClient::new(config, Box::new(mock));
@@ -270,12 +280,9 @@ mod tests {
 
     #[test]
     fn test_llm_client_unsupported_provider() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "test-key");
+        let (mut config, env_var) = test_config_with_key("test-key");
+        config.provider = "openai".to_string();
 
-        let config = ValidatorConfig {
-            provider: "openai".to_string(),
-            ..test_config()
-        };
         let mock = MockHttpClient::new("{}");
         let client = LlmClient::new(config, Box::new(mock));
 
@@ -288,95 +295,84 @@ mod tests {
                 .contains("Unsupported LLM provider")
         );
 
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_http_failure() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "test-key");
+        let (config, env_var) = test_config_with_key("test-key");
 
-        let client = LlmClient::new(test_config(), Box::new(FailingHttpClient));
+        let client = LlmClient::new(config, Box::new(FailingHttpClient));
         let result = client.call("test");
         assert!(result.is_err());
 
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_sends_correct_headers() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "my-api-key");
+        let (config, env_var) = test_config_with_key("my-api-key");
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
-        let recorder = std::sync::Arc::new(RecordingHttpClient::new(&mock_anthropic_response(
-            response_json,
-        )));
-        let client = LlmClient::new(test_config(), Box::new(MockHttpClient::new(&mock_anthropic_response(response_json))));
-
-        // Use recorder directly
         let recorder_client = LlmClient {
-            config: test_config(),
+            config: config.clone(),
             http_client: Box::new(RecordingHttpClient::new(&mock_anthropic_response(
                 response_json,
             ))),
         };
         let _ = recorder_client.call("test prompt").unwrap();
 
-        // Can't easily inspect the recorder since it's moved, but the test
-        // validates that the call succeeds with correct setup.
-        drop(client);
-        drop(recorder);
-
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_call_with_retry_valid_json() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "test-key");
+        let (config, env_var) = test_config_with_key("test-key");
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
         let mock = MockHttpClient::new(&mock_anthropic_response(response_json));
-        let client = LlmClient::new(test_config(), Box::new(mock));
+        let client = LlmClient::new(config, Box::new(mock));
 
         let result = client.call_with_retry("test prompt").unwrap();
         assert_eq!(result, response_json);
 
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_empty_response() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "test-key");
+        let (config, env_var) = test_config_with_key("test-key");
 
         let response = serde_json::json!({
             "content": [{"type": "text", "text": ""}],
         })
         .to_string();
         let mock = MockHttpClient::new(&response);
-        let client = LlmClient::new(test_config(), Box::new(mock));
+        let client = LlmClient::new(config, Box::new(mock));
 
         let result = client.call("test");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty response"));
 
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_invalid_api_response() {
-        std::env::set_var("TEST_ANTHROPIC_API_KEY", "test-key");
+        let (config, env_var) = test_config_with_key("test-key");
 
         let mock = MockHttpClient::new("not json at all");
-        let client = LlmClient::new(test_config(), Box::new(mock));
+        let client = LlmClient::new(config, Box::new(mock));
 
         let result = client.call("test");
         assert!(result.is_err());
 
-        std::env::remove_var("TEST_ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var(&env_var) };
     }
 
     #[test]
     fn test_llm_client_with_ureq_constructor() {
-        let config = test_config();
+        let (config, _env_var) = test_config_with_key("test-key");
         let _client = LlmClient::with_ureq(config);
         // Just verify construction doesn't panic
     }

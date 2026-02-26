@@ -17,7 +17,6 @@ use crate::domain::transition::validate_transition;
 use crate::domain::validation::ValidationReport;
 use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
-use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
 
 use taskstore::{Filter, FilterOp, IndexValue, Record};
@@ -80,6 +79,9 @@ pub fn dispatch(
         "worktree.refresh" => handle_worktree_refresh(worktree_mgr, req),
         "integrator.validate" => handle_integrator_validate(stores, event_tx, integrator_config, req),
         "integrator.publish" => handle_integrator_publish(stores, event_tx, integrator_config, req),
+        "validator.validate" => handle_validator_validate(stores, req),
+        "validator.report" => handle_validator_report(stores, req),
+        "validator.reports" => handle_validator_reports(stores, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     }
 }
@@ -2186,6 +2188,186 @@ fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
         .filter(|t| t.status == TickStatus::Published)
         .max_by_key(|t| t.number)
         .cloned()
+}
+
+// --- Validator handlers ---
+
+fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let validator = match &stores.validator {
+        Some(v) => v.clone(),
+        None => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::internal("validator is not enabled"),
+            );
+        }
+    };
+
+    let collection = match req.params.get("collection").and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("collection is required"),
+            );
+        }
+    };
+
+    let target_id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("id is required"));
+        }
+    };
+
+    let report = match collection.as_str() {
+        "plans" => {
+            let plans = stores.plans.read().unwrap();
+            let plan = match plans.get(&target_id) {
+                Some(p) => p.clone(),
+                None => {
+                    return DaemonResponse::err(
+                        req.id,
+                        RpcError::not_found("plan", &target_id),
+                    );
+                }
+            };
+            drop(plans);
+            validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
+        }
+        "specs" => {
+            let specs = stores.specs.read().unwrap();
+            let spec = match specs.get(&target_id) {
+                Some(s) => s.clone(),
+                None => {
+                    return DaemonResponse::err(
+                        req.id,
+                        RpcError::not_found("spec", &target_id),
+                    );
+                }
+            };
+            drop(specs);
+            // Get parent plan title for context
+            let plan_title = stores
+                .plans
+                .read()
+                .unwrap()
+                .get(&spec.plan_id)
+                .map(|p| p.title.clone())
+                .unwrap_or_default();
+            validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
+        }
+        "phases" => {
+            let phases = stores.phases.read().unwrap();
+            let phase = match phases.get(&target_id) {
+                Some(p) => p.clone(),
+                None => {
+                    return DaemonResponse::err(
+                        req.id,
+                        RpcError::not_found("phase", &target_id),
+                    );
+                }
+            };
+            drop(phases);
+            // Get parent spec title for context
+            let spec_title = stores
+                .specs
+                .read()
+                .unwrap()
+                .get(&phase.spec_id)
+                .map(|s| s.title.clone())
+                .unwrap_or_default();
+            validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
+        }
+        _ => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params(&format!(
+                    "unsupported collection for validation: {}",
+                    collection
+                )),
+            );
+        }
+    };
+
+    match report {
+        Ok(report) => {
+            // Persist to TaskStore
+            if let Some(store) = &stores.store
+                && let Err(e) = store.lock().unwrap().create(report.clone())
+            {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+            DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap())
+        }
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let report_id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("id is required"));
+        }
+    };
+
+    // Read from TaskStore
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<ValidationReport>(&report_id) {
+            Ok(Some(report)) => {
+                return DaemonResponse::ok(
+                    req.id,
+                    serde_json::to_value(&report).unwrap(),
+                );
+            }
+            Ok(None) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::not_found("validation_report", &report_id),
+                );
+            }
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    DaemonResponse::err(
+        req.id,
+        RpcError::internal("TaskStore not available"),
+    )
+}
+
+fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    if let Some(store) = &stores.store {
+        let mut filters = vec![];
+
+        if let Some(target_id) = req.params.get("target_id").and_then(|v| v.as_str()) {
+            filters.push(Filter {
+                field: "target_id".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(target_id.to_string()),
+            });
+        }
+
+        if let Some(target_collection) = req.params.get("target_collection").and_then(|v| v.as_str()) {
+            filters.push(Filter {
+                field: "target_collection".to_string(),
+                op: FilterOp::Eq,
+                value: IndexValue::String(target_collection.to_string()),
+            });
+        }
+
+        match store.lock().unwrap().list::<ValidationReport>(&filters) {
+            Ok(reports) => {
+                DaemonResponse::ok(req.id, serde_json::to_value(&reports).unwrap())
+            }
+            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        }
+    } else {
+        DaemonResponse::ok(req.id, json!([]))
+    }
 }
 
 #[cfg(test)]

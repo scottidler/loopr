@@ -14,9 +14,9 @@ use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::validation::ValidationReport;
+use crate::validator::DocValidator;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
 use crate::ipc::protocol::DaemonEvent;
-use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
 
 /// In-memory record stores, each behind a std::sync::RwLock for synchronous access
@@ -32,6 +32,8 @@ pub struct Stores {
     pub locks: StdRwLock<HashMap<String, Lock>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
     pub store: Option<Arc<StdMutex<Store>>>,
+    /// Doc Validator (LLM-based). None when validator.enabled = false or in legacy contexts.
+    pub validator: Option<Arc<DocValidator>>,
 }
 
 impl Stores {
@@ -46,6 +48,7 @@ impl Stores {
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
             store: None,
+            validator: None,
         }
     }
 }
@@ -63,7 +66,6 @@ pub struct DaemonContext {
     pub config: Config,
     pub stores: Arc<Stores>,
     pub worktree_manager: WorktreeManager,
-    pub validator: Option<Arc<DocValidator>>,
 }
 
 impl DaemonContext {
@@ -98,20 +100,18 @@ impl DaemonContext {
         stores.store = Some(Arc::new(StdMutex::new(store)));
 
         // Create DocValidator if enabled in config
-        let validator = if config.validator.enabled {
+        if config.validator.enabled {
             info!("Doc Validator enabled: provider={}, model={}", config.validator.provider, config.validator.model);
-            Some(Arc::new(DocValidator::new(config.validator.clone())))
+            stores.validator = Some(Arc::new(DocValidator::new(config.validator.clone())));
         } else {
             info!("Doc Validator disabled");
-            None
-        };
+        }
 
         Ok(Self {
             config,
             event_tx,
             stores: Arc::new(stores),
             worktree_manager,
-            validator,
         })
     }
 

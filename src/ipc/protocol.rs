@@ -88,12 +88,6 @@ impl RpcError {
         }
     }
 
-    pub fn validation_required(detail: &str) -> Self {
-        Self {
-            code: -32003,
-            message: format!("validation required: {detail}"),
-        }
-    }
 }
 
 // --- Convenience constructors ---

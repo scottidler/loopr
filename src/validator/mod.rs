@@ -9,7 +9,7 @@ use crate::domain::validation::{
     IssueSeverity, ValidationIssue, ValidationReport, ValidationVerdict,
 };
 
-use client::{HttpClient, LlmClient};
+use client::LlmClient;
 
 /// Parsed LLM response before it becomes a full ValidationReport.
 #[derive(Debug, serde::Deserialize)]
@@ -42,15 +42,6 @@ impl DocValidator {
         let model = config.model.clone();
         Self {
             llm_client: LlmClient::with_ureq(config),
-            model,
-        }
-    }
-
-    /// Create a DocValidator with a mock HTTP client (for tests).
-    pub fn with_http_client(config: ValidatorConfig, http_client: Box<dyn HttpClient>) -> Self {
-        let model = config.model.clone();
-        Self {
-            llm_client: LlmClient::new(config, http_client),
             model,
         }
     }
@@ -163,6 +154,18 @@ impl DocValidator {
 }
 
 #[cfg(test)]
+impl DocValidator {
+    /// Create a DocValidator with a mock HTTP client (for tests).
+    pub fn with_http_client(config: ValidatorConfig, http_client: Box<dyn client::HttpClient>) -> Self {
+        let model = config.model.clone();
+        Self {
+            llm_client: LlmClient::new(config, http_client),
+            model,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use client::HttpClient;
@@ -224,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_validate_plan_pass() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
@@ -237,12 +240,12 @@ mod tests {
         assert_eq!(report.target_id, "plan-1");
         assert!(report.issues.is_empty());
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_validate_plan_fail() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock = MockHttpClient::new(&mock_anthropic_response(&failing_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
@@ -255,12 +258,12 @@ mod tests {
         assert_eq!(report.issues[0].severity, IssueSeverity::Error);
         assert_eq!(report.issues[0].category, "completeness");
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_validate_spec_warn() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock = MockHttpClient::new(&mock_anthropic_response(&warning_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
@@ -273,12 +276,12 @@ mod tests {
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues[0].severity, IssueSeverity::Warning);
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_validate_phase() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
@@ -290,12 +293,12 @@ mod tests {
         assert_eq!(report.target_collection, "phases");
         assert_eq!(report.target_id, "phase-1");
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_parse_response_with_code_fences() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let fenced = format!(
             "```json\n{}\n```",
@@ -307,12 +310,12 @@ mod tests {
         let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_parse_response_fallback_on_invalid_json() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock =
             MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
@@ -325,12 +328,12 @@ mod tests {
         assert_eq!(report.issues[0].category, "parse_error");
         assert!(report.summary.contains("Raw output"));
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_report_has_model_field() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
@@ -338,12 +341,12 @@ mod tests {
         let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
         assert_eq!(report.model_used, "claude-sonnet-4-6");
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
     fn test_report_has_valid_id_and_timestamp() {
-        std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key");
+        unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
@@ -352,7 +355,7 @@ mod tests {
         assert!(!report.id.is_empty());
         assert!(report.created_at > 0);
 
-        std::env::remove_var("TEST_VALIDATOR_API_KEY");
+        unsafe { std::env::remove_var("TEST_VALIDATOR_API_KEY") };
     }
 
     #[test]
