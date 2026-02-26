@@ -1912,10 +1912,7 @@ mod tests {
     // --- bundle handlers ---
 
     /// Helper: create plan + spec + phase + work_item and return (phase_id, work_item_id)
-    fn create_test_work_item(
-        stores: &Arc<Stores>,
-        tx: &broadcast::Sender<DaemonEvent>,
-    ) -> (String, String) {
+    fn create_test_work_item(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>) -> (String, String) {
         let (_plan_id, _spec_id, phase_id) = create_test_phase(stores, tx);
         let resp = dispatch(
             stores,
@@ -2006,11 +2003,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let (_phase_id, wi_id) = create_test_work_item(&stores, &tx);
-        let req = DaemonRequest::new(
-            40,
-            "bundle.create",
-            json!({"work_item_id": wi_id, "claims": "stuff"}),
-        );
+        let req = DaemonRequest::new(40, "bundle.create", json!({"work_item_id": wi_id, "claims": "stuff"}));
         let resp = dispatch(&stores, &tx, req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("branch_name"));
