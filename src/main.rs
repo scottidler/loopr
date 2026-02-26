@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod cli;
 mod config;
+mod daemon;
 mod domain;
 mod error;
 mod id;
@@ -265,6 +266,34 @@ async fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     accept_task.abort();
     drop(event_rx);
     server.cleanup();
+
+    // Validate DaemonContext + daemon_main are wired up
+    let mut daemon_config = config.clone();
+    let daemon_test_sock = std::env::temp_dir().join(format!("loopr-run-{}.sock", id::generate_id()));
+    let daemon_test_pid = std::env::temp_dir().join(format!("loopr-run-{}.pid", id::generate_id()));
+    daemon_config.daemon.socket_path = daemon_test_sock.clone();
+    daemon_config.daemon.pid_path = daemon_test_pid.clone();
+    let (daemon_ctx, daemon_tx) = daemon::context::DaemonContext::shared(daemon_config);
+    {
+        let c = daemon_ctx.read().await;
+        let mut rx = c.subscribe();
+        daemon_tx
+            .send(ipc::protocol::DaemonEvent::record_created("plan", &plan.id))
+            .unwrap();
+        let evt = rx.try_recv().unwrap();
+        info!("DaemonContext event: {}", evt.event);
+        info!(
+            "DaemonContext socket_path={}",
+            c.config.daemon.socket_path.display()
+        );
+    }
+    // Start daemon briefly to validate wiring, then abort
+    let daemon_handle = tokio::spawn(daemon::daemon_main(daemon_ctx));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    daemon_handle.abort();
+    let _ = daemon_handle.await;
+    let _ = std::fs::remove_file(&daemon_test_sock);
+    let _ = std::fs::remove_file(&daemon_test_pid);
 
     // Log some information
     info!("Application started at ts={}", id::now_millis());

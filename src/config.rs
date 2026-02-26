@@ -3,20 +3,57 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Serialize)]
+/// Daemon-specific configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DaemonConfig {
+    pub socket_path: PathBuf,
+    pub pid_path: PathBuf,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        let base = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("loopr");
+        Self {
+            socket_path: base.join("daemon.sock"),
+            pid_path: base.join("daemon.pid"),
+        }
+    }
+}
+
+/// Project-specific configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProjectConfig {
+    pub repo_path: PathBuf,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self {
+            repo_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub name: String,
-    pub age: u32,
     pub debug: bool,
+    pub daemon: DaemonConfig,
+    pub project: ProjectConfig,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            name: "John Doe".to_string(),
-            age: 30,
+            name: "loopr".to_string(),
             debug: false,
+            daemon: DaemonConfig::default(),
+            project: ProjectConfig::default(),
         }
     }
 }
@@ -77,14 +114,33 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = Config::default();
-        assert_eq!(config.name, "John Doe");
-        assert_eq!(config.age, 30);
+        assert_eq!(config.name, "loopr");
         assert!(!config.debug);
     }
 
     #[test]
     fn test_config_load_defaults_when_no_file() {
         let config = Config::load(None).expect("should load defaults");
-        assert_eq!(config.name, "John Doe");
+        assert_eq!(config.name, "loopr");
+    }
+
+    #[test]
+    fn test_daemon_config_default() {
+        let dc = DaemonConfig::default();
+        assert!(dc.socket_path.ends_with("daemon.sock"));
+        assert!(dc.pid_path.ends_with("daemon.pid"));
+    }
+
+    #[test]
+    fn test_project_config_default() {
+        let pc = ProjectConfig::default();
+        assert!(pc.repo_path.is_absolute() || pc.repo_path == PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_config_has_daemon_and_project() {
+        let config = Config::default();
+        assert!(config.daemon.socket_path.ends_with("daemon.sock"));
+        assert!(!config.project.repo_path.as_os_str().is_empty());
     }
 }
