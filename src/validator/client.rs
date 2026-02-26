@@ -181,10 +181,13 @@ mod tests {
         }
     }
 
+    /// A single recorded HTTP call: (url, headers, body).
+    type RecordedCall = (String, Vec<(String, String)>, String);
+
     /// Mock that records request details.
     struct RecordingHttpClient {
         response: String,
-        calls: std::sync::Mutex<Vec<(String, Vec<(String, String)>, String)>>,
+        calls: std::sync::Mutex<Vec<RecordedCall>>,
     }
 
     impl RecordingHttpClient {

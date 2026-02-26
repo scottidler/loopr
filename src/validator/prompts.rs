@@ -1,7 +1,7 @@
-/// Per-type validation prompt templates for the Doc Validator LLM.
-///
-/// Each collection type (Plan, Spec, Phase) has specific evaluation criteria
-/// and additional fields that the LLM uses to assess readiness for Draft → Active.
+//! Per-type validation prompt templates for the Doc Validator LLM.
+//!
+//! Each collection type (Plan, Spec, Phase) has specific evaluation criteria
+//! and additional fields that the LLM uses to assess readiness for Draft → Active.
 
 /// JSON schema fragment included in all prompts to guide LLM response format.
 const RESPONSE_SCHEMA: &str = r#"{
