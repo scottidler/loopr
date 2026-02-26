@@ -5,9 +5,7 @@ use eyre::{Context, Result};
 use log::info;
 
 use crate::config::ValidatorConfig;
-use crate::domain::validation::{
-    IssueSeverity, ValidationIssue, ValidationReport, ValidationVerdict,
-};
+use crate::domain::validation::{IssueSeverity, ValidationIssue, ValidationReport, ValidationVerdict};
 
 use client::LlmClient;
 
@@ -84,12 +82,7 @@ impl DocValidator {
     }
 
     /// Internal: send prompt to LLM, parse response, build ValidationReport.
-    fn run_validation(
-        &self,
-        collection: &str,
-        target_id: &str,
-        prompt: &str,
-    ) -> Result<ValidationReport> {
+    fn run_validation(&self, collection: &str, target_id: &str, prompt: &str) -> Result<ValidationReport> {
         info!("Running validation for {}/{}", collection, target_id);
 
         let raw = self
@@ -99,10 +92,7 @@ impl DocValidator {
 
         let parsed = self.parse_response(&raw).unwrap_or_else(|e| {
             // Fallback: if parsing fails, return a Fail verdict with the raw output
-            info!(
-                "Failed to parse LLM response, falling back to Fail verdict: {}",
-                e
-            );
+            info!("Failed to parse LLM response, falling back to Fail verdict: {}", e);
             LlmValidationResponse {
                 verdict: ValidationVerdict::Fail,
                 issues: vec![LlmIssue {
@@ -144,10 +134,7 @@ impl DocValidator {
             .strip_prefix("```json")
             .or_else(|| raw.trim().strip_prefix("```"))
             .unwrap_or(raw.trim());
-        let cleaned = cleaned
-            .strip_suffix("```")
-            .unwrap_or(cleaned)
-            .trim();
+        let cleaned = cleaned.strip_suffix("```").unwrap_or(cleaned).trim();
 
         serde_json::from_str(cleaned).context("Failed to parse LLM response as JSON")
     }
@@ -183,12 +170,7 @@ mod tests {
     }
 
     impl HttpClient for MockHttpClient {
-        fn post(
-            &self,
-            _url: &str,
-            _headers: &[(&str, &str)],
-            _body: &str,
-        ) -> Result<String> {
+        fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             Ok(self.response.clone())
         }
     }
@@ -250,9 +232,7 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&failing_llm_response()));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
 
-        let report = validator
-            .validate_plan("plan-2", "Bad Plan", "Vague", "")
-            .unwrap();
+        let report = validator.validate_plan("plan-2", "Bad Plan", "Vague", "").unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Fail);
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues[0].severity, IssueSeverity::Error);
@@ -300,10 +280,7 @@ mod tests {
     fn test_parse_response_with_code_fences() {
         unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
-        let fenced = format!(
-            "```json\n{}\n```",
-            r#"{"verdict":"pass","issues":[],"summary":"ok"}"#
-        );
+        let fenced = format!("```json\n{}\n```", r#"{"verdict":"pass","issues":[],"summary":"ok"}"#);
         let mock = MockHttpClient::new(&mock_anthropic_response(&fenced));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
 
@@ -317,8 +294,7 @@ mod tests {
     fn test_parse_response_fallback_on_invalid_json() {
         unsafe { std::env::set_var("TEST_VALIDATOR_API_KEY", "test-key") };
 
-        let mock =
-            MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
+        let mock = MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
         let validator = DocValidator::with_http_client(mock_config(), Box::new(mock));
 
         let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
@@ -361,10 +337,7 @@ mod tests {
     #[test]
     fn test_parse_response_direct() {
         let validator = DocValidator {
-            llm_client: LlmClient::new(
-                mock_config(),
-                Box::new(MockHttpClient::new("")),
-            ),
+            llm_client: LlmClient::new(mock_config(), Box::new(MockHttpClient::new(""))),
             model: "test".to_string(),
         };
 

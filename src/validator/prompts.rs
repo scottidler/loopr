@@ -50,11 +50,7 @@ Respond with ONLY valid JSON matching this schema:
 }
 
 /// Build a validation prompt for a Spec document.
-pub fn spec_prompt(
-    title: &str,
-    description: &str,
-    plan_title: &str,
-) -> String {
+pub fn spec_prompt(title: &str, description: &str, plan_title: &str) -> String {
     format!(
         r#"You are a technical document validator for a software development orchestrator.
 You are reviewing a Spec document. Your job is to assess whether this document is complete and clear enough to move from Draft to Active status.
@@ -86,12 +82,7 @@ Respond with ONLY valid JSON matching this schema:
 }
 
 /// Build a validation prompt for a Phase document.
-pub fn phase_prompt(
-    title: &str,
-    description: &str,
-    order: u32,
-    spec_title: &str,
-) -> String {
+pub fn phase_prompt(title: &str, description: &str, order: u32, spec_title: &str) -> String {
     format!(
         r#"You are a technical document validator for a software development orchestrator.
 You are reviewing a Phase document. Your job is to assess whether this document is complete and clear enough to move from Draft to Active status.

@@ -14,9 +14,9 @@ use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::validation::ValidationReport;
-use crate::validator::DocValidator;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
 use crate::ipc::protocol::DaemonEvent;
+use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
 
 /// In-memory record stores, each behind a std::sync::RwLock for synchronous access
@@ -101,7 +101,10 @@ impl DaemonContext {
 
         // Create DocValidator if enabled in config
         if config.validator.enabled {
-            info!("Doc Validator enabled: provider={}, model={}", config.validator.provider, config.validator.model);
+            info!(
+                "Doc Validator enabled: provider={}, model={}",
+                config.validator.provider, config.validator.model
+            );
             stores.validator = Some(Arc::new(DocValidator::new(config.validator.clone())));
         } else {
             info!("Doc Validator disabled");

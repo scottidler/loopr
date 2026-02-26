@@ -102,18 +102,12 @@ impl Record for ValidationReport {
 
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
-        m.insert(
-            "target_id".into(),
-            IndexValue::String(self.target_id.clone()),
-        );
+        m.insert("target_id".into(), IndexValue::String(self.target_id.clone()));
         m.insert(
             "target_collection".into(),
             IndexValue::String(self.target_collection.clone()),
         );
-        m.insert(
-            "verdict".into(),
-            IndexValue::String(self.verdict.to_string()),
-        );
+        m.insert("verdict".into(), IndexValue::String(self.verdict.to_string()));
         m
     }
 }
@@ -144,18 +138,9 @@ mod tests {
 
     #[test]
     fn test_validation_verdict_serde_format() {
-        assert_eq!(
-            serde_json::to_string(&ValidationVerdict::Pass).unwrap(),
-            "\"pass\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ValidationVerdict::Fail).unwrap(),
-            "\"fail\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ValidationVerdict::Warn).unwrap(),
-            "\"warn\""
-        );
+        assert_eq!(serde_json::to_string(&ValidationVerdict::Pass).unwrap(), "\"pass\"");
+        assert_eq!(serde_json::to_string(&ValidationVerdict::Fail).unwrap(), "\"fail\"");
+        assert_eq!(serde_json::to_string(&ValidationVerdict::Warn).unwrap(), "\"warn\"");
     }
 
     #[test]
@@ -167,11 +152,7 @@ mod tests {
 
     #[test]
     fn test_issue_severity_serde_roundtrip() {
-        for severity in [
-            IssueSeverity::Error,
-            IssueSeverity::Warning,
-            IssueSeverity::Info,
-        ] {
+        for severity in [IssueSeverity::Error, IssueSeverity::Warning, IssueSeverity::Info] {
             let json = serde_json::to_string(&severity).unwrap();
             let deserialized: IssueSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(severity, deserialized);
@@ -300,10 +281,7 @@ mod tests {
             fields.get("target_collection"),
             Some(&IndexValue::String("phases".to_string()))
         );
-        assert_eq!(
-            fields.get("verdict"),
-            Some(&IndexValue::String("fail".to_string()))
-        );
+        assert_eq!(fields.get("verdict"), Some(&IndexValue::String("fail".to_string())));
     }
 
     #[test]
@@ -368,26 +346,18 @@ mod tests {
             let display = verdict.to_string();
             let quoted = format!("\"{}\"", display);
             let deserialized: ValidationVerdict = serde_json::from_str(&quoted)
-                .unwrap_or_else(|e| {
-                    panic!("Display output '{}' not deserializable: {}", display, e)
-                });
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
             assert_eq!(verdict, deserialized);
         }
     }
 
     #[test]
     fn test_issue_severity_display_matches_serde() {
-        for severity in [
-            IssueSeverity::Error,
-            IssueSeverity::Warning,
-            IssueSeverity::Info,
-        ] {
+        for severity in [IssueSeverity::Error, IssueSeverity::Warning, IssueSeverity::Info] {
             let display = severity.to_string();
             let quoted = format!("\"{}\"", display);
             let deserialized: IssueSeverity = serde_json::from_str(&quoted)
-                .unwrap_or_else(|e| {
-                    panic!("Display output '{}' not deserializable: {}", display, e)
-                });
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
             assert_eq!(severity, deserialized);
         }
     }

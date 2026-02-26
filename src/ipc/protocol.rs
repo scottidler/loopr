@@ -87,7 +87,6 @@ impl RpcError {
             ),
         }
     }
-
 }
 
 // --- Convenience constructors ---

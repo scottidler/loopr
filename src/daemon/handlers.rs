@@ -2196,20 +2196,14 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
     let validator = match &stores.validator {
         Some(v) => v.clone(),
         None => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::internal("validator is not enabled"),
-            );
+            return DaemonResponse::err(req.id, RpcError::internal("validator is not enabled"));
         }
     };
 
     let collection = match req.params.get("collection").and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),
         None => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params("collection is required"),
-            );
+            return DaemonResponse::err(req.id, RpcError::invalid_params("collection is required"));
         }
     };
 
@@ -2226,10 +2220,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
             let plan = match plans.get(&target_id) {
                 Some(p) => p.clone(),
                 None => {
-                    return DaemonResponse::err(
-                        req.id,
-                        RpcError::not_found("plan", &target_id),
-                    );
+                    return DaemonResponse::err(req.id, RpcError::not_found("plan", &target_id));
                 }
             };
             drop(plans);
@@ -2240,10 +2231,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
             let spec = match specs.get(&target_id) {
                 Some(s) => s.clone(),
                 None => {
-                    return DaemonResponse::err(
-                        req.id,
-                        RpcError::not_found("spec", &target_id),
-                    );
+                    return DaemonResponse::err(req.id, RpcError::not_found("spec", &target_id));
                 }
             };
             drop(specs);
@@ -2262,10 +2250,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
             let phase = match phases.get(&target_id) {
                 Some(p) => p.clone(),
                 None => {
-                    return DaemonResponse::err(
-                        req.id,
-                        RpcError::not_found("phase", &target_id),
-                    );
+                    return DaemonResponse::err(req.id, RpcError::not_found("phase", &target_id));
                 }
             };
             drop(phases);
@@ -2282,10 +2267,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
         _ => {
             return DaemonResponse::err(
                 req.id,
-                RpcError::invalid_params(&format!(
-                    "unsupported collection for validation: {}",
-                    collection
-                )),
+                RpcError::invalid_params(&format!("unsupported collection for validation: {}", collection)),
             );
         }
     };
@@ -2316,16 +2298,10 @@ fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRe
     if let Some(store) = &stores.store {
         match store.lock().unwrap().get::<ValidationReport>(&report_id) {
             Ok(Some(report)) => {
-                return DaemonResponse::ok(
-                    req.id,
-                    serde_json::to_value(&report).unwrap(),
-                );
+                return DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap());
             }
             Ok(None) => {
-                return DaemonResponse::err(
-                    req.id,
-                    RpcError::not_found("validation_report", &report_id),
-                );
+                return DaemonResponse::err(req.id, RpcError::not_found("validation_report", &report_id));
             }
             Err(e) => {
                 return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
@@ -2333,10 +2309,7 @@ fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRe
         }
     }
 
-    DaemonResponse::err(
-        req.id,
-        RpcError::internal("TaskStore not available"),
-    )
+    DaemonResponse::err(req.id, RpcError::internal("TaskStore not available"))
 }
 
 fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
@@ -2360,9 +2333,7 @@ fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
         }
 
         match store.lock().unwrap().list::<ValidationReport>(&filters) {
-            Ok(reports) => {
-                DaemonResponse::ok(req.id, serde_json::to_value(&reports).unwrap())
-            }
+            Ok(reports) => DaemonResponse::ok(req.id, serde_json::to_value(&reports).unwrap()),
             Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
         }
     } else {

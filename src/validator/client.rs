@@ -18,9 +18,7 @@ impl HttpClient for UreqClient {
         for (key, value) in headers {
             req = req.header(*key, *value);
         }
-        let mut response = req
-            .send(body.as_bytes())
-            .context("HTTP request failed")?;
+        let mut response = req.send(body.as_bytes()).context("HTTP request failed")?;
         let body = response
             .body_mut()
             .read_to_string()
@@ -64,10 +62,7 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: ValidatorConfig, http_client: Box<dyn HttpClient>) -> Self {
-        Self {
-            config,
-            http_client,
-        }
+        Self { config, http_client }
     }
 
     /// Create an LlmClient with the real ureq HTTP client.
@@ -78,10 +73,8 @@ impl LlmClient {
     /// Send a prompt to the LLM and return the raw text response.
     /// Retries once on parse failure with error feedback.
     pub fn call(&self, prompt: &str) -> Result<String> {
-        let api_key = std::env::var(&self.config.api_key_env).context(format!(
-            "Missing API key env var: {}",
-            self.config.api_key_env
-        ))?;
+        let api_key = std::env::var(&self.config.api_key_env)
+            .context(format!("Missing API key env var: {}", self.config.api_key_env))?;
 
         let api_url = match self.config.provider.as_str() {
             "anthropic" => "https://api.anthropic.com/v1/messages",
@@ -116,9 +109,8 @@ impl LlmClient {
             .post(api_url, &headers, &body)
             .context("LLM API call failed")?;
 
-        let response: AnthropicResponse = serde_json::from_str(&response_text).context(
-            "Failed to parse API response — may indicate API error or rate limiting",
-        )?;
+        let response: AnthropicResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse API response — may indicate API error or rate limiting")?;
 
         let text = response
             .content
@@ -203,10 +195,7 @@ mod tests {
         fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
             self.calls.lock().unwrap().push((
                 url.to_string(),
-                headers
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
+                headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                 body.to_string(),
             ));
             Ok(self.response.clone())
@@ -291,12 +280,7 @@ mod tests {
 
         let result = client.call("test");
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Unsupported LLM provider")
-        );
+        assert!(result.unwrap_err().to_string().contains("Unsupported LLM provider"));
 
         unsafe { std::env::remove_var(&env_var) };
     }
@@ -319,9 +303,7 @@ mod tests {
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
         let recorder_client = LlmClient {
             config: config.clone(),
-            http_client: Box::new(RecordingHttpClient::new(&mock_anthropic_response(
-                response_json,
-            ))),
+            http_client: Box::new(RecordingHttpClient::new(&mock_anthropic_response(response_json))),
         };
         let _ = recorder_client.call("test prompt").unwrap();
 
