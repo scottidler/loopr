@@ -5,18 +5,21 @@ use tokio::sync::{RwLock, broadcast};
 
 use crate::config::Config;
 use crate::domain::plan::Plan;
+use crate::domain::spec::Spec;
 use crate::ipc::protocol::DaemonEvent;
 
 /// In-memory record stores, each behind a std::sync::RwLock for synchronous access
 /// from IPC request handlers (no async needed for in-memory HashMap operations).
 pub struct Stores {
     pub plans: StdRwLock<HashMap<String, Plan>>,
+    pub specs: StdRwLock<HashMap<String, Spec>>,
 }
 
 impl Stores {
     pub fn new() -> Self {
         Self {
             plans: StdRwLock::new(HashMap::new()),
+            specs: StdRwLock::new(HashMap::new()),
         }
     }
 }
@@ -119,6 +122,7 @@ mod tests {
     fn test_stores_default() {
         let stores = Stores::default();
         assert!(stores.plans.read().unwrap().is_empty());
+        assert!(stores.specs.read().unwrap().is_empty());
     }
 
     #[test]
@@ -130,5 +134,16 @@ mod tests {
         let plans = stores.plans.read().unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[&id].title, "Test");
+    }
+
+    #[test]
+    fn test_stores_spec_insert_and_read() {
+        let stores = Stores::new();
+        let spec = Spec::new("plan-1".into(), "Test Spec".into(), "Desc".into());
+        let id = spec.id.clone();
+        stores.specs.write().unwrap().insert(id.clone(), spec);
+        let specs = stores.specs.read().unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[&id].title, "Test Spec");
     }
 }
