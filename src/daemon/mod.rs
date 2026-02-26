@@ -59,12 +59,17 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     result
 }
 
-/// Accept loop: handles incoming connections and ctrl_c for graceful shutdown.
+/// Accept loop: handles incoming connections, SIGINT/SIGTERM, and IPC shutdown.
 async fn accept_loop(
     listener: UnixListener,
     ctx: Arc<RwLock<DaemonContext>>,
     event_tx: tokio::sync::broadcast::Sender<DaemonEvent>,
 ) -> eyre::Result<()> {
+    let mut shutdown_rx = event_tx.subscribe();
+
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
     loop {
         tokio::select! {
             accept_result = listener.accept() => {
@@ -95,6 +100,18 @@ async fn accept_loop(
             _ = tokio::signal::ctrl_c() => {
                 info!("Received SIGINT, shutting down");
                 break;
+            }
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down");
+                break;
+            }
+            event = shutdown_rx.recv() => {
+                if let Ok(ev) = event {
+                    if ev.event == "system.shutdown" {
+                        info!("Received shutdown command via IPC");
+                        break;
+                    }
+                }
             }
         }
     }
@@ -209,5 +226,59 @@ mod tests {
         drop(client2);
         daemon_handle.abort();
         let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_status() {
+        let config = test_config();
+        let socket_path = config.daemon.socket_path.clone();
+        let (ctx, _tx) = context::DaemonContext::shared(config);
+
+        let daemon_handle = tokio::spawn(daemon_main(ctx));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let mut client = IpcClient::connect(&socket_path).await.unwrap();
+        let _ = client.handshake("0.1.0").await.unwrap();
+
+        let (resp, _events) = client.request("system.status", json!(null)).await.unwrap();
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert!(result["version"].is_string());
+        assert!(result["pid"].is_number());
+        assert_eq!(result["counts"]["plans"], 0);
+
+        drop(client);
+        daemon_handle.abort();
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_ipc_shutdown() {
+        let config = test_config();
+        let socket_path = config.daemon.socket_path.clone();
+        let pid_path = config.daemon.pid_path.clone();
+        let (ctx, _tx) = context::DaemonContext::shared(config);
+
+        let daemon_handle = tokio::spawn(daemon_main(ctx));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        let mut client = IpcClient::connect(&socket_path).await.unwrap();
+        let _ = client.handshake("0.1.0").await.unwrap();
+
+        // Send shutdown command
+        let (resp, _events) = client.request("system.shutdown", json!(null)).await.unwrap();
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "shutting_down");
+
+        // Daemon should exit on its own
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            daemon_handle,
+        ).await;
+        assert!(result.is_ok(), "daemon should have shut down");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&pid_path);
     }
 }

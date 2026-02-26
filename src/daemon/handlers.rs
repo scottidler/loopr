@@ -31,6 +31,8 @@ pub fn dispatch(
 ) -> DaemonResponse {
     match req.method.as_str() {
         "system.handshake" => handle_handshake(req),
+        "system.status" => handle_status(stores, req),
+        "system.shutdown" => handle_shutdown(event_tx, req),
         "plan.create" => handle_plan_create(stores, event_tx, req),
         "plan.get" => handle_plan_get(stores, req),
         "plan.list" => handle_plan_list(stores, req),
@@ -85,6 +87,43 @@ fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
             "protocol": "ndjson/1"
         }),
     )
+}
+
+fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let plans = stores.plans.read().unwrap().len();
+    let specs = stores.specs.read().unwrap().len();
+    let phases = stores.phases.read().unwrap().len();
+    let work_items = stores.work_items.read().unwrap().len();
+    let bundles = stores.bundles.read().unwrap().len();
+    let ticks = stores.ticks.read().unwrap().len();
+    let learnings = stores.learnings.read().unwrap().len();
+    let locks = stores.locks.read().unwrap().len();
+    DaemonResponse::ok(
+        req.id,
+        json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "pid": std::process::id(),
+            "counts": {
+                "plans": plans,
+                "specs": specs,
+                "phases": phases,
+                "work_items": work_items,
+                "bundles": bundles,
+                "ticks": ticks,
+                "learnings": learnings,
+                "locks": locks,
+            }
+        }),
+    )
+}
+
+fn handle_shutdown(
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    // Broadcast a shutdown event so the accept loop can pick it up
+    let _ = event_tx.send(DaemonEvent::new("system.shutdown", json!({})));
+    DaemonResponse::ok(req.id, json!({ "status": "shutting_down" }))
 }
 
 fn handle_plan_create(
@@ -1622,6 +1661,57 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["protocol"], "ndjson/1");
+    }
+
+    #[test]
+    fn test_dispatch_status_empty() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "system.status", json!(null));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert!(result["version"].is_string());
+        assert!(result["pid"].is_number());
+        assert_eq!(result["counts"]["plans"], 0);
+        assert_eq!(result["counts"]["work_items"], 0);
+    }
+
+    #[test]
+    fn test_dispatch_status_with_records() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // Insert a plan
+        let plan = Plan::new("Test".into(), "".into(), "".into());
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+        // Insert a work item
+        let wi = WorkItem::new("p-1".into(), "WI".into(), "".into());
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let req = DaemonRequest::new(1, "system.status", json!(null));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["counts"]["plans"], 1);
+        assert_eq!(result["counts"]["work_items"], 1);
+        assert_eq!(result["counts"]["specs"], 0);
+    }
+
+    #[test]
+    fn test_dispatch_shutdown() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "system.shutdown", json!(null));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "shutting_down");
+        // Verify event was broadcast
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "system.shutdown");
     }
 
     // --- plan.create tests ---
