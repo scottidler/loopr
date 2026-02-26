@@ -1,3 +1,4 @@
+pub mod phase;
 pub mod plan;
 pub mod role;
 pub mod spec;

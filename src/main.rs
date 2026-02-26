@@ -75,6 +75,17 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
         spec.id, spec.plan_id, spec.status
     );
 
+    let phase = domain::phase::Phase::new(
+        spec.id.clone(),
+        "Bootstrap phase".to_string(),
+        "First implementation phase".to_string(),
+        1,
+    );
+    info!(
+        "Created phase: {} (spec={}, order={}, status={})",
+        phase.id, phase.spec_id, phase.order, phase.status
+    );
+
     // Validate hierarchy FSM is wired up
     let hierarchy_rules = domain::plan::hierarchy_transitions();
     domain::transition::validate_transition(
