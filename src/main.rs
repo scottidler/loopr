@@ -126,6 +126,21 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     )?;
     info!("Bundle FSM validated ({} rules)", bundle_rules.len());
 
+    // Validate tick FSM is wired up
+    let tick = domain::tick::Tick::new(1);
+    info!(
+        "Created tick: {} (number={}, status={})",
+        tick.id, tick.number, tick.status
+    );
+    let tick_rules = domain::tick::tick_transitions();
+    domain::transition::validate_transition(
+        domain::tick::TickStatus::Open,
+        domain::tick::TickStatus::Sealing,
+        domain::role::Role::Integrator,
+        &tick_rules,
+    )?;
+    info!("Tick FSM validated ({} rules)", tick_rules.len());
+
     // Validate hierarchy FSM is wired up
     let hierarchy_rules = domain::plan::hierarchy_transitions();
     domain::transition::validate_transition(
