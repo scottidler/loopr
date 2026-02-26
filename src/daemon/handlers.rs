@@ -372,6 +372,22 @@ fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<Spec>(id) {
+            Ok(Some(spec)) => {
+                return match serde_json::to_value(&spec) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let specs = stores.specs.read().unwrap();
     match specs.get(id) {
         Some(spec) => match serde_json::to_value(spec) {
@@ -2349,6 +2365,33 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_spec_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+
+        // Create a spec (writes to both TaskStore and HashMap)
+        let create_req = DaemonRequest::new(
+            2,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "TaskStore Spec"}),
+        );
+        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
+        assert!(!create_resp.is_error());
+        let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.specs.write().unwrap().remove(&spec_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(3, "spec.get", json!({"id": spec_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["title"], "TaskStore Spec");
     }
 
     // --- spec.list tests ---
