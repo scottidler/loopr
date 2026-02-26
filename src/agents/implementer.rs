@@ -38,6 +38,7 @@ pub struct ImplementerContext {
     pub learnings: Vec<String>,
     pub available_tools: Vec<String>,
     pub previous_summary: Option<String>,
+    pub staleness_note: Option<String>,
 }
 
 /// Load the hierarchy context for a WorkItem from Stores.
@@ -95,6 +96,7 @@ pub fn load_context(
         learnings,
         available_tools,
         previous_summary,
+        staleness_note: None,
     })
 }
 
@@ -164,6 +166,12 @@ pub fn build_user_message(ctx: &ImplementerContext, iteration: u32) -> String {
         msg.push('\n');
     }
 
+    if let Some(ref note) = ctx.staleness_note {
+        msg.push_str("## Staleness Warning\n\n");
+        msg.push_str(note);
+        msg.push_str("\n\n");
+    }
+
     if let Some(ref summary) = ctx.previous_summary {
         msg.push_str("## Previous Iteration Summary\n\n");
         msg.push_str(summary);
@@ -223,8 +231,10 @@ pub async fn run_iteration(
     params: &IterationParams<'_>,
     iteration: u32,
     previous_summary: Option<String>,
+    staleness_note: Option<String>,
 ) -> Result<IterationOutcome> {
-    let ctx = load_context(params.stores, params.work_item_id, params.tool_runner, previous_summary)?;
+    let mut ctx = load_context(params.stores, params.work_item_id, params.tool_runner, previous_summary)?;
+    ctx.staleness_note = staleness_note;
     let user_message = build_user_message(&ctx, iteration);
 
     let response = params.llm.call(SYSTEM_PROMPT, &user_message).await?;
@@ -271,6 +281,27 @@ pub async fn run_iteration(
     Ok(IterationOutcome::Continue(last_summary))
 }
 
+/// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
+fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>) -> Option<String> {
+    let mut latest_tick_id: Option<String> = None;
+    loop {
+        match event_rx.try_recv() {
+            Ok(event) if event.event == "tick.published" => {
+                if let Some(tid) = event.data.get("tick_id").and_then(|v| v.as_str()) {
+                    latest_tick_id = Some(tid.to_string());
+                }
+            }
+            Ok(_) => {} // ignore non-tick events
+            Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => break,
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                // Missed messages — continue draining from current position
+                continue;
+            }
+        }
+    }
+    latest_tick_id
+}
+
 /// Run the full implementer loop with iteration cap.
 pub async fn run_implementer(
     llm: &dyn LlmClient,
@@ -295,6 +326,7 @@ pub async fn run_implementer(
 
     let max_iterations = config.max_iterations;
     let mut previous_summary: Option<String> = None;
+    let mut event_rx = event_tx.subscribe();
 
     let params = IterationParams {
         llm,
@@ -311,7 +343,25 @@ pub async fn run_implementer(
         session.iteration = i;
         info!("Implementer {} iteration {}/{}", session.id, i, max_iterations);
 
-        match run_iteration(&params, i, previous_summary.clone()).await {
+        // Check for staleness (tick.published events since last iteration)
+        let staleness_note = if let Some(new_tick_id) = drain_tick_published(&mut event_rx) {
+            info!(
+                "Implementer {} detected stale: new tick {} published",
+                session.id, new_tick_id
+            );
+            let _ = event_tx.send(DaemonEvent::agent_staleness_detected(&session.id, &new_tick_id));
+            Some(format!(
+                "A new Tick '{}' has been published since your last iteration. \
+                 Your worktree may be based on an older Tick. Review your changes \
+                 for conflicts and re-run tests before proposing a Bundle. \
+                 Use the latest base when proposing.",
+                new_tick_id
+            ))
+        } else {
+            None
+        };
+
+        match run_iteration(&params, i, previous_summary.clone(), staleness_note).await {
             Ok(IterationOutcome::Done(summary)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &summary));
                 info!("Implementer {} completed: {}", session.id, summary);
@@ -505,6 +555,7 @@ mod tests {
             learnings: vec![],
             available_tools: vec!["test".into(), "clippy".into()],
             previous_summary: None,
+            staleness_note: None,
         };
         let msg = build_user_message(&ctx, 1);
         assert!(msg.contains("My Plan"));
@@ -516,6 +567,7 @@ mod tests {
         assert!(msg.contains("Current Iteration: 1"));
         assert!(!msg.contains("Learnings"));
         assert!(!msg.contains("Previous Iteration"));
+        assert!(!msg.contains("Staleness"));
     }
 
     #[test]
@@ -532,6 +584,7 @@ mod tests {
             learnings: vec!["Bug found in parser".into()],
             available_tools: vec![],
             previous_summary: Some("Last iteration added error types".into()),
+            staleness_note: None,
         };
         let msg = build_user_message(&ctx, 3);
         assert!(msg.contains("Learnings"));
@@ -601,7 +654,7 @@ mod tests {
             event_tx: &event_tx,
         };
 
-        let outcome = run_iteration(&params, 1, None).await.unwrap();
+        let outcome = run_iteration(&params, 1, None, None).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "All done"));
     }
 
@@ -626,7 +679,7 @@ mod tests {
             event_tx: &event_tx,
         };
 
-        let outcome = run_iteration(&params, 1, None).await.unwrap();
+        let outcome = run_iteration(&params, 1, None, None).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::NeedHelp(ref r) if r == "Ambiguous spec"));
     }
 
@@ -656,7 +709,7 @@ mod tests {
             event_tx: &event_tx,
         };
 
-        let outcome = run_iteration(&params, 1, None).await.unwrap();
+        let outcome = run_iteration(&params, 1, None, None).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
         // File should have been written
         assert!(dir.join("test.txt").exists());
@@ -683,7 +736,7 @@ mod tests {
             event_tx: &event_tx,
         };
 
-        let result = run_iteration(&params, 1, None).await;
+        let result = run_iteration(&params, 1, None, None).await;
         assert!(result.is_err());
     }
 
@@ -708,7 +761,7 @@ mod tests {
             event_tx: &event_tx,
         };
 
-        let result = run_iteration(&params, 1, None).await;
+        let result = run_iteration(&params, 1, None, None).await;
         assert!(result.is_err());
     }
 
@@ -733,7 +786,7 @@ mod tests {
             event_tx: &event_tx,
         };
 
-        let result = run_iteration(&params, 1, None).await;
+        let result = run_iteration(&params, 1, None, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty action list"));
     }
@@ -834,5 +887,150 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("done"));
         assert!(SYSTEM_PROMPT.contains("need_help"));
         assert!(SYSTEM_PROMPT.contains("JSON array"));
+    }
+
+    // --- staleness cascade tests ---
+
+    #[test]
+    fn test_drain_tick_published_empty() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+        drop(tx);
+        let result = drain_tick_published(&mut rx);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_drain_tick_published_finds_tick() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+        let _ = tx.send(DaemonEvent::tick_published("tick-42", "abc123"));
+        let result = drain_tick_published(&mut rx);
+        assert_eq!(result, Some("tick-42".to_string()));
+    }
+
+    #[test]
+    fn test_drain_tick_published_returns_latest() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+        let _ = tx.send(DaemonEvent::tick_published("tick-1", "aaa"));
+        let _ = tx.send(DaemonEvent::tick_published("tick-2", "bbb"));
+        let _ = tx.send(DaemonEvent::tick_published("tick-3", "ccc"));
+        let result = drain_tick_published(&mut rx);
+        assert_eq!(result, Some("tick-3".to_string()));
+    }
+
+    #[test]
+    fn test_drain_tick_published_ignores_other_events() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+        let _ = tx.send(DaemonEvent::record_created("work_item", "wi-1"));
+        let _ = tx.send(DaemonEvent::transition_completed("bundle", "b-1", "draft", "proposed", "implementer"));
+        let result = drain_tick_published(&mut rx);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_drain_tick_published_mixed_events() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+        let _ = tx.send(DaemonEvent::record_created("work_item", "wi-1"));
+        let _ = tx.send(DaemonEvent::tick_published("tick-5", "sha5"));
+        let _ = tx.send(DaemonEvent::record_updated("bundle", "b-1"));
+        let result = drain_tick_published(&mut rx);
+        assert_eq!(result, Some("tick-5".to_string()));
+    }
+
+    #[test]
+    fn test_build_user_message_with_staleness() {
+        let ctx = ImplementerContext {
+            plan_title: "P".into(),
+            plan_description: "p".into(),
+            spec_title: "S".into(),
+            spec_description: "s".into(),
+            phase_title: "Ph".into(),
+            phase_description: "ph".into(),
+            work_item_title: "W".into(),
+            work_item_description: "w".into(),
+            learnings: vec![],
+            available_tools: vec![],
+            previous_summary: None,
+            staleness_note: Some("A new Tick 'tick-99' has been published.".into()),
+        };
+        let msg = build_user_message(&ctx, 2);
+        assert!(msg.contains("Staleness Warning"));
+        assert!(msg.contains("tick-99"));
+    }
+
+    #[tokio::test]
+    async fn test_run_iteration_with_staleness_note() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-stale-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+
+        let llm = MockLlm::new(r#"[{"action": "done", "summary": "Rebased and done"}]"#);
+        let params = IterationParams {
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
+            session_id: "test-session",
+            event_tx: &event_tx,
+        };
+
+        let staleness = Some("New tick published, please review.".to_string());
+        let outcome = run_iteration(&params, 2, None, staleness).await.unwrap();
+        assert!(matches!(outcome, IterationOutcome::Done(_)));
+    }
+
+    #[tokio::test]
+    async fn test_run_implementer_detects_staleness() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-staleness-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let mut config = AgentRoleConfig::default_implementer();
+        config.max_iterations = 3;
+
+        // Mock LLM that sends tick.published during the first call, so it's available
+        // by the time the second iteration starts and drains events.
+        struct StalenessLlm {
+            call_count: std::sync::atomic::AtomicU32,
+            event_tx: broadcast::Sender<DaemonEvent>,
+        }
+
+        #[async_trait]
+        impl LlmClient for StalenessLlm {
+            async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    // First iteration: send tick.published, then return a continue action.
+                    // The event will be in the broadcast buffer for the next drain.
+                    let _ = self.event_tx.send(DaemonEvent::tick_published("tick-new", "newshaval"));
+                    Ok(r#"[{"action": "write_file", "path": "x.txt", "content": "v1"}]"#.to_string())
+                } else {
+                    // Second iteration: should see staleness warning in user message
+                    assert!(
+                        user_msg.contains("Staleness Warning"),
+                        "Expected staleness context in user message"
+                    );
+                    Ok(r#"[{"action": "done", "summary": "Handled staleness"}]"#.to_string())
+                }
+            }
+        }
+
+        let llm = StalenessLlm {
+            call_count: std::sync::atomic::AtomicU32::new(0),
+            event_tx: event_tx.clone(),
+        };
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test".into());
+        session.work_item_id = Some(wi_id);
+        session.worktree_path = Some(dir.to_string_lossy().into());
+
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
     }
 }

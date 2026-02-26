@@ -197,6 +197,7 @@ fn event_collection(event: &crate::ipc::protocol::DaemonEvent) -> Option<&str> {
         "record.created" | "record.updated" | "transition.completed" => event.data["collection"].as_str(),
         "tick.published" | "tick.validation_failed" => Some("tick"),
         "bundle.rejected_stale" => Some("bundle"),
+        e if e.starts_with("agent.") => Some("agent"),
         _ => None,
     }
 }

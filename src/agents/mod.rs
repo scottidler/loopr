@@ -239,6 +239,10 @@ pub enum AgentEvent {
         iteration: u32,
         summary: String,
     },
+    StalenessDetected {
+        session_id: String,
+        new_tick_id: String,
+    },
 }
 
 #[cfg(test)]
@@ -648,6 +652,26 @@ mod tests {
             assert_eq!(duration_ms, 1500);
         } else {
             panic!("expected ToolCompleted");
+        }
+    }
+
+    #[test]
+    fn test_agent_event_staleness_detected_serde() {
+        let event = AgentEvent::StalenessDetected {
+            session_id: "s1".to_string(),
+            new_tick_id: "tick-42".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        if let AgentEvent::StalenessDetected {
+            session_id,
+            new_tick_id,
+        } = deserialized
+        {
+            assert_eq!(session_id, "s1");
+            assert_eq!(new_tick_id, "tick-42");
+        } else {
+            panic!("expected StalenessDetected");
         }
     }
 }

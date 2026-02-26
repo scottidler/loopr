@@ -248,6 +248,17 @@ impl DaemonEvent {
             serde_json::to_value(event).unwrap_or_default(),
         )
     }
+
+    pub fn agent_staleness_detected(session_id: &str, new_tick_id: &str) -> Self {
+        let event = AgentEvent::StalenessDetected {
+            session_id: session_id.to_string(),
+            new_tick_id: new_tick_id.to_string(),
+        };
+        Self::new(
+            "agent.staleness_detected",
+            serde_json::to_value(event).unwrap_or_default(),
+        )
+    }
 }
 
 /// Parse a raw JSON line into an IpcMessage.
