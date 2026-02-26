@@ -14,4 +14,4 @@
 | **Persistence** | TaskStore (JSONL truth, SQLite cache, Git merge driver) | Same | Same |
 | **IPC** | NDJSON over Unix socket, daemon as single authority | Same | Same + streaming LLM output to TUI |
 | **Key Principle** | "Your hardest problems are not LLM problems. Prove the system works first." | "Safest entry point for intelligence: read-only, can't break Tick semantics." | "Everything plugs into the backbone MVP1 built." |
-| **Design Doc** | `design/2026-02-25-loopr-v3-mvp1.md` | `design/2026-02-26-loopr-v3-mvp2.md` | TBD |
+| **Design Doc** | `design/2026-02-25-loopr-v3-mvp1.md` | `design/2026-02-26-loopr-v3-mvp2.md` | `design/2026-02-26-loopr-v3-mvp3.md` |
