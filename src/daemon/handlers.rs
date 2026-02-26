@@ -746,7 +746,12 @@ fn handle_tick_create(
 ) -> DaemonResponse {
     let number = match req.params.get("number").and_then(|v| v.as_u64()) {
         Some(n) => n as u32,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("number is required (positive integer)")),
+        None => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("number is required (positive integer)"),
+            );
+        }
     };
 
     let tick = Tick::new(number);
@@ -2429,11 +2434,7 @@ mod tests {
         );
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        let get_resp = dispatch(
-            &stores,
-            &tx,
-            DaemonRequest::new(51, "tick.get", json!({"id": tick_id})),
-        );
+        let get_resp = dispatch(&stores, &tx, DaemonRequest::new(51, "tick.get", json!({"id": tick_id})));
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["number"], 42);
     }
@@ -2464,15 +2465,27 @@ mod tests {
         let tx = test_event_tx();
 
         // Create two ticks
-        dispatch(&stores, &tx, DaemonRequest::new(50, "tick.create", json!({"number": 1})));
-        let create2 = dispatch(&stores, &tx, DaemonRequest::new(51, "tick.create", json!({"number": 2})));
+        dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let create2 = dispatch(
+            &stores,
+            &tx,
+            DaemonRequest::new(51, "tick.create", json!({"number": 2})),
+        );
         let tick2_id = create2.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Transition tick 2 to Sealing
         dispatch(
             &stores,
             &tx,
-            DaemonRequest::new(52, "tick.transition", json!({"id": tick2_id, "target_status": "Sealing", "role": "integrator"})),
+            DaemonRequest::new(
+                52,
+                "tick.transition",
+                json!({"id": tick2_id, "target_status": "Sealing", "role": "integrator"}),
+            ),
         );
 
         // List all — should have 2
