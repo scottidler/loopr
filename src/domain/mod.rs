@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod phase;
 pub mod plan;
 pub mod role;

@@ -106,6 +106,26 @@ fn run_application(_cli: &Cli, config: &Config) -> error::Result<()> {
     )?;
     info!("WorkItem FSM validated ({} rules)", wi_rules.len());
 
+    // Validate bundle FSM is wired up
+    let bundle = domain::bundle::Bundle::new(
+        work_item.id.clone(),
+        None,
+        "feature/bootstrap".to_string(),
+        "Bootstrap bundle".to_string(),
+    );
+    info!(
+        "Created bundle: {} (work_item={}, status={})",
+        bundle.id, bundle.work_item_id, bundle.status
+    );
+    let bundle_rules = domain::bundle::bundle_transitions();
+    domain::transition::validate_transition(
+        domain::bundle::BundleStatus::Proposed,
+        domain::bundle::BundleStatus::Triaged,
+        role,
+        &bundle_rules,
+    )?;
+    info!("Bundle FSM validated ({} rules)", bundle_rules.len());
+
     // Validate hierarchy FSM is wired up
     let hierarchy_rules = domain::plan::hierarchy_transitions();
     domain::transition::validate_transition(
