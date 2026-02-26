@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod cli;
 mod config;
+mod error;
 
 use cli::Cli;
 use config::Config;
