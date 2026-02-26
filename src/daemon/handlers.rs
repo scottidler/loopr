@@ -656,27 +656,13 @@ fn handle_bundle_create(
     match (&base_tick_id, &latest_published) {
         // Published tick exists but bundle has no base_tick_id
         (None, Some(latest)) => {
-            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(
-                &work_item_id,
-                "(none)",
-                &latest.id,
-            ));
-            return DaemonResponse::err(
-                req.id,
-                RpcError::stale_bundle("(none)", &latest.id),
-            );
+            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_item_id, "(none)", &latest.id));
+            return DaemonResponse::err(req.id, RpcError::stale_bundle("(none)", &latest.id));
         }
         // Published tick exists and bundle's base_tick_id doesn't match it
         (Some(base_id), Some(latest)) if base_id != &latest.id => {
-            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(
-                &work_item_id,
-                base_id,
-                &latest.id,
-            ));
-            return DaemonResponse::err(
-                req.id,
-                RpcError::stale_bundle(base_id, &latest.id),
-            );
+            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_item_id, base_id, &latest.id));
+            return DaemonResponse::err(req.id, RpcError::stale_bundle(base_id, &latest.id));
         }
         // No published tick and no base_tick_id: bootstrap case, OK
         // base_tick_id matches latest published: OK
