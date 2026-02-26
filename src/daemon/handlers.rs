@@ -2772,7 +2772,11 @@ mod tests {
         let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
 
         // Create a phase (writes to both TaskStore and HashMap)
-        let create_req = DaemonRequest::new(20, "phase.create", json!({"spec_id": spec_id, "title": "TaskStore Phase", "order": 1}));
+        let create_req = DaemonRequest::new(
+            20,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "TaskStore Phase", "order": 1}),
+        );
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
         assert!(!create_resp.is_error());
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
