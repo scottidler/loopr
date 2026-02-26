@@ -230,12 +230,7 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_client(
-                stream,
-                |req| DaemonResponse::ok(req.id, json!(null)),
-                event_rx,
-            )
-            .await;
+            handle_client(stream, |req| DaemonResponse::ok(req.id, json!(null)), event_rx).await;
         });
 
         let stream = UnixStream::connect(&path).await.unwrap();
@@ -267,12 +262,7 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_client(
-                stream,
-                |req| DaemonResponse::ok(req.id, json!(null)),
-                event_rx,
-            )
-            .await;
+            handle_client(stream, |req| DaemonResponse::ok(req.id, json!(null)), event_rx).await;
         });
 
         let stream = UnixStream::connect(&path).await.unwrap();
@@ -308,12 +298,7 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_client(
-                stream,
-                |req| DaemonResponse::ok(req.id, json!(null)),
-                event_rx,
-            )
-            .await;
+            handle_client(stream, |req| DaemonResponse::ok(req.id, json!(null)), event_rx).await;
             // handle_client should return cleanly when client disconnects
         });
 
