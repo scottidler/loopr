@@ -170,9 +170,10 @@ $(cat "$PROGRESS_FILE")
     else
         echo -e "${RED}Validation FAILED${NC}"
         # Append last 50 lines of validation output to progress.txt
+        # Use /usr/bin/tail to bypass the Rust tail crate which doesn't support -n
         {
             echo "Iteration $i: FAIL — validation errors:"
-            tail -50 "$VALIDATION_LOG"
+            /usr/bin/tail -n 50 "$VALIDATION_LOG"
         } >>"$PROGRESS_FILE"
     fi
 
@@ -186,7 +187,8 @@ $(cat "$PROGRESS_FILE")
     # Only consider completion if BOTH validation passes AND promise found
     if [[ "$VALIDATION_PASSED" == "true" && "$PROMISE_FOUND" == "true" ]]; then
         echo -e "${BLUE}Running quality gate checks...${NC}"
-        GATE_OUTPUT=$(check_quality_gates 2>&1 | tee /dev/stderr) && {
+        GATE_OUTPUT=$(check_quality_gates 2>&1) && {
+            echo -e "${GREEN}Quality gates PASSED${NC}"
             echo ""
             echo -e "${GREEN}===============================================================${NC}"
             echo -e "${GREEN}  BUILD COMPLETE!${NC}"
@@ -196,6 +198,7 @@ $(cat "$PROGRESS_FILE")
             exit 0
         } || {
             echo -e "${YELLOW}Quality gates FAILED — continuing iterations${NC}"
+            echo "$GATE_OUTPUT"
             # Append gate output directly to progress.txt
             {
                 echo "Iteration $i: quality gates FAILED:"
