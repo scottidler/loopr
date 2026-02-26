@@ -336,6 +336,14 @@ fn handle_spec_create(
     };
 
     let id = spec.id.clone();
+
+    // Persist to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(spec.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     stores.specs.write().unwrap().insert(id.clone(), spec);
     let _ = event_tx.send(DaemonEvent::record_created("spec", &id));
 
@@ -2189,6 +2197,28 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "spec");
+    }
+
+    #[test]
+    fn test_spec_create_persists_to_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+        let req = DaemonRequest::new(
+            2,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "Persisted Spec", "description": "desc"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Verify it was persisted to TaskStore
+        let store = stores.store.as_ref().unwrap().lock().unwrap();
+        let retrieved: Option<Spec> = store.get(&spec_id).unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().title, "Persisted Spec");
     }
 
     // --- spec.get tests ---
