@@ -106,11 +106,11 @@ async fn accept_loop(
                 break;
             }
             event = shutdown_rx.recv() => {
-                if let Ok(ev) = event {
-                    if ev.event == "system.shutdown" {
-                        info!("Received shutdown command via IPC");
-                        break;
-                    }
+                if let Ok(ev) = event
+                    && ev.event == "system.shutdown"
+                {
+                    info!("Received shutdown command via IPC");
+                    break;
                 }
             }
         }
