@@ -222,14 +222,8 @@ mod tests {
     fn test_spec_record_indexed_fields() {
         let spec = Spec::new("plan-42".to_string(), "T".to_string(), "D".to_string());
         let fields = spec.indexed_fields();
-        assert_eq!(
-            fields.get("status"),
-            Some(&IndexValue::String("draft".to_string()))
-        );
-        assert_eq!(
-            fields.get("plan_id"),
-            Some(&IndexValue::String("plan-42".to_string()))
-        );
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
+        assert_eq!(fields.get("plan_id"), Some(&IndexValue::String("plan-42".to_string())));
         assert_eq!(fields.len(), 2);
     }
 
