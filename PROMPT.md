@@ -6,7 +6,7 @@ Your state persists ONLY in `progress.txt` and the git history.
 ## CRITICAL RULES
 
 1. **CHECK THE INJECTED CONTEXT BELOW** — progress, validation output, and quality gate results from previous iterations are appended to this prompt automatically. You do NOT need to read progress.txt yourself.
-2. **DO ONE SMALL THING** — not a phase. One file, one fix, one test.
+2. **DO ONE LOGICAL UNIT OF WORK** — see "What is one task?" below. Batch similar/mechanical changes together, but don't mix unrelated work.
 3. **EXIT IMMEDIATELY** — do not retry failures. Do not loop. Just exit.
 4. **If validation failed last iteration, FIX THAT FIRST** — the validation output is injected below. Read it, fix the issue, done.
 
@@ -43,20 +43,24 @@ echo "<promise>COMPLETE</promise>"
 
 ## What is ONE task?
 
-**YES — do these:**
-- Add `Record` trait impl for Plan in `src/domain/plan.rs`
-- Add `taskstore` git dependency to `Cargo.toml`
-- Replace HashMap store with TaskStore in `DaemonContext`
-- Migrate `plan.create` handler to use TaskStore
-- Add `ValidatorConfig` to `Config`
-- Add `validator.validate` handler
-- Fix the compile error in `src/daemon/handlers.rs`
+**Batch similar/mechanical work together.** If the changes follow the same pattern (same transformation applied to multiple types/handlers), do them all in one iteration. Don't waste iterations doing `plan.create`, then `spec.create`, then `phase.create` one at a time — they're the same pattern with different type names.
+
+**YES — do these (each is one iteration):**
+- Migrate ALL `*.create` handlers to TaskStore (8 handlers, same pattern)
+- Migrate ALL `*.get` handlers to TaskStore (8 handlers, same pattern)
+- Migrate ALL `*.list` handlers to TaskStore (8 handlers, same pattern)
+- Migrate ALL `*.transition` handlers to TaskStore (4 handlers, same pattern)
+- Migrate ALL learning + lock action handlers (6 handlers, same pattern)
+- Add `Record` trait impl for ALL domain types (8 types, same pattern)
+- Add the entire `validator` module (mod.rs + client.rs + prompts.rs) — it's one cohesive unit
+- Add ALL validation gate checks to transition handlers (3 handlers, same pattern)
+- Fix a compile error or test failure
 - Wire TUI event processing to refresh AppState
 
 **NO — too much:**
-- "Implement Phase 2"
-- Migrate all 8 handler groups in one go
-- Add validator module + wire handlers + add gate in one iteration
+- "Implement Phase 2" (migration + tests + status handler = multiple logical units)
+- Add validator module + wire handlers + add gate + CLI commands in one iteration
+- Mix unrelated work (e.g., fix a bug AND add a new feature)
 
 ## On Previous Validation Failure
 
@@ -331,7 +335,7 @@ If you need to investigate what happened in a previous iteration (e.g., why a ch
 1. [ ] Read injected context below (progress + validation + quality gates)
 2. [ ] If last iteration failed: fix that failure. If not: determine next task.
 3. [ ] Optionally run `git log --oneline -10` and `ls src/` for current state
-4. [ ] Do ONE small task (implement code + write tests)
+4. [ ] Do one logical unit of work — batch similar/mechanical changes together
 5. [ ] `git add <specific files>` then `git commit`
 6. [ ] `echo "Iteration N: <what you did>" >> progress.txt`
 7. [ ] Check if ALL phases + success criteria complete → `echo "<promise>COMPLETE</promise>"`
