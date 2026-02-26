@@ -1196,6 +1196,22 @@ fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespon
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
+    // Try TaskStore first, fall back to HashMap
+    if let Some(store) = &stores.store {
+        match store.lock().unwrap().get::<Learning>(id) {
+            Ok(Some(learning)) => {
+                return match serde_json::to_value(&learning) {
+                    Ok(v) => DaemonResponse::ok(req.id, v),
+                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
     let learnings = stores.learnings.read().unwrap();
     match learnings.get(id) {
         Some(learning) => match serde_json::to_value(learning) {
@@ -4546,6 +4562,25 @@ mod tests {
         );
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
+    }
+
+    #[test]
+    fn test_learning_get_reads_from_taskstore() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a learning (writes to both TaskStore and HashMap)
+        let learning_id = create_learning(&stores, &tx, &wm, 50);
+
+        // Remove from HashMap to prove get reads from TaskStore
+        stores.learnings.write().unwrap().remove(&learning_id);
+
+        // Get should still succeed via TaskStore
+        let get_req = DaemonRequest::new(51, "learning.get", json!({"id": learning_id}));
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        assert!(!get_resp.is_error());
+        assert_eq!(get_resp.result.unwrap()["source_id"], "wi-123");
     }
 
     // --- learning.list tests ---
