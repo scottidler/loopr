@@ -279,7 +279,14 @@ mod tests {
 
     #[test]
     fn test_config_load_defaults_when_no_file() {
+        // Run in a temp dir so we don't pick up ./loopr.yml from the project root
+        let tmp = std::env::temp_dir().join("loopr_test_no_config");
+        let _ = std::fs::create_dir_all(&tmp);
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
         let config = Config::load(None).expect("should load defaults");
+        std::env::set_current_dir(prev).unwrap();
+        let _ = std::fs::remove_dir_all(&tmp);
         assert_eq!(config.name, "loopr");
     }
 
