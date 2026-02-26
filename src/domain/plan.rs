@@ -19,10 +19,10 @@ pub enum HierarchyStatus {
 impl fmt::Display for HierarchyStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HierarchyStatus::Draft => write!(f, "Draft"),
-            HierarchyStatus::Active => write!(f, "Active"),
-            HierarchyStatus::Complete => write!(f, "Complete"),
-            HierarchyStatus::Abandoned => write!(f, "Abandoned"),
+            HierarchyStatus::Draft => write!(f, "draft"),
+            HierarchyStatus::Active => write!(f, "active"),
+            HierarchyStatus::Complete => write!(f, "complete"),
+            HierarchyStatus::Abandoned => write!(f, "abandoned"),
         }
     }
 }
@@ -93,10 +93,10 @@ mod tests {
 
     #[test]
     fn test_hierarchy_status_display() {
-        assert_eq!(HierarchyStatus::Draft.to_string(), "Draft");
-        assert_eq!(HierarchyStatus::Active.to_string(), "Active");
-        assert_eq!(HierarchyStatus::Complete.to_string(), "Complete");
-        assert_eq!(HierarchyStatus::Abandoned.to_string(), "Abandoned");
+        assert_eq!(HierarchyStatus::Draft.to_string(), "draft");
+        assert_eq!(HierarchyStatus::Active.to_string(), "active");
+        assert_eq!(HierarchyStatus::Complete.to_string(), "complete");
+        assert_eq!(HierarchyStatus::Abandoned.to_string(), "abandoned");
     }
 
     #[test]
@@ -125,6 +125,24 @@ mod tests {
             serde_json::to_string(&HierarchyStatus::Abandoned).unwrap(),
             "\"abandoned\""
         );
+    }
+
+    #[test]
+    fn test_hierarchy_status_display_matches_serde() {
+        // Regression: Display must produce values that serde can deserialize.
+        // CLI dispatch uses to_string() but handlers use serde_json::from_value().
+        for status in [
+            HierarchyStatus::Draft,
+            HierarchyStatus::Active,
+            HierarchyStatus::Complete,
+            HierarchyStatus::Abandoned,
+        ] {
+            let display = status.to_string();
+            let quoted = format!("\"{}\"", display);
+            let deserialized: HierarchyStatus = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
+            assert_eq!(status, deserialized);
+        }
     }
 
     // --- HierarchyStatus transition tests ---

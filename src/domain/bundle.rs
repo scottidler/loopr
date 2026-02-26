@@ -158,6 +158,27 @@ mod tests {
     }
 
     #[test]
+    fn test_bundle_status_display_matches_serde() {
+        // Regression: Display must produce values that serde can deserialize.
+        for status in [
+            BundleStatus::Proposed,
+            BundleStatus::Triaged,
+            BundleStatus::Reviewed,
+            BundleStatus::Accepted,
+            BundleStatus::Integrating,
+            BundleStatus::Merged,
+            BundleStatus::Rejected,
+            BundleStatus::Superseded,
+        ] {
+            let display = status.to_string();
+            let quoted = format!("\"{}\"", display);
+            let deserialized: BundleStatus = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
     fn test_bundle_new() {
         let b = Bundle::new(
             "wi-123".to_string(),

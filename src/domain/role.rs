@@ -13,9 +13,9 @@ pub enum Role {
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Role::Coordinator => write!(f, "Coordinator"),
-            Role::Integrator => write!(f, "Integrator"),
-            Role::Implementer => write!(f, "Implementer"),
+            Role::Coordinator => write!(f, "coordinator"),
+            Role::Integrator => write!(f, "integrator"),
+            Role::Implementer => write!(f, "implementer"),
         }
     }
 }
@@ -41,9 +41,9 @@ mod tests {
 
     #[test]
     fn test_role_display() {
-        assert_eq!(Role::Coordinator.to_string(), "Coordinator");
-        assert_eq!(Role::Integrator.to_string(), "Integrator");
-        assert_eq!(Role::Implementer.to_string(), "Implementer");
+        assert_eq!(Role::Coordinator.to_string(), "coordinator");
+        assert_eq!(Role::Integrator.to_string(), "integrator");
+        assert_eq!(Role::Implementer.to_string(), "implementer");
     }
 
     #[test]
@@ -74,5 +74,18 @@ mod tests {
         assert_eq!(serde_json::to_string(&Role::Coordinator).unwrap(), "\"coordinator\"");
         assert_eq!(serde_json::to_string(&Role::Integrator).unwrap(), "\"integrator\"");
         assert_eq!(serde_json::to_string(&Role::Implementer).unwrap(), "\"implementer\"");
+    }
+
+    #[test]
+    fn test_role_display_matches_serde() {
+        // Regression: Display must produce values that serde can deserialize.
+        // CLI dispatch uses to_string() but handlers use serde_json::from_value().
+        for role in [Role::Coordinator, Role::Integrator, Role::Implementer] {
+            let display = role.to_string();
+            let quoted = format!("\"{}\"", display);
+            let deserialized: Role = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
+            assert_eq!(role, deserialized);
+        }
     }
 }

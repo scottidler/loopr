@@ -105,6 +105,24 @@ mod tests {
     }
 
     #[test]
+    fn test_tick_status_display_matches_serde() {
+        // Regression: Display must produce values that serde can deserialize.
+        for status in [
+            TickStatus::Open,
+            TickStatus::Sealing,
+            TickStatus::Validating,
+            TickStatus::Published,
+            TickStatus::Failed,
+        ] {
+            let display = status.to_string();
+            let quoted = format!("\"{}\"", display);
+            let deserialized: TickStatus = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
     fn test_tick_new() {
         let t = Tick::new(1);
         assert_eq!(t.number, 1);

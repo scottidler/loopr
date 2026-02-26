@@ -154,6 +154,27 @@ mod tests {
     }
 
     #[test]
+    fn test_work_item_status_display_matches_serde() {
+        // Regression: Display must produce values that serde can deserialize.
+        for status in [
+            WorkItemStatus::Draft,
+            WorkItemStatus::Ready,
+            WorkItemStatus::InProgress,
+            WorkItemStatus::Blocked,
+            WorkItemStatus::InReview,
+            WorkItemStatus::Integrated,
+            WorkItemStatus::Done,
+            WorkItemStatus::Abandoned,
+        ] {
+            let display = status.to_string();
+            let quoted = format!("\"{}\"", display);
+            let deserialized: WorkItemStatus = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
     fn test_work_item_new() {
         let wi = WorkItem::new(
             "phase-123".to_string(),

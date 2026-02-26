@@ -24,7 +24,7 @@ pub fn validate_transition<S: PartialEq + Copy + Debug>(
         return Err(LooprError::InvalidTransition {
             from: format!("{:?}", current),
             to: format!("{:?}", target),
-            role: format!("{:?}", role),
+            role: role.to_string(),
         });
     }
     Ok(())
@@ -102,6 +102,6 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("C"), "Error should mention source state");
         assert!(msg.contains("A"), "Error should mention target state");
-        assert!(msg.contains("Coordinator"), "Error should mention role");
+        assert!(msg.contains("coordinator"), "Error should mention role");
     }
 }

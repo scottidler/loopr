@@ -1881,8 +1881,8 @@ mod tests {
         // Check event was broadcast
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "transition.completed");
-        assert_eq!(event.data["from"], "Draft");
-        assert_eq!(event.data["to"], "Active");
+        assert_eq!(event.data["from"], "draft");
+        assert_eq!(event.data["to"], "active");
     }
 
     #[test]
@@ -2244,8 +2244,8 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "transition.completed");
         assert_eq!(event.data["collection"], "spec");
-        assert_eq!(event.data["from"], "Draft");
-        assert_eq!(event.data["to"], "Active");
+        assert_eq!(event.data["from"], "draft");
+        assert_eq!(event.data["to"], "active");
     }
 
     #[test]
@@ -2587,8 +2587,8 @@ mod tests {
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "transition.completed");
         assert_eq!(event.data["collection"], "phase");
-        assert_eq!(event.data["from"], "Draft");
-        assert_eq!(event.data["to"], "Active");
+        assert_eq!(event.data["from"], "draft");
+        assert_eq!(event.data["to"], "active");
     }
 
     #[test]

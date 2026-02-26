@@ -111,14 +111,21 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             }
             (format!("{collection}.list"), params)
         }
-        CrudCmd::Transition { id, status } => (
-            format!("{collection}.transition"),
-            json!({
-                "id": id,
-                "target_status": status,
-                "role": role.to_string(),
-            }),
-        ),
+        CrudCmd::Transition { id, status } => {
+            // Plan/Spec/Phase use serde(rename_all = "lowercase"), so normalize
+            let normalized_status = match collection {
+                "plan" | "spec" | "phase" => status.to_lowercase(),
+                _ => status.clone(),
+            };
+            (
+                format!("{collection}.transition"),
+                json!({
+                    "id": id,
+                    "target_status": normalized_status,
+                    "role": role.to_string(),
+                }),
+            )
+        }
     }
 }
 
@@ -315,7 +322,7 @@ mod tests {
         assert_eq!(method, "work_item.transition");
         assert_eq!(params["id"], "wi-1");
         assert_eq!(params["target_status"], "Ready");
-        assert_eq!(params["role"], "Coordinator");
+        assert_eq!(params["role"], "coordinator");
     }
 
     #[test]
@@ -429,5 +436,116 @@ mod tests {
         };
         let (method, _) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "plan.list");
+    }
+
+    #[test]
+    fn test_transition_role_is_serde_compatible() {
+        // Regression: dispatch must emit role values that handlers can deserialize.
+        use crate::domain::role::Role;
+        for role in [Role::Coordinator, Role::Integrator, Role::Implementer] {
+            let cmd = Command::Plan {
+                cmd: CrudCmd::Transition {
+                    id: "p-1".to_string(),
+                    status: "active".to_string(),
+                },
+            };
+            let (_, params) = command_to_ipc(&cmd, role);
+            let role_str = params["role"].as_str().unwrap();
+            let quoted = format!("\"{}\"", role_str);
+            let parsed: Role = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("role '{}' not deserializable: {}", role_str, e));
+            assert_eq!(role, parsed);
+        }
+    }
+
+    #[test]
+    fn test_plan_transition_normalizes_status_to_lowercase() {
+        // Regression: plan/spec/phase use serde(rename_all = "lowercase"),
+        // so dispatch must lowercase the user-provided status string.
+        for input in ["Active", "ACTIVE", "active", "AcTiVe"] {
+            let cmd = Command::Plan {
+                cmd: CrudCmd::Transition {
+                    id: "p-1".to_string(),
+                    status: input.to_string(),
+                },
+            };
+            let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
+            assert_eq!(
+                params["target_status"], "active",
+                "input '{}' should normalize to 'active'",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn test_spec_transition_normalizes_status_to_lowercase() {
+        let cmd = Command::Spec {
+            cmd: CrudCmd::Transition {
+                id: "s-1".to_string(),
+                status: "Active".to_string(),
+            },
+        };
+        let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(params["target_status"], "active");
+    }
+
+    #[test]
+    fn test_phase_transition_normalizes_status_to_lowercase() {
+        let cmd = Command::Phase {
+            cmd: CrudCmd::Transition {
+                id: "ph-1".to_string(),
+                status: "Complete".to_string(),
+            },
+        };
+        let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(params["target_status"], "complete");
+    }
+
+    #[test]
+    fn test_work_item_transition_preserves_status_casing() {
+        // WorkItemStatus uses default serde (PascalCase), so dispatch must NOT lowercase.
+        let cmd = Command::WorkItem {
+            cmd: CrudCmd::Transition {
+                id: "wi-1".to_string(),
+                status: "InProgress".to_string(),
+            },
+        };
+        let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(params["target_status"], "InProgress");
+    }
+
+    #[test]
+    fn test_bundle_transition_role_is_serde_compatible() {
+        for role in [Role::Coordinator, Role::Integrator, Role::Implementer] {
+            let cmd = Command::Bundle {
+                cmd: BundleCmd::Transition {
+                    id: "b-1".to_string(),
+                    status: "Triaged".to_string(),
+                },
+            };
+            let (_, params) = command_to_ipc(&cmd, role);
+            let role_str = params["role"].as_str().unwrap();
+            let quoted = format!("\"{}\"", role_str);
+            let parsed: Role = serde_json::from_str(&quoted)
+                .unwrap_or_else(|e| panic!("role '{}' not deserializable: {}", role_str, e));
+            assert_eq!(role, parsed);
+        }
+    }
+
+    #[test]
+    fn test_tick_transition_role_is_serde_compatible() {
+        let cmd = Command::Tick {
+            cmd: TickCmd::Transition {
+                id: "t-1".to_string(),
+                status: "Sealing".to_string(),
+            },
+        };
+        let (_, params) = command_to_ipc(&cmd, Role::Integrator);
+        let role_str = params["role"].as_str().unwrap();
+        let quoted = format!("\"{}\"", role_str);
+        let parsed: Role =
+            serde_json::from_str(&quoted).unwrap_or_else(|e| panic!("role '{}' not deserializable: {}", role_str, e));
+        assert_eq!(Role::Integrator, parsed);
     }
 }
