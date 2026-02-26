@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::domain::role::Role;
 use crate::ipc::client::IpcClient;
 
-use super::{BundleCmd, Command, CrudCmd, LearningCmd, LockCmd, TickCmd, WorktreeCmd};
+use super::{AgentCmd, BundleCmd, Command, CrudCmd, LearningCmd, LockCmd, TickCmd, WorktreeCmd};
 
 /// Connect to the daemon, send the IPC request for the given CLI command,
 /// print the result, and exit.
@@ -63,6 +63,8 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         Command::Worktree { cmd } => worktree_to_ipc(cmd),
         Command::Learning { cmd } => learning_to_ipc(cmd),
         Command::Lock { cmd } => lock_to_ipc(cmd),
+
+        Command::Agent { cmd } => agent_to_ipc(cmd),
 
         Command::Init => ("system.init".to_string(), json!({})),
         Command::Validate { collection, id } => (
@@ -239,6 +241,33 @@ fn learning_to_ipc(cmd: &LearningCmd) -> (String, serde_json::Value) {
         LearningCmd::Contradict { id } => ("learning.contradict".to_string(), json!({ "id": id })),
         LearningCmd::Promote { id } => ("learning.promote".to_string(), json!({ "id": id })),
         LearningCmd::Demote { id } => ("learning.demote".to_string(), json!({ "id": id })),
+    }
+}
+
+fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
+    match cmd {
+        AgentCmd::StartImplementer { work_item_id } => (
+            "agent.start".to_string(),
+            json!({ "agent_type": "implementer", "work_item_id": work_item_id }),
+        ),
+        AgentCmd::StartReviewer { bundle_id } => (
+            "agent.start".to_string(),
+            json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
+        ),
+        AgentCmd::Stop { session_id } => ("agent.stop".to_string(), json!({ "session_id": session_id })),
+        AgentCmd::Pause { session_id } => ("agent.pause".to_string(), json!({ "session_id": session_id })),
+        AgentCmd::Resume { session_id } => ("agent.resume".to_string(), json!({ "session_id": session_id })),
+        AgentCmd::Status { session_id } => ("agent.status".to_string(), json!({ "session_id": session_id })),
+        AgentCmd::List { status, agent_type } => {
+            let mut params = json!({});
+            if let Some(s) = status {
+                params["status"] = json!(s);
+            }
+            if let Some(t) = agent_type {
+                params["agent_type"] = json!(t);
+            }
+            ("agent.list".to_string(), params)
+        }
     }
 }
 
@@ -609,5 +638,106 @@ mod tests {
         assert_eq!(method, "validator.reports");
         assert_eq!(params["collection"], "plans");
         assert_eq!(params["target_id"], "plan-1");
+    }
+
+    #[test]
+    fn test_agent_start_implementer_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::StartImplementer {
+                work_item_id: "wi-1".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.start");
+        assert_eq!(params["agent_type"], "implementer");
+        assert_eq!(params["work_item_id"], "wi-1");
+    }
+
+    #[test]
+    fn test_agent_start_reviewer_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::StartReviewer {
+                bundle_id: "b-1".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.start");
+        assert_eq!(params["agent_type"], "reviewer");
+        assert_eq!(params["bundle_id"], "b-1");
+    }
+
+    #[test]
+    fn test_agent_stop_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::Stop {
+                session_id: "sess-1".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.stop");
+        assert_eq!(params["session_id"], "sess-1");
+    }
+
+    #[test]
+    fn test_agent_pause_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::Pause {
+                session_id: "sess-1".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.pause");
+        assert_eq!(params["session_id"], "sess-1");
+    }
+
+    #[test]
+    fn test_agent_resume_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::Resume {
+                session_id: "sess-1".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.resume");
+        assert_eq!(params["session_id"], "sess-1");
+    }
+
+    #[test]
+    fn test_agent_status_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::Status {
+                session_id: "sess-1".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.status");
+        assert_eq!(params["session_id"], "sess-1");
+    }
+
+    #[test]
+    fn test_agent_list_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::List {
+                status: None,
+                agent_type: None,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.list");
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_agent_list_with_filters_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::List {
+                status: Some("running".to_string()),
+                agent_type: Some("implementer".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.list");
+        assert_eq!(params["status"], "running");
+        assert_eq!(params["agent_type"], "implementer");
     }
 }

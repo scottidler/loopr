@@ -189,6 +189,52 @@ pub enum LearningCmd {
     },
 }
 
+/// Agent subcommands.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum AgentCmd {
+    /// Start an implementer agent for a work item
+    #[command(name = "start-implementer")]
+    StartImplementer {
+        /// Work item ID
+        work_item_id: String,
+    },
+    /// Start a reviewer agent for a bundle
+    #[command(name = "start-reviewer")]
+    StartReviewer {
+        /// Bundle ID
+        bundle_id: String,
+    },
+    /// Stop a running agent
+    Stop {
+        /// Agent session ID
+        session_id: String,
+    },
+    /// Pause a running agent
+    Pause {
+        /// Agent session ID
+        session_id: String,
+    },
+    /// Resume a paused agent
+    Resume {
+        /// Agent session ID
+        session_id: String,
+    },
+    /// Get status of an agent session
+    Status {
+        /// Agent session ID
+        session_id: String,
+    },
+    /// List agent sessions
+    List {
+        /// Filter by status (starting, running, paused, completed, failed, cancelled)
+        #[arg(short, long)]
+        status: Option<String>,
+        /// Filter by agent type (implementer, reviewer)
+        #[arg(short = 't', long)]
+        agent_type: Option<String>,
+    },
+}
+
 /// Lock subcommands.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum LockCmd {
@@ -302,6 +348,11 @@ pub enum Command {
     Lock {
         #[command(subcommand)]
         cmd: LockCmd,
+    },
+    /// Agent operations (start, stop, pause, resume, list, status)
+    Agent {
+        #[command(subcommand)]
+        cmd: AgentCmd,
     },
     /// Initialize TaskStore (create collections, install git hooks)
     Init,
@@ -568,6 +619,112 @@ mod tests {
                 assert_eq!(target_id, "plan-1");
             }
             _ => panic!("expected Reports"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_start_implementer() {
+        let cli = Cli::parse_from(["loopr", "agent", "start-implementer", "wi-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::StartImplementer { work_item_id },
+            }) => {
+                assert_eq!(work_item_id, "wi-1");
+            }
+            _ => panic!("expected Agent StartImplementer"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_start_reviewer() {
+        let cli = Cli::parse_from(["loopr", "agent", "start-reviewer", "b-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::StartReviewer { bundle_id },
+            }) => {
+                assert_eq!(bundle_id, "b-1");
+            }
+            _ => panic!("expected Agent StartReviewer"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_stop() {
+        let cli = Cli::parse_from(["loopr", "agent", "stop", "sess-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::Stop { session_id },
+            }) => {
+                assert_eq!(session_id, "sess-1");
+            }
+            _ => panic!("expected Agent Stop"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_pause() {
+        let cli = Cli::parse_from(["loopr", "agent", "pause", "sess-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::Pause { session_id },
+            }) => {
+                assert_eq!(session_id, "sess-1");
+            }
+            _ => panic!("expected Agent Pause"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_resume() {
+        let cli = Cli::parse_from(["loopr", "agent", "resume", "sess-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::Resume { session_id },
+            }) => {
+                assert_eq!(session_id, "sess-1");
+            }
+            _ => panic!("expected Agent Resume"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_status() {
+        let cli = Cli::parse_from(["loopr", "agent", "status", "sess-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::Status { session_id },
+            }) => {
+                assert_eq!(session_id, "sess-1");
+            }
+            _ => panic!("expected Agent Status"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_list() {
+        let cli = Cli::parse_from(["loopr", "agent", "list"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::List { status, agent_type },
+            }) => {
+                assert!(status.is_none());
+                assert!(agent_type.is_none());
+            }
+            _ => panic!("expected Agent List"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_list_with_filters() {
+        let cli = Cli::parse_from(["loopr", "agent", "list", "-s", "running", "-t", "implementer"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::List { status, agent_type },
+            }) => {
+                assert_eq!(status, Some("running".to_string()));
+                assert_eq!(agent_type, Some("implementer".to_string()));
+            }
+            _ => panic!("expected Agent List with filters"),
         }
     }
 }
