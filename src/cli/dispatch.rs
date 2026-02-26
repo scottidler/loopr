@@ -64,6 +64,17 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         Command::Learning { cmd } => learning_to_ipc(cmd),
         Command::Lock { cmd } => lock_to_ipc(cmd),
 
+        Command::Init => ("system.init".to_string(), json!({})),
+        Command::Validate { collection, id } => (
+            "validator.validate".to_string(),
+            json!({ "collection": collection, "id": id }),
+        ),
+        Command::Report { id } => ("validator.report".to_string(), json!({ "id": id })),
+        Command::Reports { collection, target_id } => (
+            "validator.reports".to_string(),
+            json!({ "collection": collection, "target_id": target_id }),
+        ),
+
         // Tui and Daemon are handled by main before dispatch
         Command::Tui | Command::Daemon => unreachable!("tui/daemon handled before dispatch"),
     }
@@ -547,5 +558,47 @@ mod tests {
         let parsed: Role =
             serde_json::from_str(&quoted).unwrap_or_else(|e| panic!("role '{}' not deserializable: {}", role_str, e));
         assert_eq!(Role::Integrator, parsed);
+    }
+
+    #[test]
+    fn test_init_mapping() {
+        let cmd = Command::Init;
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "system.init");
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_validate_mapping() {
+        let cmd = Command::Validate {
+            collection: "plan".to_string(),
+            id: "plan-1".to_string(),
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "validator.validate");
+        assert_eq!(params["collection"], "plan");
+        assert_eq!(params["id"], "plan-1");
+    }
+
+    #[test]
+    fn test_report_mapping() {
+        let cmd = Command::Report {
+            id: "vr-1".to_string(),
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "validator.report");
+        assert_eq!(params["id"], "vr-1");
+    }
+
+    #[test]
+    fn test_reports_mapping() {
+        let cmd = Command::Reports {
+            collection: "plans".to_string(),
+            target_id: "plan-1".to_string(),
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "validator.reports");
+        assert_eq!(params["collection"], "plans");
+        assert_eq!(params["target_id"], "plan-1");
     }
 }

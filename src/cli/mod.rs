@@ -300,6 +300,27 @@ pub enum Command {
         #[command(subcommand)]
         cmd: LockCmd,
     },
+    /// Initialize TaskStore (create collections, install git hooks)
+    Init,
+    /// Validate a document (plan/spec/phase) via the Doc Validator LLM
+    Validate {
+        /// Collection type (plan, spec, phase)
+        collection: String,
+        /// Record ID
+        id: String,
+    },
+    /// Get a validation report by ID
+    Report {
+        /// Report ID
+        id: String,
+    },
+    /// List validation reports for a collection/record
+    Reports {
+        /// Collection type (plans, specs, phases)
+        collection: String,
+        /// Record ID
+        target_id: String,
+    },
     /// Graceful daemon shutdown
     Shutdown,
 }
@@ -503,6 +524,47 @@ mod tests {
                 assert_eq!(granted_by, "coordinator");
             }
             _ => panic!("expected Lock Create"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_init() {
+        let cli = Cli::parse_from(["loopr", "init"]);
+        assert!(matches!(cli.command, Some(Command::Init)));
+    }
+
+    #[test]
+    fn test_cli_parses_validate() {
+        let cli = Cli::parse_from(["loopr", "validate", "plan", "plan-123"]);
+        match cli.command {
+            Some(Command::Validate { collection, id }) => {
+                assert_eq!(collection, "plan");
+                assert_eq!(id, "plan-123");
+            }
+            _ => panic!("expected Validate"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_report() {
+        let cli = Cli::parse_from(["loopr", "report", "vr-123"]);
+        match cli.command {
+            Some(Command::Report { id }) => {
+                assert_eq!(id, "vr-123");
+            }
+            _ => panic!("expected Report"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_reports() {
+        let cli = Cli::parse_from(["loopr", "reports", "plans", "plan-1"]);
+        match cli.command {
+            Some(Command::Reports { collection, target_id }) => {
+                assert_eq!(collection, "plans");
+                assert_eq!(target_id, "plan-1");
+            }
+            _ => panic!("expected Reports"),
         }
     }
 }
