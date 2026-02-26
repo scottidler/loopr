@@ -28,12 +28,14 @@ impl Default for DaemonConfig {
 #[serde(default)]
 pub struct ProjectConfig {
     pub repo_path: PathBuf,
+    pub worktree_dir: PathBuf,
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
             repo_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            worktree_dir: PathBuf::from(".worktrees"),
         }
     }
 }

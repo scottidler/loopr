@@ -13,6 +13,7 @@ use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::work_item::WorkItem;
 use crate::ipc::protocol::DaemonEvent;
+use crate::worktree::manager::WorktreeManager;
 
 /// In-memory record stores, each behind a std::sync::RwLock for synchronous access
 /// from IPC request handlers (no async needed for in-memory HashMap operations).
@@ -54,15 +55,24 @@ pub struct DaemonContext {
     pub event_tx: broadcast::Sender<DaemonEvent>,
     pub config: Config,
     pub stores: Arc<Stores>,
+    pub worktree_manager: WorktreeManager,
 }
 
 impl DaemonContext {
     /// Create a new DaemonContext with the given config and event broadcast channel.
     pub fn new(config: Config, event_tx: broadcast::Sender<DaemonEvent>) -> Self {
+        let repo_path = config.project.repo_path.clone();
+        let worktree_dir = if config.project.worktree_dir.is_absolute() {
+            config.project.worktree_dir.clone()
+        } else {
+            repo_path.join(&config.project.worktree_dir)
+        };
+        let worktree_manager = WorktreeManager::new(repo_path, worktree_dir);
         Self {
             config,
             event_tx,
             stores: Arc::new(Stores::new()),
+            worktree_manager,
         }
     }
 
