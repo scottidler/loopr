@@ -201,10 +201,10 @@ fn handle_plan_create(
     let id = plan.id.clone();
 
     // Persist to TaskStore if available
-    if let Some(store) = &stores.store {
-        if let Err(e) = store.lock().unwrap().create(plan.clone()) {
-            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-        }
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(plan.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
     stores.plans.write().unwrap().insert(id.clone(), plan);
