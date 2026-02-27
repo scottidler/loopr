@@ -13,7 +13,7 @@ MAX_ITERATIONS=${MAX_ITERATIONS:-100}
 PROGRESS_FILE=${PROGRESS_FILE:-progress.txt}
 MODEL=${MODEL:-"opus[1m]"}
 SLEEP_BETWEEN=${SLEEP_BETWEEN:-2}
-TIMEOUT_MINUTES=${TIMEOUT_MINUTES:-10}
+TIMEOUT_MINUTES=${TIMEOUT_MINUTES:-15}
 COMPLETION_SIGNAL="<promise>COMPLETE</promise>"
 VALIDATION_CMD=${VALIDATION_CMD:-"otto ci"}
 LOG_DIR=${LOG_DIR:-logs}
@@ -58,7 +58,7 @@ fi
 if [[ ! -f "$PROGRESS_FILE" ]]; then
     echo -e "${YELLOW}Initializing progress file...${NC}"
     cat >"$PROGRESS_FILE" <<EOF
-# Loopr v3 MVP3 — Ralph Progress Log
+# Loopr v3 MVP4 — Ralph Progress Log
 Started: $(date)
 Branch: $CURRENT_BRANCH
 Prompt: $PROMPT_FILE

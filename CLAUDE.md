@@ -2,13 +2,14 @@
 
 ## Project
 
-Loopr is a TUI-based "dev team in a box" orchestrator. MVP1 (orchestration spine) and MVP2 (TaskStore persistence + Doc Validator) are complete. We're building MVP3 — LLM agents, tool execution, and streaming.
+Loopr is a TUI-based "dev team in a box" orchestrator. MVP1 (orchestration spine), MVP2 (TaskStore persistence + Doc Validator), and MVP3 (Implementer + Reviewer agents, tool execution, streaming) are complete. We're building MVP4 — multi-level RWL, Coordinator agent, Researcher agent, deterministic Integrator, context builder, strategy knobs, advisory locks.
 
 ## Source of Truth
 
-The design doc at `docs/design/2026-02-26-loopr-v3-mvp3.md` is the single source of truth for MVP3. Previous MVP design docs remain references for the existing architecture:
-- `docs/design/2026-02-25-loopr-v3-mvp1.md` — orchestration spine
+The design doc at `docs/design/2026-02-26-loopr-v3-mvp4.md` is the single source of truth for MVP4. Previous MVP design docs remain references for the existing architecture:
+- `docs/design/2026-02-26-loopr-v3-mvp3.md` — Implementer + Reviewer agents
 - `docs/design/2026-02-26-loopr-v3-mvp2.md` — TaskStore + Doc Validator
+- `docs/design/2026-02-25-loopr-v3-mvp1.md` — orchestration spine
 
 Do not deviate from them without discussion.
 
@@ -36,6 +37,7 @@ cargo check      # Quick compile check
 - **TaskStore** (`scottidler/taskstore`) — JSONL-as-truth, SQLite-as-cache persistence. Generic over types implementing `Record` trait. Git dependency.
 - **reqwest** — async HTTP client for agent LLM calls (streaming SSE). Used in Tokio task context.
 - **ureq** — sync HTTP client for Doc Validator (MVP2, unchanged). Used in sync handler context.
+- **glob** — glob pattern matching for Researcher SearchFiles action.
 
 ## Ralph Wiggum Loop
 
