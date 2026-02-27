@@ -8,11 +8,13 @@ use log::{info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::context::select_learnings;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::{AgentAction, AgentSession};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
 use crate::domain::learning::LearningScope;
+use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
 
@@ -70,15 +72,14 @@ pub fn load_context(
 
     // Gather learnings scoped to this work item and its ancestors
     let learnings_map = stores.learnings.read().unwrap();
-    let learnings: Vec<String> = learnings_map
-        .values()
-        .filter(|l| {
-            (l.scope == LearningScope::WorkItem && l.source_id == work_item_id)
-                || (l.scope == LearningScope::Phase && l.source_id == phase.id)
-                || (l.scope == LearningScope::Spec && l.source_id == spec.id)
-                || (l.scope == LearningScope::Plan && l.source_id == plan.id)
-                || l.scope == LearningScope::Global
-        })
+    let scope_ids = [
+        (work_item_id, LearningScope::WorkItem),
+        (phase.id.as_str(), LearningScope::Phase),
+        (spec.id.as_str(), LearningScope::Spec),
+        (plan.id.as_str(), LearningScope::Plan),
+    ];
+    let learnings: Vec<String> = select_learnings(&learnings_map, &scope_ids, Role::Implementer, 0.3, 20)
+        .into_iter()
         .map(|l| l.content.clone())
         .collect();
 

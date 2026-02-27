@@ -7,10 +7,12 @@ use tokio::sync::broadcast;
 
 use crate::agents::AgentSession;
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::context::select_learnings;
 use crate::agents::implementer::LlmClient;
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
 use crate::domain::learning::LearningScope;
+use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
 /// Verdict from a review.
@@ -108,15 +110,14 @@ pub fn load_review_context(stores: &Stores, bundle_id: &str) -> Result<ReviewerC
 
     // Gather learnings scoped to the work item and its ancestors
     let learnings_map = stores.learnings.read().unwrap();
-    let learnings: Vec<String> = learnings_map
-        .values()
-        .filter(|l| {
-            (l.scope == LearningScope::WorkItem && l.source_id == bundle.work_item_id)
-                || (l.scope == LearningScope::Phase && l.source_id == phase.id)
-                || (l.scope == LearningScope::Spec && l.source_id == spec.id)
-                || (l.scope == LearningScope::Plan && l.source_id == plan.id)
-                || l.scope == LearningScope::Global
-        })
+    let scope_ids = [
+        (bundle.work_item_id.as_str(), LearningScope::WorkItem),
+        (phase.id.as_str(), LearningScope::Phase),
+        (spec.id.as_str(), LearningScope::Spec),
+        (plan.id.as_str(), LearningScope::Plan),
+    ];
+    let learnings: Vec<String> = select_learnings(&learnings_map, &scope_ids, Role::Reviewer, 0.3, 20)
+        .into_iter()
         .map(|l| l.content.clone())
         .collect();
 

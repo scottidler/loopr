@@ -1,4 +1,5 @@
 pub mod bridge;
+pub mod context;
 pub mod executor;
 pub mod implementer;
 pub mod llm_client;
