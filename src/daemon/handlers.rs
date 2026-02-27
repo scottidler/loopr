@@ -1587,8 +1587,9 @@ fn handle_learning_reinforce(
         None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
     };
 
-    learning.reinforce();
-    learning.updated_at = crate::id::now_millis();
+    // TODO: thread PromotionPolicy from StrategyConfig through dispatch when available
+    let promotion = crate::config::PromotionPolicy::default();
+    learning.reinforce(&promotion);
 
     // Persist to TaskStore if available
     if let Some(store) = &stores.store
@@ -1624,7 +1625,6 @@ fn handle_learning_contradict(
     };
 
     learning.contradict();
-    learning.updated_at = crate::id::now_millis();
 
     // Persist to TaskStore if available
     if let Some(store) = &stores.store
