@@ -1389,7 +1389,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
 
         let action = AgentAction::CreatePlan {
             title: "E2E Test Plan".to_string(),
@@ -1436,7 +1436,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
 
         // Create Plan
         let plan_result = rt
@@ -1559,7 +1559,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
         let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
 
         // Create hierarchy + work item (via dispatch for speed)
         let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
@@ -2271,7 +2271,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores, tx, wm, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
 
         let result = rt
             .block_on(execute_action(
@@ -2355,7 +2355,7 @@ mod tests {
 
         // Execute AssignAgent — should auto-transition Draft→Ready→InProgress
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, stores.config.clone());
 
         let runner = crate::tools::ToolRunner::new(&[]);
         let assign_action = crate::agents::AgentAction::AssignAgent {

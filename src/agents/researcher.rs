@@ -759,7 +759,7 @@ mod tests {
 
         let config = AgentRoleConfig::default_researcher();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_ok());
@@ -788,7 +788,7 @@ mod tests {
 
         let config = AgentRoleConfig::default_researcher();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
@@ -825,7 +825,7 @@ mod tests {
         config.max_iterations = 3; // Low cap for testing
 
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
@@ -853,7 +853,7 @@ mod tests {
 
         let config = AgentRoleConfig::default_researcher();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_ok()); // Cancelled = graceful exit
@@ -882,7 +882,7 @@ mod tests {
 
         let config = AgentRoleConfig::default_researcher();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_ok()); // Completes with Done

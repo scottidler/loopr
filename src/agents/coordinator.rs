@@ -809,7 +809,7 @@ mod tests {
 
         let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let outcome =
             run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
@@ -832,7 +832,7 @@ mod tests {
 
         let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let outcome =
             run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
@@ -855,7 +855,7 @@ mod tests {
 
         let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let outcome =
             run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
@@ -877,7 +877,7 @@ mod tests {
 
         let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let outcome =
             run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
@@ -908,7 +908,7 @@ mod tests {
 
         let config = CoordinatorConfig::default();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
@@ -935,7 +935,7 @@ mod tests {
 
         let config = CoordinatorConfig::default();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_ok()); // Cancelled = graceful exit
@@ -1083,7 +1083,7 @@ mod tests {
         };
 
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
         let _ = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
 

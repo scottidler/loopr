@@ -1033,7 +1033,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
 
@@ -1065,7 +1065,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
 
@@ -1118,7 +1118,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::RunTool {
             tool_name: "echo-test".to_string(),
@@ -1144,7 +1144,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::WriteFile {
             path: "test.txt".to_string(),
@@ -1211,7 +1211,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         // Default config has LockAdvisory
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Create a lock on "src/main.rs"
         let lock_resp = bridge.request(
@@ -1241,7 +1241,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
@@ -1265,7 +1265,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::Done {
             summary: "All done".to_string(),
@@ -1289,7 +1289,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
@@ -1313,7 +1313,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::RunTool {
             tool_name: "nonexistent".to_string(),
@@ -1332,7 +1332,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
@@ -1358,7 +1358,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Acquire first lock
         let action = AgentAction::AcquireLock {
@@ -1398,7 +1398,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Acquire a lock first
         let acquire_action = AgentAction::AcquireLock {
@@ -1437,7 +1437,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Acquire
         let action1 = AgentAction::AcquireLock {
