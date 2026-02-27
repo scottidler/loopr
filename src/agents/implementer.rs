@@ -253,7 +253,14 @@ pub async fn run_iteration(
                 .send(DaemonEvent::agent_tool_started(params.session_id, tool_name));
         }
 
-        let result = execute_action(action, params.tool_runner, params.bridge, params.worktree_path).await?;
+        let result = execute_action(
+            action,
+            params.tool_runner,
+            params.bridge,
+            params.worktree_path,
+            Some(params.work_item_id),
+        )
+        .await?;
 
         // Broadcast tool_completed event for RunTool results
         if let ActionResult::ToolRun(ref tr) = result {

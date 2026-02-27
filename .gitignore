@@ -38,6 +38,7 @@ examples/_test_broken/
 # Loopr runtime data
 .taskstore/
 .worktrees/
+.env
 
 # Ralph Wiggum loop control files
 progress.txt

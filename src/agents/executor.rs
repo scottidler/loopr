@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::{error, info, warn};
 use tokio::sync::broadcast;
@@ -16,33 +15,15 @@ use crate::ipc::protocol::DaemonEvent;
 use crate::tools::{ToolResult, ToolRunner};
 use crate::worktree::manager::WorktreeManager;
 
-/// Stub LLM client — used when no API key is available (testing, development).
-struct StubLlmClient;
-
-#[async_trait]
-impl LlmClient for StubLlmClient {
-    async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-        Ok(r#"[{"action": "done", "summary": "Stub LLM — no API key configured"}]"#.to_string())
-    }
-}
-
-/// Create the appropriate LLM client based on configuration.
-/// Returns a real `AgentLlmClient` if the API key env var is set, otherwise falls back to `StubLlmClient`.
+/// Create the LLM client. Fails if the API key env var is not set.
 fn create_llm_client(
     config: &crate::config::AgentRoleConfig,
     session_id: &str,
     event_tx: &broadcast::Sender<DaemonEvent>,
-) -> Box<dyn LlmClient> {
-    match AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone()) {
-        Ok(client) => {
-            info!("Agent {} using real LLM client (model: {})", session_id, config.model);
-            Box::new(client)
-        }
-        Err(e) => {
-            warn!("Agent {} falling back to stub LLM client: {}", session_id, e);
-            Box::new(StubLlmClient)
-        }
-    }
+) -> Result<Box<dyn LlmClient>> {
+    let client = AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone())?;
+    info!("Agent {} using LLM client (model: {})", session_id, config.model);
+    Ok(Box::new(client))
 }
 
 /// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
@@ -168,7 +149,7 @@ async fn run_agent_loop(
         AgentType::Implementer => {
             let tool_runner = &stores.tool_runner;
             let config = stores.config.agents.implementer.clone();
-            let llm = create_llm_client(&config, session_id, event_tx);
+            let llm = create_llm_client(&config, session_id, event_tx)?;
 
             // Clone session out for the implementer loop
             let mut session = {
@@ -202,7 +183,7 @@ async fn run_agent_loop(
         }
         AgentType::Reviewer => {
             let config = stores.config.agents.reviewer.clone();
-            let llm = create_llm_client(&config, session_id, event_tx);
+            let llm = create_llm_client(&config, session_id, event_tx)?;
 
             // Clone session out for the reviewer loop
             let mut session = {
@@ -235,6 +216,7 @@ pub async fn execute_action(
     tool_runner: &ToolRunner,
     bridge: &AgentIpcBridge,
     worktree_path: &Path,
+    work_item_id: Option<&str>,
 ) -> Result<ActionResult> {
     match action {
         AgentAction::RunTool { tool_name, args } => {
@@ -263,20 +245,43 @@ pub async fn execute_action(
             Ok(ActionResult::FileRead(content))
         }
         AgentAction::Commit { message, paths } => {
-            // Use bridge to create a commit via IPC
-            let resp = bridge.request(
-                "system.status",
-                serde_json::json!({ "message": message, "paths": paths }),
-            );
-            if resp.is_error() {
-                return Err(eyre!("commit failed: {:?}", resp.error));
+            // Stage specified paths (or all changes if empty)
+            let add_args = if paths.is_empty() { vec!["-A".to_string()] } else { paths.clone() };
+            let mut add_cmd = tokio::process::Command::new("git");
+            add_cmd.arg("add").args(&add_args).current_dir(worktree_path);
+            let add_out = add_cmd.output().await?;
+            if !add_out.status.success() {
+                let stderr = String::from_utf8_lossy(&add_out.stderr);
+                return Err(eyre!("git add failed: {}", stderr));
+            }
+
+            // Commit
+            let mut commit_cmd = tokio::process::Command::new("git");
+            commit_cmd.args(["commit", "-m", message]).current_dir(worktree_path);
+            let commit_out = commit_cmd.output().await?;
+            if !commit_out.status.success() {
+                let stderr = String::from_utf8_lossy(&commit_out.stderr);
+                return Err(eyre!("git commit failed: {}", stderr));
             }
             Ok(ActionResult::Committed(message.clone()))
         }
         AgentAction::ProposeBundle { description, claims } => {
+            // Get the current branch name from the worktree
+            let mut branch_cmd = tokio::process::Command::new("git");
+            branch_cmd
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(worktree_path);
+            let branch_out = branch_cmd.output().await?;
+            let branch_name = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+
+            let wi_id = work_item_id.ok_or_else(|| eyre!("propose_bundle requires work_item_id"))?;
             let resp = bridge.request(
-                "system.status",
-                serde_json::json!({ "description": description, "claims": claims }),
+                "bundle.create",
+                serde_json::json!({
+                    "work_item_id": wi_id,
+                    "branch_name": branch_name,
+                    "claims": claims,
+                }),
             );
             if resp.is_error() {
                 return Err(eyre!("propose bundle failed: {:?}", resp.error));
@@ -386,7 +391,7 @@ mod tests {
             tool_name: "echo-test".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
         if let ActionResult::ToolRun(tool_result) = result {
             assert_eq!(tool_result.exit_code, 0);
             assert_eq!(tool_result.stdout.trim(), "hello");
@@ -410,7 +415,7 @@ mod tests {
             path: "test.txt".to_string(),
             content: "hello world".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
 
         let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
@@ -432,7 +437,7 @@ mod tests {
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = result {
             assert_eq!(content, "file content");
         } else {
@@ -454,7 +459,7 @@ mod tests {
         let action = AgentAction::Done {
             summary: "All done".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
         if let ActionResult::Done(summary) = result {
             assert_eq!(summary, "All done");
         } else {
@@ -476,7 +481,7 @@ mod tests {
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
         if let ActionResult::NeedHelp(reason) = result {
             assert_eq!(reason, "Ambiguous spec");
         } else {
@@ -499,7 +504,7 @@ mod tests {
             tool_name: "nonexistent".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir).await;
+        let result = execute_action(&action, &runner, &bridge, &dir, None).await;
         assert!(result.is_err());
     }
 
