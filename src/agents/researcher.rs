@@ -73,9 +73,7 @@ pub fn validate_path(repo_root: &Path, relative: &str) -> Result<PathBuf> {
         full.clone()
     };
 
-    let root_canonical = repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let root_canonical = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
     if !canonical.starts_with(&root_canonical) {
         return Err(eyre!("path escapes repo root: {}", relative));
     }
@@ -208,18 +206,10 @@ pub async fn execute_list_directory(repo_root: &Path, path: &str) -> Result<Stri
         .await
         .map_err(|e| eyre!("list_directory '{}': {}", path, e))?;
 
-    while let Some(entry) = reader
-        .next_entry()
-        .await
-        .map_err(|e| eyre!("read dir entry: {}", e))?
-    {
+    while let Some(entry) = reader.next_entry().await.map_err(|e| eyre!("read dir entry: {}", e))? {
         let name = entry.file_name().to_string_lossy().to_string();
         let meta = entry.metadata().await;
-        let suffix = if meta.as_ref().map(|m| m.is_dir()).unwrap_or(false) {
-            "/"
-        } else {
-            ""
-        };
+        let suffix = if meta.as_ref().map(|m| m.is_dir()).unwrap_or(false) { "/" } else { "" };
         entries.push(format!("{}{}", name, suffix));
 
         if entries.len() >= 500 {
@@ -290,10 +280,7 @@ async fn run_researcher_iteration(
     for action in &actions {
         // Validate: Researcher can only use read-only actions
         if !is_allowed_researcher_action(action) {
-            warn!(
-                "Researcher {} attempted disallowed action: {:?}",
-                session.id, action
-            );
+            warn!("Researcher {} attempted disallowed action: {:?}", session.id, action);
             last_summary = format!("ERROR: action not allowed for Researcher: {:?}", action);
             continue;
         }
@@ -312,12 +299,10 @@ async fn run_researcher_iteration(
                     Err(e) => ActionResult::ActionError(e.to_string()),
                 }
             }
-            AgentAction::ListDirectory { path } => {
-                match execute_list_directory(repo_root, path).await {
-                    Ok(output) => ActionResult::FileRead(output),
-                    Err(e) => ActionResult::ActionError(e.to_string()),
-                }
-            }
+            AgentAction::ListDirectory { path } => match execute_list_directory(repo_root, path).await {
+                Ok(output) => ActionResult::FileRead(output),
+                Err(e) => ActionResult::ActionError(e.to_string()),
+            },
             AgentAction::ReadFile { path } => {
                 // Apply path sandboxing for ReadFile
                 match validate_path(repo_root, path) {
@@ -406,7 +391,10 @@ pub async fn run_researcher(
         }
 
         session.iteration = iteration;
-        info!("Researcher {} iteration {}/{}", session.id, iteration, config.max_iterations);
+        info!(
+            "Researcher {} iteration {}/{}",
+            session.id, iteration, config.max_iterations
+        );
 
         let previous_summary: Option<String> = None;
 
@@ -438,10 +426,7 @@ pub async fn run_researcher(
         "Researcher {} reached max iterations ({})",
         session.id, config.max_iterations
     );
-    Err(eyre!(
-        "researcher reached max iterations ({})",
-        config.max_iterations
-    ))
+    Err(eyre!("researcher reached max iterations ({})", config.max_iterations))
 }
 
 fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String {
@@ -915,9 +900,7 @@ mod tests {
 
     #[test]
     fn test_format_action_summary_list_dir() {
-        let action = AgentAction::ListDirectory {
-            path: "src".into(),
-        };
+        let action = AgentAction::ListDirectory { path: "src".into() };
         let result = ActionResult::FileRead("mod.rs\nmain.rs".into());
         let summary = format_action_summary(&action, &result);
         assert!(summary.contains("list_directory"));

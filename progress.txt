@@ -159,3 +159,5 @@ Iteration 6: VALIDATING at 06:38:54
 Iteration 6: PASS
 Iteration 7: STARTED at 06:39:06
 Iteration 7: Created src/agents/researcher.rs — Researcher agent with system prompt (query injection), run_researcher loop (max_iterations cap, cancellation check), path sandboxing (validate_path with denylist for .env, *.key, *.pem, credentials.*, *secret*), read-only action enforcement (is_allowed_researcher_action), execute_search_code (grep -rn -E), execute_search_files (glob crate), execute_list_directory (tokio::fs::read_dir). Wired into executor.rs run_agent_loop (replaces stub), replaced SearchCode/SearchFiles/ListDirectory stubs with real implementations. Added glob dependency. 26 new tests (988 total), clippy clean. Phase 4 COMPLETE: Researcher system prompt ✓, search execution ✓, path sandboxing ✓, read-only enforcement ✓, dedup on scope_id (via SpawnResearcher handler) ✓, proposer mode (via query convention + tagging) ✓. Next: Phase 5 (Integrator task — deterministic, no LLM).
+Iteration 7: VALIDATING at 06:46:45
+Iteration 7: PASS
