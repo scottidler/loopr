@@ -49,11 +49,7 @@ pub fn select_learnings<'a>(
     candidates.sort_by(|a, b| {
         b.promoted
             .cmp(&a.promoted)
-            .then(
-                b.confidence
-                    .partial_cmp(&a.confidence)
-                    .unwrap_or(Ordering::Equal),
-            )
+            .then(b.confidence.partial_cmp(&a.confidence).unwrap_or(Ordering::Equal))
             .then(b.updated_at.cmp(&a.updated_at))
     });
 
@@ -71,12 +67,7 @@ mod tests {
         Learning::new(source_id.to_string(), scope, content.to_string())
     }
 
-    fn make_learning_with_role(
-        source_id: &str,
-        scope: LearningScope,
-        content: &str,
-        roles: Vec<Role>,
-    ) -> Learning {
+    fn make_learning_with_role(source_id: &str, scope: LearningScope, content: &str, roles: Vec<Role>) -> Learning {
         let mut l = make_learning(source_id, scope, content);
         l.applicable_roles = Some(roles);
         l
@@ -156,12 +147,7 @@ mod tests {
 
     #[test]
     fn test_select_by_role_match() {
-        let l = make_learning_with_role(
-            "wi-1",
-            LearningScope::WorkItem,
-            "impl insight",
-            vec![Role::Implementer],
-        );
+        let l = make_learning_with_role("wi-1", LearningScope::WorkItem, "impl insight", vec![Role::Implementer]);
         let map = to_map(vec![l]);
         let scope_ids = [("wi-1", LearningScope::WorkItem)];
 
@@ -171,12 +157,7 @@ mod tests {
 
     #[test]
     fn test_select_by_role_mismatch() {
-        let l = make_learning_with_role(
-            "wi-1",
-            LearningScope::WorkItem,
-            "reviewer only",
-            vec![Role::Reviewer],
-        );
+        let l = make_learning_with_role("wi-1", LearningScope::WorkItem, "reviewer only", vec![Role::Reviewer]);
         let map = to_map(vec![l]);
         let scope_ids = [("wi-1", LearningScope::WorkItem)];
 
