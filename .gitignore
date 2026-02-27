@@ -40,9 +40,11 @@ examples/_test_broken/
 .worktrees/
 .env
 
+# Log files
+*.log
+
 # Ralph Wiggum loop control files
 progress.txt
 .loopr-progress
 .loopr-complete
-.loopr-iter*.log
 logs/
