@@ -253,14 +253,24 @@ pub async fn run_iteration(
                 .send(DaemonEvent::agent_tool_started(params.session_id, tool_name));
         }
 
-        let result = execute_action(
+        let result = match execute_action(
             action,
             params.tool_runner,
             params.bridge,
             params.worktree_path,
             Some(params.work_item_id),
         )
-        .await?;
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    "Implementer {} action failed (non-fatal): {e}",
+                    params.session_id
+                );
+                ActionResult::ActionError(e.to_string())
+            }
+        };
 
         // Broadcast tool_completed event for RunTool results
         if let ActionResult::ToolRun(ref tr) = result {
@@ -405,6 +415,7 @@ fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String
         ActionResult::LearningCreated(c) => format!("learning: {}", c),
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
+        ActionResult::ActionError(e) => format!("ERROR: {}", e),
     }
 }
 

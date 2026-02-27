@@ -48,6 +48,7 @@ fn setup_logging() -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     setup_logging().context("Failed to setup logging")?;
 
     let cli_args = Cli::parse();

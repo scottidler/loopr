@@ -220,7 +220,10 @@ pub async fn execute_action(
 ) -> Result<ActionResult> {
     match action {
         AgentAction::RunTool { tool_name, args } => {
-            let tool_result = tool_runner.run(tool_name, args, worktree_path).await?;
+            let tool_result = tool_runner
+                .run(tool_name, args, worktree_path)
+                .await
+                .map_err(|e| eyre!("run_tool '{}': {}", tool_name, e))?;
             Ok(ActionResult::ToolRun(tool_result))
         }
         AgentAction::WriteFile { path, content } => {
@@ -234,14 +237,20 @@ pub async fn execute_action(
                 return Err(eyre!("path escapes worktree: {}", path));
             }
             if let Some(parent) = full_path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| eyre!("write_file mkdir '{}': {}", path, e))?;
             }
-            tokio::fs::write(&full_path, content).await?;
+            tokio::fs::write(&full_path, content)
+                .await
+                .map_err(|e| eyre!("write_file '{}': {}", path, e))?;
             Ok(ActionResult::FileWritten(path.clone()))
         }
         AgentAction::ReadFile { path } => {
             let full_path = worktree_path.join(path);
-            let content = tokio::fs::read_to_string(&full_path).await?;
+            let content = tokio::fs::read_to_string(&full_path)
+                .await
+                .map_err(|e| eyre!("read_file '{}': {}", path, e))?;
             Ok(ActionResult::FileRead(content))
         }
         AgentAction::Commit { message, paths } => {
@@ -338,6 +347,8 @@ pub enum ActionResult {
     LearningCreated(String),
     Done(String),
     NeedHelp(String),
+    /// Non-fatal error — fed back to the LLM so it can self-correct.
+    ActionError(String),
 }
 
 fn persist_session(stores: &Stores, session: &AgentSession) {

@@ -3,7 +3,8 @@ pub mod handlers;
 
 use std::sync::Arc;
 
-use log::info;
+use eyre::eyre;
+use log::{info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
@@ -11,6 +12,32 @@ use crate::ipc::protocol::DaemonEvent;
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::DaemonContext;
+
+/// Ensure only one daemon runs at a time. If a stale PID file exists from a
+/// dead process, clean it up. If a live daemon is found, abort with an error.
+fn ensure_one_daemon(ctx: &DaemonContext) -> eyre::Result<()> {
+    let pid_path = &ctx.config.daemon.pid_path;
+    if let Ok(contents) = std::fs::read_to_string(pid_path)
+        && let Ok(pid) = contents.trim().parse::<u32>()
+    {
+        let proc_path = std::path::PathBuf::from(format!("/proc/{pid}"));
+        if proc_path.exists() {
+            return Err(eyre!(
+                "daemon already running (pid={pid}, pidfile={})",
+                pid_path.display()
+            ));
+        }
+        warn!("Stale PID file found (pid={pid}), cleaning up");
+        let _ = std::fs::remove_file(pid_path);
+    }
+    // Also clean up stale socket
+    let socket_path = &ctx.config.daemon.socket_path;
+    if socket_path.exists() {
+        warn!("Stale socket found, cleaning up: {}", socket_path.display());
+        let _ = std::fs::remove_file(socket_path);
+    }
+    Ok(())
+}
 
 /// Write the daemon PID file.
 fn write_pid_file(ctx: &DaemonContext) -> std::io::Result<()> {
@@ -35,6 +62,7 @@ fn remove_pid_file(ctx: &DaemonContext) {
 pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     let socket_path = {
         let c = ctx.read().await;
+        ensure_one_daemon(&c)?;
         write_pid_file(&c)?;
         // Crash recovery: reset any orphaned InProgress/Integrating records
         c.recover_orphaned_records();
