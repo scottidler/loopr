@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 // --- Strategy Knobs ---
 
 /// How to handle stale Bundles when a new Tick is published.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StalePolicy {
     /// Agent rebases and re-tests at next safe point.
+    #[default]
     ReplanAtSafePoint,
     /// Bundle rejected outright if stale.
     RejectIfStale,
@@ -17,45 +18,29 @@ pub enum StalePolicy {
     AutoReplayAndVerify,
 }
 
-impl Default for StalePolicy {
-    fn default() -> Self {
-        Self::ReplanAtSafePoint
-    }
-}
-
 /// How to handle resource conflicts between agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictPolicy {
     /// Locks checked, conflicts detected at merge time.
+    #[default]
     LockAdvisory,
     /// File writes to locked paths rejected by executor.
     LockStrict,
 }
 
-impl Default for ConflictPolicy {
-    fn default() -> Self {
-        Self::LockAdvisory
-    }
-}
-
 /// When the Integrator creates Ticks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "mode")]
 pub enum TickCadence {
     /// Create a Tick as soon as any Bundle is Accepted.
+    #[default]
     Continuous,
     /// Wait for N Accepted Bundles or a timeout before creating a Tick.
     Batched {
         min_bundles: u32,
         timeout_secs: u64,
     },
-}
-
-impl Default for TickCadence {
-    fn default() -> Self {
-        Self::Continuous
-    }
 }
 
 /// Limits on Bundle size to keep changes reviewable.
@@ -76,21 +61,16 @@ impl Default for BundleSizePolicy {
 }
 
 /// How strict the Doc Validator is about ambiguity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidatorStrictness {
     /// Any ambiguity in doc = Fail.
+    #[default]
     HardFailOnAnyAmbiguity,
     /// Ambiguity = Warn, not Fail.
     AllowAmbiguityWithFlags,
     /// All issues are Info, never Fail.
     SuggestOnly,
-}
-
-impl Default for ValidatorStrictness {
-    fn default() -> Self {
-        Self::HardFailOnAnyAmbiguity
-    }
 }
 
 /// Policy for auto-promoting Learnings to Policies.
