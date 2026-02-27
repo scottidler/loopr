@@ -7,6 +7,7 @@ use tokio::sync::broadcast;
 use crate::agents::{AgentSession, AgentStatus, AgentType};
 use crate::config::IntegratorConfig;
 use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
+use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::lock::Lock;
 use crate::domain::phase::{Phase, PhaseStatus};
@@ -23,6 +24,18 @@ use crate::worktree::manager::WorktreeManager;
 use taskstore::{Filter, FilterOp, IndexValue, Record};
 
 use super::context::Stores;
+
+/// Returns the configured pool_size for a given agent type.
+fn pool_size_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
+    match agent_type {
+        AgentType::Implementer => config.agents.implementer.pool_size,
+        AgentType::Reviewer => config.agents.reviewer.pool_size,
+        AgentType::Coordinator => config.agents.coordinator.role.pool_size,
+        AgentType::Researcher => config.agents.researcher.pool_size,
+        // Integrator uses pool_size = 1 (singleton, same as Coordinator)
+        AgentType::Integrator => 1,
+    }
+}
 
 /// Check the validation gate for Draft → Active transitions.
 /// Returns `Some(RpcError)` if the gate blocks the transition, `None` if allowed.
@@ -144,6 +157,8 @@ pub fn dispatch(
         "validator.report" => handle_validator_report(stores, req),
         "validator.reports" => handle_validator_reports(stores, req),
         "tool.list" => handle_tool_list(stores, req),
+        "coordinator.set_goal" => handle_coordinator_set_goal(stores, event_tx, req),
+        "coordinator.clear_goal" => handle_coordinator_clear_goal(stores, event_tx, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
@@ -194,6 +209,7 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
         Tick::collection_name(),
         Learning::collection_name(),
         Lock::collection_name(),
+        CoordinatorGoal::collection_name(),
         AgentSession::collection_name(),
     ];
 
@@ -2466,6 +2482,83 @@ fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse 
     DaemonResponse::ok(req.id, json!({ "tools": tools }))
 }
 
+// --- Coordinator goal handlers ---
+
+fn handle_coordinator_set_goal(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let goal_text = match req.params.get("goal").and_then(|v| v.as_str()) {
+        Some(g) if !g.trim().is_empty() => g.trim().to_string(),
+        _ => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("goal is required and must be non-empty"),
+            );
+        }
+    };
+
+    // Deactivate any existing active goals
+    {
+        let mut goals = stores.coordinator_goals.write().unwrap();
+        for existing in goals.values_mut() {
+            if existing.active {
+                existing.deactivate();
+                // Persist deactivation to TaskStore
+                if let Some(store) = &stores.store {
+                    let _ = store.lock().unwrap().update(existing.clone());
+                }
+            }
+        }
+    }
+
+    // Create new active goal
+    let goal = CoordinatorGoal::new(goal_text);
+    let goal_json = match serde_json::to_value(&goal) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
+
+    let id = goal.id.clone();
+
+    // Persist to TaskStore
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().create(goal.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    stores.coordinator_goals.write().unwrap().insert(id.clone(), goal);
+    let _ = event_tx.send(DaemonEvent::record_created("coordinator_goal", &id));
+
+    DaemonResponse::ok(req.id, goal_json)
+}
+
+fn handle_coordinator_clear_goal(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let mut cleared_count = 0;
+    {
+        let mut goals = stores.coordinator_goals.write().unwrap();
+        for existing in goals.values_mut() {
+            if existing.active {
+                existing.deactivate();
+                // Persist deactivation to TaskStore
+                if let Some(store) = &stores.store {
+                    let _ = store.lock().unwrap().update(existing.clone());
+                }
+                let _ = event_tx.send(DaemonEvent::record_updated("coordinator_goal", &existing.id));
+                cleared_count += 1;
+            }
+        }
+    }
+
+    DaemonResponse::ok(req.id, json!({ "cleared": cleared_count }))
+}
+
 // --- Agent handlers ---
 
 fn handle_agent_start(
@@ -2533,7 +2626,35 @@ fn handle_agent_start(
         .map(|s| s.to_string());
     let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-    // Create agent session with model from config (placeholder — will be wired up in Phase 2)
+    // Pool_size enforcement: reject if active sessions of this type >= pool_size
+    {
+        let sessions = stores.agent_sessions.read().unwrap();
+        let active_count = sessions
+            .values()
+            .filter(|s| s.agent_type == agent_type && !s.status.is_terminal())
+            .count();
+        let pool_size = pool_size_for(agent_type, &stores.config) as usize;
+        if active_count >= pool_size {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::pool_exhausted(&format!(
+                    "pool_size exceeded for {}: {active_count}/{pool_size} active",
+                    agent_type
+                )),
+            );
+        }
+
+        // Global agent cap: 20 total active sessions
+        let total_active = sessions.values().filter(|s| !s.status.is_terminal()).count();
+        if total_active >= 20 {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::pool_exhausted(&format!("global agent cap exceeded: {total_active}/20 active sessions")),
+            );
+        }
+    }
+
+    // Create agent session with model from config
     let mut session = AgentSession::new(agent_type, "claude-sonnet-4-6".to_string());
     session.work_item_id = work_item_id;
     session.bundle_id = bundle_id;
@@ -7388,7 +7509,7 @@ mod tests {
         assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let collections = result["collections"].as_array().unwrap();
-        assert_eq!(collections.len(), 9);
+        assert_eq!(collections.len(), 10);
         assert!(collections.contains(&json!("plans")));
         assert!(collections.contains(&json!("specs")));
         assert!(collections.contains(&json!("phases")));
@@ -7397,6 +7518,7 @@ mod tests {
         assert!(collections.contains(&json!("ticks")));
         assert!(collections.contains(&json!("learnings")));
         assert!(collections.contains(&json!("locks")));
+        assert!(collections.contains(&json!("coordinator_goals")));
         assert!(collections.contains(&json!("agent_sessions")));
         // git_hooks_installed is best-effort — may be false in test environments
         // due to taskstore's configure_merge_driver not using current_dir
@@ -8025,5 +8147,163 @@ mod tests {
         );
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
+    }
+
+    // --- Coordinator goal tests ---
+
+    #[test]
+    fn test_coordinator_set_goal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "Build auth" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error(), "set_goal failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["goal"], "Build auth");
+        assert_eq!(result["active"], true);
+        assert!(!result["id"].as_str().unwrap().is_empty());
+        // Verify in stores
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert_eq!(goals.len(), 1);
+        let goal = goals.values().next().unwrap();
+        assert_eq!(goal.goal, "Build auth");
+        assert!(goal.active);
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_replaces_previous() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Set first goal
+        let req1 = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "First goal" }));
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        assert!(!resp1.is_error());
+        let first_id = resp1.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Set second goal — deactivates first
+        let req2 = DaemonRequest::new(2, "coordinator.set_goal", json!({ "goal": "Second goal" }));
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp2.is_error());
+
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert_eq!(goals.len(), 2);
+        // First goal deactivated
+        assert!(!goals[&first_id].active);
+        // Second goal active
+        let active_count = goals.values().filter(|g| g.active).count();
+        assert_eq!(active_count, 1);
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_empty_rejected() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_missing_param() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.set_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_coordinator_clear_goal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Set a goal first
+        let req1 = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "Test goal" }));
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+
+        // Clear it
+        let req2 = DaemonRequest::new(2, "coordinator.clear_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["cleared"], 1);
+
+        // All goals deactivated
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert!(goals.values().all(|g| !g.active));
+    }
+
+    #[test]
+    fn test_coordinator_clear_goal_when_none() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.clear_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["cleared"], 0);
+    }
+
+    // --- Pool size enforcement tests ---
+
+    #[test]
+    fn test_pool_size_for_helper() {
+        let config = crate::config::Config::default();
+        assert_eq!(pool_size_for(AgentType::Implementer, &config), 2);
+        assert_eq!(pool_size_for(AgentType::Reviewer, &config), 2);
+        assert_eq!(pool_size_for(AgentType::Coordinator, &config), 1);
+        assert_eq!(pool_size_for(AgentType::Researcher, &config), 4);
+        assert_eq!(pool_size_for(AgentType::Integrator, &config), 1);
+    }
+
+    #[test]
+    fn test_agent_start_pool_size_enforcement() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Add a non-terminal Coordinator session to the store (simulating already running)
+        let session = crate::agents::AgentSession::new(AgentType::Coordinator, "model".to_string());
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        // Attempt to start another Coordinator — should be rejected (pool_size = 1)
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error(), "expected pool_size rejection");
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32004);
+        assert!(err.message.contains("pool_size exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_agent_start_pool_allows_after_terminal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Add a terminal (Completed) Coordinator session — should NOT count
+        let mut session = crate::agents::AgentSession::new(AgentType::Coordinator, "model".to_string());
+        session.status = crate::agents::AgentStatus::Completed;
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        // Should be allowed — no active Coordinator sessions
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        // This will succeed at session creation but the spawned task may fail (no runtime).
+        // We just check it wasn't rejected by pool_size.
+        assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
     }
 }

@@ -98,6 +98,13 @@ impl RpcError {
             ),
         }
     }
+
+    pub fn pool_exhausted(detail: &str) -> Self {
+        Self {
+            code: -32004,
+            message: format!("pool exhausted: {detail}"),
+        }
+    }
 }
 
 // --- Convenience constructors ---
@@ -379,6 +386,8 @@ mod tests {
                 .message
                 .contains("validator.validate")
         );
+        assert_eq!(RpcError::pool_exhausted("x").code, -32004);
+        assert!(RpcError::pool_exhausted("test detail").message.contains("test detail"));
     }
 
     #[test]

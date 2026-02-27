@@ -1,4 +1,5 @@
 pub mod bundle;
+pub mod coordinator_goal;
 pub mod learning;
 pub mod lock;
 pub mod phase;

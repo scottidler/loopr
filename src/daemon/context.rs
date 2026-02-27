@@ -8,12 +8,13 @@ use tokio::sync::{RwLock, broadcast};
 use crate::agents::AgentSession;
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
+use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::spec::Spec;
-use crate::domain::tick::Tick;
+use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
 use crate::ipc::protocol::DaemonEvent;
@@ -32,6 +33,7 @@ pub struct Stores {
     pub ticks: StdRwLock<HashMap<String, Tick>>,
     pub learnings: StdRwLock<HashMap<String, Learning>>,
     pub locks: StdRwLock<HashMap<String, Lock>>,
+    pub coordinator_goals: StdRwLock<HashMap<String, CoordinatorGoal>>,
     pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
     pub store: Option<Arc<StdMutex<Store>>>,
@@ -54,6 +56,7 @@ impl Stores {
             ticks: StdRwLock::new(HashMap::new()),
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
+            coordinator_goals: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
             store: None,
             validator: None,
@@ -102,6 +105,7 @@ impl DaemonContext {
         store.rebuild_indexes::<Tick>()?;
         store.rebuild_indexes::<Learning>()?;
         store.rebuild_indexes::<Lock>()?;
+        store.rebuild_indexes::<CoordinatorGoal>()?;
         store.rebuild_indexes::<ValidationReport>()?;
         store.rebuild_indexes::<AgentSession>()?;
 
@@ -136,6 +140,9 @@ impl DaemonContext {
             for lock in store.list::<Lock>(&[])? {
                 stores.locks.write().unwrap().insert(lock.id.clone(), lock);
             }
+            for goal in store.list::<CoordinatorGoal>(&[])? {
+                stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
+            }
             for session in store.list::<AgentSession>(&[])? {
                 stores
                     .agent_sessions
@@ -151,6 +158,7 @@ impl DaemonContext {
                 + stores.ticks.read().unwrap().len()
                 + stores.learnings.read().unwrap().len()
                 + stores.locks.read().unwrap().len()
+                + stores.coordinator_goals.read().unwrap().len()
                 + stores.agent_sessions.read().unwrap().len();
             if hydrated > 0 {
                 info!("Hydrated {} records from TaskStore into memory", hydrated);
@@ -233,6 +241,26 @@ impl DaemonContext {
                         && let Err(e) = store_arc.lock().unwrap().update(bundle.clone())
                     {
                         warn!("Failed to persist Bundle recovery to TaskStore: {}", e);
+                    }
+                    recovered += 1;
+                }
+            }
+        }
+
+        // Recover stuck Ticks (Sealing/Validating) → Failed
+        {
+            let mut ticks = self.stores.ticks.write().unwrap();
+            let store_lock = self.stores.store.as_ref();
+            for (id, tick) in ticks.iter_mut() {
+                if tick.status == TickStatus::Sealing || tick.status == TickStatus::Validating {
+                    warn!("Recovering stuck Tick in {:?} state: {}", tick.status, id);
+                    tick.status = TickStatus::Failed;
+                    tick.updated_at = crate::id::now_millis();
+                    // Persist recovery to TaskStore
+                    if let Some(store_arc) = store_lock
+                        && let Err(e) = store_arc.lock().unwrap().update(tick.clone())
+                    {
+                        warn!("Failed to persist Tick recovery to TaskStore: {}", e);
                     }
                     recovered += 1;
                 }
@@ -406,6 +434,7 @@ mod tests {
         assert!(stores.ticks.read().unwrap().is_empty());
         assert!(stores.learnings.read().unwrap().is_empty());
         assert!(stores.locks.read().unwrap().is_empty());
+        assert!(stores.coordinator_goals.read().unwrap().is_empty());
         assert!(stores.agent_sessions.read().unwrap().is_empty());
     }
 
@@ -614,5 +643,100 @@ mod tests {
         let ctx = DaemonContext::new(config, tx).unwrap();
         let recovered = ctx.recover_orphaned_records();
         assert_eq!(recovered, 0);
+    }
+
+    #[test]
+    fn test_recover_stuck_tick_sealing() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        let mut tick = Tick::new(1);
+        tick.status = TickStatus::Sealing;
+        let tick_id = tick.id.clone();
+        ctx.stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 1);
+
+        let ticks = ctx.stores.ticks.read().unwrap();
+        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+    }
+
+    #[test]
+    fn test_recover_stuck_tick_validating() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        let mut tick = Tick::new(2);
+        tick.status = TickStatus::Validating;
+        let tick_id = tick.id.clone();
+        ctx.stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 1);
+
+        let ticks = ctx.stores.ticks.read().unwrap();
+        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+    }
+
+    #[test]
+    fn test_recover_open_tick_not_recovered() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        let tick = Tick::new(3);
+        let tick_id = tick.id.clone();
+        ctx.stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 0);
+
+        let ticks = ctx.stores.ticks.read().unwrap();
+        assert_eq!(ticks[&tick_id].status, TickStatus::Open);
+    }
+
+    #[test]
+    fn test_recover_mixed_orphans() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        // Orphaned InProgress WorkItem
+        let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.status = WorkItemStatus::InProgress;
+        ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        // Stuck Sealing Tick
+        let mut tick = Tick::new(1);
+        tick.status = TickStatus::Sealing;
+        ctx.stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        // Orphaned Integrating Bundle
+        let mut bundle = Bundle::new(
+            "wi-1".into(),
+            Some("tick-1".into()),
+            "feature/orphaned".into(),
+            "claims".into(),
+        );
+        bundle.status = BundleStatus::Integrating;
+        ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 3);
+    }
+
+    #[test]
+    fn test_stores_coordinator_goal_insert_and_read() {
+        let stores = Stores::new();
+        let goal = CoordinatorGoal::new("Build auth system".into());
+        let id = goal.id.clone();
+        stores.coordinator_goals.write().unwrap().insert(id.clone(), goal);
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[&id].goal, "Build auth system");
+        assert!(goals[&id].active);
     }
 }
