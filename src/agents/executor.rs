@@ -735,7 +735,11 @@ mod tests {
             .await
             .unwrap();
         if let ActionResult::ActionError(msg) = &result2 {
-            assert!(msg.contains("already locked"), "expected conflict message, got: {}", msg);
+            assert!(
+                msg.contains("already locked"),
+                "expected conflict message, got: {}",
+                msg
+            );
         } else {
             panic!("expected ActionError for lock conflict, got {:?}", result2);
         }
