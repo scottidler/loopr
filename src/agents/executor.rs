@@ -9,6 +9,7 @@ use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::coordinator;
 use crate::agents::implementer::{self, LlmClient};
 use crate::agents::llm_client::AgentLlmClient;
+use crate::agents::researcher;
 use crate::agents::reviewer;
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
@@ -237,7 +238,31 @@ async fn run_agent_loop(
 
             result
         }
-        AgentType::Researcher => Err(eyre!("Researcher agent loop not yet implemented")),
+        AgentType::Researcher => {
+            let config = stores.config.agents.researcher.clone();
+            let llm = create_llm_client(&config, session_id, event_tx)?;
+
+            let mut session = {
+                let sessions = stores.agent_sessions.read().unwrap();
+                sessions
+                    .get(session_id)
+                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
+                    .clone()
+            };
+
+            let result =
+                researcher::run_researcher(llm.as_ref(), &mut session, stores, bridge, &config, event_tx).await;
+
+            // Write back updated session iteration count
+            {
+                let mut sessions = stores.agent_sessions.write().unwrap();
+                if let Some(s) = sessions.get_mut(session_id) {
+                    s.iteration = session.iteration;
+                }
+            }
+
+            result
+        }
         AgentType::Integrator => Err(eyre!("Integrator task loop not yet implemented")),
     }
 }
@@ -517,14 +542,28 @@ pub async fn execute_action(
             Ok(ActionResult::NotYetImplemented(format!("AcceptBundle: {}", bundle_id)))
         }
 
-        // --- Researcher actions (stubs — wired in Phase 4 researcher.rs) ---
-        AgentAction::SearchCode { pattern, .. } => {
-            Ok(ActionResult::NotYetImplemented(format!("SearchCode: {}", pattern)))
+        // --- Researcher actions (wired in Phase 4 researcher.rs) ---
+        AgentAction::SearchCode { pattern, glob, path } => {
+            let repo_root = worktree_path; // For Researcher, worktree_path is the repo root
+            match researcher::execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref()).await {
+                Ok(output) => Ok(ActionResult::FileRead(output)),
+                Err(e) => Ok(ActionResult::ActionError(e.to_string())),
+            }
         }
-        AgentAction::SearchFiles { pattern, .. } => {
-            Ok(ActionResult::NotYetImplemented(format!("SearchFiles: {}", pattern)))
+        AgentAction::SearchFiles { pattern, path } => {
+            let repo_root = worktree_path;
+            match researcher::execute_search_files(repo_root, pattern, path.as_deref()).await {
+                Ok(output) => Ok(ActionResult::FileRead(output)),
+                Err(e) => Ok(ActionResult::ActionError(e.to_string())),
+            }
         }
-        AgentAction::ListDirectory { path } => Ok(ActionResult::NotYetImplemented(format!("ListDirectory: {}", path))),
+        AgentAction::ListDirectory { path } => {
+            let repo_root = worktree_path;
+            match researcher::execute_list_directory(repo_root, path).await {
+                Ok(output) => Ok(ActionResult::FileRead(output)),
+                Err(e) => Ok(ActionResult::ActionError(e.to_string())),
+            }
+        }
     }
 }
 

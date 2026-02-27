@@ -5,6 +5,7 @@ pub mod executor;
 pub mod generation;
 pub mod implementer;
 pub mod llm_client;
+pub mod researcher;
 pub mod reviewer;
 
 use serde::{Deserialize, Serialize};
