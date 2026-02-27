@@ -143,3 +143,5 @@ Iteration 2: VALIDATING at 06:07:21
 Iteration 2: PASS
 Iteration 3: STARTED at 06:07:34
 Iteration 3: Added CoordinatorGoal domain record (singleton, TaskStore-persisted), coordinator.set_goal/clear_goal IPC handlers, pool_size enforcement (per-type + global 20 cap) in handle_agent_start, RpcError::pool_exhausted (-32004), stuck Tick crash recovery (Sealing/Validating → Failed). Wired CoordinatorGoal into Stores, DaemonContext hydration, system.init collections. 910 tests pass, clippy clean, fmt clean. Phase 2 progress: Coordinator loop ✓, CoordinatorGoal + handlers ✓, pool_size enforcement ✓, stuck Tick recovery ✓. Remaining Phase 2: AcquireLock/ReleaseLock execution in executor.
+Iteration 3: VALIDATING at 06:16:05
+Iteration 3: PASS
