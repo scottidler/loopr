@@ -431,6 +431,12 @@ async fn run_coordinator_iteration(
     ));
 
     let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
+    info!(
+        "Coordinator {} raw LLM response ({} chars): {}",
+        session.id,
+        response.len(),
+        &response[..response.len().min(800)]
+    );
     let actions = implementer::parse_actions(&response)?;
 
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session.id, AgentStatus::Running));

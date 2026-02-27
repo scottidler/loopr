@@ -232,6 +232,7 @@ pub enum AgentAction {
         paths: Vec<String>,
     },
     ProposeBundle {
+        #[serde(default)]
         description: String,
         #[serde(default)]
         claims: Vec<String>,

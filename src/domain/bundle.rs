@@ -72,11 +72,16 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
             to: Rejected,
             role: Some(Role::Integrator),
         },
-        // Early rejection (Coordinator can reject from Proposed, Triaged, Reviewed)
+        // Early rejection (Coordinator or Reviewer can reject from Proposed, Triaged, Reviewed)
         TransitionRule {
             from: Proposed,
             to: Rejected,
             role: Some(Role::Coordinator),
+        },
+        TransitionRule {
+            from: Proposed,
+            to: Rejected,
+            role: Some(Role::Reviewer),
         },
         TransitionRule {
             from: Triaged,
@@ -92,6 +97,11 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
             from: Reviewed,
             to: Rejected,
             role: Some(Role::Coordinator),
+        },
+        TransitionRule {
+            from: Reviewed,
+            to: Rejected,
+            role: Some(Role::Reviewer),
         },
         // Superseded from any non-final state
         TransitionRule {

@@ -1,9 +1,11 @@
 use tokio_util::codec::LinesCodec;
 
 /// Create the standard NDJSON codec used for IPC framing.
-/// Each line is one JSON message. Max line length is 64 KiB.
+/// Each line is one JSON message. Max line length is 1 MiB.
+/// Large limit is needed because tick validation logs from cargo
+/// can be substantial (especially clippy/test output).
 pub fn ndjson_codec() -> LinesCodec {
-    LinesCodec::new_with_max_length(64 * 1024)
+    LinesCodec::new_with_max_length(1024 * 1024)
 }
 
 // Test-only codec helpers (thin serde_json wrappers for readability in tests)
