@@ -63,6 +63,13 @@ pub fn validate_path(repo_root: &Path, relative: &str) -> Result<PathBuf> {
         return Err(eyre!("absolute paths not allowed: {}", relative));
     }
 
+    // Reject path traversal components (..)
+    for component in Path::new(relative).components() {
+        if component == std::path::Component::ParentDir {
+            return Err(eyre!("path traversal not allowed: {}", relative));
+        }
+    }
+
     let full = repo_root.join(relative);
 
     // Canonicalize — for files that don't yet exist, we validate the parent
