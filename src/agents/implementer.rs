@@ -301,6 +301,8 @@ fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String
         ActionResult::BundleProposed(d) => format!("proposed bundle: {}", d),
         ActionResult::Transitioned(d) => format!("transitioned: {}", d),
         ActionResult::LearningCreated(c) => format!("learning: {}", c),
+        ActionResult::LockAcquired(id) => format!("lock acquired: {}", id),
+        ActionResult::LockReleased(id) => format!("lock released: {}", id),
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
         ActionResult::ActionError(e) => format!("ERROR: {}", e),

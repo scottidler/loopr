@@ -402,12 +402,63 @@ pub async fn execute_action(
             "ValidateDocument: {}/{}",
             collection, id
         ))),
-        AgentAction::AcquireLock { resource, holder_id } => Ok(ActionResult::NotYetImplemented(format!(
-            "AcquireLock: {} (holder: {})",
-            resource, holder_id
-        ))),
+        AgentAction::AcquireLock { resource, holder_id } => {
+            // Check if there's already an active lock on this resource
+            let check_resp = bridge.request(
+                "lock.list",
+                serde_json::json!({ "resource": resource, "active_only": true }),
+            );
+            if check_resp.is_error() {
+                return Err(eyre!("lock.list failed: {:?}", check_resp.error));
+            }
+            if let Some(result) = &check_resp.result
+                && let Some(locks) = result.as_array()
+                && !locks.is_empty()
+            {
+                // Resource already locked — return as ActionError so the LLM can self-correct
+                let existing_holder = locks[0]
+                    .get("holder_id")
+                    .and_then(|v: &serde_json::Value| v.as_str())
+                    .unwrap_or("unknown");
+                let existing_id = locks[0]
+                    .get("id")
+                    .and_then(|v: &serde_json::Value| v.as_str())
+                    .unwrap_or("unknown");
+                return Ok(ActionResult::ActionError(format!(
+                    "resource '{}' already locked by {} (lock_id: {})",
+                    resource, existing_holder, existing_id
+                )));
+            }
+
+            // Create the lock — granted_by is the holder_id (self-granted by coordinator)
+            let resp = bridge.request(
+                "lock.create",
+                serde_json::json!({
+                    "resource": resource,
+                    "holder_id": holder_id,
+                    "granted_by": holder_id,
+                }),
+            );
+            if resp.is_error() {
+                return Err(eyre!("lock.create failed: {:?}", resp.error));
+            }
+            let lock_id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!("Lock acquired: {} on '{}' for {}", lock_id, resource, holder_id);
+            Ok(ActionResult::LockAcquired(lock_id))
+        }
         AgentAction::ReleaseLock { lock_id } => {
-            Ok(ActionResult::NotYetImplemented(format!("ReleaseLock: {}", lock_id)))
+            let resp = bridge.request("lock.release", serde_json::json!({ "id": lock_id }));
+            if resp.is_error() {
+                return Err(eyre!("lock.release failed: {:?}", resp.error));
+            }
+            info!("Lock released: {}", lock_id);
+            Ok(ActionResult::LockReleased(lock_id.clone()))
         }
         AgentAction::TriageBundle { bundle_id } => {
             Ok(ActionResult::NotYetImplemented(format!("TriageBundle: {}", bundle_id)))
@@ -437,6 +488,10 @@ pub enum ActionResult {
     BundleProposed(String),
     Transitioned(String),
     LearningCreated(String),
+    /// Lock acquired — contains lock_id.
+    LockAcquired(String),
+    /// Lock released — contains lock_id.
+    LockReleased(String),
     Done(String),
     NeedHelp(String),
     /// Non-fatal error — fed back to the LLM so it can self-correct.
@@ -622,6 +677,151 @@ mod tests {
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_acquire_lock() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-acqlock-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+
+        let action = AgentAction::AcquireLock {
+            resource: "src/main.rs".to_string(),
+            holder_id: "wi-123".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::LockAcquired(lock_id) = &result {
+            assert!(!lock_id.is_empty());
+            assert_ne!(lock_id, "unknown");
+        } else {
+            panic!("expected LockAcquired result, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_acquire_lock_conflict() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-lockconf-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+
+        // Acquire first lock
+        let action = AgentAction::AcquireLock {
+            resource: "src/main.rs".to_string(),
+            holder_id: "wi-100".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::LockAcquired(_)));
+
+        // Try to acquire again on same resource — should get ActionError
+        let action2 = AgentAction::AcquireLock {
+            resource: "src/main.rs".to_string(),
+            holder_id: "wi-200".to_string(),
+        };
+        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::ActionError(msg) = &result2 {
+            assert!(msg.contains("already locked"), "expected conflict message, got: {}", msg);
+        } else {
+            panic!("expected ActionError for lock conflict, got {:?}", result2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_release_lock() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-rellock-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+
+        // Acquire a lock first
+        let acquire_action = AgentAction::AcquireLock {
+            resource: "src/lib.rs".to_string(),
+            holder_id: "wi-456".to_string(),
+        };
+        let acquire_result = execute_action(&acquire_action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        let lock_id = if let ActionResult::LockAcquired(id) = acquire_result {
+            id
+        } else {
+            panic!("expected LockAcquired");
+        };
+
+        // Release it
+        let release_action = AgentAction::ReleaseLock {
+            lock_id: lock_id.clone(),
+        };
+        let release_result = execute_action(&release_action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::LockReleased(id) = &release_result {
+            assert_eq!(id, &lock_id);
+        } else {
+            panic!("expected LockReleased result, got {:?}", release_result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_acquire_after_release() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-reacq-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+
+        // Acquire
+        let action1 = AgentAction::AcquireLock {
+            resource: "src/config.rs".to_string(),
+            holder_id: "wi-1".to_string(),
+        };
+        let r1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        let lock_id = if let ActionResult::LockAcquired(id) = r1 {
+            id
+        } else {
+            panic!("expected LockAcquired");
+        };
+
+        // Release
+        let release = AgentAction::ReleaseLock {
+            lock_id: lock_id.clone(),
+        };
+        execute_action(&release, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+
+        // Re-acquire same resource by different holder — should succeed
+        let action2 = AgentAction::AcquireLock {
+            resource: "src/config.rs".to_string(),
+            holder_id: "wi-2".to_string(),
+        };
+        let r2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(r2, ActionResult::LockAcquired(_)));
     }
 
     #[tokio::test]
