@@ -82,21 +82,57 @@ mod tests {
         wm: &WorktreeManager,
         ic: &IntegratorConfig,
     ) -> (String, String, String) {
-        let plan = dispatch_ok(stores, tx, wm, ic, "plan.create",
-            json!({"title": "Test Plan", "description": "desc", "acceptance_criteria": "pass"}));
+        let plan = dispatch_ok(
+            stores,
+            tx,
+            wm,
+            ic,
+            "plan.create",
+            json!({"title": "Test Plan", "description": "desc", "acceptance_criteria": "pass"}),
+        );
         let plan_id = plan["id"].as_str().unwrap().to_string();
-        dispatch_ok(stores, tx, wm, ic, "plan.transition",
-            json!({"id": plan_id, "target_status": "active"}));
-        let spec = dispatch_ok(stores, tx, wm, ic, "spec.create",
-            json!({"plan_id": plan_id, "title": "Test Spec", "description": "desc", "acceptance_criteria": "pass"}));
+        dispatch_ok(
+            stores,
+            tx,
+            wm,
+            ic,
+            "plan.transition",
+            json!({"id": plan_id, "target_status": "active"}),
+        );
+        let spec = dispatch_ok(
+            stores,
+            tx,
+            wm,
+            ic,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "Test Spec", "description": "desc", "acceptance_criteria": "pass"}),
+        );
         let spec_id = spec["id"].as_str().unwrap().to_string();
-        dispatch_ok(stores, tx, wm, ic, "spec.transition",
-            json!({"id": spec_id, "target_status": "active"}));
-        let phase = dispatch_ok(stores, tx, wm, ic, "phase.create",
-            json!({"spec_id": spec_id, "title": "Test Phase", "description": "desc", "acceptance_criteria": "pass"}));
+        dispatch_ok(
+            stores,
+            tx,
+            wm,
+            ic,
+            "spec.transition",
+            json!({"id": spec_id, "target_status": "active"}),
+        );
+        let phase = dispatch_ok(
+            stores,
+            tx,
+            wm,
+            ic,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Test Phase", "description": "desc", "acceptance_criteria": "pass"}),
+        );
         let phase_id = phase["id"].as_str().unwrap().to_string();
-        dispatch_ok(stores, tx, wm, ic, "phase.transition",
-            json!({"id": phase_id, "target_status": "active"}));
+        dispatch_ok(
+            stores,
+            tx,
+            wm,
+            ic,
+            "phase.transition",
+            json!({"id": phase_id, "target_status": "active"}),
+        );
         (plan_id, spec_id, phase_id)
     }
 
@@ -640,7 +676,10 @@ mod tests {
         assert!(summary.contains("Test Plan"), "summary should include plan");
         assert!(summary.contains("WI-1"), "summary should include work item");
         assert!(summary.contains("implementer"), "summary should include agent session");
-        assert!(summary.contains("### Active Agents"), "summary should have agents section");
+        assert!(
+            summary.contains("### Active Agents"),
+            "summary should have agents section"
+        );
     }
 
     // ========================================================================
