@@ -8,12 +8,11 @@ use log::{info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::context::select_learnings;
+use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::{AgentAction, AgentSession};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
-use crate::domain::learning::LearningScope;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
@@ -24,81 +23,6 @@ use crate::tools::ToolRunner;
 pub trait LlmClient: Send + Sync {
     /// Call the LLM with a system prompt and user message, return the full response text.
     async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String>;
-}
-
-/// Context loaded for an Implementer iteration.
-#[derive(Debug, Clone)]
-pub struct ImplementerContext {
-    pub plan_title: String,
-    pub plan_description: String,
-    pub spec_title: String,
-    pub spec_description: String,
-    pub phase_title: String,
-    pub phase_description: String,
-    pub work_item_title: String,
-    pub work_item_description: String,
-    pub learnings: Vec<String>,
-    pub available_tools: Vec<String>,
-    pub previous_summary: Option<String>,
-    pub staleness_note: Option<String>,
-}
-
-/// Load the hierarchy context for a WorkItem from Stores.
-pub fn load_context(
-    stores: &Stores,
-    work_item_id: &str,
-    tool_runner: &ToolRunner,
-    previous_summary: Option<String>,
-) -> Result<ImplementerContext> {
-    let work_items = stores.work_items.read().unwrap();
-    let wi = work_items
-        .get(work_item_id)
-        .ok_or_else(|| eyre!("work item not found: {}", work_item_id))?;
-
-    let phases = stores.phases.read().unwrap();
-    let phase = phases
-        .get(&wi.phase_id)
-        .ok_or_else(|| eyre!("phase not found: {}", wi.phase_id))?;
-
-    let specs = stores.specs.read().unwrap();
-    let spec = specs
-        .get(&phase.spec_id)
-        .ok_or_else(|| eyre!("spec not found: {}", phase.spec_id))?;
-
-    let plans = stores.plans.read().unwrap();
-    let plan = plans
-        .get(&spec.plan_id)
-        .ok_or_else(|| eyre!("plan not found: {}", spec.plan_id))?;
-
-    // Gather learnings scoped to this work item and its ancestors
-    let learnings_map = stores.learnings.read().unwrap();
-    let scope_ids = [
-        (work_item_id, LearningScope::WorkItem),
-        (phase.id.as_str(), LearningScope::Phase),
-        (spec.id.as_str(), LearningScope::Spec),
-        (plan.id.as_str(), LearningScope::Plan),
-    ];
-    let learnings: Vec<String> = select_learnings(&learnings_map, &scope_ids, Role::Implementer, 0.3, 20)
-        .into_iter()
-        .map(|l| l.content.clone())
-        .collect();
-
-    let available_tools = tool_runner.available_tools().into_iter().map(String::from).collect();
-
-    Ok(ImplementerContext {
-        plan_title: plan.title.clone(),
-        plan_description: plan.description.clone(),
-        spec_title: spec.title.clone(),
-        spec_description: spec.description.clone(),
-        phase_title: phase.title.clone(),
-        phase_description: phase.description.clone(),
-        work_item_title: wi.title.clone(),
-        work_item_description: wi.description.clone(),
-        learnings,
-        available_tools,
-        previous_summary,
-        staleness_note: None,
-    })
 }
 
 const SYSTEM_PROMPT: &str = r#"You are an Implementer agent in the Loopr development orchestrator. Your role is to implement a specific WorkItem by writing code in a Git worktree.
