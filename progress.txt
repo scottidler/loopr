@@ -224,3 +224,6 @@ Task ensure failed with exit code Some(1)
 Logs:
   stdout: /home/saidler/.otto/loopr-fab8a972/1772205651/tasks/ensure/stdout.log
   stderr: /home/saidler/.otto/loopr-fab8a972/1772205651/tasks/ensure/stderr.log
+Iteration 11: STARTED at 07:20:56
+Iteration 11: STARTED at 07:20:56
+Iteration 11: Fixed 13 compile errors in src/integration_tests.rs left over from iter 10 timeout. Fixes: TickCadence::AfterEachBundle→Continuous, BundleSizePolicy::SingleWorkItem→field asserts (struct not enum), config.agents.integrator→config.integrator, WorkItemStatus::Complete→Done, WorkItemStatus::Open→Draft, StalePolicy::RejectStale→ReplanAtSafePoint, ConflictPolicy::FailOnConflict→LockAdvisory, stale/conflict/cadence→stale_policy/conflict_policy/tick_cadence, Spec::new 4→3 args, Phase::new order "c"→1u32, Lock .active→.status==LockStatus::Released, lock["active"]→lock["status"]=="active", removed unused imports. Clean compile, no warnings.
