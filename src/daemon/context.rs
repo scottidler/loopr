@@ -11,10 +11,12 @@ use crate::agents::AgentSession;
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_goal::CoordinatorGoal;
+use crate::domain::decision::Decision;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
+use crate::domain::proposal::Proposal;
 use crate::domain::spec::Spec;
 use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
@@ -36,6 +38,8 @@ pub struct Stores {
     pub learnings: StdRwLock<HashMap<String, Learning>>,
     pub locks: StdRwLock<HashMap<String, Lock>>,
     pub coordinator_goals: StdRwLock<HashMap<String, CoordinatorGoal>>,
+    pub proposals: StdRwLock<HashMap<String, Proposal>>,
+    pub decisions: StdRwLock<HashMap<String, Decision>>,
     pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
     pub store: Option<Arc<StdMutex<Store>>>,
@@ -62,6 +66,8 @@ impl Stores {
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
             coordinator_goals: StdRwLock::new(HashMap::new()),
+            proposals: StdRwLock::new(HashMap::new()),
+            decisions: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
             store: None,
             validator: None,
@@ -112,6 +118,8 @@ impl DaemonContext {
         store.rebuild_indexes::<Learning>()?;
         store.rebuild_indexes::<Lock>()?;
         store.rebuild_indexes::<CoordinatorGoal>()?;
+        store.rebuild_indexes::<Proposal>()?;
+        store.rebuild_indexes::<Decision>()?;
         store.rebuild_indexes::<ValidationReport>()?;
         store.rebuild_indexes::<AgentSession>()?;
 
@@ -149,6 +157,12 @@ impl DaemonContext {
             for goal in store.list::<CoordinatorGoal>(&[])? {
                 stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
             }
+            for proposal in store.list::<Proposal>(&[])? {
+                stores.proposals.write().unwrap().insert(proposal.id.clone(), proposal);
+            }
+            for decision in store.list::<Decision>(&[])? {
+                stores.decisions.write().unwrap().insert(decision.id.clone(), decision);
+            }
             for session in store.list::<AgentSession>(&[])? {
                 stores
                     .agent_sessions
@@ -165,6 +179,8 @@ impl DaemonContext {
                 + stores.learnings.read().unwrap().len()
                 + stores.locks.read().unwrap().len()
                 + stores.coordinator_goals.read().unwrap().len()
+                + stores.proposals.read().unwrap().len()
+                + stores.decisions.read().unwrap().len()
                 + stores.agent_sessions.read().unwrap().len();
             if hydrated > 0 {
                 info!("Hydrated {} records from TaskStore into memory", hydrated);

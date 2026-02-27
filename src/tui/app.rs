@@ -39,17 +39,19 @@ pub enum View {
     Bundles,
     Ticks,
     Learnings,
+    Locks,
     Agents,
 }
 
 impl View {
     /// All views in tab order.
-    pub const ALL: [View; 6] = [
+    pub const ALL: [View; 7] = [
         View::Dashboard,
         View::WorkItems,
         View::Bundles,
         View::Ticks,
         View::Learnings,
+        View::Locks,
         View::Agents,
     ];
 
@@ -74,6 +76,7 @@ impl fmt::Display for View {
             View::Bundles => write!(f, "Bundles"),
             View::Ticks => write!(f, "Ticks"),
             View::Learnings => write!(f, "Learnings"),
+            View::Locks => write!(f, "Locks"),
             View::Agents => write!(f, "Agents"),
         }
     }
@@ -199,6 +202,7 @@ impl App {
             View::Bundles => self.state.bundles.len(),
             View::Ticks => self.state.ticks.len(),
             View::Learnings => self.state.learnings.len(),
+            View::Locks => self.state.locks.len(),
             View::Agents => self.state.agent_sessions.len(),
         }
     }
@@ -214,14 +218,16 @@ mod tests {
         assert_eq!(View::WorkItems.next(), View::Bundles);
         assert_eq!(View::Bundles.next(), View::Ticks);
         assert_eq!(View::Ticks.next(), View::Learnings);
-        assert_eq!(View::Learnings.next(), View::Agents);
+        assert_eq!(View::Learnings.next(), View::Locks);
+        assert_eq!(View::Locks.next(), View::Agents);
         assert_eq!(View::Agents.next(), View::Dashboard);
     }
 
     #[test]
     fn test_view_prev_cycles() {
         assert_eq!(View::Dashboard.prev(), View::Agents);
-        assert_eq!(View::Agents.prev(), View::Learnings);
+        assert_eq!(View::Agents.prev(), View::Locks);
+        assert_eq!(View::Locks.prev(), View::Learnings);
         assert_eq!(View::Learnings.prev(), View::Ticks);
         assert_eq!(View::Ticks.prev(), View::Bundles);
         assert_eq!(View::Bundles.prev(), View::WorkItems);
@@ -235,15 +241,17 @@ mod tests {
         assert_eq!(View::Bundles.to_string(), "Bundles");
         assert_eq!(View::Ticks.to_string(), "Ticks");
         assert_eq!(View::Learnings.to_string(), "Learnings");
+        assert_eq!(View::Locks.to_string(), "Locks");
         assert_eq!(View::Agents.to_string(), "Agents");
     }
 
     #[test]
     fn test_view_all_order() {
-        assert_eq!(View::ALL.len(), 6);
+        assert_eq!(View::ALL.len(), 7);
         assert_eq!(View::ALL[0], View::Dashboard);
         assert_eq!(View::ALL[4], View::Learnings);
-        assert_eq!(View::ALL[5], View::Agents);
+        assert_eq!(View::ALL[5], View::Locks);
+        assert_eq!(View::ALL[6], View::Agents);
     }
 
     #[test]

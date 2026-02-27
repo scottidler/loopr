@@ -43,7 +43,7 @@ impl AgentType {
     pub fn is_thinking_plane(&self) -> bool {
         matches!(
             self,
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Reviewer
         )
     }
 }
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn test_agent_type_is_thinking_plane() {
         assert!(!AgentType::Implementer.is_thinking_plane());
-        assert!(!AgentType::Reviewer.is_thinking_plane());
+        assert!(AgentType::Reviewer.is_thinking_plane());
         assert!(AgentType::Coordinator.is_thinking_plane());
         assert!(AgentType::Researcher.is_thinking_plane());
         assert!(AgentType::Integrator.is_thinking_plane());

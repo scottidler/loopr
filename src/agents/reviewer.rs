@@ -174,7 +174,7 @@ pub async fn run_reviewer(
 
     // Execute verdict action via FSM transition
     match review.verdict {
-        ReviewVerdict::Approve | ReviewVerdict::RequestChanges => {
+        ReviewVerdict::Approve => {
             let resp = bridge.request(
                 "bundle.transition",
                 serde_json::json!({
@@ -190,9 +190,38 @@ pub async fn run_reviewer(
                 );
                 return Err(eyre!("failed to transition bundle: {:?}", resp.error));
             }
+            info!("Reviewer {} approved bundle {}", session.id, bundle_id);
+        }
+        ReviewVerdict::RequestChanges => {
+            // #21: Reject the bundle — Coordinator will re-assign for rework
+            let resp = bridge.request(
+                "bundle.transition",
+                serde_json::json!({
+                    "id": bundle_id,
+                    "target_status": "Rejected",
+                    "role": "reviewer",
+                }),
+            );
+            if resp.is_error() {
+                warn!(
+                    "Reviewer {} failed to reject bundle (request_changes): {:?}",
+                    session.id, resp.error
+                );
+                return Err(eyre!("failed to reject bundle: {:?}", resp.error));
+            }
+            // Create a Learning with the review feedback so the next
+            // Implementer iteration has context about what to fix
+            let _ = bridge.request(
+                "learning.create",
+                serde_json::json!({
+                    "content": format!("Review requested changes: {}", review.summary),
+                    "scope": "workitem",
+                    "source_id": work_item_title,
+                }),
+            );
             info!(
-                "Reviewer {} verdict={} on bundle {}",
-                session.id, review.verdict, bundle_id
+                "Reviewer {} requested changes on bundle {} (→Rejected + Learning)",
+                session.id, bundle_id
             );
         }
         ReviewVerdict::Reject => {
@@ -536,10 +565,10 @@ mod tests {
         let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
         assert!(result.is_ok());
 
-        // Bundle should have been transitioned to Reviewed (request_changes still transitions)
+        // #21: request_changes now transitions to Rejected (not Reviewed)
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
-        assert_eq!(bundle.status, BundleStatus::Reviewed);
+        assert_eq!(bundle.status, BundleStatus::Rejected);
     }
 
     #[tokio::test]

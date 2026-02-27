@@ -1,9 +1,13 @@
 pub mod bundle;
 pub mod coordinator_goal;
+#[allow(dead_code)]
+pub mod decision;
 pub mod learning;
 pub mod lock;
 pub mod phase;
 pub mod plan;
+#[allow(dead_code)]
+pub mod proposal;
 pub mod role;
 pub mod spec;
 pub mod tick;

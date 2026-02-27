@@ -434,6 +434,7 @@ pub async fn execute_action(
                     "work_item_id": wi_id,
                     "branch_name": branch_name,
                     "claims": claims,
+                    "description": description,
                 }),
             );
             if resp.is_error() {

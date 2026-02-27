@@ -1217,7 +1217,14 @@ fn handle_bundle_create(
         .unwrap_or("")
         .to_string();
 
-    let bundle = Bundle::new(work_item_id, base_tick_id, branch_name, claims);
+    let description = req
+        .params
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let mut bundle = Bundle::new(work_item_id, base_tick_id, branch_name, claims);
+    bundle.description = description;
     let bundle_json = match serde_json::to_value(&bundle) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),

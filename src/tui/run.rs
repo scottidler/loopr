@@ -283,6 +283,7 @@ fn draw_content(app: &App, frame: &mut Frame, area: Rect) {
         View::Bundles => views::bundles::render(app, frame, area),
         View::Ticks => views::ticks::render(app, frame, area),
         View::Learnings => views::learnings::render(app, frame, area),
+        View::Locks => views::locks::render(app, frame, area),
         View::Agents => views::agents::render(app, frame, area),
     }
 }
