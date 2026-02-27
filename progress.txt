@@ -180,7 +180,7 @@ Iteration 10: FAIL — validation errors:
 [ensure]     |
 [ensure]  35 | pub enum TickCadence {
 [ensure]     | -------------------- variant or associated item `AfterEachBundle` not found for this enum
-[ensure] 
+[ensure]
 [ensure] error[E0599]: no associated item named `SingleWorkItem` found for struct `config::BundleSizePolicy` in the current scope
 [ensure]    --> src/integration_tests.rs:963:64
 [ensure]     |
@@ -191,7 +191,7 @@ Iteration 10: FAIL — validation errors:
 [ensure]     |
 [ensure]  46 | pub struct BundleSizePolicy {
 [ensure]     | --------------------------- associated item `SingleWorkItem` not found for this struct
-[ensure] 
+[ensure]
 [ensure] error[E0609]: no field `integrator` on type `config::AgentConfig`
 [ensure]    --> src/integration_tests.rs:983:28
 [ensure]     |
@@ -199,7 +199,7 @@ Iteration 10: FAIL — validation errors:
 [ensure]     |                            ^^^^^^^^^^ unknown field
 [ensure]     |
 [ensure]     = note: available fields are: `enabled`, `auto_start_implementer`, `auto_start_reviewer`, `auto_start_coordinator`, `implementer` ... and 4 others
-[ensure] 
+[ensure]
 [ensure] error[E0599]: no variant or associated item named `Complete` found for enum `work_item::WorkItemStatus` in the current scope
 [ensure]     --> src/integration_tests.rs:1117:82
 [ensure]      |
@@ -210,12 +210,12 @@ Iteration 10: FAIL — validation errors:
 [ensure]      |
 [ensure]   11 | pub enum WorkItemStatus {
 [ensure]      | ----------------------- variant or associated item `Complete` not found for this enum
-[ensure] 
+[ensure]
 [ensure] Some errors have detailed explanations: E0061, E0277, E0599, E0609.
 [ensure] For more information about an error, try `rustc --explain E0061`.
 [ensure] warning: `loopr` (bin "loopr" test) generated 1 warning
 [ensure] error: could not compile `loopr` (bin "loopr" test) due to 13 previous errors; 1 warning emitted
-[ensure] 
+[ensure]
 [ensure] Build or test discovery failed!
 [check]     Checking loopr v0.1.0 (/home/saidler/repos/scottidler/loopr)
 [ensure] failed
@@ -227,3 +227,55 @@ Logs:
 Iteration 11: STARTED at 07:20:56
 Iteration 11: STARTED at 07:20:56
 Iteration 11: Fixed 13 compile errors in src/integration_tests.rs left over from iter 10 timeout. Fixes: TickCadence::AfterEachBundle→Continuous, BundleSizePolicy::SingleWorkItem→field asserts (struct not enum), config.agents.integrator→config.integrator, WorkItemStatus::Complete→Done, WorkItemStatus::Open→Draft, StalePolicy::RejectStale→ReplanAtSafePoint, ConflictPolicy::FailOnConflict→LockAdvisory, stale/conflict/cadence→stale_policy/conflict_policy/tick_cadence, Spec::new 4→3 args, Phase::new order "c"→1u32, Lock .active→.status==LockStatus::Released, lock["active"]→lock["status"]=="active", removed unused imports. Clean compile, no warnings.
+Iteration 11: VALIDATING at 07:24:42
+Iteration 11: FAIL — validation errors:
+[test] traversal path should be rejected
+[test] 
+[test] ---- integration_tests::tests::test_work_item_fsm_enforcement_via_dispatch stdout ----
+[test] 
+[test] thread 'integration_tests::tests::test_work_item_fsm_enforcement_via_dispatch' (691717) panicked at src/integration_tests.rs:59:9:
+[test] work_item.create failed: Some(RpcError { code: -32001, message: "not found: phase/ph-1" })
+[test] 
+[test] ---- integration_tests::tests::test_tick_crash_recovery_state stdout ----
+[test] 
+[test] thread 'integration_tests::tests::test_tick_crash_recovery_state' (691715) panicked at src/integration_tests.rs:59:9:
+[test] tick.transition failed: Some(RpcError { code: -32602, message: "invalid params: target_status is required" })
+[test] 
+[test] ---- integration_tests::tests::test_tick_lifecycle_via_dispatch stdout ----
+[test] 
+[test] thread 'integration_tests::tests::test_tick_lifecycle_via_dispatch' (691716) panicked at src/integration_tests.rs:821:9:
+[test] assertion `left == right` failed
+[test]   left: String("Open")
+[test]  right: "open"
+[test] 
+[test] 
+[test] failures:
+[test]     integration_tests::tests::test_agent_pause_resume_lifecycle
+[test]     integration_tests::tests::test_bundle_lifecycle_via_dispatch
+[test]     integration_tests::tests::test_coordinator_state_summary_multi_record
+[test]     integration_tests::tests::test_full_hierarchy_creation_via_dispatch
+[test]     integration_tests::tests::test_full_pipeline_plan_to_bundle_acceptance
+[test]     integration_tests::tests::test_lock_lifecycle_via_dispatch
+[test]     integration_tests::tests::test_multi_agent_session_coexistence
+[test]     integration_tests::tests::test_pool_allows_after_terminal_session
+[test]     integration_tests::tests::test_pool_exhaustion_multi_type
+[test]     integration_tests::tests::test_researcher_path_sandboxing
+[test]     integration_tests::tests::test_tick_crash_recovery_state
+[test]     integration_tests::tests::test_tick_lifecycle_via_dispatch
+[test]     integration_tests::tests::test_work_item_fsm_enforcement_via_dispatch
+[test] 
+[test] test result: FAILED. 1045 passed; 13 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.41s
+[test] 
+[test] error: test failed, to rerun pass `--bin loopr`
+[test] failed
+Task test failed with exit code Some(101)
+
+Error output (last 4 lines):
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.51s
+     Running unittests src/main.rs (target/debug/deps/loopr-f0e1c2bb3429d586)
+error: test failed, to rerun pass `--bin loopr`
+
+Logs:
+  stdout: /home/saidler/.otto/loopr-fab8a972/1772205882/tasks/test/stdout.log
+  stderr: /home/saidler/.otto/loopr-fab8a972/1772205882/tasks/test/stderr.log

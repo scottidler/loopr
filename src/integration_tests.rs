@@ -89,7 +89,10 @@ mod tests {
 
         // Create Plan
         let plan = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "plan.create",
             json!({"title": "Auth System", "description": "Add authentication", "acceptance_criteria": "All tests pass"}),
         );
@@ -98,7 +101,10 @@ mod tests {
 
         // Transition Plan: Draft → Active (no validator, so no gate)
         let plan_active = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "plan.transition",
             json!({"id": plan_id, "target": "active"}),
         );
@@ -106,7 +112,10 @@ mod tests {
 
         // Create Spec under Plan
         let spec = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "spec.create",
             json!({"plan_id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance_criteria": "JWT tokens work"}),
         );
@@ -115,14 +124,20 @@ mod tests {
 
         // Transition Spec: Draft → Active
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "spec.transition",
             json!({"id": spec_id, "target": "active"}),
         );
 
         // Create Phase under Spec
         let phase = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "phase.create",
             json!({"spec_id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance_criteria": "Tokens are signed"}),
         );
@@ -130,14 +145,20 @@ mod tests {
 
         // Transition Phase: Draft → Active
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "phase.transition",
             json!({"id": phase_id, "target": "active"}),
         );
 
         // Create WorkItem under Phase
         let wi = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.create",
             json!({"phase_id": phase_id, "title": "Implement sign()", "description": "JWT signing function"}),
         );
@@ -146,14 +167,20 @@ mod tests {
 
         // Transition WorkItem: Open → InProgress
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.transition",
             json!({"id": wi_id, "target": "in_progress", "role": "implementer"}),
         );
 
         // Create Bundle for WorkItem
         let bundle = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "bundle.create",
             json!({"work_item_id": wi_id, "branch_name": "feat/jwt-sign", "claims": "Added sign() function"}),
         );
@@ -192,7 +219,10 @@ mod tests {
 
         // Create WorkItem
         let wi = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.create",
             json!({"phase_id": "ph-1", "title": "Task", "description": "desc"}),
         );
@@ -200,7 +230,10 @@ mod tests {
 
         // Create Bundle
         let bundle = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "bundle.create",
             json!({"work_item_id": wi_id, "branch_name": "feat/task", "claims": "Did it"}),
         );
@@ -208,21 +241,30 @@ mod tests {
 
         // Proposed → InReview (Reviewer picks it up)
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "bundle.transition",
             json!({"id": bundle_id, "target": "in_review", "role": "reviewer"}),
         );
 
         // InReview → Approved (Reviewer approves)
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "bundle.transition",
             json!({"id": bundle_id, "target": "approved", "role": "reviewer"}),
         );
 
         // Approved → Accepted (Coordinator accepts)
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "bundle.transition",
             json!({"id": bundle_id, "target": "accepted", "role": "coordinator"}),
         );
@@ -248,7 +290,10 @@ mod tests {
 
         // Create a learning
         let learning = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "learning.create",
             json!({
                 "source_id": "wi-123",
@@ -262,11 +307,7 @@ mod tests {
 
         // Reinforce 3 times (min_reinforcements default = 3)
         for i in 1..=3 {
-            let result = dispatch_ok(
-                &stores, &tx, &wm, &ic,
-                "learning.reinforce",
-                json!({"id": learning_id}),
-            );
+            let result = dispatch_ok(&stores, &tx, &wm, &ic, "learning.reinforce", json!({"id": learning_id}));
             assert_eq!(result["reinforcements"], i);
         }
 
@@ -292,7 +333,10 @@ mod tests {
 
         // Create learning
         let learning = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "learning.create",
             json!({"source_id": "wi-1", "scope": "global", "content": "Use tabs not spaces"}),
         );
@@ -337,7 +381,10 @@ mod tests {
 
         // Second Coordinator should be rejected
         let code = dispatch_err(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "coordinator"}),
         );
@@ -345,7 +392,10 @@ mod tests {
 
         // But Implementer should still work (different pool, pool_size = 2)
         let resp = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "implementer"}),
         );
@@ -353,7 +403,10 @@ mod tests {
 
         // Fill Implementer pool (1 more to reach pool_size = 2)
         let resp2 = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "implementer"}),
         );
@@ -361,7 +414,10 @@ mod tests {
 
         // Third Implementer should be rejected
         let code2 = dispatch_err(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "implementer"}),
         );
@@ -391,7 +447,10 @@ mod tests {
 
         // Should be allowed — terminal sessions don't count
         let resp = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "coordinator"}),
         );
@@ -411,7 +470,10 @@ mod tests {
 
         // Set first goal
         let g1 = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "coordinator.set_goal",
             json!({"goal": "Build auth system"}),
         );
@@ -420,7 +482,10 @@ mod tests {
 
         // Set second goal — first should be deactivated
         let g2 = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "coordinator.set_goal",
             json!({"goal": "Add dark mode"}),
         );
@@ -437,11 +502,7 @@ mod tests {
         drop(goals);
 
         // Clear all goals
-        let cleared = dispatch_ok(
-            &stores, &tx, &wm, &ic,
-            "coordinator.clear_goal",
-            json!({}),
-        );
+        let cleared = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.clear_goal", json!({}));
         assert_eq!(cleared["cleared"], 1);
 
         // All goals should be inactive
@@ -462,16 +523,15 @@ mod tests {
         let ic = test_integrator_config();
 
         // Create a Tick via IPC
-        let tick = dispatch_ok(
-            &stores, &tx, &wm, &ic,
-            "tick.create",
-            json!({"number": 1}),
-        );
+        let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1}));
         let tick_id = tick["id"].as_str().unwrap().to_string();
 
         // Transition to Sealing (simulating normal path before crash)
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "tick.transition",
             json!({"id": tick_id, "target": "sealing", "role": "integrator"}),
         );
@@ -483,7 +543,10 @@ mod tests {
 
         // Transition to Failed (as crash recovery would do)
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "tick.transition",
             json!({"id": tick_id, "target": "failed", "role": "integrator"}),
         );
@@ -506,7 +569,10 @@ mod tests {
 
         // Create a lock
         let lock = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "lock.create",
             json!({
                 "resource": "src/main.rs",
@@ -523,11 +589,7 @@ mod tests {
         assert_eq!(locks.as_array().unwrap().len(), 1);
 
         // Release the lock
-        dispatch_ok(
-            &stores, &tx, &wm, &ic,
-            "lock.release",
-            json!({"id": lock_id}),
-        );
+        dispatch_ok(&stores, &tx, &wm, &ic, "lock.release", json!({"id": lock_id}));
 
         // Lock should be released
         let lock_state = stores.locks.read().unwrap();
@@ -547,17 +609,26 @@ mod tests {
 
         // Populate stores via IPC
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "plan.create",
             json!({"title": "Plan A", "description": "desc", "acceptance_criteria": "pass"}),
         );
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.create",
             json!({"phase_id": "ph-1", "title": "WI-1", "description": "desc"}),
         );
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "learning.create",
             json!({"source_id": "wi-1", "scope": "global", "content": "Test insight"}),
         );
@@ -574,14 +645,8 @@ mod tests {
         let summary = crate::agents::coordinator::build_state_summary(&stores);
         assert!(summary.contains("Plan A"), "summary should include plan");
         assert!(summary.contains("WI-1"), "summary should include work item");
-        assert!(
-            summary.contains("Test insight"),
-            "summary should include learning"
-        );
-        assert!(
-            summary.contains("implementer"),
-            "summary should include agent session"
-        );
+        assert!(summary.contains("Test insight"), "summary should include learning");
+        assert!(summary.contains("implementer"), "summary should include agent session");
     }
 
     // ========================================================================
@@ -612,13 +677,8 @@ mod tests {
 
         // Select learnings for Implementer
         let scope_ids = [("wi-1", LearningScope::WorkItem)];
-        let impl_learnings = crate::agents::context::select_learnings(
-            &learnings,
-            &scope_ids,
-            Role::Implementer,
-            0.3,
-            100,
-        );
+        let impl_learnings =
+            crate::agents::context::select_learnings(&learnings, &scope_ids, Role::Implementer, 0.3, 100);
 
         // Should include implementer-specific and global, but NOT reviewer-specific
         assert!(
@@ -635,13 +695,7 @@ mod tests {
         );
 
         // Select learnings for Reviewer
-        let rev_learnings = crate::agents::context::select_learnings(
-            &learnings,
-            &scope_ids,
-            Role::Reviewer,
-            0.3,
-            100,
-        );
+        let rev_learnings = crate::agents::context::select_learnings(&learnings, &scope_ids, Role::Reviewer, 0.3, 100);
 
         assert!(
             rev_learnings.iter().any(|l| l.content == "Review insight"),
@@ -732,7 +786,10 @@ mod tests {
 
         // Create WorkItem (starts as Draft)
         let wi = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.create",
             json!({"phase_id": "ph-1", "title": "Task", "description": "desc"}),
         );
@@ -740,7 +797,10 @@ mod tests {
 
         // Invalid: Draft → Done (must go through InProgress first)
         let code = dispatch_err(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.transition",
             json!({"id": wi_id, "target": "done", "role": "coordinator"}),
         );
@@ -748,10 +808,7 @@ mod tests {
 
         // Verify state unchanged
         let wis = stores.work_items.read().unwrap();
-        assert_eq!(
-            wis[&wi_id].status,
-            crate::domain::work_item::WorkItemStatus::Draft
-        );
+        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Draft);
     }
 
     // ========================================================================
@@ -767,22 +824,34 @@ mod tests {
 
         // Start sessions of different types
         let coord = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "coordinator"}),
         );
         let impl1 = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "implementer"}),
         );
         let impl2 = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "implementer"}),
         );
         let researcher = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "researcher"}),
         );
@@ -812,31 +881,36 @@ mod tests {
         let ic = test_integrator_config();
 
         // Create Tick
-        let tick = dispatch_ok(
-            &stores, &tx, &wm, &ic,
-            "tick.create",
-            json!({"number": 1}),
-        );
+        let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1}));
         let tick_id = tick["id"].as_str().unwrap().to_string();
         assert_eq!(tick["status"], "open");
 
         // Open → Sealing
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "tick.transition",
             json!({"id": tick_id, "target": "sealing", "role": "integrator"}),
         );
 
         // Sealing → Validating
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "tick.transition",
             json!({"id": tick_id, "target": "validating", "role": "integrator"}),
         );
 
         // Validating → Published
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "tick.transition",
             json!({"id": tick_id, "target": "published", "role": "integrator", "sha": "abc123"}),
         );
@@ -853,9 +927,9 @@ mod tests {
     #[test]
     fn test_generation_level_progression() {
         use crate::agents::generation::{GenerationLevel, determine_generation_level};
+        use crate::domain::phase::Phase;
         use crate::domain::plan::{HierarchyStatus, Plan};
         use crate::domain::spec::Spec;
-        use crate::domain::phase::Phase;
 
         let stores = test_stores();
 
@@ -881,16 +955,9 @@ mod tests {
         // Add active Phase → needs WorkItem
         let mut phase = Phase::new(spec_id.clone(), "Ph".into(), "d".into(), 1);
         phase.status = HierarchyStatus::Active;
-        stores
-            .phases
-            .write()
-            .unwrap()
-            .insert(phase.id.clone(), phase);
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        assert_eq!(
-            determine_generation_level(&stores),
-            Some(GenerationLevel::WorkItem)
-        );
+        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::WorkItem));
     }
 
     // ========================================================================
@@ -906,7 +973,10 @@ mod tests {
 
         // Start a coordinator
         let resp = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.start",
             json!({"agent_type": "coordinator"}),
         );
@@ -920,27 +990,22 @@ mod tests {
         }
 
         // Pause
-        let paused = dispatch_ok(
-            &stores, &tx, &wm, &ic,
-            "agent.pause",
-            json!({"session_id": session_id}),
-        );
+        let paused = dispatch_ok(&stores, &tx, &wm, &ic, "agent.pause", json!({"session_id": session_id}));
         assert_eq!(paused["status"], "paused");
 
         // Resume
         let resumed = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "agent.resume",
             json!({"session_id": session_id}),
         );
         assert_eq!(resumed["status"], "running");
 
         // Stop
-        let stopped = dispatch_ok(
-            &stores, &tx, &wm, &ic,
-            "agent.stop",
-            json!({"session_id": session_id}),
-        );
+        let stopped = dispatch_ok(&stores, &tx, &wm, &ic, "agent.stop", json!({"session_id": session_id}));
         assert_eq!(stopped["status"], "cancelled");
     }
 
@@ -950,10 +1015,7 @@ mod tests {
 
     #[test]
     fn test_strategy_knobs_defaults() {
-        use crate::config::{
-            ConflictPolicy, StalePolicy, StrategyConfig,
-            TickCadence, ValidatorStrictness,
-        };
+        use crate::config::{ConflictPolicy, StalePolicy, StrategyConfig, TickCadence, ValidatorStrictness};
 
         let config = StrategyConfig::default();
 
@@ -962,7 +1024,10 @@ mod tests {
         assert!(matches!(config.tick_cadence, TickCadence::Continuous));
         assert_eq!(config.bundle_size.max_files_touched, 8);
         assert_eq!(config.bundle_size.max_loc_changed, 300);
-        assert!(matches!(config.validator_strictness, ValidatorStrictness::HardFailOnAnyAmbiguity));
+        assert!(matches!(
+            config.validator_strictness,
+            ValidatorStrictness::HardFailOnAnyAmbiguity
+        ));
         assert!(config.promotion.auto_promote);
         assert_eq!(config.promotion.min_reinforcements, 3);
         assert_eq!(config.max_lock_ttl_minutes, 60);
@@ -980,10 +1045,7 @@ mod tests {
             !config.agents.auto_start_coordinator,
             "coordinator should not auto-start by default"
         );
-        assert!(
-            !config.integrator.enabled,
-            "integrator should be disabled by default"
-        );
+        assert!(!config.integrator.enabled, "integrator should be disabled by default");
     }
 
     // ========================================================================
@@ -1018,10 +1080,7 @@ mod tests {
             let resp = dispatch(&stores, &tx, &wm, &ic, req);
             // May fail with invalid_params, but should NOT fail with method_not_found
             if let Some(err) = &resp.error {
-                assert_ne!(
-                    err.code, -32601,
-                    "{method} returned method_not_found"
-                );
+                assert_ne!(err.code, -32601, "{method} returned method_not_found");
             }
         }
     }
@@ -1040,76 +1099,174 @@ mod tests {
 
         // 1. Set a goal
         dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "coordinator.set_goal",
             json!({"goal": "Implement user auth"}),
         );
 
         // 2. Create full hierarchy
         let plan = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "plan.create",
             json!({"title": "User Auth", "description": "Auth system", "acceptance_criteria": "Tests pass"}),
         );
         let plan_id = plan["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "plan.transition", json!({"id": plan_id, "target": "active"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.transition",
+            json!({"id": plan_id, "target": "active"}),
+        );
 
         let spec = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "spec.create",
             json!({"plan_id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance_criteria": "OK"}),
         );
         let spec_id = spec["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "spec.transition", json!({"id": spec_id, "target": "active"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.transition",
+            json!({"id": spec_id, "target": "active"}),
+        );
 
         let phase = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "phase.create",
             json!({"spec_id": spec_id, "title": "Token", "description": "Token gen", "acceptance_criteria": "OK"}),
         );
         let phase_id = phase["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "phase.transition", json!({"id": phase_id, "target": "active"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.transition",
+            json!({"id": phase_id, "target": "active"}),
+        );
 
         let wi = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "work_item.create",
             json!({"phase_id": phase_id, "title": "sign()", "description": "Sign JWT"}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
         // 3. Implementer works on it
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi_id, "target": "in_progress", "role": "implementer"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi_id, "target": "in_progress", "role": "implementer"}),
+        );
 
         let bundle = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "bundle.create",
             json!({"work_item_id": wi_id, "branch_name": "feat/sign", "claims": "Added sign()"}),
         );
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
         // 4. Reviewer reviews and approves
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target": "in_review", "role": "reviewer"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target": "approved", "role": "reviewer"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target": "in_review", "role": "reviewer"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target": "approved", "role": "reviewer"}),
+        );
 
         // 5. Coordinator accepts
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target": "accepted", "role": "coordinator"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target": "accepted", "role": "coordinator"}),
+        );
 
         // 6. Integrator creates tick and publishes
         let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1}));
         let tick_id = tick["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "tick.transition", json!({"id": tick_id, "target": "sealing", "role": "integrator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "tick.transition", json!({"id": tick_id, "target": "validating", "role": "integrator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "tick.transition", json!({"id": tick_id, "target": "published", "role": "integrator", "sha": "abc123"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "tick.transition",
+            json!({"id": tick_id, "target": "sealing", "role": "integrator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "tick.transition",
+            json!({"id": tick_id, "target": "validating", "role": "integrator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "tick.transition",
+            json!({"id": tick_id, "target": "published", "role": "integrator", "sha": "abc123"}),
+        );
 
         // 7. Complete the work item
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi_id, "target": "done", "role": "coordinator"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi_id, "target": "done", "role": "coordinator"}),
+        );
 
         // Verify final state across all stores
         let plans = stores.plans.read().unwrap();
         assert_eq!(plans[&plan_id].status, crate::domain::plan::HierarchyStatus::Active);
 
         let bundles = stores.bundles.read().unwrap();
-        assert_eq!(bundles[&bundle_id].status, crate::domain::bundle::BundleStatus::Accepted);
+        assert_eq!(
+            bundles[&bundle_id].status,
+            crate::domain::bundle::BundleStatus::Accepted
+        );
 
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks[&tick_id].status, TickStatus::Published);
@@ -1134,7 +1291,10 @@ mod tests {
         let ic = test_integrator_config();
 
         let learning = dispatch_ok(
-            &stores, &tx, &wm, &ic,
+            &stores,
+            &tx,
+            &wm,
+            &ic,
             "learning.create",
             json!({"source_id": "wi-1", "scope": "global", "content": "Test"}),
         );
