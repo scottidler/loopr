@@ -240,7 +240,7 @@ pub enum AgentAction {
     Transition {
         collection: String,
         id: String,
-        target_state: String,
+        target_status: String,
         /// If None, role is inferred from agent_type via AgentType::default_role().
         #[serde(default)]
         role: Option<String>,
@@ -818,7 +818,7 @@ mod tests {
         let action = AgentAction::Transition {
             collection: "work_item".to_string(),
             id: "wi-1".to_string(),
-            target_state: "in_progress".to_string(),
+            target_status: "in_progress".to_string(),
             role: Some("implementer".to_string()),
         };
         let json = serde_json::to_string(&action).unwrap();
@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn test_agent_action_transition_without_role_backward_compat() {
-        let json = r#"{"action":"transition","collection":"work_item","id":"wi-1","target_state":"done"}"#;
+        let json = r#"{"action":"transition","collection":"work_item","id":"wi-1","target_status":"done"}"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         if let AgentAction::Transition { role, .. } = action {
             assert!(role.is_none());

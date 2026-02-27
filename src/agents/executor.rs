@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use eyre::{Result, eyre};
 use log::{error, info, warn};
@@ -103,7 +104,35 @@ pub async fn run_agent_task(
     }
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
 
-    let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
+    let result = if agent_type == AgentType::Coordinator {
+        let max_restarts = 3u32;
+        let restart_delay = stores.config.agents.coordinator.idle_interval_secs * 2;
+        let mut attempt = 0u32;
+        let mut result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
+
+        while result.is_err() && attempt < max_restarts {
+            attempt += 1;
+            warn!(
+                "Coordinator {} failed (attempt {}/{}), restarting in {}s",
+                session_id, attempt, max_restarts, restart_delay
+            );
+            tokio::time::sleep(Duration::from_secs(restart_delay)).await;
+            // Check cancellation during sleep
+            let cancelled = stores
+                .agent_sessions
+                .read()
+                .unwrap()
+                .get(&session_id)
+                .is_some_and(|s| s.status == AgentStatus::Cancelled);
+            if cancelled {
+                break;
+            }
+            result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
+        }
+        result
+    } else {
+        run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await
+    };
 
     // Transition to terminal state based on result
     let terminal_status = match result {
@@ -401,7 +430,7 @@ pub async fn execute_action(
         AgentAction::Transition {
             collection,
             id,
-            target_state,
+            target_status,
             role,
         } => {
             // If role is not specified, infer from agent_type
@@ -409,7 +438,7 @@ pub async fn execute_action(
                 .as_ref()
                 .map(|r| r.to_string())
                 .unwrap_or_else(|| agent_type.default_role().to_string());
-            let params = serde_json::json!({ "id": id, "target": target_state, "role": effective_role });
+            let params = serde_json::json!({ "id": id, "target_status": target_status, "role": effective_role });
             let method = format!("{}.transition", collection);
             let resp = bridge.request(&method, params);
             if resp.is_error() {
@@ -417,7 +446,7 @@ pub async fn execute_action(
             }
             Ok(ActionResult::Transitioned(format!(
                 "{}/{} → {}",
-                collection, id, target_state
+                collection, id, target_status
             )))
         }
         AgentAction::CreateLearning {
@@ -573,6 +602,76 @@ pub async fn execute_action(
 
         // --- Coordinator agent management actions ---
         AgentAction::AssignAgent { agent_type, target_id } => {
+            // For implementer assignments, auto-transition work item to InProgress if needed
+            if agent_type == "implementer" {
+                let get_resp = bridge.request("work_item.get", serde_json::json!({ "id": target_id }));
+                let wi_status = get_resp
+                    .result
+                    .as_ref()
+                    .and_then(|v| v.get("status"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                match wi_status {
+                    "Draft" => {
+                        // Draft → Ready → InProgress
+                        let r1 = bridge.request(
+                            "work_item.transition",
+                            serde_json::json!({ "id": target_id, "target_status": "Ready", "role": "coordinator" }),
+                        );
+                        if r1.is_error() {
+                            let msg = r1.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Ok(ActionResult::ActionError(format!(
+                                "auto-transition Draft→Ready failed: {}",
+                                msg
+                            )));
+                        }
+                        let r2 = bridge.request(
+                            "work_item.transition",
+                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator" }),
+                        );
+                        if r2.is_error() {
+                            let msg = r2.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Ok(ActionResult::ActionError(format!(
+                                "auto-transition Ready→InProgress failed: {}",
+                                msg
+                            )));
+                        }
+                        info!(
+                            "AssignAgent: auto-transitioned work item {} Draft→Ready→InProgress",
+                            target_id
+                        );
+                    }
+                    "Ready" => {
+                        // Ready → InProgress
+                        let r = bridge.request(
+                            "work_item.transition",
+                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator" }),
+                        );
+                        if r.is_error() {
+                            let msg = r.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Ok(ActionResult::ActionError(format!(
+                                "auto-transition Ready→InProgress failed: {}",
+                                msg
+                            )));
+                        }
+                        info!(
+                            "AssignAgent: auto-transitioned work item {} Ready→InProgress",
+                            target_id
+                        );
+                    }
+                    "InProgress" => {
+                        // Already correct
+                    }
+                    other => {
+                        return Ok(ActionResult::ActionError(format!(
+                            "cannot assign implementer to work item {} in state '{}'",
+                            target_id, other
+                        )));
+                    }
+                }
+            }
+
             // Map target_id to the correct param based on agent type
             let mut params = serde_json::json!({ "agent_type": agent_type });
             match agent_type.as_str() {
@@ -867,6 +966,122 @@ mod tests {
         stores.store = Some(Arc::new(StdMutex::new(store)));
         stores.config = config;
         Arc::new(stores)
+    }
+
+    /// Helper: create a full Plan→Spec→Phase→WorkItem hierarchy in stores via bridge.
+    fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String, String, String) {
+        let plan_resp = bridge.request(
+            "plan.create",
+            serde_json::json!({"title": "Test Plan", "description": "desc", "acceptance_criteria": "pass"}),
+        );
+        let plan_id = plan_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        bridge.request(
+            "plan.transition",
+            serde_json::json!({"id": plan_id, "target_status": "Active", "role": "coordinator"}),
+        );
+        let spec_resp = bridge.request(
+            "spec.create",
+            serde_json::json!({"plan_id": plan_id, "title": "Test Spec", "description": "desc"}),
+        );
+        let spec_id = spec_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        bridge.request(
+            "spec.transition",
+            serde_json::json!({"id": spec_id, "target_status": "Active", "role": "coordinator"}),
+        );
+        let phase_resp = bridge.request(
+            "phase.create",
+            serde_json::json!({"spec_id": spec_id, "title": "Test Phase", "description": "desc", "order": 1}),
+        );
+        let phase_id = phase_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        bridge.request(
+            "phase.transition",
+            serde_json::json!({"id": phase_id, "target_status": "Active", "role": "coordinator"}),
+        );
+        let wi_resp = bridge.request(
+            "work_item.create",
+            serde_json::json!({"phase_id": phase_id, "title": "Test WI", "description": "desc"}),
+        );
+        let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        (plan_id, spec_id, phase_id, wi_id)
+    }
+
+    #[tokio::test]
+    async fn test_transition_action_uses_correct_param() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-transparam-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Transition Draft → Ready via execute_action
+        let action = AgentAction::Transition {
+            collection: "work_item".to_string(),
+            id: wi_id.clone(),
+            target_status: "Ready".to_string(),
+            role: Some("coordinator".to_string()),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+
+        // Should succeed (not "target_status required" error)
+        assert!(
+            matches!(result, ActionResult::Transitioned(_)),
+            "expected Transitioned, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_assign_agent_auto_transitions_draft() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-autotrans-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, Config::default());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Work item starts as Draft — AssignAgent should auto-transition to InProgress
+        let action = AgentAction::AssignAgent {
+            agent_type: "implementer".to_string(),
+            target_id: wi_id.clone(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+
+        // The agent.start may fail (no LLM key) but the auto-transition should have happened
+        // Check work item status is InProgress
+        let wi_resp = bridge.request("work_item.get", serde_json::json!({"id": wi_id}));
+        let wi_status = wi_resp
+            .result
+            .as_ref()
+            .unwrap()
+            .get("status")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            wi_status, "InProgress",
+            "work item should be InProgress after auto-transition"
+        );
+
+        // The overall result should be either AgentSpawned or ActionError (if agent.start failed due to no LLM)
+        // but the transition should have succeeded regardless
+        assert!(
+            matches!(result, ActionResult::AgentSpawned { .. } | ActionResult::ActionError(_)),
+            "expected AgentSpawned or ActionError, got: {:?}",
+            result
+        );
     }
 
     #[tokio::test]

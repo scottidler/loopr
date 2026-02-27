@@ -113,6 +113,51 @@ pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
     ))
 }
 
+/// Build a focused state summary for the implementer: active locks and sibling agents.
+pub fn build_implementer_summary(stores: &Stores, work_item_id: &str) -> String {
+    use crate::domain::lock::LockStatus;
+
+    let mut summary = String::with_capacity(512);
+
+    // Active locks on resources
+    {
+        let locks = stores.locks.read().unwrap();
+        let active: Vec<_> = locks.values().filter(|l| l.status == LockStatus::Active).collect();
+        if !active.is_empty() {
+            summary.push_str("### Active Locks\n");
+            for l in &active {
+                summary.push_str(&format!("- {} (holder: {})\n", l.resource, l.holder_id));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // Active agents working on sibling work items
+    {
+        let sessions = stores.agent_sessions.read().unwrap();
+        let siblings: Vec<_> = sessions
+            .values()
+            .filter(|s| {
+                !s.status.is_terminal() && s.work_item_id.as_deref() != Some(work_item_id) && s.work_item_id.is_some()
+            })
+            .collect();
+        if !siblings.is_empty() {
+            summary.push_str("### Sibling Agents\n");
+            for s in &siblings {
+                summary.push_str(&format!(
+                    "- {} {} (wi: {})\n",
+                    s.agent_type,
+                    s.status,
+                    s.work_item_id.as_deref().unwrap_or("?")
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
+    summary
+}
+
 /// Outcome of a single implementer iteration.
 #[derive(Debug)]
 pub enum IterationOutcome {
@@ -140,8 +185,11 @@ pub async fn run_iteration(
     previous_summary: Option<String>,
     staleness_note: Option<String>,
 ) -> Result<IterationOutcome> {
+    let state_summary = build_implementer_summary(params.stores, params.work_item_id);
     let assembled = ContextBuilder::new(params.stores, Role::Implementer)
         .load_work_item_hierarchy(params.work_item_id)?
+        .with_coordinator_goal()
+        .with_state_summary(state_summary)
         .with_tools(params.tool_runner)
         .with_previous_summary(previous_summary)
         .with_staleness_note(staleness_note)
@@ -169,7 +217,7 @@ pub async fn run_iteration(
         return Err(eyre!("LLM returned empty action list"));
     }
 
-    let mut last_summary = String::new();
+    let mut summaries = Vec::new();
     for action in &actions {
         // Broadcast tool_started event for RunTool actions
         if let AgentAction::RunTool { tool_name, .. } = action {
@@ -215,10 +263,10 @@ pub async fn run_iteration(
             ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
             _ => {}
         }
-        last_summary = summary;
+        summaries.push(summary);
     }
 
-    Ok(IterationOutcome::Continue(last_summary))
+    Ok(IterationOutcome::Continue(summaries.join("\n")))
 }
 
 /// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
@@ -281,6 +329,13 @@ pub async fn run_implementer(
 
     for i in 1..=max_iterations {
         session.iteration = i;
+        // Persist iteration to stores so agent list/status reflect progress
+        {
+            let mut sessions = stores.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&session.id) {
+                s.iteration = session.iteration;
+            }
+        }
         info!("Implementer {} iteration {}/{}", session.id, i, max_iterations);
 
         // Check for staleness (tick.published events since last iteration)
@@ -935,5 +990,103 @@ mod tests {
 
         let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_action_results_accumulate() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-accum-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+
+        // LLM returns multiple actions — all summaries should be joined
+        let llm = MockLlm::new(
+            r#"[
+            {"action": "write_file", "path": "a.txt", "content": "aaa"},
+            {"action": "write_file", "path": "b.txt", "content": "bbb"},
+            {"action": "read_file", "path": "a.txt"}
+        ]"#,
+        );
+        let params = IterationParams {
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
+            session_id: "test-accum",
+            event_tx: &event_tx,
+        };
+
+        let outcome = run_iteration(&params, 1, None, None).await.unwrap();
+        if let IterationOutcome::Continue(summary) = outcome {
+            // All action summaries should be present, joined by newline
+            assert!(summary.contains("wrote a.txt"), "missing a.txt summary: {}", summary);
+            assert!(summary.contains("wrote b.txt"), "missing b.txt summary: {}", summary);
+            assert!(summary.contains("read file"), "missing read summary: {}", summary);
+        } else {
+            panic!("expected Continue, got: {:?}", outcome);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_implementer_context_includes_goal() {
+        use crate::domain::coordinator_goal::CoordinatorGoal;
+        use std::sync::Mutex as StdMutex2;
+
+        let dir = std::env::temp_dir().join(format!("loopr-impl-goal-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+
+        // Set a coordinator goal
+        let goal = CoordinatorGoal::new("Build a REST API for user management".to_string());
+        stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
+
+        // Use a CapturingLlm that captures the prompt
+        struct CapturingLlm {
+            captured_user_msg: StdMutex2<Option<String>>,
+        }
+
+        #[async_trait]
+        impl LlmClient for CapturingLlm {
+            async fn call(&self, _system_prompt: &str, user_message: &str) -> Result<String> {
+                *self.captured_user_msg.lock().unwrap() = Some(user_message.to_string());
+                Ok(r#"[{"action": "done", "summary": "done"}]"#.to_string())
+            }
+        }
+
+        let llm = CapturingLlm {
+            captured_user_msg: StdMutex2::new(None),
+        };
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+
+        let params = IterationParams {
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
+            session_id: "test-goal",
+            event_tx: &event_tx,
+        };
+
+        let _ = run_iteration(&params, 1, None, None).await.unwrap();
+
+        let captured = llm.captured_user_msg.lock().unwrap();
+        let user_msg = captured.as_ref().expect("LLM should have been called");
+        assert!(
+            user_msg.contains("Project Goal"),
+            "expected 'Project Goal' in context, got: {}",
+            &user_msg[..user_msg.len().min(500)]
+        );
+        assert!(
+            user_msg.contains("REST API for user management"),
+            "expected goal text in context"
+        );
     }
 }

@@ -1876,7 +1876,6 @@ mod tests {
         assert_eq!(stores.coordinator_goals.read().unwrap().len(), 1);
     }
 
-    #[test]
     // ========================================================================
     // Test: Full pipeline e2e — goal through tick publish with tmpdir git repo
     //
@@ -1914,47 +1913,99 @@ mod tests {
         };
 
         // --- 1. Set coordinator goal ---
-        let goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.set_goal", json!({"goal": "Build portfolio site"}));
+        let goal = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "coordinator.set_goal",
+            json!({"goal": "Build portfolio site"}),
+        );
         assert_eq!(goal["active"], true);
 
         // --- 2. Create full hierarchy ---
         let plan = dispatch_ok(
-            &stores, &tx, &wm, &ic, "plan.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.create",
             json!({"title": "Portfolio", "description": "Build a portfolio website"}),
         );
         let plan_id = plan["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "plan.transition", json!({"id": plan_id, "target_status": "active"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.transition",
+            json!({"id": plan_id, "target_status": "active"}),
+        );
 
         let spec = dispatch_ok(
-            &stores, &tx, &wm, &ic, "spec.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.create",
             json!({"plan_id": plan_id, "title": "Pages", "description": "HTML pages"}),
         );
         let spec_id = spec["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "spec.transition", json!({"id": spec_id, "target_status": "active"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.transition",
+            json!({"id": spec_id, "target_status": "active"}),
+        );
 
         let phase = dispatch_ok(
-            &stores, &tx, &wm, &ic, "phase.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.create",
             json!({"spec_id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
         );
         let phase_id = phase["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "phase.transition", json!({"id": phase_id, "target_status": "active"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.transition",
+            json!({"id": phase_id, "target_status": "active"}),
+        );
 
         // --- 3. Create work items ---
         let wi1 = dispatch_ok(
-            &stores, &tx, &wm, &ic, "work_item.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.create",
             json!({"phase_id": phase_id, "title": "Create index.html", "description": "Homepage"}),
         );
         let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
         let wi2 = dispatch_ok(
-            &stores, &tx, &wm, &ic, "work_item.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.create",
             json!({"phase_id": phase_id, "title": "Create about.html", "description": "About page"}),
         );
         let wi2_id = wi2["id"].as_str().unwrap().to_string();
 
         // --- 4. Lock lifecycle ---
         let lock = dispatch_ok(
-            &stores, &tx, &wm, &ic, "lock.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "lock.create",
             json!({"resource": "index.html", "holder_id": wi1_id, "granted_by": "coordinator"}),
         );
         let lock_id = lock["id"].as_str().unwrap().to_string();
@@ -1968,11 +2019,46 @@ mod tests {
         assert_eq!(released["status"], "released");
 
         // --- 5. Full work item lifecycle: Draft → Ready → InProgress → InReview → Integrated → Done ---
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi1_id, "target_status": "Ready", "role": "coordinator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi1_id, "target_status": "InReview", "role": "implementer"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi1_id, "target_status": "Integrated", "role": "integrator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi1_id, "target_status": "Done", "role": "coordinator"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi1_id, "target_status": "Ready", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi1_id, "target_status": "InReview", "role": "implementer"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi1_id, "target_status": "Integrated", "role": "integrator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi1_id, "target_status": "Done", "role": "coordinator"}),
+        );
         {
             let wis = stores.work_items.read().unwrap();
             assert_eq!(wis[&wi1_id].status, crate::domain::work_item::WorkItemStatus::Done);
@@ -1980,21 +2066,74 @@ mod tests {
 
         // --- 6. Bundle full lifecycle: Proposed → Triaged → Reviewed → Accepted → Integrating → Merged ---
         // First get wi2 to InReview so we can create a bundle
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi2_id, "target_status": "Ready", "role": "coordinator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi2_id, "target_status": "Ready", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator"}),
+        );
 
         let bundle = dispatch_ok(
-            &stores, &tx, &wm, &ic, "bundle.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.create",
             json!({"work_item_id": wi2_id, "description": "About page", "branch_name": "feature/about"}),
         );
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
         assert_eq!(bundle["status"], "Proposed");
 
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target_status": "Integrating", "role": "integrator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle_id, "target_status": "Merged", "role": "integrator"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Integrating", "role": "integrator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Merged", "role": "integrator"}),
+        );
         {
             let bundles = stores.bundles.read().unwrap();
             assert_eq!(bundles[&bundle_id].status, crate::domain::bundle::BundleStatus::Merged);
@@ -2002,31 +2141,70 @@ mod tests {
 
         // --- 7. Reviewer rejection from Proposed (new FSM rule) ---
         let bundle2 = dispatch_ok(
-            &stores, &tx, &wm, &ic, "bundle.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.create",
             json!({"work_item_id": wi2_id, "description": "Bad bundle", "branch_name": "feature/bad"}),
         );
         let bundle2_id = bundle2["id"].as_str().unwrap().to_string();
         dispatch_ok(
-            &stores, &tx, &wm, &ic, "bundle.transition",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
             json!({"id": bundle2_id, "target_status": "Rejected", "role": "reviewer"}),
         );
         {
             let bundles = stores.bundles.read().unwrap();
-            assert_eq!(bundles[&bundle2_id].status, crate::domain::bundle::BundleStatus::Rejected);
+            assert_eq!(
+                bundles[&bundle2_id].status,
+                crate::domain::bundle::BundleStatus::Rejected
+            );
         }
 
         // --- 8. Reviewer rejection from Reviewed ---
         let bundle3 = dispatch_ok(
-            &stores, &tx, &wm, &ic, "bundle.create",
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.create",
             json!({"work_item_id": wi2_id, "description": "Reviewed then rejected", "branch_name": "feature/rev-reject"}),
         );
         let bundle3_id = bundle3["id"].as_str().unwrap().to_string();
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle3_id, "target_status": "Triaged", "role": "coordinator"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle3_id, "target_status": "Reviewed", "role": "reviewer"}));
-        dispatch_ok(&stores, &tx, &wm, &ic, "bundle.transition", json!({"id": bundle3_id, "target_status": "Rejected", "role": "reviewer"}));
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle3_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle3_id, "target_status": "Reviewed", "role": "reviewer"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle3_id, "target_status": "Rejected", "role": "reviewer"}),
+        );
         {
             let bundles = stores.bundles.read().unwrap();
-            assert_eq!(bundles[&bundle3_id].status, crate::domain::bundle::BundleStatus::Rejected);
+            assert_eq!(
+                bundles[&bundle3_id].status,
+                crate::domain::bundle::BundleStatus::Rejected
+            );
         }
 
         // --- 9. Tick publish with validation in tmpdir git repo ---
@@ -2034,10 +2212,21 @@ mod tests {
         let tick_id = tick["id"].as_str().unwrap().to_string();
         assert_eq!(tick["status"], "Open");
 
-        let published = dispatch_ok(&stores, &tx, &wm, &ic, "integrator.publish", json!({"tick_id": tick_id}));
+        let published = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "integrator.publish",
+            json!({"tick_id": tick_id}),
+        );
         assert_eq!(published["status"], "Published");
         assert!(published["integration_sha"].as_str().is_some_and(|s| !s.is_empty()));
-        assert!(published["validation_log"].as_str().is_some_and(|s| s.contains("PASSED")));
+        assert!(
+            published["validation_log"]
+                .as_str()
+                .is_some_and(|s| s.contains("PASSED"))
+        );
 
         // --- 10. Goal still active ---
         let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
@@ -2093,5 +2282,133 @@ mod tests {
             "expected ActionError for invalid parent, got: {:?}",
             result
         );
+    }
+
+    // ========================================================================
+    // E2E: Full pipeline — coordinator assigns implementer, implementer completes
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_coordinator_assigns_implementer_completes() {
+        use crate::agents::bridge::AgentIpcBridge;
+        use crate::agents::implementer::{self, IterationOutcome, LlmClient};
+        use async_trait::async_trait;
+        use eyre::Result;
+
+        let dir = std::env::temp_dir().join(format!("loopr-e2e-pipeline-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Init git repo so worktree code doesn't fail
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        // Build stores with repo_path set BEFORE wrapping in Arc
+        let mut raw_stores = Stores::new();
+        raw_stores.config.project.repo_path = dir.clone();
+        let stores = Arc::new(raw_stores);
+
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Create hierarchy via IPC
+        let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+
+        // Create work item
+        let wi = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.create",
+            json!({"phase_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content"}),
+        );
+        let wi_id = wi["id"].as_str().unwrap().to_string();
+
+        // Set coordinator goal
+        use crate::domain::coordinator_goal::CoordinatorGoal;
+        let goal = CoordinatorGoal::new("Build a hello world project".to_string());
+        stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
+
+        // Verify work item starts as Draft
+        let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
+        assert_eq!(wi_resp["status"].as_str().unwrap(), "Draft");
+
+        // Execute AssignAgent — should auto-transition Draft→Ready→InProgress
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, Config::default());
+
+        let runner = crate::tools::ToolRunner::new(&[]);
+        let assign_action = crate::agents::AgentAction::AssignAgent {
+            agent_type: "implementer".to_string(),
+            target_id: wi_id.clone(),
+        };
+        let _ = crate::agents::executor::execute_action(
+            &assign_action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+        )
+        .await;
+
+        // Verify work item is now InProgress
+        let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
+        assert_eq!(
+            wi_resp["status"].as_str().unwrap(),
+            "InProgress",
+            "work item should be InProgress after auto-transition"
+        );
+
+        // Now run an implementer iteration directly with a mock LLM that writes a file
+        struct PipelineLlm;
+
+        #[async_trait]
+        impl LlmClient for PipelineLlm {
+            async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
+                // Verify context includes goal and hierarchy
+                assert!(user_msg.contains("Project Goal"), "missing Project Goal in context");
+                assert!(user_msg.contains("hello world"), "missing goal text in context");
+                assert!(user_msg.contains("Write hello.txt"), "missing work item in context");
+
+                Ok(r#"[
+                    {"action": "write_file", "path": "hello.txt", "content": "Hello, World!"},
+                    {"action": "done", "summary": "Created hello.txt"}
+                ]"#
+                .to_string())
+            }
+        }
+
+        let llm = PipelineLlm;
+        let params = implementer::IterationParams {
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
+            session_id: "test-pipeline",
+            event_tx: &tx,
+        };
+
+        let outcome = implementer::run_iteration(&params, 1, None, None).await.unwrap();
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s.contains("hello.txt")),
+            "expected Done with hello.txt, got: {:?}",
+            outcome
+        );
+
+        // Verify file was written
+        let content = std::fs::read_to_string(dir.join("hello.txt")).unwrap();
+        assert_eq!(content, "Hello, World!");
     }
 }

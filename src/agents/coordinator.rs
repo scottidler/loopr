@@ -52,7 +52,7 @@ Respond with a JSON array of actions:
 9. `validate_document` {"action": "validate_document", "collection": "plans", "id": "plan-id"}
 10. `triage_bundle`   {"action": "triage_bundle", "bundle_id": "..."}
 11. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
-12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_state": "active"}
+12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "active"}
 13. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
 14. `need_help`       {"action": "need_help", "reason": "..."}
 15. `done`            {"action": "done", "summary": "..."}
@@ -501,6 +501,13 @@ pub async fn run_coordinator(
 
         iteration = iteration.saturating_add(1);
         session.iteration = iteration;
+        // Persist iteration to stores so agent list/status reflect progress
+        {
+            let mut sessions = stores.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&session.id) {
+                s.iteration = session.iteration;
+            }
+        }
         info!("Coordinator {} iteration {}", session.id, iteration);
 
         let outcome = run_coordinator_iteration(
@@ -1043,5 +1050,54 @@ mod tests {
         assert!(summary.contains("### Phases"));
         assert!(summary.contains("### WorkItems"));
         assert!(summary.contains("### Ticks"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_persists() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-itpersist-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        // MockLlm: iterations 1,2 return Continue, iteration 3 returns NeedHelp to exit loop
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "create_learning", "content": "iter 1", "scope": "global", "source_id": "test"}]"#
+                .to_string(),
+            r#"[{"action": "create_learning", "content": "iter 2", "scope": "global", "source_id": "test"}]"#
+                .to_string(),
+            r#"[{"action": "need_help", "reason": "done testing"}]"#.to_string(),
+        ]);
+
+        let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+
+        let config = CoordinatorConfig {
+            active_interval_secs: 0,
+            idle_interval_secs: 0,
+            ..CoordinatorConfig::default()
+        };
+
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let _ = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+
+        // Session iteration should be 3 (need_help on iteration 3)
+        assert_eq!(session.iteration, 3);
+
+        // The iteration should also be persisted in stores
+        let stored_iteration = stores
+            .agent_sessions
+            .read()
+            .unwrap()
+            .get(&session.id)
+            .map(|s| s.iteration)
+            .unwrap_or(0);
+        assert_eq!(stored_iteration, 3, "iteration should be persisted in stores");
     }
 }

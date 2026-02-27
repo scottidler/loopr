@@ -208,12 +208,16 @@ pub struct ContextBuilder<'a> {
     work_item: Option<(String, String)>,
     // Learning scope chain
     scope_ids: Vec<(String, LearningScope)>,
+    // IDs for sibling lookups
+    work_item_id: Option<String>,
+    phase_id: Option<String>,
     // Optional sections
     bundle_info: Option<(String, String, Vec<String>)>, // (id, claims, touched_paths)
     tools: Vec<String>,
     previous_summary: Option<String>,
     staleness_note: Option<String>,
     state_summary: Option<String>,
+    coordinator_goal: Option<String>,
     iteration: Option<u32>,
     footer: Option<String>,
 }
@@ -239,11 +243,14 @@ impl<'a> ContextBuilder<'a> {
             phase: None,
             work_item: None,
             scope_ids: Vec::new(),
+            work_item_id: None,
+            phase_id: None,
             bundle_info: None,
             tools: Vec::new(),
             previous_summary: None,
             staleness_note: None,
             state_summary: None,
+            coordinator_goal: None,
             iteration: None,
             footer: None,
         }
@@ -297,6 +304,8 @@ impl<'a> ContextBuilder<'a> {
         self.spec = Some((spec_title, spec_desc));
         self.phase = Some((ph_title, ph_desc));
         self.work_item = Some((wi_title, wi_desc));
+        self.work_item_id = Some(work_item_id.to_string());
+        self.phase_id = Some(phase_id_owned.clone());
         self.scope_ids = vec![
             (work_item_id.to_string(), LearningScope::WorkItem),
             (phase_id_owned, LearningScope::Phase),
@@ -356,6 +365,16 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
+    /// Set the coordinator goal from stores (reads the active goal).
+    pub fn with_coordinator_goal(mut self) -> Self {
+        let goal = {
+            let goals = self.stores.coordinator_goals.read().unwrap();
+            goals.values().find(|g| g.active).map(|g| g.goal.clone())
+        };
+        self.coordinator_goal = goal;
+        self
+    }
+
     /// Access the loaded work item title (available after load_*_hierarchy).
     pub fn work_item_title(&self) -> Option<&str> {
         self.work_item.as_ref().map(|(t, _)| t.as_str())
@@ -364,6 +383,13 @@ impl<'a> ContextBuilder<'a> {
     /// Build the assembled context with per-section token budgeting.
     pub fn build(&self, system_prompt: &str) -> AssembledContext {
         let mut msg = String::with_capacity(4096);
+
+        // --- Project Goal section (before hierarchy) ---
+        if let Some(ref goal) = self.coordinator_goal {
+            msg.push_str("## Project Goal\n\n");
+            msg.push_str(goal);
+            msg.push_str("\n\n");
+        }
 
         // --- Hierarchy section ---
         if self.plan.is_some() || self.spec.is_some() || self.phase.is_some() || self.work_item.is_some() {
@@ -388,6 +414,24 @@ impl<'a> ContextBuilder<'a> {
                 msg.push_str(&truncate_prose(&hierarchy, self.budget.hierarchy));
             } else {
                 msg.push_str(&hierarchy);
+            }
+        }
+
+        // --- Sibling Work Items section (after hierarchy) ---
+        if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_item_id) {
+            let work_items = self.stores.work_items.read().unwrap();
+            let siblings: Vec<String> = work_items
+                .values()
+                .filter(|wi| wi.phase_id == *phase_id && wi.id != *current_wi_id)
+                .map(|wi| format!("- [{}] {}", wi.status, wi.title))
+                .collect();
+            if !siblings.is_empty() {
+                msg.push_str("## Sibling Work Items\n\n");
+                for s in &siblings {
+                    msg.push_str(s);
+                    msg.push('\n');
+                }
+                msg.push('\n');
             }
         }
 
