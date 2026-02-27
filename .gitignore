@@ -35,9 +35,10 @@ lcov.info
 tarpaulin-report.html
 examples/_test_broken/
 
-# Loopr runtime data
+# Loopr runtime data (created by `loopr init` in target repos)
 .taskstore/
 .worktrees/
+.gitattributes
 .env
 
 # Log files
