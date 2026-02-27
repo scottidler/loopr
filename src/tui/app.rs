@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::AgentSession;
+use crate::agents::{AgentSession, AgentType};
 use crate::domain::bundle::Bundle;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -12,6 +12,24 @@ use crate::domain::role::Role;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::work_item::WorkItem;
+
+/// Whether the TUI is in normal mode or capturing text input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    /// Normal keybinding mode.
+    Normal,
+    /// Capturing goal text input (g key).
+    GoalInput,
+}
+
+/// An IPC action queued by a keybinding for the event loop to send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IpcAction {
+    SetGoal(String),
+    PauseAgent(String),
+    ResumeAgent(String),
+    StopAgent(String),
+}
 
 /// The six TUI views, cycled with Tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -100,6 +118,9 @@ pub struct App {
     pub selected_index: usize,
     pub show_help: bool,
     pub should_quit: bool,
+    pub input_mode: InputMode,
+    pub goal_input: String,
+    pub pending_ipc: Option<IpcAction>,
 }
 
 impl App {
@@ -112,7 +133,21 @@ impl App {
             selected_index: 0,
             show_help: false,
             should_quit: false,
+            input_mode: InputMode::Normal,
+            goal_input: String::new(),
+            pending_ipc: None,
         }
+    }
+
+    /// Find the session ID of a coordinator agent with the given status.
+    pub fn find_coordinator_session(&self, running: bool) -> Option<String> {
+        use crate::agents::AgentStatus;
+        let target = if running { AgentStatus::Running } else { AgentStatus::Paused };
+        self.state
+            .agent_sessions
+            .iter()
+            .find(|s| s.agent_type == AgentType::Coordinator && s.status == target)
+            .map(|s| s.id.clone())
     }
 
     /// Switch to next view (Tab).

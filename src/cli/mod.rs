@@ -204,6 +204,18 @@ pub enum AgentCmd {
         /// Bundle ID
         bundle_id: String,
     },
+    /// Start the coordinator agent
+    #[command(name = "start-coordinator")]
+    StartCoordinator,
+    /// Start a researcher agent for a query
+    #[command(name = "start-researcher")]
+    StartResearcher {
+        /// Research query
+        query: String,
+        /// Target scope ID (plan/spec/phase/work-item ID)
+        #[arg(short, long)]
+        target_id: Option<String>,
+    },
     /// Stop a running agent
     Stop {
         /// Agent session ID
@@ -229,10 +241,27 @@ pub enum AgentCmd {
         /// Filter by status (starting, running, paused, completed, failed, cancelled)
         #[arg(short, long)]
         status: Option<String>,
-        /// Filter by agent type (implementer, reviewer)
+        /// Filter by agent type (implementer, reviewer, coordinator, researcher)
         #[arg(short = 't', long)]
         agent_type: Option<String>,
     },
+}
+
+/// Coordinator subcommands.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum CoordinatorCmd {
+    /// Set the coordinator goal
+    #[command(name = "set-goal")]
+    Set {
+        /// Goal text
+        goal: String,
+    },
+    /// Clear the coordinator goal
+    #[command(name = "clear-goal")]
+    Clear,
+    /// Get the current coordinator goal
+    #[command(name = "goal")]
+    Status,
 }
 
 /// Lock subcommands.
@@ -353,6 +382,11 @@ pub enum Command {
     Agent {
         #[command(subcommand)]
         cmd: AgentCmd,
+    },
+    /// Coordinator operations (set-goal, clear-goal, goal)
+    Coordinator {
+        #[command(subcommand)]
+        cmd: CoordinatorCmd,
     },
     /// Initialize TaskStore (create collections, install git hooks)
     Init,
@@ -726,5 +760,79 @@ mod tests {
             }
             _ => panic!("expected Agent List with filters"),
         }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_start_coordinator() {
+        let cli = Cli::parse_from(["loopr", "agent", "start-coordinator"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Agent {
+                cmd: AgentCmd::StartCoordinator
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_agent_start_researcher() {
+        let cli = Cli::parse_from(["loopr", "agent", "start-researcher", "How does auth work?"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::StartResearcher { query, target_id },
+            }) => {
+                assert_eq!(query, "How does auth work?");
+                assert!(target_id.is_none());
+            }
+            _ => panic!("expected Agent StartResearcher"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_start_researcher_with_target() {
+        let cli = Cli::parse_from(["loopr", "agent", "start-researcher", "Investigate module", "-t", "wi-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::StartResearcher { query, target_id },
+            }) => {
+                assert_eq!(query, "Investigate module");
+                assert_eq!(target_id, Some("wi-1".to_string()));
+            }
+            _ => panic!("expected Agent StartResearcher with target"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_coordinator_set_goal() {
+        let cli = Cli::parse_from(["loopr", "coordinator", "set-goal", "Build auth module"]);
+        match cli.command {
+            Some(Command::Coordinator {
+                cmd: CoordinatorCmd::Set { goal },
+            }) => {
+                assert_eq!(goal, "Build auth module");
+            }
+            _ => panic!("expected Coordinator SetGoal"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_coordinator_clear_goal() {
+        let cli = Cli::parse_from(["loopr", "coordinator", "clear-goal"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Coordinator {
+                cmd: CoordinatorCmd::Clear
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_coordinator_goal() {
+        let cli = Cli::parse_from(["loopr", "coordinator", "goal"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Coordinator {
+                cmd: CoordinatorCmd::Status
+            })
+        ));
     }
 }

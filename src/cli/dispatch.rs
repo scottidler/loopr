@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::domain::role::Role;
 use crate::ipc::client::IpcClient;
 
-use super::{AgentCmd, BundleCmd, Command, CrudCmd, LearningCmd, LockCmd, TickCmd, WorktreeCmd};
+use super::{AgentCmd, BundleCmd, Command, CoordinatorCmd, CrudCmd, LearningCmd, LockCmd, TickCmd, WorktreeCmd};
 
 /// Connect to the daemon, send the IPC request for the given CLI command,
 /// print the result, and exit.
@@ -65,6 +65,7 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         Command::Lock { cmd } => lock_to_ipc(cmd),
 
         Command::Agent { cmd } => agent_to_ipc(cmd),
+        Command::Coordinator { cmd } => coordinator_to_ipc(cmd),
 
         Command::Init => ("system.init".to_string(), json!({})),
         Command::Validate { collection, id } => (
@@ -254,6 +255,14 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
             "agent.start".to_string(),
             json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
         ),
+        AgentCmd::StartCoordinator => ("agent.start".to_string(), json!({ "agent_type": "coordinator" })),
+        AgentCmd::StartResearcher { query, target_id } => {
+            let mut params = json!({ "agent_type": "researcher", "query": query });
+            if let Some(tid) = target_id {
+                params["target_id"] = json!(tid);
+            }
+            ("agent.start".to_string(), params)
+        }
         AgentCmd::Stop { session_id } => ("agent.stop".to_string(), json!({ "session_id": session_id })),
         AgentCmd::Pause { session_id } => ("agent.pause".to_string(), json!({ "session_id": session_id })),
         AgentCmd::Resume { session_id } => ("agent.resume".to_string(), json!({ "session_id": session_id })),
@@ -268,6 +277,14 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
             }
             ("agent.list".to_string(), params)
         }
+    }
+}
+
+fn coordinator_to_ipc(cmd: &CoordinatorCmd) -> (String, serde_json::Value) {
+    match cmd {
+        CoordinatorCmd::Set { goal } => ("coordinator.set_goal".to_string(), json!({ "goal": goal })),
+        CoordinatorCmd::Clear => ("coordinator.clear_goal".to_string(), json!({})),
+        CoordinatorCmd::Status => ("coordinator.get_goal".to_string(), json!({})),
     }
 }
 
@@ -739,5 +756,73 @@ mod tests {
         assert_eq!(method, "agent.list");
         assert_eq!(params["status"], "running");
         assert_eq!(params["agent_type"], "implementer");
+    }
+
+    #[test]
+    fn test_agent_start_coordinator_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::StartCoordinator,
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.start");
+        assert_eq!(params["agent_type"], "coordinator");
+    }
+
+    #[test]
+    fn test_agent_start_researcher_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::StartResearcher {
+                query: "How does auth work?".to_string(),
+                target_id: Some("wi-1".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.start");
+        assert_eq!(params["agent_type"], "researcher");
+        assert_eq!(params["query"], "How does auth work?");
+        assert_eq!(params["target_id"], "wi-1");
+    }
+
+    #[test]
+    fn test_agent_start_researcher_no_target() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::StartResearcher {
+                query: "test".to_string(),
+                target_id: None,
+            },
+        };
+        let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert!(params["target_id"].is_null());
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_mapping() {
+        let cmd = Command::Coordinator {
+            cmd: CoordinatorCmd::Set {
+                goal: "Build auth".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "coordinator.set_goal");
+        assert_eq!(params["goal"], "Build auth");
+    }
+
+    #[test]
+    fn test_coordinator_clear_goal_mapping() {
+        let cmd = Command::Coordinator {
+            cmd: CoordinatorCmd::Clear,
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "coordinator.clear_goal");
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_coordinator_get_goal_mapping() {
+        let cmd = Command::Coordinator {
+            cmd: CoordinatorCmd::Status,
+        };
+        let (method, _) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "coordinator.get_goal");
     }
 }

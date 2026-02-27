@@ -28,7 +28,7 @@ use crate::domain::work_item::WorkItem;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::IpcMessage;
 
-use super::app::{App, AppState, ConnectionStatus, View};
+use super::app::{App, AppState, ConnectionStatus, InputMode, IpcAction, View};
 use super::input::{apply_action, handle_key};
 use super::views;
 
@@ -98,8 +98,13 @@ async fn event_loop(
                 if let Some(Ok(Event::Key(key))) = crossterm_event
                     && key.kind == KeyEventKind::Press
                 {
-                    let action = handle_key(key);
+                    let action = handle_key(key, app.input_mode);
                     apply_action(app, action);
+
+                    // Dispatch any pending IPC action
+                    if let (Some(ipc_action), Some(c)) = (app.pending_ipc.take(), client.as_mut()) {
+                        dispatch_ipc_action(c, ipc_action).await;
+                    }
                 }
             }
             ipc_msg = async { client.as_mut().unwrap().recv().await }, if client.is_some() => {
@@ -133,6 +138,28 @@ async fn event_loop(
     }
 
     Ok(())
+}
+
+/// Send an IPC action to the daemon.
+async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
+    let (method, params) = match action {
+        IpcAction::SetGoal(goal) => ("coordinator.set_goal".to_string(), serde_json::json!({ "goal": goal })),
+        IpcAction::PauseAgent(session_id) => (
+            "agent.pause".to_string(),
+            serde_json::json!({ "session_id": session_id }),
+        ),
+        IpcAction::ResumeAgent(session_id) => (
+            "agent.resume".to_string(),
+            serde_json::json!({ "session_id": session_id }),
+        ),
+        IpcAction::StopAgent(session_id) => (
+            "agent.stop".to_string(),
+            serde_json::json!({ "session_id": session_id }),
+        ),
+    };
+    if let Err(e) = client.request(&method, params).await {
+        warn!("Failed to dispatch IPC action {method}: {e}");
+    }
 }
 
 /// Refresh a collection in AppState by fetching the latest list from the daemon.
@@ -223,6 +250,10 @@ pub fn draw(app: &App, frame: &mut Frame) {
     draw_content(app, frame, chunks[1]);
     draw_action_bar(app, frame, chunks[2]);
 
+    if app.input_mode == InputMode::GoalInput {
+        draw_goal_input(app, frame, frame.area());
+    }
+
     if app.show_help {
         draw_help_overlay(frame, frame.area());
     }
@@ -282,12 +313,32 @@ fn draw_action_bar(app: &App, frame: &mut Frame, area: Rect) {
 /// Actions available for each role, shown in the action bar.
 pub fn role_actions(role: Role) -> Vec<&'static str> {
     match role {
-        Role::Coordinator => vec!["n:New Plan", "t:Transition", "r:Switch Role"],
-        Role::Integrator => vec!["n:New Tick", "t:Transition", "r:Switch Role"],
-        Role::Implementer => vec!["n:New WorkItem", "t:Transition", "r:Switch Role"],
-        Role::Reviewer => vec!["t:Transition", "r:Switch Role"],
-        Role::Researcher => vec!["r:Switch Role"],
+        Role::Coordinator => vec!["g:Goal", "p:Pause", "r:Resume", "x:Stop", "R:Role"],
+        Role::Integrator => vec!["n:New Tick", "t:Transition", "R:Role"],
+        Role::Implementer => vec!["n:New WorkItem", "t:Transition", "R:Role"],
+        Role::Reviewer => vec!["t:Transition", "R:Role"],
+        Role::Researcher => vec!["R:Role"],
     }
+}
+
+/// Goal input popup shown when user presses 'g'.
+fn draw_goal_input(app: &App, frame: &mut Frame, area: Rect) {
+    let width = 50.min(area.width.saturating_sub(4));
+    let height = 3;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let input_text = format!("{}_", app.goal_input);
+    let input = Paragraph::new(Line::from(input_text)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Set Goal (Enter=submit, Esc=cancel)")
+            .style(Style::default().bg(Color::DarkGray)),
+    );
+    frame.render_widget(input, popup_area);
 }
 
 /// Centered help overlay showing keyboard shortcuts.
@@ -299,9 +350,11 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("Shift+Tab  Previous view"),
         Line::from("j / Down   Select next item"),
         Line::from("k / Up     Select previous item"),
-        Line::from("r          Cycle role"),
-        Line::from("n          New item (context-dependent)"),
-        Line::from("t          Transition selected item"),
+        Line::from("R          Cycle role"),
+        Line::from("g          Set coordinator goal"),
+        Line::from("p          Pause coordinator"),
+        Line::from("r          Resume coordinator"),
+        Line::from("x          Stop coordinator"),
         Line::from("q          Quit"),
         Line::from("?          Toggle this help"),
     ];
@@ -408,8 +461,12 @@ mod tests {
     #[test]
     fn test_role_actions_coordinator() {
         let actions = role_actions(Role::Coordinator);
-        assert_eq!(actions.len(), 3);
-        assert!(actions[0].contains("Plan"));
+        assert_eq!(actions.len(), 5);
+        assert!(actions[0].contains("Goal"));
+        assert!(actions[1].contains("Pause"));
+        assert!(actions[2].contains("Resume"));
+        assert!(actions[3].contains("Stop"));
+        assert!(actions[4].contains("Role"));
     }
 
     #[test]
