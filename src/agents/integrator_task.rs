@@ -285,12 +285,23 @@ pub fn run_integrator_cycle(
         }
     }
 
-    // Update tick with bundle IDs (write directly to stores since there's no IPC for this)
-    {
+    // Update tick with bundle IDs — clone-then-drop-then-persist to avoid deadlock.
+    // Lock ordering: never hold in-memory RwLock while acquiring Store mutex.
+    let tick_to_persist = {
         let mut ticks = stores.ticks.write().unwrap();
         if let Some(tick) = ticks.get_mut(&tick_id) {
             tick.bundle_ids = valid_bundle_ids.clone();
+            Some(tick.clone())
+        } else {
+            None
         }
+    }; // write lock dropped here
+
+    if let Some(tick) = tick_to_persist
+        && let Some(ref store) = stores.store
+        && let Err(e) = store.lock().unwrap().update(tick)
+    {
+        warn!("Failed to persist tick bundle_ids: {}", e);
     }
 
     // 9. Transition Tick: Sealing → Validating
@@ -313,12 +324,22 @@ pub fn run_integrator_cycle(
     // 10. Run validation commands
     let (passed, validation_log) = run_validation_commands(&config.validation_commands);
 
-    // Update tick with validation log
-    {
+    // Update tick with validation log — clone-then-drop-then-persist
+    let tick_to_persist = {
         let mut ticks = stores.ticks.write().unwrap();
         if let Some(tick) = ticks.get_mut(&tick_id) {
             tick.validation_log = validation_log.clone();
+            Some(tick.clone())
+        } else {
+            None
         }
+    };
+
+    if let Some(tick) = tick_to_persist
+        && let Some(ref store) = stores.store
+        && let Err(e) = store.lock().unwrap().update(tick)
+    {
+        warn!("Failed to persist tick validation_log: {}", e);
     }
 
     // 11. Publish or Fail
@@ -339,12 +360,22 @@ pub fn run_integrator_cycle(
             return Err(eyre!("Failed to publish tick {}: {:?}", tick_id, pub_resp.error));
         }
 
-        // Update integration SHA
-        {
+        // Update integration SHA — clone-then-drop-then-persist
+        let tick_to_persist = {
             let mut ticks = stores.ticks.write().unwrap();
             if let Some(tick) = ticks.get_mut(&tick_id) {
                 tick.integration_sha = Some(sha);
+                Some(tick.clone())
+            } else {
+                None
             }
+        };
+
+        if let Some(tick) = tick_to_persist
+            && let Some(ref store) = stores.store
+            && let Err(e) = store.lock().unwrap().update(tick)
+        {
+            warn!("Failed to persist tick integration_sha: {}", e);
         }
 
         // Transition bundles: Integrating → Merged

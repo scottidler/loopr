@@ -88,6 +88,11 @@ pub async fn run_agent_task(
         }
     }
 
+    // Retain a copy of the worktree manager for cleanup after the agent loop exits.
+    // The original is moved into the bridge.
+    let cleanup_mgr = worktree_mgr.clone();
+    let cleanup_key = worktree_key.clone();
+
     // Create the in-process IPC bridge for this agent
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
@@ -133,6 +138,15 @@ pub async fn run_agent_task(
     } else {
         run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await
     };
+
+    // Clean up worktree after agent loop exits (only for non-thinking-plane agents)
+    if let Some(ref key) = cleanup_key {
+        if let Err(e) = cleanup_mgr.cleanup(key) {
+            warn!("Worktree cleanup failed for {} (key={}): {}", session_id, key, e);
+        } else {
+            info!("Worktree cleaned up for {} (key={})", session_id, key);
+        }
+    }
 
     // Transition to terminal state based on result
     let terminal_status = match result {

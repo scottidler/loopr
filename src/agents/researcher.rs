@@ -385,6 +385,8 @@ pub async fn run_researcher(
         session.target_id.as_deref().unwrap_or("none"),
     );
 
+    let mut previous_summary: Option<String> = None;
+
     for iteration in 1..=config.max_iterations {
         // Check cancellation
         {
@@ -403,9 +405,7 @@ pub async fn run_researcher(
             session.id, iteration, config.max_iterations
         );
 
-        let previous_summary: Option<String> = None;
-
-        let outcome = run_researcher_iteration(llm, session, stores, bridge, iteration, previous_summary).await;
+        let outcome = run_researcher_iteration(llm, session, stores, bridge, iteration, previous_summary.clone()).await;
 
         match outcome {
             Ok(IterationOutcome::Done(summary)) => {
@@ -416,6 +416,7 @@ pub async fn run_researcher(
             Ok(IterationOutcome::Continue(summary)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, &summary));
                 info!("Researcher {} continue: {}", session.id, summary);
+                previous_summary = Some(summary);
             }
             Ok(IterationOutcome::NeedHelp(reason)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, &reason));

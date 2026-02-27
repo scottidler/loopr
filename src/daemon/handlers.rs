@@ -1421,6 +1421,13 @@ fn handle_tick_transition(
     tick.status = target_status;
     tick.updated_at = crate::id::now_millis();
 
+    // Persist transition to TaskStore if available (matches work_item_transition pattern)
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(tick.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
     let tick_json = match serde_json::to_value(&*tick) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
