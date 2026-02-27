@@ -17,6 +17,9 @@ mod tui;
 mod validator;
 mod worktree;
 
+#[cfg(test)]
+mod integration_tests;
+
 use cli::Cli;
 use config::Config;
 
