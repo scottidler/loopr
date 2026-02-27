@@ -103,7 +103,10 @@ pub fn build_state_summary(stores: &Stores) -> String {
         if !non_terminal.is_empty() {
             summary.push_str("### Specs\n");
             for s in &non_terminal {
-                summary.push_str(&format!("- [{}] {} ({}, plan: {})\n", s.id, s.title, s.status, s.plan_id));
+                summary.push_str(&format!(
+                    "- [{}] {} ({}, plan: {})\n",
+                    s.id, s.title, s.status, s.plan_id
+                ));
             }
             summary.push('\n');
         }
@@ -202,7 +205,10 @@ pub fn build_state_summary(stores: &Stores) -> String {
                     .or(s.bundle_id.as_deref())
                     .or(s.target_id.as_deref())
                     .unwrap_or("global");
-                summary.push_str(&format!("- [{}] {} {} (target: {})\n", s.id, s.agent_type, s.status, target));
+                summary.push_str(&format!(
+                    "- [{}] {} {} (target: {})\n",
+                    s.id, s.agent_type, s.status, target
+                ));
             }
             summary.push('\n');
         }
@@ -211,10 +217,7 @@ pub fn build_state_summary(stores: &Stores) -> String {
     // --- Active Locks ---
     {
         let locks = stores.locks.read().unwrap();
-        let active: Vec<_> = locks
-            .values()
-            .filter(|l| l.status == LockStatus::Active)
-            .collect();
+        let active: Vec<_> = locks.values().filter(|l| l.status == LockStatus::Active).collect();
         if !active.is_empty() {
             summary.push_str("### Active Locks\n");
             for l in &active {
@@ -370,9 +373,16 @@ pub async fn run_coordinator(
         session.iteration = iteration;
         info!("Coordinator {} iteration {}", session.id, iteration);
 
-        let outcome =
-            run_coordinator_iteration(llm, session, stores, bridge, iteration, previous_summary.clone(), event_tx)
-                .await;
+        let outcome = run_coordinator_iteration(
+            llm,
+            session,
+            stores,
+            bridge,
+            iteration,
+            previous_summary.clone(),
+            event_tx,
+        )
+        .await;
 
         let interval = match &outcome {
             Ok(IterationOutcome::Done(summary)) => {
@@ -661,9 +671,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _rx) = broadcast::channel(16);
 
-        let llm = MockLlm::new(vec![
-            r#"[{"action": "done", "summary": "Nothing to do"}]"#.to_string(),
-        ]);
+        let llm = MockLlm::new(vec![r#"[{"action": "done", "summary": "Nothing to do"}]"#.to_string()]);
 
         let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
@@ -750,9 +758,7 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _rx) = broadcast::channel(16);
 
-        let llm = MockLlm::new(vec![
-            r#"[{"action": "need_help", "reason": "I'm stuck"}]"#.to_string(),
-        ]);
+        let llm = MockLlm::new(vec![r#"[{"action": "need_help", "reason": "I'm stuck"}]"#.to_string()]);
 
         let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         let _ = session.transition_to(AgentStatus::Running);
@@ -823,14 +829,9 @@ mod tests {
 
     #[test]
     fn test_format_action_summary_error() {
-        let action = AgentAction::Done {
-            summary: "x".into(),
-        };
+        let action = AgentAction::Done { summary: "x".into() };
         let result = ActionResult::ActionError("something broke".into());
-        assert_eq!(
-            format_action_summary(&action, &result),
-            "ERROR: something broke"
-        );
+        assert_eq!(format_action_summary(&action, &result), "ERROR: something broke");
     }
 
     // --- system prompt tests ---
