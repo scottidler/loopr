@@ -12,7 +12,7 @@ use crate::agents::generation::{
     self, GenerationLevel, build_phase_prompt, build_plan_prompt, build_spec_prompt, build_work_item_prompt,
 };
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
-use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
+use crate::agents::{AgentSession, AgentStatus, AgentType};
 use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
@@ -453,7 +453,7 @@ async fn run_coordinator_iteration(
             }
         };
 
-        let summary = format_action_summary(action, &result);
+        let summary = format_action_summary(&result);
         let _ = event_tx.send(DaemonEvent::agent_action_completed(&session.id, &summary));
 
         match &result {
@@ -536,7 +536,7 @@ pub async fn run_coordinator(
     }
 }
 
-fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String {
+fn format_action_summary(result: &ActionResult) -> String {
     match result {
         ActionResult::ToolRun(tr) => format!("ran {} (exit {})", tr.tool_name, tr.exit_code),
         ActionResult::FileWritten(p) => format!("wrote {}", p),
@@ -561,22 +561,8 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
-        ActionResult::NotYetImplemented(d) => {
-            // Log what the coordinator tried to do — useful for debugging
-            let action_name = match action {
-                AgentAction::CreatePlan { .. } => "create_plan",
-                AgentAction::CreateSpec { .. } => "create_spec",
-                AgentAction::CreatePhase { .. } => "create_phase",
-                AgentAction::CreateWorkItem { .. } => "create_work_item",
-                AgentAction::AssignAgent { .. } => "assign_agent",
-                AgentAction::SpawnResearcher { .. } => "spawn_researcher",
-                AgentAction::ValidateDocument { .. } => "validate_document",
-                AgentAction::TriageBundle { .. } => "triage_bundle",
-                AgentAction::AcceptBundle { .. } => "accept_bundle",
-                _ => "unknown",
-            };
-            format!("stub({}): {}", action_name, d)
-        }
+        ActionResult::RecordCreated { collection, id } => format!("created {}: {}", collection, id),
+        ActionResult::AgentSpawned { session_id, agent_type } => format!("spawned {} ({})", agent_type, session_id),
     }
 }
 
@@ -863,7 +849,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        // CreatePlan is currently NotYetImplemented — that's ok, returns Continue
+        // CreatePlan is now wired — creates a real plan via bridge, returns Continue
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
     }
 
@@ -946,45 +932,46 @@ mod tests {
 
     #[test]
     fn test_format_action_summary_done() {
-        let action = AgentAction::Done {
-            summary: "Complete".into(),
-        };
         let result = ActionResult::Done("Complete".into());
-        assert_eq!(format_action_summary(&action, &result), "done: Complete");
+        assert_eq!(format_action_summary(&result), "done: Complete");
     }
 
     #[test]
-    fn test_format_action_summary_not_yet_implemented() {
-        let action = AgentAction::CreatePlan {
-            title: "Auth".into(),
-            description: "desc".into(),
-            acceptance_criteria: "crit".into(),
+    fn test_format_action_summary_record_created() {
+        let result = ActionResult::RecordCreated {
+            collection: "plans".into(),
+            id: "plan-123".into(),
         };
-        let result = ActionResult::NotYetImplemented("CreatePlan: Auth".into());
-        let summary = format_action_summary(&action, &result);
-        assert!(summary.contains("stub(create_plan)"));
-        assert!(summary.contains("Auth"));
+        let summary = format_action_summary(&result);
+        assert!(summary.contains("created plans"));
+        assert!(summary.contains("plan-123"));
+    }
+
+    #[test]
+    fn test_format_action_summary_agent_spawned() {
+        let result = ActionResult::AgentSpawned {
+            session_id: "sess-abc".into(),
+            agent_type: "implementer".into(),
+        };
+        let summary = format_action_summary(&result);
+        assert!(summary.contains("spawned implementer"));
+        assert!(summary.contains("sess-abc"));
     }
 
     #[test]
     fn test_format_action_summary_error() {
-        let action = AgentAction::Done { summary: "x".into() };
         let result = ActionResult::ActionError("something broke".into());
-        assert_eq!(format_action_summary(&action, &result), "ERROR: something broke");
+        assert_eq!(format_action_summary(&result), "ERROR: something broke");
     }
 
     #[test]
     fn test_format_action_summary_document_validated_pass() {
-        let action = AgentAction::ValidateDocument {
-            collection: "plans".into(),
-            id: "plan-1".into(),
-        };
         let result = ActionResult::DocumentValidated {
             verdict: "pass".into(),
             summary: "All criteria met".into(),
             issues: vec![],
         };
-        let summary = format_action_summary(&action, &result);
+        let summary = format_action_summary(&result);
         assert!(summary.contains("validated: pass"));
         assert!(summary.contains("All criteria met"));
         assert!(!summary.contains("issues"));
@@ -992,16 +979,12 @@ mod tests {
 
     #[test]
     fn test_format_action_summary_document_validated_fail_with_issues() {
-        let action = AgentAction::ValidateDocument {
-            collection: "plans".into(),
-            id: "plan-1".into(),
-        };
         let result = ActionResult::DocumentValidated {
             verdict: "fail".into(),
             summary: "Incomplete document".into(),
             issues: vec!["Missing criteria".into(), "Too vague".into()],
         };
-        let summary = format_action_summary(&action, &result);
+        let summary = format_action_summary(&result);
         assert!(summary.contains("validated: fail"));
         assert!(summary.contains("2 issues"));
     }

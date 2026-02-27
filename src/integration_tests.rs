@@ -1368,4 +1368,551 @@ mod tests {
         let r3 = dispatch_ok(&stores, &tx, &wm, &ic, "learning.reinforce", json!({"id": id}));
         assert!((r3["confidence"].as_f64().unwrap() - 0.75).abs() < 0.01);
     }
+
+    // ========================================================================
+    // MVP4 Validation — E2E tests for wired Coordinator actions
+    // ========================================================================
+
+    #[test]
+    fn test_coordinator_action_creates_plan_via_executor() {
+        // Verify that CreatePlan action through execute_action actually creates a plan in stores
+        use crate::agents::AgentAction;
+        use crate::agents::bridge::AgentIpcBridge;
+        use crate::agents::executor::{ActionResult, execute_action};
+        use crate::tools::ToolRunner;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("loopr-e2e-createplan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let runner = ToolRunner::new(&[]);
+        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, Config::default());
+
+        let action = AgentAction::CreatePlan {
+            title: "E2E Test Plan".to_string(),
+            description: "Test description".to_string(),
+            acceptance_criteria: "All tests pass".to_string(),
+        };
+
+        let result = rt
+            .block_on(execute_action(
+                &action,
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+
+        match result {
+            ActionResult::RecordCreated { collection, id } => {
+                assert_eq!(collection, "plans");
+                // Verify plan exists in stores
+                let plans = stores.plans.read().unwrap();
+                let plan = plans.get(&id).expect("plan should exist in stores");
+                assert_eq!(plan.title, "E2E Test Plan");
+            }
+            other => panic!("expected RecordCreated, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_coordinator_creates_full_hierarchy_via_executor() {
+        // CreatePlan → CreateSpec → CreatePhase → CreateWorkItem through executor
+        use crate::agents::AgentAction;
+        use crate::agents::bridge::AgentIpcBridge;
+        use crate::agents::executor::{ActionResult, execute_action};
+        use crate::tools::ToolRunner;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("loopr-e2e-hierarchy-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let runner = ToolRunner::new(&[]);
+        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, Config::default());
+
+        // Create Plan
+        let plan_result = rt
+            .block_on(execute_action(
+                &AgentAction::CreatePlan {
+                    title: "Auth Plan".into(),
+                    description: "Auth system".into(),
+                    acceptance_criteria: "Tests pass".into(),
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+        let plan_id = match plan_result {
+            ActionResult::RecordCreated { id, .. } => id,
+            other => panic!("expected RecordCreated for plan, got: {:?}", other),
+        };
+
+        // Create Spec
+        let spec_result = rt
+            .block_on(execute_action(
+                &AgentAction::CreateSpec {
+                    plan_id: plan_id.clone(),
+                    title: "JWT Spec".into(),
+                    description: "JWT tokens".into(),
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+        let spec_id = match spec_result {
+            ActionResult::RecordCreated { id, .. } => id,
+            other => panic!("expected RecordCreated for spec, got: {:?}", other),
+        };
+
+        // Create Phase
+        let phase_result = rt
+            .block_on(execute_action(
+                &AgentAction::CreatePhase {
+                    spec_id: spec_id.clone(),
+                    title: "Phase 1".into(),
+                    description: "Foundation".into(),
+                    order: 1,
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+        let phase_id = match phase_result {
+            ActionResult::RecordCreated { id, .. } => id,
+            other => panic!("expected RecordCreated for phase, got: {:?}", other),
+        };
+
+        // Create WorkItem
+        let wi_result = rt
+            .block_on(execute_action(
+                &AgentAction::CreateWorkItem {
+                    phase_id: phase_id.clone(),
+                    title: "Add login".into(),
+                    description: "Add login endpoint".into(),
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+        let wi_id = match wi_result {
+            ActionResult::RecordCreated { collection, id } => {
+                assert_eq!(collection, "work_items");
+                id
+            }
+            other => panic!("expected RecordCreated for work_item, got: {:?}", other),
+        };
+
+        // Verify all records exist with correct parent linkage
+        let plans = stores.plans.read().unwrap();
+        assert!(plans.contains_key(&plan_id));
+
+        let specs = stores.specs.read().unwrap();
+        let spec = specs.get(&spec_id).unwrap();
+        assert_eq!(spec.plan_id, plan_id);
+
+        let phases = stores.phases.read().unwrap();
+        let phase = phases.get(&phase_id).unwrap();
+        assert_eq!(phase.spec_id, spec_id);
+
+        let wis = stores.work_items.read().unwrap();
+        let wi = wis.get(&wi_id).unwrap();
+        assert_eq!(wi.phase_id, phase_id);
+    }
+
+    #[test]
+    fn test_coordinator_triage_accept_bundle_via_executor() {
+        // Create hierarchy + bundle → TriageBundle → AcceptBundle through executor
+        use crate::agents::AgentAction;
+        use crate::agents::bridge::AgentIpcBridge;
+        use crate::agents::executor::{ActionResult, execute_action};
+        use crate::domain::bundle::BundleStatus;
+        use crate::tools::ToolRunner;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("loopr-e2e-triage-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+        let runner = ToolRunner::new(&[]);
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), Config::default());
+
+        // Create hierarchy + work item (via dispatch for speed)
+        let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+        let wi = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.create",
+            json!({"phase_id": phase_id, "title": "WI", "description": "d"}),
+        );
+        let wi_id = wi["id"].as_str().unwrap().to_string();
+
+        // Transition WI to InProgress so bundle can be proposed
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+        );
+
+        // Create a bundle
+        let bundle = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "description": "Auth changes",
+                "files_changed": ["src/auth.rs"],
+                "commit_sha": "abc123",
+                "branch_name": "feature-auth"
+            }),
+        );
+        let bundle_id = bundle["id"].as_str().unwrap().to_string();
+
+        // TriageBundle via executor
+        let triage_result = rt
+            .block_on(execute_action(
+                &AgentAction::TriageBundle {
+                    bundle_id: bundle_id.clone(),
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+        assert!(
+            matches!(triage_result, ActionResult::Transitioned(ref s) if s.contains("Triaged")),
+            "expected Transitioned(Triaged), got: {:?}",
+            triage_result
+        );
+
+        // Verify bundle is Triaged
+        {
+            let bundles = stores.bundles.read().unwrap();
+            assert_eq!(bundles[&bundle_id].status, BundleStatus::Triaged);
+        }
+
+        // Review the bundle (needed before Accept)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+        );
+
+        // AcceptBundle via executor
+        let accept_result = rt
+            .block_on(execute_action(
+                &AgentAction::AcceptBundle {
+                    bundle_id: bundle_id.clone(),
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+        assert!(
+            matches!(accept_result, ActionResult::Transitioned(ref s) if s.contains("Accepted")),
+            "expected Transitioned(Accepted), got: {:?}",
+            accept_result
+        );
+
+        // Verify bundle is Accepted
+        {
+            let bundles = stores.bundles.read().unwrap();
+            assert_eq!(bundles[&bundle_id].status, BundleStatus::Accepted);
+        }
+    }
+
+    #[test]
+    fn test_coordinator_get_goal_full_lifecycle() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // No goal yet
+        let r1 = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
+        assert_eq!(r1["active"], false);
+
+        // Set goal
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "coordinator.set_goal",
+            json!({"goal": "Build a website"}),
+        );
+
+        // Get goal — should return the active one
+        let r2 = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
+        assert_eq!(r2["goal"], "Build a website");
+        assert_eq!(r2["active"], true);
+
+        // Clear goal
+        dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.clear_goal", json!({}));
+
+        // Get goal — should be inactive now
+        let r3 = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
+        assert_eq!(r3["active"], false);
+    }
+
+    #[test]
+    fn test_full_mvp4_pipeline() {
+        // End-to-end: goal → plan → spec → phase → work_item → bundle → triage → review → accept
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // 1. Set coordinator goal
+        let goal = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "coordinator.set_goal",
+            json!({"goal": "Build example website"}),
+        );
+        assert_eq!(goal["active"], true);
+
+        // 2. Create Plan
+        let plan = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.create",
+            json!({"title": "Website Plan", "description": "Build a static site", "acceptance_criteria": "Site loads"}),
+        );
+        let plan_id = plan["id"].as_str().unwrap().to_string();
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.transition",
+            json!({"id": plan_id, "target_status": "active"}),
+        );
+
+        // 3. Create Spec
+        let spec = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
+        );
+        let spec_id = spec["id"].as_str().unwrap().to_string();
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.transition",
+            json!({"id": spec_id, "target_status": "active"}),
+        );
+
+        // 4. Create Phase
+        let phase = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
+        );
+        let phase_id = phase["id"].as_str().unwrap().to_string();
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.transition",
+            json!({"id": phase_id, "target_status": "active"}),
+        );
+
+        // 5. Create WorkItem
+        let wi = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.create",
+            json!({"phase_id": phase_id, "title": "Create index.html", "description": "Write the homepage"}),
+        );
+        let wi_id = wi["id"].as_str().unwrap().to_string();
+
+        // 6. Assign WorkItem (transition to InProgress)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
+        );
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work_item.transition",
+            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+        );
+
+        // 7. Create Bundle (implementer output)
+        let bundle = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.create",
+            json!({
+                "work_item_id": wi_id,
+                "description": "Created index.html with basic structure",
+                "files_changed": ["index.html"],
+                "commit_sha": "def456",
+                "branch_name": "feature-index"
+            }),
+        );
+        let bundle_id = bundle["id"].as_str().unwrap().to_string();
+
+        // 8. Triage (Coordinator)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+
+        // 9. Review (Reviewer)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+        );
+
+        // 10. Accept (Coordinator)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
+        );
+
+        // Verify final state
+        {
+            let bundles = stores.bundles.read().unwrap();
+            assert_eq!(
+                bundles[&bundle_id].status,
+                crate::domain::bundle::BundleStatus::Accepted
+            );
+        }
+
+        // Verify goal still active
+        let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
+        assert_eq!(final_goal["goal"], "Build example website");
+        assert_eq!(final_goal["active"], true);
+
+        // Verify record counts
+        assert_eq!(stores.plans.read().unwrap().len(), 1);
+        assert_eq!(stores.specs.read().unwrap().len(), 1);
+        assert_eq!(stores.phases.read().unwrap().len(), 1);
+        assert_eq!(stores.work_items.read().unwrap().len(), 1);
+        assert_eq!(stores.bundles.read().unwrap().len(), 1);
+        assert_eq!(stores.coordinator_goals.read().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_create_spec_with_invalid_plan_id_returns_error() {
+        // Verify that CreateSpec with a non-existent plan_id returns an error
+        use crate::agents::AgentAction;
+        use crate::agents::bridge::AgentIpcBridge;
+        use crate::agents::executor::{ActionResult, execute_action};
+        use crate::tools::ToolRunner;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = std::env::temp_dir().join(format!("loopr-e2e-badparent-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let runner = ToolRunner::new(&[]);
+        let bridge = AgentIpcBridge::new(stores, tx, wm, Config::default());
+
+        let result = rt
+            .block_on(execute_action(
+                &AgentAction::CreateSpec {
+                    plan_id: "nonexistent-plan".into(),
+                    title: "Bad Spec".into(),
+                    description: "Should fail".into(),
+                },
+                &runner,
+                &bridge,
+                &dir,
+                None,
+                AgentType::Coordinator,
+            ))
+            .unwrap();
+
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("failed")),
+            "expected ActionError for invalid parent, got: {:?}",
+            result
+        );
+    }
 }

@@ -159,6 +159,7 @@ pub fn dispatch(
         "tool.list" => handle_tool_list(stores, req),
         "coordinator.set_goal" => handle_coordinator_set_goal(stores, event_tx, req),
         "coordinator.clear_goal" => handle_coordinator_clear_goal(stores, event_tx, req),
+        "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
@@ -2557,6 +2558,21 @@ fn handle_coordinator_clear_goal(
     }
 
     DaemonResponse::ok(req.id, json!({ "cleared": cleared_count }))
+}
+
+fn handle_coordinator_get_goal(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let goals = stores.coordinator_goals.read().unwrap();
+    let active = goals.values().find(|g| g.active);
+    match active {
+        Some(goal) => {
+            let json = match serde_json::to_value(goal) {
+                Ok(v) => v,
+                Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+            };
+            DaemonResponse::ok(req.id, json)
+        }
+        None => DaemonResponse::ok(req.id, json!({ "active": false })),
+    }
 }
 
 // --- Agent handlers ---
@@ -8247,6 +8263,34 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["cleared"], 0);
+    }
+
+    #[test]
+    fn test_coordinator_get_goal_returns_active() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // Set a goal first
+        let req1 = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "Build auth" }));
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        // Get it
+        let req2 = DaemonRequest::new(2, "coordinator.get_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["goal"], "Build auth");
+        assert_eq!(result["active"], true);
+    }
+
+    #[test]
+    fn test_coordinator_get_goal_when_none() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.get_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["active"], false);
     }
 
     // --- Pool size enforcement tests ---

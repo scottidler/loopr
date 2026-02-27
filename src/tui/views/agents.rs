@@ -25,9 +25,23 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .agent_sessions
         .iter()
         .map(|session| {
-            let target = match (&session.work_item_id, &session.bundle_id) {
-                (Some(wi), _) => format!(" wi:{}", &wi[..wi.len().min(8)]),
-                (_, Some(b)) => format!(" b:{}", &b[..b.len().min(8)]),
+            let target = match (
+                &session.work_item_id,
+                &session.bundle_id,
+                &session.target_id,
+                &session.query,
+            ) {
+                (Some(wi), _, _, _) => format!(" wi:{}", &wi[..wi.len().min(8)]),
+                (_, Some(b), _, _) => format!(" b:{}", &b[..b.len().min(8)]),
+                (_, _, Some(t), Some(q)) => {
+                    let q_trunc = if q.len() > 20 { &q[..20] } else { q };
+                    format!(" {}:{}", &t[..t.len().min(8)], q_trunc)
+                }
+                (_, _, Some(t), None) => format!(" target:{}", &t[..t.len().min(8)]),
+                (_, _, None, Some(q)) => {
+                    let q_trunc = if q.len() > 24 { &q[..24] } else { q };
+                    format!(" q:{}", q_trunc)
+                }
                 _ => String::new(),
             };
             let iter_info = if session.iteration > 0 {
@@ -91,6 +105,17 @@ mod tests {
         let _ = s2.transition_to(AgentStatus::Running);
         let _ = s2.transition_to(AgentStatus::Completed);
         app.state.agent_sessions.push(s2);
+
+        // Researcher with target_id and query
+        let mut s3 = AgentSession::new(AgentType::Researcher, "claude-sonnet-4-6".to_string());
+        s3.target_id = Some("wi-xyz789".to_string());
+        s3.query = Some("Investigate auth module".to_string());
+        let _ = s3.transition_to(AgentStatus::Running);
+        app.state.agent_sessions.push(s3);
+
+        // Coordinator with no target
+        let s4 = AgentSession::new(AgentType::Coordinator, "claude-sonnet-4-6".to_string());
+        app.state.agent_sessions.push(s4);
 
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();

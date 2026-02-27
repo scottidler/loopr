@@ -319,6 +319,24 @@ pub async fn execute_action(
             if !canonical.starts_with(&worktree_canonical) {
                 return Err(eyre!("path escapes worktree: {}", path));
             }
+
+            // Advisory lock check: under LockStrict, reject writes to locked resources
+            if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
+                let lock_resp = bridge.request(
+                    "lock.list",
+                    serde_json::json!({ "resource": path, "active_only": true }),
+                );
+                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array())
+                    && !locks.is_empty()
+                {
+                    let holder = locks[0].get("holder_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    return Ok(ActionResult::ActionError(format!(
+                        "file '{}' locked by {} (policy: LockStrict)",
+                        path, holder
+                    )));
+                }
+            }
+
             if let Some(parent) = full_path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
@@ -429,23 +447,192 @@ pub async fn execute_action(
         AgentAction::Done { summary } => Ok(ActionResult::Done(summary.clone())),
         AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
 
-        // --- Coordinator actions (stubs — wired in Phase 2 coordinator.rs) ---
-        AgentAction::CreatePlan { title, .. } => Ok(ActionResult::NotYetImplemented(format!("CreatePlan: {}", title))),
-        AgentAction::CreateSpec { title, .. } => Ok(ActionResult::NotYetImplemented(format!("CreateSpec: {}", title))),
-        AgentAction::CreatePhase { title, .. } => {
-            Ok(ActionResult::NotYetImplemented(format!("CreatePhase: {}", title)))
+        // --- Coordinator document-creation actions ---
+        AgentAction::CreatePlan {
+            title,
+            description,
+            acceptance_criteria,
+        } => {
+            let resp = bridge.request(
+                "plan.create",
+                serde_json::json!({
+                    "title": title,
+                    "description": description,
+                    "acceptance_criteria": acceptance_criteria,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("create_plan failed: {}", msg)));
+            }
+            let id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!("CreatePlan: {} (id: {})", title, id);
+            Ok(ActionResult::RecordCreated {
+                collection: "plans".to_string(),
+                id,
+            })
         }
-        AgentAction::CreateWorkItem { title, .. } => {
-            Ok(ActionResult::NotYetImplemented(format!("CreateWorkItem: {}", title)))
+        AgentAction::CreateSpec {
+            plan_id,
+            title,
+            description,
+        } => {
+            let resp = bridge.request(
+                "spec.create",
+                serde_json::json!({
+                    "plan_id": plan_id,
+                    "title": title,
+                    "description": description,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("create_spec failed: {}", msg)));
+            }
+            let id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!("CreateSpec: {} (id: {})", title, id);
+            Ok(ActionResult::RecordCreated {
+                collection: "specs".to_string(),
+                id,
+            })
         }
-        AgentAction::AssignAgent { agent_type, target_id } => Ok(ActionResult::NotYetImplemented(format!(
-            "AssignAgent: {} → {}",
-            agent_type, target_id
-        ))),
-        AgentAction::SpawnResearcher { query, scope_id } => Ok(ActionResult::NotYetImplemented(format!(
-            "SpawnResearcher: {} (scope: {})",
-            query, scope_id
-        ))),
+        AgentAction::CreatePhase {
+            spec_id,
+            title,
+            description,
+            order,
+        } => {
+            let resp = bridge.request(
+                "phase.create",
+                serde_json::json!({
+                    "spec_id": spec_id,
+                    "title": title,
+                    "description": description,
+                    "order": order,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("create_phase failed: {}", msg)));
+            }
+            let id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!("CreatePhase: {} (id: {})", title, id);
+            Ok(ActionResult::RecordCreated {
+                collection: "phases".to_string(),
+                id,
+            })
+        }
+        AgentAction::CreateWorkItem {
+            phase_id,
+            title,
+            description,
+        } => {
+            let resp = bridge.request(
+                "work_item.create",
+                serde_json::json!({
+                    "phase_id": phase_id,
+                    "title": title,
+                    "description": description,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("create_work_item failed: {}", msg)));
+            }
+            let id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!("CreateWorkItem: {} (id: {})", title, id);
+            Ok(ActionResult::RecordCreated {
+                collection: "work_items".to_string(),
+                id,
+            })
+        }
+
+        // --- Coordinator agent management actions ---
+        AgentAction::AssignAgent { agent_type, target_id } => {
+            // Map target_id to the correct param based on agent type
+            let mut params = serde_json::json!({ "agent_type": agent_type });
+            match agent_type.as_str() {
+                "implementer" => {
+                    params["work_item_id"] = serde_json::json!(target_id);
+                }
+                "reviewer" => {
+                    params["bundle_id"] = serde_json::json!(target_id);
+                }
+                _ => {
+                    params["target_id"] = serde_json::json!(target_id);
+                }
+            }
+            let resp = bridge.request("agent.start", params);
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("assign_agent failed: {}", msg)));
+            }
+            let session_id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!("AssignAgent: {} → {} (session: {})", agent_type, target_id, session_id);
+            Ok(ActionResult::AgentSpawned {
+                session_id,
+                agent_type: agent_type.clone(),
+            })
+        }
+        AgentAction::SpawnResearcher { query, scope_id } => {
+            let resp = bridge.request(
+                "agent.start",
+                serde_json::json!({
+                    "agent_type": "researcher",
+                    "target_id": scope_id,
+                    "query": query,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("spawn_researcher failed: {}", msg)));
+            }
+            let session_id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            info!(
+                "SpawnResearcher: {} (scope: {}, session: {})",
+                query, scope_id, session_id
+            );
+            Ok(ActionResult::AgentSpawned {
+                session_id,
+                agent_type: "researcher".to_string(),
+            })
+        }
         AgentAction::ValidateDocument { collection, id } => {
             let resp = bridge.request(
                 "validator.validate",
@@ -559,10 +746,36 @@ pub async fn execute_action(
             Ok(ActionResult::LockReleased(lock_id.clone()))
         }
         AgentAction::TriageBundle { bundle_id } => {
-            Ok(ActionResult::NotYetImplemented(format!("TriageBundle: {}", bundle_id)))
+            let resp = bridge.request(
+                "bundle.transition",
+                serde_json::json!({
+                    "id": bundle_id,
+                    "target_status": "Triaged",
+                    "role": "coordinator",
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("triage_bundle failed: {}", msg)));
+            }
+            info!("TriageBundle: {} → Triaged", bundle_id);
+            Ok(ActionResult::Transitioned(format!("bundle/{} → Triaged", bundle_id)))
         }
         AgentAction::AcceptBundle { bundle_id } => {
-            Ok(ActionResult::NotYetImplemented(format!("AcceptBundle: {}", bundle_id)))
+            let resp = bridge.request(
+                "bundle.transition",
+                serde_json::json!({
+                    "id": bundle_id,
+                    "target_status": "Accepted",
+                    "role": "coordinator",
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Ok(ActionResult::ActionError(format!("accept_bundle failed: {}", msg)));
+            }
+            info!("AcceptBundle: {} → Accepted", bundle_id);
+            Ok(ActionResult::Transitioned(format!("bundle/{} → Accepted", bundle_id)))
         }
 
         // --- Researcher actions (wired in Phase 4 researcher.rs) ---
@@ -614,9 +827,16 @@ pub enum ActionResult {
     NeedHelp(String),
     /// Non-fatal error — fed back to the LLM so it can self-correct.
     ActionError(String),
-    /// Action type recognized but execution not yet implemented.
-    /// Used for Coordinator/Researcher actions during incremental build.
-    NotYetImplemented(String),
+    /// Record created via bridge — contains (collection, id).
+    RecordCreated {
+        collection: String,
+        id: String,
+    },
+    /// Agent session spawned — contains (session_id, agent_type).
+    AgentSpawned {
+        session_id: String,
+        agent_type: String,
+    },
 }
 
 fn persist_session(stores: &Stores, session: &AgentSession) {
@@ -703,6 +923,78 @@ mod tests {
 
         let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
         assert_eq!(content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_lock_strict_blocks() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = std::env::temp_dir().join(format!("loopr-exec-lockstrict-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, config);
+
+        // Create a lock on "src/main.rs"
+        let lock_resp = bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+        assert!(!lock_resp.is_error());
+
+        // Attempt to write to locked path
+        let action = AgentAction::WriteFile {
+            path: "src/main.rs".to_string(),
+            content: "should be blocked".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
+            "expected ActionError for locked file, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_file_lock_advisory_allows() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-lockadvisory-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        // Default config has LockAdvisory
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, Config::default());
+
+        // Create a lock on "src/main.rs"
+        let lock_resp = bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+        assert!(!lock_resp.is_error());
+
+        // Write should succeed under advisory policy
+        let action = AgentAction::WriteFile {
+            path: "test.txt".to_string(),
+            content: "should work".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::FileWritten(_)));
     }
 
     #[tokio::test]

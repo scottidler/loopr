@@ -36,6 +36,11 @@ impl AgentIpcBridge {
         }
     }
 
+    /// Access the configuration.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Access the event broadcast channel.
     pub fn event_tx(&self) -> &broadcast::Sender<DaemonEvent> {
         &self.event_tx

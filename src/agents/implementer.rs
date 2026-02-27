@@ -309,7 +309,10 @@ fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
-        ActionResult::NotYetImplemented(d) => format!("not yet implemented: {}", d),
+        ActionResult::RecordCreated { collection, id } => format!("created {}: {}", collection, id),
+        ActionResult::AgentSpawned { session_id, agent_type } => {
+            format!("spawned {} ({})", agent_type, session_id)
+        }
     }
 }
 
