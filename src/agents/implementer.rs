@@ -264,10 +264,7 @@ pub async fn run_iteration(
         {
             Ok(r) => r,
             Err(e) => {
-                warn!(
-                    "Implementer {} action failed (non-fatal): {e}",
-                    params.session_id
-                );
+                warn!("Implementer {} action failed (non-fatal): {e}", params.session_id);
                 ActionResult::ActionError(e.to_string())
             }
         };

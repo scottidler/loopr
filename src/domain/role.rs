@@ -70,7 +70,13 @@ mod tests {
 
     #[test]
     fn test_role_serde_roundtrip() {
-        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer, Role::Researcher] {
+        for role in [
+            Role::Coordinator,
+            Role::Integrator,
+            Role::Implementer,
+            Role::Reviewer,
+            Role::Researcher,
+        ] {
             let json = serde_json::to_string(&role).unwrap();
             let deserialized: Role = serde_json::from_str(&json).unwrap();
             assert_eq!(role, deserialized);
@@ -90,7 +96,13 @@ mod tests {
     fn test_role_display_matches_serde() {
         // Regression: Display must produce values that serde can deserialize.
         // CLI dispatch uses to_string() but handlers use serde_json::from_value().
-        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer, Role::Researcher] {
+        for role in [
+            Role::Coordinator,
+            Role::Integrator,
+            Role::Implementer,
+            Role::Reviewer,
+            Role::Researcher,
+        ] {
             let display = role.to_string();
             let quoted = format!("\"{}\"", display);
             let deserialized: Role = serde_json::from_str(&quoted)

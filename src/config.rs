@@ -37,10 +37,7 @@ pub enum TickCadence {
     #[default]
     Continuous,
     /// Wait for N Accepted Bundles or a timeout before creating a Tick.
-    Batched {
-        min_bundles: u32,
-        timeout_secs: u64,
-    },
+    Batched { min_bundles: u32, timeout_secs: u64 },
 }
 
 /// Limits on Bundle size to keep changes reviewable.
