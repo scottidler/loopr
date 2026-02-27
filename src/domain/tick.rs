@@ -63,6 +63,8 @@ pub struct Tick {
     pub number: u32,
     pub integration_sha: Option<String>,
     pub bundle_ids: Vec<String>,
+    #[serde(default)]
+    pub attempted_bundle_ids: Vec<String>,
     pub validation_log: String,
     pub status: TickStatus,
     pub created_at: i64,
@@ -77,6 +79,7 @@ impl Tick {
             number,
             integration_sha: None,
             bundle_ids: Vec::new(),
+            attempted_bundle_ids: Vec::new(),
             validation_log: String::new(),
             status: TickStatus::Open,
             created_at: now,

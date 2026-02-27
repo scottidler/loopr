@@ -33,6 +33,10 @@ pub struct Lock {
     pub holder_id: String,
     pub granted_by: String,
     pub status: LockStatus,
+    #[serde(default)]
+    pub expires_at: Option<i64>,
+    #[serde(default)]
+    pub renewable: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -46,6 +50,8 @@ impl Lock {
             holder_id,
             granted_by,
             status: LockStatus::Active,
+            expires_at: None,
+            renewable: false,
             created_at: now,
             updated_at: now,
         }
@@ -66,6 +72,15 @@ impl Lock {
     /// Check if this lock is currently active.
     pub fn is_active(&self) -> bool {
         self.status == LockStatus::Active
+    }
+
+    /// Check if this lock has expired based on `expires_at` timestamp.
+    pub fn is_expired(&self) -> bool {
+        if let Some(expires_at) = self.expires_at {
+            crate::id::now_millis() >= expires_at
+        } else {
+            false
+        }
     }
 }
 
@@ -172,6 +187,26 @@ mod tests {
         lock.expire();
         assert_eq!(lock.status, LockStatus::Expired);
         assert!(!lock.is_active());
+    }
+
+    #[test]
+    fn test_lock_is_expired_no_expiry() {
+        let lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        assert!(!lock.is_expired());
+    }
+
+    #[test]
+    fn test_lock_is_expired_future() {
+        let mut lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        lock.expires_at = Some(crate::id::now_millis() + 60_000);
+        assert!(!lock.is_expired());
+    }
+
+    #[test]
+    fn test_lock_is_expired_past() {
+        let mut lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
+        lock.expires_at = Some(crate::id::now_millis() - 1);
+        assert!(lock.is_expired());
     }
 
     #[test]

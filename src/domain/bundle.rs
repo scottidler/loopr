@@ -142,6 +142,8 @@ pub struct Bundle {
     pub touched_paths: Vec<String>,
     pub claims: String,
     pub verification: String,
+    #[serde(default)]
+    pub locks_used: Vec<String>,
     pub status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -158,6 +160,7 @@ impl Bundle {
             touched_paths: Vec::new(),
             claims,
             verification: String::new(),
+            locks_used: Vec::new(),
             status: BundleStatus::Proposed,
             created_at: now,
             updated_at: now,

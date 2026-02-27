@@ -108,6 +108,13 @@ pub fn work_item_transitions() -> Vec<TransitionRule<WorkItemStatus>> {
     ]
 }
 
+/// A single item in a WorkItem's completion checklist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChecklistItem {
+    pub description: String,
+    pub completed: bool,
+}
+
 /// Concrete unit of work within a Phase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkItem {
@@ -119,6 +126,10 @@ pub struct WorkItem {
     pub status: WorkItemStatus,
     pub resource_tags: Vec<String>,
     pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    pub checklist: Vec<ChecklistItem>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -135,6 +146,8 @@ impl WorkItem {
             status: WorkItemStatus::Draft,
             resource_tags: Vec::new(),
             dependencies: Vec::new(),
+            acceptance_criteria: Vec::new(),
+            checklist: Vec::new(),
             created_at: now,
             updated_at: now,
         }

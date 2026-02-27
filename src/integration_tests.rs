@@ -221,7 +221,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Implement sign()", "description": "JWT signing function"}),
+            json!({"phase_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
         assert_eq!(wi["status"], "Draft");
@@ -241,7 +241,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.transition",
-            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
         // Create Bundle for WorkItem
@@ -296,7 +296,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Task", "description": "desc"}),
+            json!({"phase_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -660,7 +660,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "WI-1", "description": "desc"}),
+            json!({"phase_id": phase_id, "title": "WI-1", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
 
         // Add agent session
@@ -827,7 +827,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Task", "description": "desc"}),
+            json!({"phase_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -1196,7 +1196,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "sign()", "description": "Sign JWT"}),
+            json!({"phase_id": phase_id, "title": "sign()", "description": "Sign JWT", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -1215,7 +1215,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.transition",
-            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
         let bundle = dispatch_ok(
@@ -1506,6 +1506,8 @@ mod tests {
                     phase_id: phase_id.clone(),
                     title: "Add login".into(),
                     description: "Add login endpoint".into(),
+                    resource_tags: vec!["src/".into()],
+                    acceptance_criteria: vec!["tests pass".into()],
                 },
                 &runner,
                 &bridge,
@@ -1567,7 +1569,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "WI", "description": "d"}),
+            json!({"phase_id": phase_id, "title": "WI", "description": "d", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -1586,7 +1588,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.transition",
-            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
         // Create a bundle
@@ -1784,7 +1786,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Create index.html", "description": "Write the homepage"}),
+            json!({"phase_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -1803,7 +1805,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.transition",
-            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+            json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
         // 7. Create Bundle (implementer output)
@@ -1985,7 +1987,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Create index.html", "description": "Homepage"}),
+            json!({"phase_id": phase_id, "title": "Create index.html", "description": "Homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
@@ -1995,7 +1997,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Create about.html", "description": "About page"}),
+            json!({"phase_id": phase_id, "title": "Create about.html", "description": "About page", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi2_id = wi2["id"].as_str().unwrap().to_string();
 
@@ -2033,7 +2035,16 @@ mod tests {
             &wm,
             &ic,
             "work_item.transition",
-            json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator"}),
+            json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
+        );
+        // Create a bundle before InReview (required by #15 invariant)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.create",
+            json!({"work_item_id": wi1_id, "branch_name": "feature/index"}),
         );
         dispatch_ok(
             &stores,
@@ -2080,7 +2091,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.transition",
-            json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator"}),
+            json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
         let bundle = dispatch_ok(
@@ -2237,7 +2248,7 @@ mod tests {
         assert_eq!(stores.specs.read().unwrap().len(), 1);
         assert_eq!(stores.phases.read().unwrap().len(), 1);
         assert_eq!(stores.work_items.read().unwrap().len(), 2);
-        assert_eq!(stores.bundles.read().unwrap().len(), 3);
+        assert_eq!(stores.bundles.read().unwrap().len(), 4);
         assert_eq!(stores.ticks.read().unwrap().len(), 1);
 
         // Cleanup
@@ -2329,7 +2340,7 @@ mod tests {
             &wm,
             &ic,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content"}),
+            json!({"phase_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 

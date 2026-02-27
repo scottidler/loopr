@@ -587,6 +587,8 @@ pub async fn execute_action(
             phase_id,
             title,
             description,
+            resource_tags,
+            acceptance_criteria,
         } => {
             let resp = bridge.request(
                 "work_item.create",
@@ -594,6 +596,8 @@ pub async fn execute_action(
                     "phase_id": phase_id,
                     "title": title,
                     "description": description,
+                    "resource_tags": resource_tags,
+                    "acceptance_criteria": acceptance_criteria,
                 }),
             );
             if resp.is_error() {
@@ -628,7 +632,7 @@ pub async fn execute_action(
 
                 match wi_status {
                     "Draft" => {
-                        // Draft → Ready → InProgress
+                        // Draft → Ready → InProgress (assignee set on InProgress transition)
                         let r1 = bridge.request(
                             "work_item.transition",
                             serde_json::json!({ "id": target_id, "target_status": "Ready", "role": "coordinator" }),
@@ -642,7 +646,7 @@ pub async fn execute_action(
                         }
                         let r2 = bridge.request(
                             "work_item.transition",
-                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator" }),
+                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator", "assignee": agent_type }),
                         );
                         if r2.is_error() {
                             let msg = r2.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
@@ -660,7 +664,7 @@ pub async fn execute_action(
                         // Ready → InProgress
                         let r = bridge.request(
                             "work_item.transition",
-                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator" }),
+                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator", "assignee": agent_type }),
                         );
                         if r.is_error() {
                             let msg = r.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
@@ -1013,7 +1017,7 @@ mod tests {
         );
         let wi_resp = bridge.request(
             "work_item.create",
-            serde_json::json!({"phase_id": phase_id, "title": "Test WI", "description": "desc"}),
+            serde_json::json!({"phase_id": phase_id, "title": "Test WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id, phase_id, wi_id)

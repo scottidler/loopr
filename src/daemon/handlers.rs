@@ -920,7 +920,50 @@ fn handle_work_item_create(
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
     }
 
-    let work_item = WorkItem::new(phase_id, title, description);
+    let resource_tags: Vec<String> = req
+        .params
+        .get("resource_tags")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    // #17: WorkItem must have at least one resource_tag
+    if resource_tags.is_empty() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::precondition_failed("WorkItem must have at least one resource_tag"),
+        );
+    }
+
+    let acceptance_criteria: Vec<String> = req
+        .params
+        .get("acceptance_criteria")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let dependencies: Vec<String> = req
+        .params
+        .get("dependencies")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    // #16: Cycle detection for depends_on
+    if !dependencies.is_empty() {
+        let work_items = stores.work_items.read().unwrap();
+        // We can't have a cycle since this is a new item, but we validate that
+        // referenced dependencies exist and that they don't form a chain back
+        // (defensive — mainly matters when update is added later)
+        for dep_id in &dependencies {
+            if !work_items.contains_key(dep_id) {
+                return DaemonResponse::err(req.id, RpcError::not_found("work_item (dependency)", dep_id));
+            }
+        }
+    }
+
+    let mut work_item = WorkItem::new(phase_id, title, description);
+    work_item.resource_tags = resource_tags;
+    work_item.acceptance_criteria = acceptance_criteria;
+    work_item.dependencies = dependencies;
+
     let wi_json = match serde_json::to_value(&work_item) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -1048,6 +1091,45 @@ fn handle_work_item_transition(
     let rules = work_item_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
+    }
+
+    // Allow setting assignee via transition params
+    if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
+        wi.assignee = Some(assignee.to_string());
+    }
+
+    // #13: Assignee required for InProgress/InReview
+    if matches!(target_status, WorkItemStatus::InProgress | WorkItemStatus::InReview) && wi.assignee.is_none() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::precondition_failed("WorkItem must have an assignee before transitioning to InProgress/InReview"),
+        );
+    }
+
+    // #14: acceptance_criteria required for Ready
+    if target_status == WorkItemStatus::Ready && wi.acceptance_criteria.is_empty() {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::precondition_failed("WorkItem must have acceptance_criteria before transitioning to Ready"),
+        );
+    }
+
+    // #15: InReview requires active Bundle (not Rejected/Merged/Superseded)
+    if target_status == WorkItemStatus::InReview {
+        let bundles = stores.bundles.read().unwrap();
+        let has_active_bundle = bundles.values().any(|b| {
+            b.work_item_id == wi.id
+                && !matches!(
+                    b.status,
+                    BundleStatus::Rejected | BundleStatus::Merged | BundleStatus::Superseded
+                )
+        });
+        if !has_active_bundle {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("WorkItem cannot move to InReview without an active Bundle"),
+            );
+        }
     }
 
     wi.status = target_status;
@@ -1254,19 +1336,42 @@ fn handle_bundle_transition(
     };
 
     let mut bundles = stores.bundles.write().unwrap();
-    let bundle = match bundles.get_mut(&id) {
-        Some(b) => b,
+
+    // Read bundle info first for validation
+    let (from, bundle_wi_id) = match bundles.get(&id) {
+        Some(b) => (b.status, b.work_item_id.clone()),
         None => return DaemonResponse::err(req.id, RpcError::not_found("bundle", &id)),
     };
 
-    let from = bundle.status;
     let rules = bundle_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
+    // #18: At most one Accepted Bundle per WorkItem
+    if target_status == BundleStatus::Accepted {
+        let has_accepted = bundles
+            .values()
+            .any(|b| b.work_item_id == bundle_wi_id && b.id != id && b.status == BundleStatus::Accepted);
+        if has_accepted {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("WorkItem already has an Accepted Bundle"),
+            );
+        }
+    }
+
+    // Now get mutable reference and apply the transition
+    let bundle = bundles.get_mut(&id).unwrap();
     bundle.status = target_status;
     bundle.updated_at = crate::id::now_millis();
+
+    // Persist transition to TaskStore if available
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(bundle.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
 
     let bundle_json = match serde_json::to_value(&*bundle) {
         Ok(v) => v,
@@ -1804,7 +1909,26 @@ fn handle_lock_create(
         return DaemonResponse::err(req.id, RpcError::invalid_params("granted_by is required"));
     }
 
-    let lock = Lock::new(resource, holder_id, granted_by);
+    let mut lock = Lock::new(resource, holder_id, granted_by);
+
+    // #11: Accept optional ttl_secs param; compute expires_at
+    if let Some(ttl_secs) = req.params.get("ttl_secs").and_then(|v| v.as_u64()) {
+        lock.expires_at = Some(crate::id::now_millis() + (ttl_secs as i64 * 1000));
+    }
+    if let Some(renewable) = req.params.get("renewable").and_then(|v| v.as_bool()) {
+        lock.renewable = renewable;
+    }
+
+    // Auto-expire any locks that have passed their TTL
+    {
+        let mut locks = stores.locks.write().unwrap();
+        for existing_lock in locks.values_mut() {
+            if existing_lock.is_active() && existing_lock.is_expired() {
+                existing_lock.expire();
+            }
+        }
+    }
+
     let lock_json = match serde_json::to_value(&lock) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -4569,7 +4693,7 @@ mod tests {
                 "phase_id": phase_id,
                 "title": "Implement auth",
                 "description": "Add JWT signing"
-            }),
+            , "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
@@ -4589,7 +4713,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "Persisted WI", "description": "desc"}),
+            json!({"phase_id": phase_id, "title": "Persisted WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
@@ -4607,7 +4731,11 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "work_item.create", json!({"title": "WI"}));
+        let req = DaemonRequest::new(
+            1,
+            "work_item.create",
+            json!({"title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("phase_id"));
@@ -4618,7 +4746,11 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "work_item.create", json!({"phase_id": "nonexistent", "title": "WI"}));
+        let req = DaemonRequest::new(
+            1,
+            "work_item.create",
+            json!({"phase_id": "nonexistent", "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -4633,7 +4765,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work_item.create",
-            json!({"phase_id": phase_id, "description": "no title"}),
+            json!({"phase_id": phase_id, "description": "no title", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
@@ -4652,7 +4784,11 @@ mod tests {
         let _ = rx.try_recv();
         let _ = rx.try_recv();
 
-        let req = DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"}));
+        let req = DaemonRequest::new(
+            30,
+            "work_item.create",
+            json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        );
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
@@ -4671,7 +4807,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "My WI"})),
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id, "title": "My WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -4708,7 +4848,7 @@ mod tests {
         let create_req = DaemonRequest::new(
             30,
             "work_item.create",
-            json!({"phase_id": phase_id, "title": "TaskStore WI"}),
+            json!({"phase_id": phase_id, "title": "TaskStore WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
         assert!(!create_resp.is_error());
@@ -4762,14 +4902,22 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id_1, "title": "WI A"})),
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id_1, "title": "WI A", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(31, "work_item.create", json!({"phase_id": phase_id_2, "title": "WI B"})),
+            DaemonRequest::new(
+                31,
+                "work_item.create",
+                json!({"phase_id": phase_id_2, "title": "WI B", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
 
         // List all — should have 2
@@ -4823,14 +4971,22 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id_1, "title": "WI A"})),
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id_1, "title": "WI A", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(31, "work_item.create", json!({"phase_id": phase_id_2, "title": "WI B"})),
+            DaemonRequest::new(
+                31,
+                "work_item.create",
+                json!({"phase_id": phase_id_2, "title": "WI B", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
 
         // Clear HashMap to prove list reads from TaskStore
@@ -4874,7 +5030,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"})),
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         let _ = rx.try_recv(); // consume work_item create event
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -4911,7 +5071,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"})),
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -4923,7 +5087,7 @@ mod tests {
                 "id": wi_id,
                 "target_status": "InProgress",
                 "role": "coordinator"
-            }),
+            , "assignee": "agent-1"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
@@ -4942,7 +5106,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(30, "work_item.create", json!({"phase_id": phase_id, "title": "WI"})),
+            DaemonRequest::new(
+                30,
+                "work_item.create",
+                json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -4995,7 +5163,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "work_item.create",
-                json!({"phase_id": phase_id, "title": "Transition WI", "description": "Test"}),
+                json!({"phase_id": phase_id, "title": "Transition WI", "description": "Test", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
         assert!(!create_resp.is_error());
@@ -5040,7 +5208,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work_item.create",
-                json!({"phase_id": phase_id, "title": "Parent WI"}),
+                json!({"phase_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
         let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -5284,7 +5452,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(31, "work_item.create", json!({"phase_id": _phase_id, "title": "WI 2"})),
+            DaemonRequest::new(
+                31,
+                "work_item.create",
+                json!({"phase_id": _phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -5349,7 +5521,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(31, "work_item.create", json!({"phase_id": _phase_id, "title": "WI 2"})),
+            DaemonRequest::new(
+                31,
+                "work_item.create",
+                json!({"phase_id": _phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
         );
         let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 

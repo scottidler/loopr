@@ -285,12 +285,14 @@ pub fn run_integrator_cycle(
         }
     }
 
-    // Update tick with bundle IDs — clone-then-drop-then-persist to avoid deadlock.
+    // Update tick with bundle IDs and attempted bundle IDs.
+    // Clone-then-drop-then-persist to avoid deadlock.
     // Lock ordering: never hold in-memory RwLock while acquiring Store mutex.
     let tick_to_persist = {
         let mut ticks = stores.ticks.write().unwrap();
         if let Some(tick) = ticks.get_mut(&tick_id) {
             tick.bundle_ids = valid_bundle_ids.clone();
+            tick.attempted_bundle_ids = valid_bundle_ids.clone();
             Some(tick.clone())
         } else {
             None

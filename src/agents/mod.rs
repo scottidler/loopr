@@ -284,6 +284,10 @@ pub enum AgentAction {
         phase_id: String,
         title: String,
         description: String,
+        #[serde(default)]
+        resource_tags: Vec<String>,
+        #[serde(default)]
+        acceptance_criteria: Vec<String>,
     },
     AssignAgent {
         agent_type: String,
@@ -886,6 +890,8 @@ mod tests {
             phase_id: "ph-1".to_string(),
             title: "Add login".to_string(),
             description: "Add login endpoint".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["tests pass".to_string()],
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
