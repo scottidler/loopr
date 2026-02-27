@@ -66,6 +66,12 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
             to: Rejected,
             role: Some(Role::Integrator),
         },
+        // Rejection from Accepted (stale base_tick_id)
+        TransitionRule {
+            from: Accepted,
+            to: Rejected,
+            role: Some(Role::Integrator),
+        },
         // Early rejection (Coordinator can reject from Proposed, Triaged, Reviewed)
         TransitionRule {
             from: Proposed,

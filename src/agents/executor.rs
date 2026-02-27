@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::coordinator;
 use crate::agents::implementer::{self, LlmClient};
+use crate::agents::integrator_task;
 use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::researcher;
 use crate::agents::reviewer;
@@ -263,7 +264,29 @@ async fn run_agent_loop(
 
             result
         }
-        AgentType::Integrator => Err(eyre!("Integrator task loop not yet implemented")),
+        AgentType::Integrator => {
+            let config = stores.config.integrator.clone();
+
+            let mut session = {
+                let sessions = stores.agent_sessions.read().unwrap();
+                sessions
+                    .get(session_id)
+                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
+                    .clone()
+            };
+
+            let result = integrator_task::run_integrator(&mut session, stores, bridge, &config, event_tx).await;
+
+            // Write back updated session iteration count
+            {
+                let mut sessions = stores.agent_sessions.write().unwrap();
+                if let Some(s) = sessions.get_mut(session_id) {
+                    s.iteration = session.iteration;
+                }
+            }
+
+            result
+        }
     }
 }
 
