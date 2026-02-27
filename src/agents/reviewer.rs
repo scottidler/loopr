@@ -7,11 +7,10 @@ use tokio::sync::broadcast;
 
 use crate::agents::AgentSession;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::context::select_learnings;
+use crate::agents::context::ContextBuilder;
 use crate::agents::implementer::LlmClient;
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
-use crate::domain::learning::LearningScope;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
@@ -64,79 +63,6 @@ pub struct ReviewResult {
     pub summary: String,
 }
 
-/// Context loaded for a Reviewer iteration.
-#[derive(Debug, Clone)]
-pub struct ReviewerContext {
-    pub bundle_id: String,
-    pub bundle_claims: String,
-    pub bundle_touched_paths: Vec<String>,
-    pub work_item_title: String,
-    pub work_item_description: String,
-    pub phase_title: String,
-    pub phase_description: String,
-    pub spec_title: String,
-    pub spec_description: String,
-    pub plan_title: String,
-    pub plan_description: String,
-    pub learnings: Vec<String>,
-}
-
-/// Load the review context for a Bundle from Stores.
-pub fn load_review_context(stores: &Stores, bundle_id: &str) -> Result<ReviewerContext> {
-    let bundles = stores.bundles.read().unwrap();
-    let bundle = bundles
-        .get(bundle_id)
-        .ok_or_else(|| eyre!("bundle not found: {}", bundle_id))?;
-
-    let work_items = stores.work_items.read().unwrap();
-    let wi = work_items
-        .get(&bundle.work_item_id)
-        .ok_or_else(|| eyre!("work item not found: {}", bundle.work_item_id))?;
-
-    let phases = stores.phases.read().unwrap();
-    let phase = phases
-        .get(&wi.phase_id)
-        .ok_or_else(|| eyre!("phase not found: {}", wi.phase_id))?;
-
-    let specs = stores.specs.read().unwrap();
-    let spec = specs
-        .get(&phase.spec_id)
-        .ok_or_else(|| eyre!("spec not found: {}", phase.spec_id))?;
-
-    let plans = stores.plans.read().unwrap();
-    let plan = plans
-        .get(&spec.plan_id)
-        .ok_or_else(|| eyre!("plan not found: {}", spec.plan_id))?;
-
-    // Gather learnings scoped to the work item and its ancestors
-    let learnings_map = stores.learnings.read().unwrap();
-    let scope_ids = [
-        (bundle.work_item_id.as_str(), LearningScope::WorkItem),
-        (phase.id.as_str(), LearningScope::Phase),
-        (spec.id.as_str(), LearningScope::Spec),
-        (plan.id.as_str(), LearningScope::Plan),
-    ];
-    let learnings: Vec<String> = select_learnings(&learnings_map, &scope_ids, Role::Reviewer, 0.3, 20)
-        .into_iter()
-        .map(|l| l.content.clone())
-        .collect();
-
-    Ok(ReviewerContext {
-        bundle_id: bundle.id.clone(),
-        bundle_claims: bundle.claims.clone(),
-        bundle_touched_paths: bundle.touched_paths.clone(),
-        work_item_title: wi.title.clone(),
-        work_item_description: wi.description.clone(),
-        phase_title: phase.title.clone(),
-        phase_description: phase.description.clone(),
-        spec_title: spec.title.clone(),
-        spec_description: spec.description.clone(),
-        plan_title: plan.title.clone(),
-        plan_description: plan.description.clone(),
-        learnings,
-    })
-}
-
 const SYSTEM_PROMPT: &str = r#"You are a Reviewer agent in the Loopr development orchestrator. Your role is to review a Bundle (proposed code change) and provide structured feedback.
 
 ## Review Criteria
@@ -164,43 +90,6 @@ Respond with ONLY valid JSON matching this schema:
   ],
   "summary": "Overall review summary"
 }"#;
-
-/// Build the user message from loaded review context.
-pub fn build_review_message(ctx: &ReviewerContext) -> String {
-    let mut msg = String::with_capacity(4096);
-
-    msg.push_str("## Hierarchy\n\n");
-    msg.push_str(&format!("**Plan:** {} — {}\n", ctx.plan_title, ctx.plan_description));
-    msg.push_str(&format!("**Spec:** {} — {}\n", ctx.spec_title, ctx.spec_description));
-    msg.push_str(&format!("**Phase:** {} — {}\n", ctx.phase_title, ctx.phase_description));
-    msg.push_str(&format!(
-        "**WorkItem:** {} — {}\n\n",
-        ctx.work_item_title, ctx.work_item_description
-    ));
-
-    msg.push_str("## Bundle Under Review\n\n");
-    msg.push_str(&format!("**Bundle ID:** {}\n", ctx.bundle_id));
-    msg.push_str(&format!("**Claims:** {}\n", ctx.bundle_claims));
-    if !ctx.bundle_touched_paths.is_empty() {
-        msg.push_str("**Touched Paths:**\n");
-        for path in &ctx.bundle_touched_paths {
-            msg.push_str(&format!("- `{}`\n", path));
-        }
-    }
-    msg.push('\n');
-
-    if !ctx.learnings.is_empty() {
-        msg.push_str("## Relevant Learnings\n\n");
-        for learning in &ctx.learnings {
-            msg.push_str(&format!("- {}\n", learning));
-        }
-        msg.push('\n');
-    }
-
-    msg.push_str("Review this Bundle against the WorkItem requirements and review criteria above. Respond with ONLY valid JSON.\n");
-
-    msg
-}
 
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
@@ -246,10 +135,13 @@ pub async fn run_reviewer(
         session.id, config.max_iterations
     );
 
-    let ctx = load_review_context(stores, &bundle_id)?;
-    let user_message = build_review_message(&ctx);
+    let ctx = ContextBuilder::new(stores, Role::Reviewer)
+        .load_bundle_hierarchy(&bundle_id)?
+        .with_footer("Review this Bundle against the WorkItem requirements and review criteria above. Respond with ONLY valid JSON.".into());
+    let work_item_title = ctx.work_item_title().unwrap_or("unknown").to_string();
+    let assembled = ctx.build(SYSTEM_PROMPT);
 
-    let response = llm.call(SYSTEM_PROMPT, &user_message).await?;
+    let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
     let review = parse_review_result(&response)?;
 
     info!(
@@ -270,7 +162,7 @@ pub async fn run_reviewer(
         serde_json::json!({
             "content": learning_content,
             "scope": "workitem",
-            "source_id": ctx.work_item_title,
+            "source_id": work_item_title,
         }),
     );
     if learning_resp.is_error() {
@@ -335,7 +227,7 @@ mod tests {
     use crate::agents::{AgentSession, AgentType};
     use crate::config::{Config, ProjectConfig};
     use crate::domain::bundle::{Bundle, BundleStatus};
-    use crate::domain::learning::Learning;
+    use crate::domain::learning::{Learning, LearningScope};
     use crate::domain::phase::Phase;
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
@@ -543,84 +435,38 @@ mod tests {
         assert!(parse_review_result(json).is_err());
     }
 
-    // --- build_review_message tests ---
+    // --- context builder integration tests ---
 
     #[test]
-    fn test_build_review_message_basic() {
-        let ctx = ReviewerContext {
-            bundle_id: "bundle-123".into(),
-            bundle_claims: "Added authentication".into(),
-            bundle_touched_paths: vec!["src/auth.rs".into()],
-            work_item_title: "WI-1".into(),
-            work_item_description: "Add auth".into(),
-            phase_title: "Phase 1".into(),
-            phase_description: "Foundation".into(),
-            spec_title: "Auth Spec".into(),
-            spec_description: "Authentication system".into(),
-            plan_title: "MVP".into(),
-            plan_description: "Build MVP".into(),
-            learnings: vec![],
-        };
-        let msg = build_review_message(&ctx);
-        assert!(msg.contains("MVP"));
-        assert!(msg.contains("Auth Spec"));
-        assert!(msg.contains("Phase 1"));
-        assert!(msg.contains("WI-1"));
-        assert!(msg.contains("bundle-123"));
-        assert!(msg.contains("Added authentication"));
-        assert!(msg.contains("`src/auth.rs`"));
-        assert!(!msg.contains("Learnings"));
-    }
-
-    #[test]
-    fn test_build_review_message_with_learnings() {
-        let ctx = ReviewerContext {
-            bundle_id: "b-1".into(),
-            bundle_claims: "claims".into(),
-            bundle_touched_paths: vec![],
-            work_item_title: "W".into(),
-            work_item_description: "w".into(),
-            phase_title: "P".into(),
-            phase_description: "p".into(),
-            spec_title: "S".into(),
-            spec_description: "s".into(),
-            plan_title: "Plan".into(),
-            plan_description: "plan".into(),
-            learnings: vec!["Watch for edge cases".into()],
-        };
-        let msg = build_review_message(&ctx);
-        assert!(msg.contains("Relevant Learnings"));
-        assert!(msg.contains("Watch for edge cases"));
-    }
-
-    // --- load_review_context tests ---
-
-    #[test]
-    fn test_load_review_context_success() {
+    fn test_context_builder_for_reviewer() {
         let dir = std::env::temp_dir().join(format!("loopr-rev-ctx-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let ctx = load_review_context(&stores, &bundle_id).unwrap();
-        assert_eq!(ctx.bundle_id, bundle_id);
-        assert_eq!(ctx.plan_title, "Test Plan");
-        assert_eq!(ctx.spec_title, "Test Spec");
-        assert_eq!(ctx.phase_title, "Test Phase");
-        assert_eq!(ctx.work_item_title, "Test WorkItem");
-        assert!(!ctx.bundle_claims.is_empty());
-        assert_eq!(ctx.bundle_touched_paths.len(), 2);
-        assert_eq!(ctx.learnings.len(), 1);
+        let ctx = ContextBuilder::new(&stores, Role::Reviewer)
+            .load_bundle_hierarchy(&bundle_id)
+            .unwrap()
+            .with_footer("Review this Bundle.".into());
+        assert_eq!(ctx.work_item_title(), Some("Test WorkItem"));
+
+        let assembled = ctx.build(SYSTEM_PROMPT);
+        assert!(assembled.user_message.contains("Test Plan"));
+        assert!(assembled.user_message.contains("Test Spec"));
+        assert!(assembled.user_message.contains("Test Phase"));
+        assert!(assembled.user_message.contains("Test WorkItem"));
+        assert!(assembled.user_message.contains("Bundle Under Review"));
+        assert!(assembled.system_prompt.contains("Reviewer agent"));
     }
 
     #[test]
-    fn test_load_review_context_missing_bundle() {
+    fn test_context_builder_missing_bundle() {
         let dir = std::env::temp_dir().join(format!("loopr-rev-miss-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, _) = setup_stores_with_bundle(&dir);
 
-        let result = load_review_context(&stores, "nonexistent");
+        let result = ContextBuilder::new(&stores, Role::Reviewer).load_bundle_hierarchy("nonexistent");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("bundle not found"));
+        assert!(result.err().unwrap().to_string().contains("bundle not found"));
     }
 
     // --- run_reviewer tests ---

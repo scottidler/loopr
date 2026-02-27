@@ -72,7 +72,7 @@ pub fn select_learnings<'a>(
 
 /// Estimate token count from text. Approximation: ~4 characters per token.
 pub fn estimate_tokens(text: &str) -> usize {
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 /// Truncate text at the last sentence boundary within the token budget.
@@ -175,17 +175,6 @@ impl TokenBudget {
             },
         }
     }
-
-    /// Total token budget across all sections.
-    pub fn total(&self) -> usize {
-        self.system_prompt
-            + self.work_target
-            + self.hierarchy
-            + self.learnings
-            + self.state_summary
-            + self.tools_or_actions
-            + self.previous_summary
-    }
 }
 
 // =====================================================
@@ -229,6 +218,15 @@ pub struct ContextBuilder<'a> {
     footer: Option<String>,
 }
 
+impl std::fmt::Debug for ContextBuilder<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContextBuilder")
+            .field("role", &self.role)
+            .field("budget", &self.budget)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> ContextBuilder<'a> {
     pub fn new(stores: &'a Stores, role: Role) -> Self {
         let budget = TokenBudget::for_role(role);
@@ -249,12 +247,6 @@ impl<'a> ContextBuilder<'a> {
             iteration: None,
             footer: None,
         }
-    }
-
-    /// Override the default token budget for this role.
-    pub fn with_budget(mut self, budget: TokenBudget) -> Self {
-        self.budget = budget;
-        self
     }
 
     /// Load the full hierarchy from a work item ID: WorkItem -> Phase -> Spec -> Plan.
@@ -419,11 +411,8 @@ impl<'a> ContextBuilder<'a> {
         // --- Learnings section ---
         {
             let learnings_map = self.stores.learnings.read().unwrap();
-            let scope_refs: Vec<(&str, LearningScope)> = self
-                .scope_ids
-                .iter()
-                .map(|(id, scope)| (id.as_str(), *scope))
-                .collect();
+            let scope_refs: Vec<(&str, LearningScope)> =
+                self.scope_ids.iter().map(|(id, scope)| (id.as_str(), *scope)).collect();
             let min_confidence = match self.role {
                 Role::Coordinator => 0.6,
                 _ => 0.3,
@@ -459,17 +448,17 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- State summary section ---
-        if let Some(ref summary) = self.state_summary {
-            if self.budget.state_summary > 0 {
-                msg.push_str("## State Summary\n\n");
-                if estimate_tokens(summary) > self.budget.state_summary {
-                    warn!("State summary exceeds token budget, truncating");
-                    msg.push_str(&truncate_prose(summary, self.budget.state_summary));
-                } else {
-                    msg.push_str(summary);
-                }
-                msg.push_str("\n\n");
+        if let Some(ref summary) = self.state_summary
+            && self.budget.state_summary > 0
+        {
+            msg.push_str("## State Summary\n\n");
+            if estimate_tokens(summary) > self.budget.state_summary {
+                warn!("State summary exceeds token budget, truncating");
+                msg.push_str(&truncate_prose(summary, self.budget.state_summary));
+            } else {
+                msg.push_str(summary);
             }
+            msg.push_str("\n\n");
         }
 
         // --- Staleness warning ---
@@ -480,17 +469,17 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- Previous iteration summary ---
-        if let Some(ref summary) = self.previous_summary {
-            if self.budget.previous_summary > 0 {
-                msg.push_str("## Previous Iteration Summary\n\n");
-                if estimate_tokens(summary) > self.budget.previous_summary {
-                    warn!("Previous summary exceeds token budget, truncating");
-                    msg.push_str(&truncate_prose(summary, self.budget.previous_summary));
-                } else {
-                    msg.push_str(summary);
-                }
-                msg.push_str("\n\n");
+        if let Some(ref summary) = self.previous_summary
+            && self.budget.previous_summary > 0
+        {
+            msg.push_str("## Previous Iteration Summary\n\n");
+            if estimate_tokens(summary) > self.budget.previous_summary {
+                warn!("Previous summary exceeds token budget, truncating");
+                msg.push_str(&truncate_prose(summary, self.budget.previous_summary));
+            } else {
+                msg.push_str(summary);
             }
+            msg.push_str("\n\n");
         }
 
         // --- Iteration and footer ---
@@ -942,7 +931,6 @@ mod tests {
         assert_eq!(budget.learnings, 2000);
         assert_eq!(budget.tools_or_actions, 500);
         assert_eq!(budget.previous_summary, 1000);
-        assert_eq!(budget.total(), 9000);
     }
 
     #[test]
@@ -953,25 +941,26 @@ mod tests {
         assert_eq!(budget.learnings, 2000);
         assert_eq!(budget.tools_or_actions, 0);
         assert_eq!(budget.previous_summary, 0);
-        assert_eq!(budget.total(), 6500);
     }
 
     #[test]
     fn test_token_budget_for_coordinator() {
         let budget = TokenBudget::for_role(Role::Coordinator);
-        assert_eq!(budget.total(), 10000);
+        assert!(budget.state_summary > 0);
+        assert!(budget.learnings > 0);
     }
 
     #[test]
     fn test_token_budget_for_researcher() {
         let budget = TokenBudget::for_role(Role::Researcher);
-        assert_eq!(budget.total(), 4500);
+        assert!(budget.learnings > 0);
     }
 
     #[test]
     fn test_token_budget_for_integrator() {
         let budget = TokenBudget::for_role(Role::Integrator);
-        assert_eq!(budget.total(), 5000);
+        assert!(budget.state_summary > 0);
+        assert!(budget.system_prompt > 0);
     }
 
     // =====================================================
@@ -1012,17 +1001,13 @@ mod tests {
             LearningScope::Phase,
             "Previous iteration found a bug in parsing".into(),
         );
-        stores
-            .learnings
-            .write()
-            .unwrap()
-            .insert(learning.id.clone(), learning);
+        stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
 
         (stores, wi_id)
     }
 
     fn setup_stores_with_bundle(dir: &std::path::Path) -> (Stores, String, String) {
-        let (mut stores, wi_id) = setup_stores(dir);
+        let (stores, wi_id) = setup_stores(dir);
 
         let mut bundle = Bundle::new(
             wi_id.clone(),
@@ -1033,11 +1018,7 @@ mod tests {
         bundle.status = BundleStatus::Triaged;
         bundle.touched_paths = vec!["src/test.rs".into(), "src/main.rs".into()];
         let bundle_id = bundle.id.clone();
-        stores
-            .bundles
-            .write()
-            .unwrap()
-            .insert(bundle.id.clone(), bundle);
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         (stores, wi_id, bundle_id)
     }
@@ -1235,28 +1216,17 @@ mod tests {
     }
 
     #[test]
-    fn test_context_builder_custom_budget() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-budget-{}", crate::id::generate_id()));
+    fn test_assembled_context_token_estimate() {
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-tokens-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, wi_id) = setup_stores(&dir);
 
-        let tiny_budget = TokenBudget {
-            system_prompt: 10,
-            work_target: 10,
-            hierarchy: 10,
-            learnings: 10,
-            state_summary: 10,
-            tools_or_actions: 10,
-            previous_summary: 10,
-        };
-
-        let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .with_budget(tiny_budget)
+        let assembled = ContextBuilder::new(&stores, Role::Implementer)
             .load_work_item_hierarchy(&wi_id)
-            .unwrap();
+            .unwrap()
+            .build("system prompt");
 
-        let assembled = builder.build("system");
-        // Should still produce output (truncated)
+        assert!(assembled.token_estimate > 0);
         assert!(!assembled.user_message.is_empty());
     }
 }

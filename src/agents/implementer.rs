@@ -62,53 +62,6 @@ Respond with ONLY a JSON array of AgentAction objects. Example:
 ]
 ```"#;
 
-/// Build the user message from loaded context.
-pub fn build_user_message(ctx: &ImplementerContext, iteration: u32) -> String {
-    let mut msg = String::with_capacity(4096);
-
-    msg.push_str("## Hierarchy\n\n");
-    msg.push_str(&format!("**Plan:** {} — {}\n", ctx.plan_title, ctx.plan_description));
-    msg.push_str(&format!("**Spec:** {} — {}\n", ctx.spec_title, ctx.spec_description));
-    msg.push_str(&format!("**Phase:** {} — {}\n", ctx.phase_title, ctx.phase_description));
-    msg.push_str(&format!(
-        "**WorkItem:** {} — {}\n\n",
-        ctx.work_item_title, ctx.work_item_description
-    ));
-
-    if !ctx.learnings.is_empty() {
-        msg.push_str("## Learnings\n\n");
-        for learning in &ctx.learnings {
-            msg.push_str(&format!("- {}\n", learning));
-        }
-        msg.push('\n');
-    }
-
-    if !ctx.available_tools.is_empty() {
-        msg.push_str("## Available Tools\n\n");
-        for tool in &ctx.available_tools {
-            msg.push_str(&format!("- `{}`\n", tool));
-        }
-        msg.push('\n');
-    }
-
-    if let Some(ref note) = ctx.staleness_note {
-        msg.push_str("## Staleness Warning\n\n");
-        msg.push_str(note);
-        msg.push_str("\n\n");
-    }
-
-    if let Some(ref summary) = ctx.previous_summary {
-        msg.push_str("## Previous Iteration Summary\n\n");
-        msg.push_str(summary);
-        msg.push_str("\n\n");
-    }
-
-    msg.push_str(&format!("## Current Iteration: {}\n\n", iteration));
-    msg.push_str("Implement the WorkItem described above. Respond with a JSON array of actions.\n");
-
-    msg
-}
-
 /// Parse the LLM response into a list of agent actions.
 /// Extracts the first JSON array found in the response text.
 pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
@@ -158,11 +111,23 @@ pub async fn run_iteration(
     previous_summary: Option<String>,
     staleness_note: Option<String>,
 ) -> Result<IterationOutcome> {
-    let mut ctx = load_context(params.stores, params.work_item_id, params.tool_runner, previous_summary)?;
-    ctx.staleness_note = staleness_note;
-    let user_message = build_user_message(&ctx, iteration);
+    let assembled = ContextBuilder::new(params.stores, Role::Implementer)
+        .load_work_item_hierarchy(params.work_item_id)?
+        .with_tools(params.tool_runner)
+        .with_previous_summary(previous_summary)
+        .with_staleness_note(staleness_note)
+        .with_iteration(iteration)
+        .with_footer("Implement the WorkItem described above. Respond with a JSON array of actions.".into())
+        .build(SYSTEM_PROMPT);
 
-    let response = params.llm.call(SYSTEM_PROMPT, &user_message).await?;
+    info!(
+        "Implementer {} context: ~{} tokens",
+        params.session_id, assembled.token_estimate
+    );
+    let response = params
+        .llm
+        .call(&assembled.system_prompt, &assembled.user_message)
+        .await?;
     let actions = parse_actions(&response)?;
 
     if actions.is_empty() {
@@ -346,7 +311,7 @@ mod tests {
     use super::*;
     use crate::agents::{AgentSession, AgentType};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig, ToolEntry};
-    use crate::domain::learning::Learning;
+    use crate::domain::learning::{Learning, LearningScope};
     use crate::domain::phase::Phase;
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
@@ -479,65 +444,10 @@ mod tests {
         assert!(actions.is_empty());
     }
 
-    // --- build_user_message tests ---
+    // --- context builder integration tests ---
 
     #[test]
-    fn test_build_user_message_basic() {
-        let ctx = ImplementerContext {
-            plan_title: "My Plan".into(),
-            plan_description: "Plan desc".into(),
-            spec_title: "My Spec".into(),
-            spec_description: "Spec desc".into(),
-            phase_title: "Phase 1".into(),
-            phase_description: "Phase desc".into(),
-            work_item_title: "WI-1".into(),
-            work_item_description: "Do the thing".into(),
-            learnings: vec![],
-            available_tools: vec!["test".into(), "clippy".into()],
-            previous_summary: None,
-            staleness_note: None,
-        };
-        let msg = build_user_message(&ctx, 1);
-        assert!(msg.contains("My Plan"));
-        assert!(msg.contains("My Spec"));
-        assert!(msg.contains("Phase 1"));
-        assert!(msg.contains("WI-1"));
-        assert!(msg.contains("`test`"));
-        assert!(msg.contains("`clippy`"));
-        assert!(msg.contains("Current Iteration: 1"));
-        assert!(!msg.contains("Learnings"));
-        assert!(!msg.contains("Previous Iteration"));
-        assert!(!msg.contains("Staleness"));
-    }
-
-    #[test]
-    fn test_build_user_message_with_learnings() {
-        let ctx = ImplementerContext {
-            plan_title: "P".into(),
-            plan_description: "p".into(),
-            spec_title: "S".into(),
-            spec_description: "s".into(),
-            phase_title: "Ph".into(),
-            phase_description: "ph".into(),
-            work_item_title: "W".into(),
-            work_item_description: "w".into(),
-            learnings: vec!["Bug found in parser".into()],
-            available_tools: vec![],
-            previous_summary: Some("Last iteration added error types".into()),
-            staleness_note: None,
-        };
-        let msg = build_user_message(&ctx, 3);
-        assert!(msg.contains("Learnings"));
-        assert!(msg.contains("Bug found in parser"));
-        assert!(msg.contains("Previous Iteration Summary"));
-        assert!(msg.contains("Last iteration added error types"));
-        assert!(msg.contains("Current Iteration: 3"));
-    }
-
-    // --- load_context tests ---
-
-    #[test]
-    fn test_load_context_success() {
+    fn test_context_builder_for_implementer() {
         let dir = std::env::temp_dir().join(format!("loopr-impl-ctx-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
@@ -549,24 +459,30 @@ mod tests {
         }]);
         let wi_id = get_work_item_id(&stores);
 
-        let ctx = load_context(&stores, &wi_id, &tool_runner, None).unwrap();
-        assert_eq!(ctx.plan_title, "Test Plan");
-        assert_eq!(ctx.spec_title, "Test Spec");
-        assert_eq!(ctx.phase_title, "Test Phase");
-        assert_eq!(ctx.work_item_title, "Test WorkItem");
-        assert_eq!(ctx.available_tools, vec!["test"]);
-        assert_eq!(ctx.learnings.len(), 1);
-        assert!(ctx.previous_summary.is_none());
+        let assembled = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_item_hierarchy(&wi_id)
+            .unwrap()
+            .with_tools(&tool_runner)
+            .with_iteration(1)
+            .with_footer("Respond with JSON.".into())
+            .build(SYSTEM_PROMPT);
+
+        assert!(assembled.user_message.contains("Test Plan"));
+        assert!(assembled.user_message.contains("Test Spec"));
+        assert!(assembled.user_message.contains("Test Phase"));
+        assert!(assembled.user_message.contains("Test WorkItem"));
+        assert!(assembled.user_message.contains("`test`"));
+        assert!(assembled.user_message.contains("Current Iteration: 1"));
+        assert!(assembled.system_prompt.contains("Implementer agent"));
     }
 
     #[test]
-    fn test_load_context_missing_work_item() {
+    fn test_context_builder_missing_work_item() {
         let dir = std::env::temp_dir().join(format!("loopr-impl-miss-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let tool_runner = ToolRunner::new(&[]);
 
-        let result = load_context(&stores, "nonexistent", &tool_runner, None);
+        let result = ContextBuilder::new(&stores, Role::Implementer).load_work_item_hierarchy("nonexistent");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work item not found"));
     }
@@ -883,24 +799,20 @@ mod tests {
     }
 
     #[test]
-    fn test_build_user_message_with_staleness() {
-        let ctx = ImplementerContext {
-            plan_title: "P".into(),
-            plan_description: "p".into(),
-            spec_title: "S".into(),
-            spec_description: "s".into(),
-            phase_title: "Ph".into(),
-            phase_description: "ph".into(),
-            work_item_title: "W".into(),
-            work_item_description: "w".into(),
-            learnings: vec![],
-            available_tools: vec![],
-            previous_summary: None,
-            staleness_note: Some("A new Tick 'tick-99' has been published.".into()),
-        };
-        let msg = build_user_message(&ctx, 2);
-        assert!(msg.contains("Staleness Warning"));
-        assert!(msg.contains("tick-99"));
+    fn test_context_builder_with_staleness() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-stale2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+
+        let assembled = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_item_hierarchy(&wi_id)
+            .unwrap()
+            .with_staleness_note(Some("A new Tick 'tick-99' has been published.".into()))
+            .with_iteration(2)
+            .build(SYSTEM_PROMPT);
+        assert!(assembled.user_message.contains("Staleness Warning"));
+        assert!(assembled.user_message.contains("tick-99"));
     }
 
     #[tokio::test]
