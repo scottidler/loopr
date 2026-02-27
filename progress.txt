@@ -279,3 +279,5 @@ error: test failed, to rerun pass `--bin loopr`
 Logs:
   stdout: /home/saidler/.otto/loopr-fab8a972/1772205882/tasks/test/stdout.log
   stderr: /home/saidler/.otto/loopr-fab8a972/1772205882/tasks/test/stderr.log
+Iteration 12: STARTED at 07:24:58
+Iteration 12: Fixed 13 integration test failures from iter 10/11. Fixes: 'target'→'target_status' in all transition IPC calls, PascalCase for WorkItem/Bundle/Tick status values, create real Plan→Spec→Phase hierarchy before work_item.create, 'granted_by' param for lock.create, #[tokio::test] for agent.start tests, researcher validate_path now rejects '..' components, tick crash recovery test uses direct store manipulation (bypasses FSM), coordinator state summary test assertions corrected, work_item FSM role fixes. 1058 tests pass, clippy clean.
