@@ -1,0 +1,71 @@
+# Loopr v3 MVP4 — Ralph Progress Log
+Started: $(date)
+Branch: v3
+Prompt: PROMPT.md
+Design Doc: docs/design/2026-02-26-loopr-v3-mvp4.md
+---
+Iteration 1: STARTED at 23:51:53
+Iteration 1: Added Role::Researcher to role.rs, StrategyConfig with all 6 strategy knobs (StalePolicy, ConflictPolicy, TickCadence, BundleSizePolicy, ValidatorStrictness, PromotionPolicy) to config.rs, CoordinatorConfig, extended AgentConfig (coordinator, researcher, auto_start_coordinator) and IntegratorConfig (interval_secs, enabled), wired StrategyConfig into Config, updated TUI role cycle, updated all existing tests, added comprehensive new tests. 781 tests pass.
+Iteration 1: VALIDATING at 23:58:27
+Iteration 1: FAIL — validation errors:
+[check] 93 | |     }
+[check] 94 | | }
+[test] test tools::tests::test_run_timeout ... ok
+[check]    | |_^
+[check]    |
+[check]    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#derivable_impls
+[test]
+[check] help: replace the manual implementation with a derive attribute and mark the default variant
+[test] test result: ok. 781 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.61s
+[check]    |
+[test]
+[check] 81 + #[derive(Default)]
+[check] 82 | pub enum ValidatorStrictness {
+[check] 83 |     /// Any ambiguity in doc = Fail.
+[check] 84 ~     #[default]
+[check] 85 ~     HardFailOnAnyAmbiguity,
+[check]    |
+[check]
+[test] finished successfully
+[check] error: could not compile `loopr` (bin "loopr") due to 4 previous errors
+[check] warning: build failed, waiting for other jobs to finish...
+[check] error: could not compile `loopr` (bin "loopr" test) due to 4 previous errors
+[check] failed
+Task check failed with exit code Some(101)
+
+Error output (last 20 lines):
+90 | / impl Default for ValidatorStrictness {
+91 | |     fn default() -> Self {
+92 | |         Self::HardFailOnAnyAmbiguity
+93 | |     }
+94 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#derivable_impls
+help: replace the manual implementation with a derive attribute and mark the default variant
+   |
+81 + #[derive(Default)]
+82 | pub enum ValidatorStrictness {
+83 |     /// Any ambiguity in doc = Fail.
+84 ~     #[default]
+85 ~     HardFailOnAnyAmbiguity,
+   |
+
+error: could not compile `loopr` (bin "loopr") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `loopr` (bin "loopr" test) due to 4 previous errors
+
+Logs:
+  stdout: /home/saidler/.otto/loopr-fab8a972/1772179107/tasks/check/stdout.log
+  stderr: /home/saidler/.otto/loopr-fab8a972/1772179107/tasks/check/stderr.log
+Iteration 2: STARTED at 23:58:43
+Iteration 2: Fixed 4 clippy derivable_impls errors — replaced manual Default impls with #[derive(Default)] + #[default] on StalePolicy, ConflictPolicy, TickCadence, ValidatorStrictness enums in config.rs.
+Iteration 2: VALIDATING at 23:59:33
+Iteration 2: PASS
+Iteration 3: STARTED at 23:59:54
+Iteration 3: Enriched Learning model — added applicable_roles (Option<Vec<Role>>), resource_tags (Vec<String>), confidence (f32) with #[serde(default)] for backward compat. Added recompute_confidence(), auto-promotion in reinforce(&PromotionPolicy), updated contradict() to recompute confidence. Updated handler to pass PromotionPolicy::default(). Added promoted to indexed_fields. 33 tests (was 16). Phase 1 progress: Role::Researcher ✓, StrategyConfig ✓, CoordinatorConfig ✓, Learning enrichment ✓. Remaining Phase 1: context.rs (ContextBuilder), refactor implementer/reviewer to use ContextBuilder.
+Iteration 3: VALIDATING at $(date +%H:%M:%S)
+Iteration 3: VALIDATING at 00:05:26
+Iteration 3: PASS
+Iteration 4: STARTED at 00:05:42
+Iteration 4: Created src/agents/context.rs with select_learnings() — scope chain matching, role-based filtering, confidence thresholding, promoted-always-included, sorted output. Wired into implementer.rs and reviewer.rs (replacing inline learning filtering). 21 new tests (819 total). Phase 1 progress: Role::Researcher ✓, StrategyConfig ✓, CoordinatorConfig ✓, Learning enrichment ✓, context.rs select_learnings ✓. Remaining Phase 1: TokenBudget/AssembledContext/ContextBuilder (with implementer/reviewer refactor), refactor implementer.rs to use ContextBuilder, refactor reviewer.rs to use ContextBuilder.
