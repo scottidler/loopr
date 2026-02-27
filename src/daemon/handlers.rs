@@ -2480,7 +2480,9 @@ fn handle_agent_start(
             Err(_) => {
                 return DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("invalid agent_type (implementer|reviewer)"),
+                    RpcError::invalid_params(
+                        "invalid agent_type (implementer|reviewer|coordinator|researcher|integrator)",
+                    ),
                 );
             }
         },
@@ -2501,6 +2503,7 @@ fn handle_agent_start(
         .map(|s| s.to_string());
 
     // Validate: Implementer needs work_item_id, Reviewer needs bundle_id
+    // Thinking plane agents (Coordinator, Researcher, Integrator) don't require either.
     match agent_type {
         AgentType::Implementer => {
             if work_item_id.is_none() {
@@ -2518,12 +2521,28 @@ fn handle_agent_start(
                 );
             }
         }
+        AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => {
+            // These agents operate without worktrees; no target ID required at start time
+        }
     }
+
+    let target_id = req
+        .params
+        .get("target_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let query = req
+        .params
+        .get("query")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     // Create agent session with model from config (placeholder — will be wired up in Phase 2)
     let mut session = AgentSession::new(agent_type, "claude-sonnet-4-6".to_string());
     session.work_item_id = work_item_id;
     session.bundle_id = bundle_id;
+    session.target_id = target_id;
+    session.query = query;
 
     let session_json = match serde_json::to_value(&session) {
         Ok(v) => v,

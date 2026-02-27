@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
-use crate::agents::{AgentAction, AgentSession};
+use crate::agents::{AgentAction, AgentSession, AgentType};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
 use crate::domain::role::Role;
@@ -149,6 +149,7 @@ pub async fn run_iteration(
             params.bridge,
             params.worktree_path,
             Some(params.work_item_id),
+            AgentType::Implementer,
         )
         .await
         {
@@ -303,6 +304,7 @@ fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
+        ActionResult::NotYetImplemented(d) => format!("not yet implemented: {}", d),
     }
 }
 

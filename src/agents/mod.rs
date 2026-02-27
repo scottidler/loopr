@@ -18,6 +18,30 @@ use crate::id;
 pub enum AgentType {
     Implementer,
     Reviewer,
+    Coordinator,
+    Researcher,
+    Integrator,
+}
+
+impl AgentType {
+    /// Returns the default Role corresponding to this agent type.
+    pub fn default_role(&self) -> crate::domain::role::Role {
+        match self {
+            AgentType::Implementer => crate::domain::role::Role::Implementer,
+            AgentType::Reviewer => crate::domain::role::Role::Reviewer,
+            AgentType::Coordinator => crate::domain::role::Role::Coordinator,
+            AgentType::Researcher => crate::domain::role::Role::Researcher,
+            AgentType::Integrator => crate::domain::role::Role::Integrator,
+        }
+    }
+
+    /// Returns true if this agent type operates in the "thinking plane" (no worktree needed).
+    pub fn is_thinking_plane(&self) -> bool {
+        matches!(
+            self,
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator
+        )
+    }
 }
 
 impl fmt::Display for AgentType {
@@ -25,6 +49,9 @@ impl fmt::Display for AgentType {
         match self {
             AgentType::Implementer => write!(f, "implementer"),
             AgentType::Reviewer => write!(f, "reviewer"),
+            AgentType::Coordinator => write!(f, "coordinator"),
+            AgentType::Researcher => write!(f, "researcher"),
+            AgentType::Integrator => write!(f, "integrator"),
         }
     }
 }
@@ -104,6 +131,15 @@ pub struct AgentSession {
     pub error_message: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Generic target ID for agents that don't target WorkItems or Bundles.
+    /// Coordinator: None (operates globally).
+    /// Researcher: the scope_id (Plan/Spec/Phase/WorkItem ID being researched).
+    /// Integrator: None (operates on whatever Accepted Bundles exist).
+    #[serde(default)]
+    pub target_id: Option<String>,
+    /// Query string for Researcher agents. Set by SpawnResearcher action.
+    #[serde(default)]
+    pub query: Option<String>,
 }
 
 impl AgentSession {
@@ -121,6 +157,8 @@ impl AgentSession {
             error_message: None,
             created_at: now,
             updated_at: now,
+            target_id: None,
+            query: None,
         }
     }
 
@@ -159,6 +197,9 @@ impl Record for AgentSession {
         if let Some(ref b_id) = self.bundle_id {
             m.insert("bundle_id".into(), IndexValue::String(b_id.clone()));
         }
+        if let Some(ref tid) = self.target_id {
+            m.insert("target_id".into(), IndexValue::String(tid.clone()));
+        }
         m
     }
 }
@@ -168,6 +209,7 @@ impl Record for AgentSession {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AgentAction {
+    // === Shared actions (all agent types) ===
     RunTool {
         tool_name: String,
         #[serde(default)]
@@ -194,17 +236,91 @@ pub enum AgentAction {
         collection: String,
         id: String,
         target_state: String,
+        /// If None, role is inferred from agent_type via AgentType::default_role().
+        #[serde(default)]
+        role: Option<String>,
     },
     CreateLearning {
         content: String,
         scope: String,
         source_id: String,
+        /// Roles this learning is relevant to. None = all roles.
+        #[serde(default)]
+        applicable_roles: Option<Vec<String>>,
+        /// Resource tags for scoped selection (file paths, module names).
+        #[serde(default)]
+        resource_tags: Option<Vec<String>>,
     },
     Done {
         summary: String,
     },
     NeedHelp {
         reason: String,
+    },
+
+    // === Coordinator-only actions ===
+    CreatePlan {
+        title: String,
+        description: String,
+        acceptance_criteria: String,
+    },
+    CreateSpec {
+        plan_id: String,
+        title: String,
+        description: String,
+    },
+    CreatePhase {
+        spec_id: String,
+        title: String,
+        description: String,
+        order: u32,
+    },
+    CreateWorkItem {
+        phase_id: String,
+        title: String,
+        description: String,
+    },
+    AssignAgent {
+        agent_type: String,
+        target_id: String,
+    },
+    SpawnResearcher {
+        query: String,
+        scope_id: String,
+    },
+    ValidateDocument {
+        collection: String,
+        id: String,
+    },
+    AcquireLock {
+        resource: String,
+        holder_id: String,
+    },
+    ReleaseLock {
+        lock_id: String,
+    },
+    TriageBundle {
+        bundle_id: String,
+    },
+    AcceptBundle {
+        bundle_id: String,
+    },
+
+    // === Researcher-only actions ===
+    SearchCode {
+        pattern: String,
+        #[serde(default)]
+        glob: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
+    },
+    SearchFiles {
+        pattern: String,
+        #[serde(default)]
+        path: Option<String>,
+    },
+    ListDirectory {
+        path: String,
     },
 }
 
@@ -252,15 +368,26 @@ mod tests {
 
     // --- AgentType tests ---
 
+    const ALL_AGENT_TYPES: [AgentType; 5] = [
+        AgentType::Implementer,
+        AgentType::Reviewer,
+        AgentType::Coordinator,
+        AgentType::Researcher,
+        AgentType::Integrator,
+    ];
+
     #[test]
     fn test_agent_type_display() {
         assert_eq!(AgentType::Implementer.to_string(), "implementer");
         assert_eq!(AgentType::Reviewer.to_string(), "reviewer");
+        assert_eq!(AgentType::Coordinator.to_string(), "coordinator");
+        assert_eq!(AgentType::Researcher.to_string(), "researcher");
+        assert_eq!(AgentType::Integrator.to_string(), "integrator");
     }
 
     #[test]
     fn test_agent_type_serde_roundtrip() {
-        for at in [AgentType::Implementer, AgentType::Reviewer] {
+        for at in ALL_AGENT_TYPES {
             let json = serde_json::to_string(&at).unwrap();
             let deserialized: AgentType = serde_json::from_str(&json).unwrap();
             assert_eq!(at, deserialized);
@@ -269,12 +396,31 @@ mod tests {
 
     #[test]
     fn test_agent_type_display_matches_serde() {
-        for at in [AgentType::Implementer, AgentType::Reviewer] {
+        for at in ALL_AGENT_TYPES {
             let display = at.to_string();
             let quoted = format!("\"{display}\"");
             let deserialized: AgentType = serde_json::from_str(&quoted).unwrap();
             assert_eq!(at, deserialized);
         }
+    }
+
+    #[test]
+    fn test_agent_type_default_role() {
+        use crate::domain::role::Role;
+        assert_eq!(AgentType::Implementer.default_role(), Role::Implementer);
+        assert_eq!(AgentType::Reviewer.default_role(), Role::Reviewer);
+        assert_eq!(AgentType::Coordinator.default_role(), Role::Coordinator);
+        assert_eq!(AgentType::Researcher.default_role(), Role::Researcher);
+        assert_eq!(AgentType::Integrator.default_role(), Role::Integrator);
+    }
+
+    #[test]
+    fn test_agent_type_is_thinking_plane() {
+        assert!(!AgentType::Implementer.is_thinking_plane());
+        assert!(!AgentType::Reviewer.is_thinking_plane());
+        assert!(AgentType::Coordinator.is_thinking_plane());
+        assert!(AgentType::Researcher.is_thinking_plane());
+        assert!(AgentType::Integrator.is_thinking_plane());
     }
 
     // --- AgentStatus tests ---
@@ -370,8 +516,28 @@ mod tests {
         assert!(session.bundle_id.is_none());
         assert!(session.worktree_path.is_none());
         assert!(session.error_message.is_none());
+        assert!(session.target_id.is_none());
+        assert!(session.query.is_none());
         assert!(session.created_at > 0);
         assert_eq!(session.created_at, session.updated_at);
+    }
+
+    #[test]
+    fn test_agent_session_new_researcher_with_target() {
+        let mut session = AgentSession::new(AgentType::Researcher, "model".to_string());
+        session.target_id = Some("wi-123".to_string());
+        session.query = Some("Investigate auth module".to_string());
+        assert_eq!(session.agent_type, AgentType::Researcher);
+        assert_eq!(session.target_id.as_deref(), Some("wi-123"));
+        assert_eq!(session.query.as_deref(), Some("Investigate auth module"));
+    }
+
+    #[test]
+    fn test_agent_session_new_coordinator() {
+        let session = AgentSession::new(AgentType::Coordinator, "model".to_string());
+        assert_eq!(session.agent_type, AgentType::Coordinator);
+        assert!(session.target_id.is_none());
+        assert!(session.query.is_none());
     }
 
     #[test]
@@ -419,6 +585,22 @@ mod tests {
         assert_eq!(session.status, deserialized.status);
         assert_eq!(session.work_item_id, deserialized.work_item_id);
         assert_eq!(session.worktree_path, deserialized.worktree_path);
+        assert_eq!(session.target_id, deserialized.target_id);
+        assert_eq!(session.query, deserialized.query);
+    }
+
+    #[test]
+    fn test_agent_session_serde_backward_compat() {
+        // Old JSON without target_id/query should deserialize with defaults (None)
+        let json = r#"{
+            "id": "test-1", "agent_type": "implementer", "work_item_id": null,
+            "bundle_id": null, "status": "starting", "iteration": 0,
+            "model": "m", "worktree_path": null, "error_message": null,
+            "created_at": 1000, "updated_at": 1000
+        }"#;
+        let session: AgentSession = serde_json::from_str(json).unwrap();
+        assert!(session.target_id.is_none());
+        assert!(session.query.is_none());
     }
 
     // --- Record trait tests ---
@@ -470,6 +652,19 @@ mod tests {
         );
         assert_eq!(fields.get("bundle_id"), Some(&IndexValue::String("b-1".to_string())));
         assert!(!fields.contains_key("work_item_id"));
+    }
+
+    #[test]
+    fn test_agent_session_record_indexed_fields_with_target_id() {
+        let mut session = AgentSession::new(AgentType::Researcher, "m".to_string());
+        session.target_id = Some("wi-42".to_string());
+
+        let fields = session.indexed_fields();
+        assert_eq!(
+            fields.get("agent_type"),
+            Some(&IndexValue::String("researcher".to_string()))
+        );
+        assert_eq!(fields.get("target_id"), Some(&IndexValue::String("wi-42".to_string())));
     }
 
     // --- AgentAction tests ---
@@ -572,6 +767,8 @@ mod tests {
             content: "Parser needs error recovery".to_string(),
             scope: "work_item".to_string(),
             source_id: "wi-1".to_string(),
+            applicable_roles: Some(vec!["implementer".to_string()]),
+            resource_tags: Some(vec!["src/parser.rs".to_string()]),
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
@@ -579,14 +776,230 @@ mod tests {
             content,
             scope,
             source_id,
+            applicable_roles,
+            resource_tags,
         } = deserialized
         {
             assert_eq!(content, "Parser needs error recovery");
             assert_eq!(scope, "work_item");
             assert_eq!(source_id, "wi-1");
+            assert_eq!(applicable_roles, Some(vec!["implementer".to_string()]));
+            assert_eq!(resource_tags, Some(vec!["src/parser.rs".to_string()]));
         } else {
             panic!("expected CreateLearning");
         }
+    }
+
+    #[test]
+    fn test_agent_action_create_learning_backward_compat() {
+        // Old JSON without applicable_roles/resource_tags should deserialize
+        let json = r#"{"action":"create_learning","content":"x","scope":"global","source_id":"s1"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::CreateLearning {
+            applicable_roles,
+            resource_tags,
+            ..
+        } = action
+        {
+            assert!(applicable_roles.is_none());
+            assert!(resource_tags.is_none());
+        } else {
+            panic!("expected CreateLearning");
+        }
+    }
+
+    #[test]
+    fn test_agent_action_transition_with_role() {
+        let action = AgentAction::Transition {
+            collection: "work_item".to_string(),
+            id: "wi-1".to_string(),
+            target_state: "in_progress".to_string(),
+            role: Some("implementer".to_string()),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        if let AgentAction::Transition { role, .. } = deserialized {
+            assert_eq!(role, Some("implementer".to_string()));
+        } else {
+            panic!("expected Transition");
+        }
+    }
+
+    #[test]
+    fn test_agent_action_transition_without_role_backward_compat() {
+        let json = r#"{"action":"transition","collection":"work_item","id":"wi-1","target_state":"done"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::Transition { role, .. } = action {
+            assert!(role.is_none());
+        } else {
+            panic!("expected Transition");
+        }
+    }
+
+    // --- Coordinator action tests ---
+
+    #[test]
+    fn test_agent_action_create_plan_serde() {
+        let action = AgentAction::CreatePlan {
+            title: "Auth overhaul".to_string(),
+            description: "Rewrite auth".to_string(),
+            acceptance_criteria: "All tests pass".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::CreatePlan { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_create_spec_serde() {
+        let action = AgentAction::CreateSpec {
+            plan_id: "p-1".to_string(),
+            title: "JWT tokens".to_string(),
+            description: "Implement JWT".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::CreateSpec { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_create_phase_serde() {
+        let action = AgentAction::CreatePhase {
+            spec_id: "s-1".to_string(),
+            title: "Phase 1".to_string(),
+            description: "Foundation".to_string(),
+            order: 1,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::CreatePhase { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_create_work_item_serde() {
+        let action = AgentAction::CreateWorkItem {
+            phase_id: "ph-1".to_string(),
+            title: "Add login".to_string(),
+            description: "Add login endpoint".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::CreateWorkItem { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_assign_agent_serde() {
+        let action = AgentAction::AssignAgent {
+            agent_type: "implementer".to_string(),
+            target_id: "wi-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::AssignAgent { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_spawn_researcher_serde() {
+        let action = AgentAction::SpawnResearcher {
+            query: "Investigate auth module".to_string(),
+            scope_id: "wi-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::SpawnResearcher { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_validate_document_serde() {
+        let action = AgentAction::ValidateDocument {
+            collection: "plan".to_string(),
+            id: "p-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::ValidateDocument { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_acquire_lock_serde() {
+        let action = AgentAction::AcquireLock {
+            resource: "src/main.rs".to_string(),
+            holder_id: "wi-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::AcquireLock { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_release_lock_serde() {
+        let action = AgentAction::ReleaseLock {
+            lock_id: "lock-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::ReleaseLock { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_triage_bundle_serde() {
+        let action = AgentAction::TriageBundle {
+            bundle_id: "b-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::TriageBundle { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_accept_bundle_serde() {
+        let action = AgentAction::AcceptBundle {
+            bundle_id: "b-1".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::AcceptBundle { .. }));
+    }
+
+    // --- Researcher action tests ---
+
+    #[test]
+    fn test_agent_action_search_code_serde() {
+        let action = AgentAction::SearchCode {
+            pattern: "fn main".to_string(),
+            glob: Some("*.rs".to_string()),
+            path: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        if let AgentAction::SearchCode { pattern, glob, path } = deserialized {
+            assert_eq!(pattern, "fn main");
+            assert_eq!(glob, Some("*.rs".to_string()));
+            assert!(path.is_none());
+        } else {
+            panic!("expected SearchCode");
+        }
+    }
+
+    #[test]
+    fn test_agent_action_search_files_serde() {
+        let action = AgentAction::SearchFiles {
+            pattern: "*.rs".to_string(),
+            path: Some("src/".to_string()),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::SearchFiles { .. }));
+    }
+
+    #[test]
+    fn test_agent_action_list_directory_serde() {
+        let action = AgentAction::ListDirectory {
+            path: "src/agents".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized, AgentAction::ListDirectory { .. }));
     }
 
     // --- AgentEvent tests ---

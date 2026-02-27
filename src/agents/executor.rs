@@ -40,8 +40,11 @@ pub async fn run_agent_task(
     info!("Agent task started: {} ({})", session_id, agent_type);
 
     // Create a worktree for the agent before starting the loop.
+    // Thinking plane agents (Coordinator, Researcher, Integrator) don't use worktrees.
     // Implementers key on work_item_id, Reviewers on bundle_id.
-    let worktree_key = {
+    let worktree_key = if agent_type.is_thinking_plane() {
+        None
+    } else {
         let sessions = stores.agent_sessions.read().unwrap();
         let session = match sessions.get(&session_id) {
             Some(s) => s,
@@ -53,6 +56,8 @@ pub async fn run_agent_task(
         match agent_type {
             AgentType::Implementer => session.work_item_id.clone(),
             AgentType::Reviewer => session.bundle_id.clone(),
+            // Already handled by is_thinking_plane() above
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => None,
         }
     };
 
@@ -206,17 +211,29 @@ async fn run_agent_loop(
 
             result
         }
+        // Coordinator, Researcher, and Integrator loops are wired in their respective modules
+        AgentType::Coordinator => {
+            Err(eyre!("Coordinator agent loop not yet implemented"))
+        }
+        AgentType::Researcher => {
+            Err(eyre!("Researcher agent loop not yet implemented"))
+        }
+        AgentType::Integrator => {
+            Err(eyre!("Integrator task loop not yet implemented"))
+        }
     }
 }
 
 /// Execute a single agent action. Used by the agent loop to process parsed LLM responses.
-/// Phase 2 will flesh out all action variants.
+///
+/// `agent_type` is used for role inference on Transition actions (when role is None).
 pub async fn execute_action(
     action: &AgentAction,
     tool_runner: &ToolRunner,
     bridge: &AgentIpcBridge,
     worktree_path: &Path,
     work_item_id: Option<&str>,
+    agent_type: AgentType,
 ) -> Result<ActionResult> {
     match action {
         AgentAction::RunTool { tool_name, args } => {
@@ -301,9 +318,16 @@ pub async fn execute_action(
             collection,
             id,
             target_state,
+            role,
         } => {
+            // If role is not specified, infer from agent_type
+            let effective_role = role
+                .as_ref()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| agent_type.default_role().to_string());
+            let params = serde_json::json!({ "id": id, "target": target_state, "role": effective_role });
             let method = format!("{}.transition", collection);
-            let resp = bridge.request(&method, serde_json::json!({ "id": id, "target": target_state }));
+            let resp = bridge.request(&method, params);
             if resp.is_error() {
                 return Err(eyre!("transition failed: {:?}", resp.error));
             }
@@ -316,15 +340,21 @@ pub async fn execute_action(
             content,
             scope,
             source_id,
+            applicable_roles,
+            resource_tags,
         } => {
-            let resp = bridge.request(
-                "learning.create",
-                serde_json::json!({
-                    "content": content,
-                    "scope": scope,
-                    "source_id": source_id,
-                }),
-            );
+            let mut params = serde_json::json!({
+                "content": content,
+                "scope": scope,
+                "source_id": source_id,
+            });
+            if let Some(roles) = applicable_roles {
+                params["applicable_roles"] = serde_json::json!(roles);
+            }
+            if let Some(tags) = resource_tags {
+                params["resource_tags"] = serde_json::json!(tags);
+            }
+            let resp = bridge.request("learning.create", params);
             if resp.is_error() {
                 return Err(eyre!("create learning failed: {:?}", resp.error));
             }
@@ -332,6 +362,60 @@ pub async fn execute_action(
         }
         AgentAction::Done { summary } => Ok(ActionResult::Done(summary.clone())),
         AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
+
+        // --- Coordinator actions (stubs — wired in Phase 2 coordinator.rs) ---
+        AgentAction::CreatePlan { title, .. } => {
+            Ok(ActionResult::NotYetImplemented(format!("CreatePlan: {}", title)))
+        }
+        AgentAction::CreateSpec { title, .. } => {
+            Ok(ActionResult::NotYetImplemented(format!("CreateSpec: {}", title)))
+        }
+        AgentAction::CreatePhase { title, .. } => {
+            Ok(ActionResult::NotYetImplemented(format!("CreatePhase: {}", title)))
+        }
+        AgentAction::CreateWorkItem { title, .. } => {
+            Ok(ActionResult::NotYetImplemented(format!("CreateWorkItem: {}", title)))
+        }
+        AgentAction::AssignAgent {
+            agent_type,
+            target_id,
+        } => Ok(ActionResult::NotYetImplemented(format!(
+            "AssignAgent: {} → {}",
+            agent_type, target_id
+        ))),
+        AgentAction::SpawnResearcher { query, scope_id } => Ok(ActionResult::NotYetImplemented(
+            format!("SpawnResearcher: {} (scope: {})", query, scope_id),
+        )),
+        AgentAction::ValidateDocument { collection, id } => Ok(ActionResult::NotYetImplemented(
+            format!("ValidateDocument: {}/{}", collection, id),
+        )),
+        AgentAction::AcquireLock {
+            resource,
+            holder_id,
+        } => Ok(ActionResult::NotYetImplemented(format!(
+            "AcquireLock: {} (holder: {})",
+            resource, holder_id
+        ))),
+        AgentAction::ReleaseLock { lock_id } => {
+            Ok(ActionResult::NotYetImplemented(format!("ReleaseLock: {}", lock_id)))
+        }
+        AgentAction::TriageBundle { bundle_id } => {
+            Ok(ActionResult::NotYetImplemented(format!("TriageBundle: {}", bundle_id)))
+        }
+        AgentAction::AcceptBundle { bundle_id } => {
+            Ok(ActionResult::NotYetImplemented(format!("AcceptBundle: {}", bundle_id)))
+        }
+
+        // --- Researcher actions (stubs — wired in Phase 4 researcher.rs) ---
+        AgentAction::SearchCode { pattern, .. } => {
+            Ok(ActionResult::NotYetImplemented(format!("SearchCode: {}", pattern)))
+        }
+        AgentAction::SearchFiles { pattern, .. } => {
+            Ok(ActionResult::NotYetImplemented(format!("SearchFiles: {}", pattern)))
+        }
+        AgentAction::ListDirectory { path } => {
+            Ok(ActionResult::NotYetImplemented(format!("ListDirectory: {}", path)))
+        }
     }
 }
 
@@ -349,6 +433,9 @@ pub enum ActionResult {
     NeedHelp(String),
     /// Non-fatal error — fed back to the LLM so it can self-correct.
     ActionError(String),
+    /// Action type recognized but execution not yet implemented.
+    /// Used for Coordinator/Researcher actions during incremental build.
+    NotYetImplemented(String),
 }
 
 fn persist_session(stores: &Stores, session: &AgentSession) {
@@ -402,7 +489,7 @@ mod tests {
             tool_name: "echo-test".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
         if let ActionResult::ToolRun(tool_result) = result {
             assert_eq!(tool_result.exit_code, 0);
             assert_eq!(tool_result.stdout.trim(), "hello");
@@ -426,7 +513,7 @@ mod tests {
             path: "test.txt".to_string(),
             content: "hello world".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
 
         let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
@@ -448,7 +535,7 @@ mod tests {
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
         if let ActionResult::FileRead(content) = result {
             assert_eq!(content, "file content");
         } else {
@@ -470,7 +557,7 @@ mod tests {
         let action = AgentAction::Done {
             summary: "All done".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
         if let ActionResult::Done(summary) = result {
             assert_eq!(summary, "All done");
         } else {
@@ -492,7 +579,7 @@ mod tests {
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
         if let ActionResult::NeedHelp(reason) = result {
             assert_eq!(reason, "Ambiguous spec");
         } else {
@@ -515,7 +602,7 @@ mod tests {
             tool_name: "nonexistent".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None).await;
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
         assert!(result.is_err());
     }
 
