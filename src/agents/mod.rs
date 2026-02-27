@@ -2,6 +2,7 @@ pub mod bridge;
 pub mod context;
 pub mod coordinator;
 pub mod executor;
+pub mod generation;
 pub mod implementer;
 pub mod llm_client;
 pub mod reviewer;

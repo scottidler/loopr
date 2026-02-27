@@ -8,6 +8,10 @@ use tokio::sync::broadcast;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
+use crate::agents::generation::{
+    self, GenerationLevel, build_plan_prompt, build_spec_prompt, build_phase_prompt,
+    build_work_item_prompt,
+};
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::config::CoordinatorConfig;
@@ -243,6 +247,58 @@ fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
         .unwrap_or(true) // missing session = treat as cancelled
 }
 
+/// Build a generation-specific footer for the Coordinator's context message.
+///
+/// If the hierarchy needs generation at some level, this produces a targeted prompt
+/// from `generation.rs` to guide the LLM. Otherwise returns None (normal iteration).
+fn build_generation_footer(stores: &Stores, goal: &str) -> Option<String> {
+    let level = generation::determine_generation_level(stores)?;
+
+    let prompt = match level {
+        GenerationLevel::Plan => {
+            build_plan_prompt(goal, &[], &[])
+        }
+        GenerationLevel::Spec => {
+            let plan = generation::find_active_plan(stores)?;
+            build_spec_prompt(&plan, &[], &[], &[])
+        }
+        GenerationLevel::Phase => {
+            let plan = generation::find_active_plan(stores)?;
+            let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+            let spec = specs.into_iter().next()?;
+            build_phase_prompt(&spec, &[], &[])
+        }
+        GenerationLevel::WorkItem => {
+            let phase = generation::find_phase_needing_work_items(stores)?;
+            let existing = generation::find_work_items_for_phase(stores, &phase.id);
+            build_work_item_prompt(&phase, &existing, &[], &[])
+        }
+    };
+
+    info!("Coordinator generation needed at level: {} (prompt level: {})", level, prompt.level);
+    Some(prompt.user_message)
+}
+
+/// Check if the Coordinator should mark any Phases as complete based on WorkItem status.
+/// Returns summaries of any phases that were detected as complete.
+pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
+    let plan = match generation::find_active_plan(stores) {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+    let mut completed = Vec::new();
+    for spec in &specs {
+        let phases = generation::find_active_phases_for_spec(stores, &spec.id);
+        for phase in &phases {
+            if generation::is_phase_complete(stores, &phase.id) {
+                completed.push(format!("Phase '{}' (id: {}) has all WorkItems Done", phase.title, phase.id));
+            }
+        }
+    }
+    completed
+}
+
 /// Run a single coordinator iteration: load context → call LLM → parse → execute actions.
 async fn run_coordinator_iteration(
     llm: &dyn LlmClient,
@@ -253,6 +309,12 @@ async fn run_coordinator_iteration(
     previous_summary: Option<String>,
     event_tx: &broadcast::Sender<DaemonEvent>,
 ) -> Result<IterationOutcome> {
+    // Check if any phases have completed (all WorkItems Done)
+    let completed_phases = check_phase_completion(stores);
+    for cp in &completed_phases {
+        info!("Coordinator {} detected: {}", session.id, cp);
+    }
+
     let state_summary = build_state_summary(stores);
 
     // Find active plan for scope_ids (if any)
@@ -264,35 +326,31 @@ async fn run_coordinator_iteration(
             .map(|p| p.id.clone())
     };
 
-    let mut builder = ContextBuilder::new(stores, Role::Coordinator)
+    // Check if generation is needed — if so, use a targeted generation prompt as footer.
+    // Otherwise use the default "assess and act" footer.
+    let goal = {
+        let goals = stores.coordinator_goals.read().unwrap();
+        goals
+            .values()
+            .find(|g| g.active)
+            .map(|g| g.goal.clone())
+            .unwrap_or_else(|| "No goal set.".to_string())
+    };
+
+    let footer = match build_generation_footer(stores, &goal) {
+        Some(gen_footer) => gen_footer,
+        None => "Assess the project state and decide what action to take next. \
+                 Respond with a JSON array of actions."
+            .to_string(),
+    };
+
+    let builder = ContextBuilder::new(stores, Role::Coordinator)
         .with_state_summary(state_summary)
         .with_previous_summary(previous_summary)
         .with_iteration(iteration)
-        .with_footer(
-            "Assess the project state and decide what action to take next. \
-             Respond with a JSON array of actions."
-                .into(),
-        );
+        .with_footer(footer);
 
-    // If there's an active plan, add it to scope for learning selection
-    if let Some(ref plan_id) = active_plan_id {
-        let plans = stores.plans.read().unwrap();
-        if let Some(plan) = plans.get(plan_id) {
-            builder = ContextBuilder::new(stores, Role::Coordinator)
-                .with_state_summary(build_state_summary(stores))
-                .with_previous_summary(builder.work_item_title().map(String::from)) // pass through
-                .with_iteration(iteration)
-                .with_footer(
-                    "Assess the project state and decide what action to take next. \
-                     Respond with a JSON array of actions."
-                        .into(),
-                );
-            // We can't easily set scope_ids through the public API since load_work_item_hierarchy
-            // is the only way. For now, the Coordinator gets global learnings only.
-            // This is fine for MVP4 — scope_ids enhancement can come later.
-            let _ = plan; // acknowledge we found it
-        }
-    }
+    let _ = active_plan_id; // used in generation footer indirectly via stores
 
     let assembled = builder.build(SYSTEM_PROMPT);
 
