@@ -10,9 +10,9 @@
 //! capped by `max_validation_attempts`.
 
 use crate::daemon::context::Stores;
+use crate::domain::phase::Phase;
 use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::domain::spec::Spec;
-use crate::domain::phase::Phase;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
 
 /// Which level of the hierarchy to generate.
@@ -50,11 +50,7 @@ pub struct GenerationPrompt {
 /// - User-provided goal/objective
 /// - Relevant learnings (global scope)
 /// - Accumulated validation failures from previous attempts
-pub fn build_plan_prompt(
-    goal: &str,
-    learnings: &[String],
-    validation_failures: &[String],
-) -> GenerationPrompt {
+pub fn build_plan_prompt(goal: &str, learnings: &[String], validation_failures: &[String]) -> GenerationPrompt {
     let mut msg = String::with_capacity(2048);
 
     msg.push_str("## Task: Generate a Plan\n\n");
@@ -171,11 +167,7 @@ pub fn build_spec_prompt(
 /// - Active Spec (title, ID, plan reference, description)
 /// - Relevant learnings (scoped to Spec + Plan + Global)
 /// - Accumulated validation failures
-pub fn build_phase_prompt(
-    spec: &Spec,
-    learnings: &[String],
-    validation_failures: &[String],
-) -> GenerationPrompt {
+pub fn build_phase_prompt(spec: &Spec, learnings: &[String], validation_failures: &[String]) -> GenerationPrompt {
     let mut msg = String::with_capacity(4096);
 
     msg.push_str("## Task: Generate Implementation Phases\n\n");
@@ -250,7 +242,10 @@ pub fn build_work_item_prompt(
         msg.push_str("None yet.\n\n");
     } else {
         for wi in existing_work_items {
-            msg.push_str(&format!("- [{}] {} ({}) — {}\n", wi.id, wi.title, wi.status, wi.description));
+            msg.push_str(&format!(
+                "- [{}] {} ({}) — {}\n",
+                wi.id, wi.title, wi.status, wi.description
+            ));
         }
         msg.push('\n');
     }
@@ -374,10 +369,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
 /// Find the active Plan from stores. Returns None if no active Plan.
 pub fn find_active_plan(stores: &Stores) -> Option<Plan> {
     let plans = stores.plans.read().unwrap();
-    plans
-        .values()
-        .find(|p| p.status == HierarchyStatus::Active)
-        .cloned()
+    plans.values().find(|p| p.status == HierarchyStatus::Active).cloned()
 }
 
 /// Find active Specs for a given Plan.
@@ -507,10 +499,7 @@ mod tests {
 
     #[test]
     fn test_plan_prompt_includes_accumulated_failures() {
-        let failures = vec![
-            "Missing acceptance criteria".to_string(),
-            "Title too vague".to_string(),
-        ];
+        let failures = vec!["Missing acceptance criteria".to_string(), "Title too vague".to_string()];
         let prompt = build_plan_prompt("Build API", &[], &failures);
         assert!(prompt.user_message.contains("Previous Validation Failures"));
         assert!(prompt.user_message.contains("1. Missing acceptance criteria"));

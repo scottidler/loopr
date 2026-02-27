@@ -9,8 +9,7 @@ use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::generation::{
-    self, GenerationLevel, build_plan_prompt, build_spec_prompt, build_phase_prompt,
-    build_work_item_prompt,
+    self, GenerationLevel, build_phase_prompt, build_plan_prompt, build_spec_prompt, build_work_item_prompt,
 };
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
@@ -255,9 +254,7 @@ fn build_generation_footer(stores: &Stores, goal: &str) -> Option<String> {
     let level = generation::determine_generation_level(stores)?;
 
     let prompt = match level {
-        GenerationLevel::Plan => {
-            build_plan_prompt(goal, &[], &[])
-        }
+        GenerationLevel::Plan => build_plan_prompt(goal, &[], &[]),
         GenerationLevel::Spec => {
             let plan = generation::find_active_plan(stores)?;
             build_spec_prompt(&plan, &[], &[], &[])
@@ -275,7 +272,10 @@ fn build_generation_footer(stores: &Stores, goal: &str) -> Option<String> {
         }
     };
 
-    info!("Coordinator generation needed at level: {} (prompt level: {})", level, prompt.level);
+    info!(
+        "Coordinator generation needed at level: {} (prompt level: {})",
+        level, prompt.level
+    );
     Some(prompt.user_message)
 }
 
@@ -292,7 +292,10 @@ pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
         let phases = generation::find_active_phases_for_spec(stores, &spec.id);
         for phase in &phases {
             if generation::is_phase_complete(stores, &phase.id) {
-                completed.push(format!("Phase '{}' (id: {}) has all WorkItems Done", phase.title, phase.id));
+                completed.push(format!(
+                    "Phase '{}' (id: {}) has all WorkItems Done",
+                    phase.title, phase.id
+                ));
             }
         }
     }
