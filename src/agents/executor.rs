@@ -212,15 +212,9 @@ async fn run_agent_loop(
             result
         }
         // Coordinator, Researcher, and Integrator loops are wired in their respective modules
-        AgentType::Coordinator => {
-            Err(eyre!("Coordinator agent loop not yet implemented"))
-        }
-        AgentType::Researcher => {
-            Err(eyre!("Researcher agent loop not yet implemented"))
-        }
-        AgentType::Integrator => {
-            Err(eyre!("Integrator task loop not yet implemented"))
-        }
+        AgentType::Coordinator => Err(eyre!("Coordinator agent loop not yet implemented")),
+        AgentType::Researcher => Err(eyre!("Researcher agent loop not yet implemented")),
+        AgentType::Integrator => Err(eyre!("Integrator task loop not yet implemented")),
     }
 }
 
@@ -364,35 +358,27 @@ pub async fn execute_action(
         AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
 
         // --- Coordinator actions (stubs — wired in Phase 2 coordinator.rs) ---
-        AgentAction::CreatePlan { title, .. } => {
-            Ok(ActionResult::NotYetImplemented(format!("CreatePlan: {}", title)))
-        }
-        AgentAction::CreateSpec { title, .. } => {
-            Ok(ActionResult::NotYetImplemented(format!("CreateSpec: {}", title)))
-        }
+        AgentAction::CreatePlan { title, .. } => Ok(ActionResult::NotYetImplemented(format!("CreatePlan: {}", title))),
+        AgentAction::CreateSpec { title, .. } => Ok(ActionResult::NotYetImplemented(format!("CreateSpec: {}", title))),
         AgentAction::CreatePhase { title, .. } => {
             Ok(ActionResult::NotYetImplemented(format!("CreatePhase: {}", title)))
         }
         AgentAction::CreateWorkItem { title, .. } => {
             Ok(ActionResult::NotYetImplemented(format!("CreateWorkItem: {}", title)))
         }
-        AgentAction::AssignAgent {
-            agent_type,
-            target_id,
-        } => Ok(ActionResult::NotYetImplemented(format!(
+        AgentAction::AssignAgent { agent_type, target_id } => Ok(ActionResult::NotYetImplemented(format!(
             "AssignAgent: {} → {}",
             agent_type, target_id
         ))),
-        AgentAction::SpawnResearcher { query, scope_id } => Ok(ActionResult::NotYetImplemented(
-            format!("SpawnResearcher: {} (scope: {})", query, scope_id),
-        )),
-        AgentAction::ValidateDocument { collection, id } => Ok(ActionResult::NotYetImplemented(
-            format!("ValidateDocument: {}/{}", collection, id),
-        )),
-        AgentAction::AcquireLock {
-            resource,
-            holder_id,
-        } => Ok(ActionResult::NotYetImplemented(format!(
+        AgentAction::SpawnResearcher { query, scope_id } => Ok(ActionResult::NotYetImplemented(format!(
+            "SpawnResearcher: {} (scope: {})",
+            query, scope_id
+        ))),
+        AgentAction::ValidateDocument { collection, id } => Ok(ActionResult::NotYetImplemented(format!(
+            "ValidateDocument: {}/{}",
+            collection, id
+        ))),
+        AgentAction::AcquireLock { resource, holder_id } => Ok(ActionResult::NotYetImplemented(format!(
             "AcquireLock: {} (holder: {})",
             resource, holder_id
         ))),
@@ -413,9 +399,7 @@ pub async fn execute_action(
         AgentAction::SearchFiles { pattern, .. } => {
             Ok(ActionResult::NotYetImplemented(format!("SearchFiles: {}", pattern)))
         }
-        AgentAction::ListDirectory { path } => {
-            Ok(ActionResult::NotYetImplemented(format!("ListDirectory: {}", path)))
-        }
+        AgentAction::ListDirectory { path } => Ok(ActionResult::NotYetImplemented(format!("ListDirectory: {}", path))),
     }
 }
 
@@ -489,7 +473,9 @@ mod tests {
             tool_name: "echo-test".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
         if let ActionResult::ToolRun(tool_result) = result {
             assert_eq!(tool_result.exit_code, 0);
             assert_eq!(tool_result.stdout.trim(), "hello");
@@ -513,7 +499,9 @@ mod tests {
             path: "test.txt".to_string(),
             content: "hello world".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
 
         let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
@@ -535,7 +523,9 @@ mod tests {
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
         if let ActionResult::FileRead(content) = result {
             assert_eq!(content, "file content");
         } else {
@@ -557,7 +547,9 @@ mod tests {
         let action = AgentAction::Done {
             summary: "All done".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
         if let ActionResult::Done(summary) = result {
             assert_eq!(summary, "All done");
         } else {
@@ -579,7 +571,9 @@ mod tests {
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await.unwrap();
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
         if let ActionResult::NeedHelp(reason) = result {
             assert_eq!(reason, "Ambiguous spec");
         } else {

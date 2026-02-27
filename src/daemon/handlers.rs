@@ -2531,11 +2531,7 @@ fn handle_agent_start(
         .get("target_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let query = req
-        .params
-        .get("query")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
 
     // Create agent session with model from config (placeholder — will be wired up in Phase 2)
     let mut session = AgentSession::new(agent_type, "claude-sonnet-4-6".to_string());
