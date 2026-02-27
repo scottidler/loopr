@@ -2,16 +2,18 @@ pub mod context;
 pub mod handlers;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use eyre::eyre;
 use log::{info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
+use crate::agents::AgentStatus;
 use crate::ipc::protocol::DaemonEvent;
 use crate::ipc::server::{self, IpcServer};
 
-use self::context::DaemonContext;
+use self::context::{DaemonContext, Stores};
 
 /// Ensure only one daemon runs at a time. If a stale PID file exists from a
 /// dead process, clean it up. If a live daemon is found, abort with an error.
@@ -74,7 +76,13 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     info!("Daemon listening on {}", ipc_server.socket_path().display());
     let event_tx = ctx.read().await.event_tx.clone();
 
-    let result = accept_loop(listener, ctx.clone(), event_tx).await;
+    let result = accept_loop(listener, ctx.clone(), event_tx.clone()).await;
+
+    // Graceful shutdown: cancel agent sessions, wait for tasks, abort stragglers
+    {
+        let c = ctx.read().await;
+        graceful_shutdown(&c.stores, &event_tx).await;
+    }
 
     // Cleanup on shutdown
     ipc_server.cleanup();
@@ -85,6 +93,65 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     info!("Daemon shut down cleanly");
 
     result
+}
+
+/// Graceful shutdown: cancel all agent sessions, wait for tasks to exit,
+/// then abort any remaining tasks after a grace period.
+async fn graceful_shutdown(stores: &Arc<Stores>, event_tx: &tokio::sync::broadcast::Sender<DaemonEvent>) {
+    let grace_period = Duration::from_secs(10);
+    info!("Starting graceful shutdown, grace period: {:?}", grace_period);
+
+    // 1. Broadcast shutting_down event
+    let _ = event_tx.send(DaemonEvent::new("system.shutting_down", serde_json::json!({})));
+
+    // 2. Cancel all non-terminal agent sessions
+    {
+        let mut sessions = stores.agent_sessions.write().unwrap();
+        for session in sessions.values_mut() {
+            if !session.status.is_terminal() {
+                let _ = session.transition_to(AgentStatus::Cancelled);
+            }
+        }
+    }
+
+    // 3. Drain handles and wait with timeout
+    let handles: Vec<_> = {
+        let mut handle_map = stores.agent_handles.lock().unwrap();
+        handle_map.drain().collect()
+    };
+
+    if handles.is_empty() {
+        info!("No agent tasks to wait for");
+        return;
+    }
+
+    info!("Waiting for {} agent task(s) to exit", handles.len());
+
+    let mut join_set = tokio::task::JoinSet::new();
+    for (id, handle) in handles {
+        join_set.spawn(async move {
+            let result = handle.await;
+            (id, result)
+        });
+    }
+
+    match tokio::time::timeout(grace_period, async {
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((id, Ok(()))) => info!("Agent task {} exited gracefully", id),
+                Ok((id, Err(e))) => warn!("Agent task {} join error: {}", id, e),
+                Err(e) => warn!("JoinSet error: {}", e),
+            }
+        }
+    })
+    .await
+    {
+        Ok(()) => info!("All agent tasks exited gracefully"),
+        Err(_) => {
+            warn!("Grace period expired, aborting remaining tasks");
+            join_set.abort_all();
+        }
+    }
 }
 
 /// Accept loop: handles incoming connections, SIGINT/SIGTERM, and IPC shutdown.

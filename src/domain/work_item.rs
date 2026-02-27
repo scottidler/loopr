@@ -69,6 +69,11 @@ pub fn work_item_transitions() -> Vec<TransitionRule<WorkItemStatus>> {
             to: Done,
             role: Some(Role::Coordinator),
         },
+        TransitionRule {
+            from: Integrated,
+            to: Done,
+            role: Some(Role::Integrator),
+        },
         // Abandoned from any non-terminal state
         TransitionRule {
             from: Draft,
@@ -344,6 +349,20 @@ mod tests {
                 WorkItemStatus::Integrated,
                 WorkItemStatus::Done,
                 Role::Coordinator,
+                &rules,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_valid_integrated_to_done_integrator() {
+        let rules = work_item_transitions();
+        assert!(
+            validate_transition(
+                WorkItemStatus::Integrated,
+                WorkItemStatus::Done,
+                Role::Integrator,
                 &rules,
             )
             .is_ok()

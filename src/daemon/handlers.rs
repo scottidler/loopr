@@ -171,10 +171,27 @@ pub fn dispatch(
 }
 
 fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
+    let server_version = env!("CARGO_PKG_VERSION");
+    let client_version = req
+        .params
+        .get("client_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let version_match = client_version == server_version;
+    if !version_match {
+        log::warn!(
+            "Client version mismatch: client={}, server={}",
+            client_version,
+            server_version
+        );
+    }
+
     DaemonResponse::ok(
         req.id,
         json!({
-            "server_version": env!("CARGO_PKG_VERSION"),
+            "server_version": server_version,
+            "client_version": client_version,
+            "version_match": version_match,
             "protocol": "ndjson/1"
         }),
     )
@@ -1274,6 +1291,18 @@ fn handle_tick_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    // Singleton guard: at most one non-terminal Tick at a time
+    {
+        let ticks = stores.ticks.read().unwrap();
+        let active = ticks.values().any(|t| !t.status.is_terminal());
+        if active {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("A non-terminal Tick already exists"),
+            );
+        }
+    }
+
     let number = match req.params.get("number").and_then(|v| v.as_u64()) {
         Some(n) => n as u32,
         None => {
@@ -2707,10 +2736,13 @@ fn handle_agent_start(
     let task_event_tx = event_tx.clone();
     let task_worktree_mgr = worktree_mgr.clone();
     let task_id = id.clone();
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         crate::agents::executor::run_agent_task(task_id, agent_type, task_stores, task_event_tx, task_worktree_mgr)
             .await;
     });
+
+    // Store JoinHandle for graceful shutdown
+    stores.agent_handles.lock().unwrap().insert(id.clone(), handle);
 
     DaemonResponse::ok(req.id, session_json)
 }
@@ -5727,6 +5759,102 @@ mod tests {
     }
 
     #[test]
+    fn test_tick_create_singleton_guard_blocks_second() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Create first tick (Open)
+        let resp1 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        assert!(!resp1.is_error());
+
+        // Second create should fail — non-terminal Tick exists
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(51, "tick.create", json!({"number": 2})),
+        );
+        assert!(resp2.is_error());
+        assert!(
+            resp2
+                .error
+                .unwrap()
+                .message
+                .contains("non-terminal Tick already exists")
+        );
+    }
+
+    #[test]
+    fn test_tick_create_singleton_guard_allows_after_terminal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Create and publish first tick
+        let c1 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let t1_id = c1.result.unwrap()["id"].as_str().unwrap().to_string();
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                51,
+                "tick.transition",
+                json!({"id": t1_id, "target_status": "Sealing", "role": "integrator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                52,
+                "tick.transition",
+                json!({"id": t1_id, "target_status": "Validating", "role": "integrator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                53,
+                "tick.transition",
+                json!({"id": t1_id, "target_status": "Published", "role": "integrator"}),
+            ),
+        );
+
+        // Now creation should succeed
+        let resp2 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(54, "tick.create", json!({"number": 2})),
+        );
+        assert!(!resp2.is_error());
+    }
+
+    #[test]
     fn test_tick_get_success() {
         let stores = test_stores();
         let tx = test_event_tx();
@@ -5806,21 +5934,60 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
 
-        // Create two ticks
+        // Create first tick
+        let create1 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let tick1_id = create1.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition tick 1 through to Published so we can create another
         dispatch(
             &stores,
             &tx,
             &wm,
-            &test_integrator_config(),
-            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+            &ic,
+            DaemonRequest::new(
+                52,
+                "tick.transition",
+                json!({"id": tick1_id, "target_status": "Sealing", "role": "integrator"}),
+            ),
         );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                53,
+                "tick.transition",
+                json!({"id": tick1_id, "target_status": "Validating", "role": "integrator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                54,
+                "tick.transition",
+                json!({"id": tick1_id, "target_status": "Published", "role": "integrator"}),
+            ),
+        );
+
+        // Now create second tick (singleton guard allows it since tick 1 is terminal)
         let create2 = dispatch(
             &stores,
             &tx,
             &wm,
-            &test_integrator_config(),
-            DaemonRequest::new(51, "tick.create", json!({"number": 2})),
+            &ic,
+            DaemonRequest::new(55, "tick.create", json!({"number": 2})),
         );
         let tick2_id = create2.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -5829,31 +5996,25 @@ mod tests {
             &stores,
             &tx,
             &wm,
-            &test_integrator_config(),
+            &ic,
             DaemonRequest::new(
-                52,
+                56,
                 "tick.transition",
                 json!({"id": tick2_id, "target_status": "Sealing", "role": "integrator"}),
             ),
         );
 
         // List all — should have 2
-        let all_resp = dispatch(
-            &stores,
-            &tx,
-            &wm,
-            &test_integrator_config(),
-            DaemonRequest::new(60, "tick.list", json!(null)),
-        );
+        let all_resp = dispatch(&stores, &tx, &wm, &ic, DaemonRequest::new(60, "tick.list", json!(null)));
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
-        // List filtered by Open — should have 1
+        // List filtered by Published — should have 1 (tick 1)
         let filtered_resp = dispatch(
             &stores,
             &tx,
             &wm,
-            &test_integrator_config(),
-            DaemonRequest::new(61, "tick.list", json!({"status": "Open"})),
+            &ic,
+            DaemonRequest::new(61, "tick.list", json!({"status": "Published"})),
         );
         let ticks = filtered_resp.result.unwrap();
         let arr = ticks.as_array().unwrap();
@@ -5866,21 +6027,56 @@ mod tests {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
 
-        // Create two ticks (writes to both TaskStore and HashMap)
+        // Create first tick, transition to Published, then create second
+        let c1 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        let t1_id = c1.result.unwrap()["id"].as_str().unwrap().to_string();
         dispatch(
             &stores,
             &tx,
             &wm,
-            &test_integrator_config(),
-            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+            &ic,
+            DaemonRequest::new(
+                52,
+                "tick.transition",
+                json!({"id": t1_id, "target_status": "Sealing", "role": "integrator"}),
+            ),
         );
         dispatch(
             &stores,
             &tx,
             &wm,
-            &test_integrator_config(),
-            DaemonRequest::new(51, "tick.create", json!({"number": 2})),
+            &ic,
+            DaemonRequest::new(
+                53,
+                "tick.transition",
+                json!({"id": t1_id, "target_status": "Validating", "role": "integrator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                54,
+                "tick.transition",
+                json!({"id": t1_id, "target_status": "Published", "role": "integrator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(55, "tick.create", json!({"number": 2})),
         );
 
         // Clear HashMap to prove list reads from TaskStore
@@ -5898,13 +6094,13 @@ mod tests {
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list by status also works from TaskStore
-        // Both ticks are Open (created in Open status)
+        // Tick 1 is Published, tick 2 is Open
         let filtered_req = DaemonRequest::new(61, "tick.list", json!({"status": "Open"}));
         let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
         assert!(!filtered_resp.is_error());
         let filtered_items = filtered_resp.result.unwrap();
         let arr = filtered_items.as_array().unwrap();
-        assert_eq!(arr.len(), 2);
+        assert_eq!(arr.len(), 1);
     }
 
     #[test]

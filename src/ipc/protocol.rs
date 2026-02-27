@@ -105,6 +105,13 @@ impl RpcError {
             message: format!("pool exhausted: {detail}"),
         }
     }
+
+    pub fn precondition_failed(detail: &str) -> Self {
+        Self {
+            code: -32005,
+            message: format!("precondition failed: {detail}"),
+        }
+    }
 }
 
 // --- Convenience constructors ---

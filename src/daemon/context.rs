@@ -5,6 +5,8 @@ use log::{info, warn};
 use taskstore::Store;
 use tokio::sync::{RwLock, broadcast};
 
+use tokio::task::JoinHandle;
+
 use crate::agents::AgentSession;
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
@@ -43,6 +45,9 @@ pub struct Stores {
     pub tool_runner: Arc<ToolRunner>,
     /// Full config, available to handlers for agent spawning.
     pub config: Config,
+    /// JoinHandles for spawned agent tasks, keyed by session ID.
+    /// Used for graceful shutdown: cancel agents, wait, then abort.
+    pub agent_handles: StdMutex<HashMap<String, JoinHandle<()>>>,
 }
 
 impl Stores {
@@ -62,6 +67,7 @@ impl Stores {
             validator: None,
             tool_runner: Arc::new(ToolRunner::new(&[])),
             config: Config::default(),
+            agent_handles: StdMutex::new(HashMap::new()),
         }
     }
 }
