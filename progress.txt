@@ -155,3 +155,5 @@ Iteration 5: VALIDATING at 06:27:44
 Iteration 5: PASS
 Iteration 6: STARTED at 06:28:00
 Iteration 6: Completed Phase 3 — wired validate-iterate loop into Coordinator. Implemented ValidateDocument executor action (via bridge IPC to validator.validate, replaces stub), added DocumentValidated ActionResult variant, added validation failure query helpers (find_failed_validations, collect_failure_messages, find_draft_needing_regeneration, is_validation_cap_reached) to generation.rs. Updated build_generation_footer to handle 3 cases: new generation (no doc), re-generation (Draft + failed validation, accumulated failures in prompt), NeedHelp (validation cap reached). Added event_tx() accessor to AgentIpcBridge to reduce param count. Updated format_action_summary in coordinator.rs and implementer.rs. 962 tests pass, clippy clean, fmt clean. Phase 3 COMPLETE: generation.rs prompts ✓, validate-iterate loop ✓. Next: Phase 4 (Researcher agent).
+Iteration 6: VALIDATING at 06:38:54
+Iteration 6: PASS
