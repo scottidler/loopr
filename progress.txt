@@ -172,3 +172,55 @@ Iteration 9: VALIDATING at 07:05:28
 Iteration 9: PASS
 Iteration 10: STARTED at 07:05:50
 Iteration 10: TIMEOUT after 15m
+Iteration 10: VALIDATING at 07:20:51
+Iteration 10: FAIL — validation errors:
+[ensure]     |                                                       ^^^^^^^^^^^^^^^ variant or associated item not found in `config::TickCadence`
+[ensure]     |
+[ensure]    ::: src/config.rs:35:1
+[ensure]     |
+[ensure]  35 | pub enum TickCadence {
+[ensure]     | -------------------- variant or associated item `AfterEachBundle` not found for this enum
+[ensure] 
+[ensure] error[E0599]: no associated item named `SingleWorkItem` found for struct `config::BundleSizePolicy` in the current scope
+[ensure]    --> src/integration_tests.rs:963:64
+[ensure]     |
+[ensure] 963 |         assert!(matches!(config.bundle_size, BundleSizePolicy::SingleWorkItem));
+[ensure]     |                                                                ^^^^^^^^^^^^^^ associated item not found in `config::BundleSizePolicy`
+[ensure]     |
+[ensure]    ::: src/config.rs:46:1
+[ensure]     |
+[ensure]  46 | pub struct BundleSizePolicy {
+[ensure]     | --------------------------- associated item `SingleWorkItem` not found for this struct
+[ensure] 
+[ensure] error[E0609]: no field `integrator` on type `config::AgentConfig`
+[ensure]    --> src/integration_tests.rs:983:28
+[ensure]     |
+[ensure] 983 |             !config.agents.integrator.enabled,
+[ensure]     |                            ^^^^^^^^^^ unknown field
+[ensure]     |
+[ensure]     = note: available fields are: `enabled`, `auto_start_implementer`, `auto_start_reviewer`, `auto_start_coordinator`, `implementer` ... and 4 others
+[ensure] 
+[ensure] error[E0599]: no variant or associated item named `Complete` found for enum `work_item::WorkItemStatus` in the current scope
+[ensure]     --> src/integration_tests.rs:1117:82
+[ensure]      |
+[ensure] 1117 |         assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Complete);
+[ensure]      |                                                                                  ^^^^^^^^ variant or associated item not found in `work_item::WorkItemStatus`
+[ensure]      |
+[ensure]     ::: src/domain/work_item.rs:11:1
+[ensure]      |
+[ensure]   11 | pub enum WorkItemStatus {
+[ensure]      | ----------------------- variant or associated item `Complete` not found for this enum
+[ensure] 
+[ensure] Some errors have detailed explanations: E0061, E0277, E0599, E0609.
+[ensure] For more information about an error, try `rustc --explain E0061`.
+[ensure] warning: `loopr` (bin "loopr" test) generated 1 warning
+[ensure] error: could not compile `loopr` (bin "loopr" test) due to 13 previous errors; 1 warning emitted
+[ensure] 
+[ensure] Build or test discovery failed!
+[check]     Checking loopr v0.1.0 (/home/saidler/repos/scottidler/loopr)
+[ensure] failed
+Task ensure failed with exit code Some(1)
+
+Logs:
+  stdout: /home/saidler/.otto/loopr-fab8a972/1772205651/tasks/ensure/stdout.log
+  stderr: /home/saidler/.otto/loopr-fab8a972/1772205651/tasks/ensure/stderr.log
