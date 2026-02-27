@@ -103,10 +103,7 @@ impl Learning {
         self.updated_at = id::now_millis();
 
         // Auto-promotion check
-        if promotion.auto_promote
-            && self.reinforcements >= promotion.min_reinforcements
-            && self.contradictions == 0
-        {
+        if promotion.auto_promote && self.reinforcements >= promotion.min_reinforcements && self.contradictions == 0 {
             let age_days = (self.updated_at - self.created_at) / (24 * 60 * 60 * 1000);
             if age_days <= promotion.max_age_days as i64 {
                 self.promoted = true;
@@ -150,14 +147,8 @@ impl Record for Learning {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("scope".into(), IndexValue::String(self.scope.to_string()));
-        m.insert(
-            "source_id".into(),
-            IndexValue::String(self.source_id.clone()),
-        );
-        m.insert(
-            "promoted".into(),
-            IndexValue::String(self.promoted.to_string()),
-        );
+        m.insert("source_id".into(), IndexValue::String(self.source_id.clone()));
+        m.insert("promoted".into(), IndexValue::String(self.promoted.to_string()));
         m
     }
 }
@@ -346,10 +337,7 @@ mod tests {
             fields.get("source_id"),
             Some(&IndexValue::String("phase-42".to_string()))
         );
-        assert_eq!(
-            fields.get("promoted"),
-            Some(&IndexValue::String("false".to_string()))
-        );
+        assert_eq!(fields.get("promoted"), Some(&IndexValue::String("false".to_string())));
         assert_eq!(fields.len(), 3);
     }
 
@@ -425,7 +413,7 @@ mod tests {
         let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
         l.reinforce(&policy); // 1r, 0c → 1.0
         l.reinforce(&policy); // 2r, 0c → 1.0
-        l.contradict();       // 2r, 1c → 0.667
+        l.contradict(); // 2r, 1c → 0.667
         assert!((l.confidence - 2.0 / 3.0).abs() < 0.01);
     }
 
@@ -483,7 +471,7 @@ mod tests {
         let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
         l.reinforce(&policy); // 1
         l.reinforce(&policy); // 2
-        l.contradict();       // 1 contradiction blocks auto-promotion
+        l.contradict(); // 1 contradiction blocks auto-promotion
         l.reinforce(&policy); // 3 reinforcements, but contradictions > 0
         assert!(!l.promoted);
     }
@@ -535,7 +523,11 @@ mod tests {
         let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
         assert!(l.applicable_roles.is_none());
         // None means applicable to all roles
-        let applies_to_all = l.applicable_roles.as_ref().map(|roles| roles.contains(&Role::Coordinator)).unwrap_or(true);
+        let applies_to_all = l
+            .applicable_roles
+            .as_ref()
+            .map(|roles| roles.contains(&Role::Coordinator))
+            .unwrap_or(true);
         assert!(applies_to_all);
     }
 
@@ -552,9 +544,6 @@ mod tests {
         let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
         l.promoted = true;
         let fields = l.indexed_fields();
-        assert_eq!(
-            fields.get("promoted"),
-            Some(&IndexValue::String("true".to_string()))
-        );
+        assert_eq!(fields.get("promoted"), Some(&IndexValue::String("true".to_string())));
     }
 }
