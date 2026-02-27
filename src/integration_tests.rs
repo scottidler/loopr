@@ -16,7 +16,7 @@ mod tests {
     use crate::daemon::context::Stores;
     use crate::daemon::handlers::dispatch;
     use crate::domain::learning::{Learning, LearningScope};
-    use crate::domain::tick::{Tick, TickStatus};
+    use crate::domain::tick::TickStatus;
     use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
     use crate::worktree::manager::WorktreeManager;
 
@@ -516,7 +516,7 @@ mod tests {
         );
         let lock_id = lock["id"].as_str().unwrap().to_string();
         assert_eq!(lock["resource"], "src/main.rs");
-        assert!(lock["active"].as_bool().unwrap());
+        assert_eq!(lock["status"], "active");
 
         // List locks — should have one active
         let locks = dispatch_ok(&stores, &tx, &wm, &ic, "lock.list", json!({}));
@@ -529,9 +529,9 @@ mod tests {
             json!({"id": lock_id}),
         );
 
-        // Lock should be inactive
+        // Lock should be released
         let lock_state = stores.locks.read().unwrap();
-        assert!(!lock_state[&lock_id].active);
+        assert_eq!(lock_state[&lock_id].status, crate::domain::lock::LockStatus::Released);
     }
 
     // ========================================================================
@@ -730,7 +730,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        // Create WorkItem (starts as Open)
+        // Create WorkItem (starts as Draft)
         let wi = dispatch_ok(
             &stores, &tx, &wm, &ic,
             "work_item.create",
@@ -738,11 +738,11 @@ mod tests {
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
-        // Invalid: Open → Complete (must go through InProgress first)
+        // Invalid: Draft → Done (must go through InProgress first)
         let code = dispatch_err(
             &stores, &tx, &wm, &ic,
             "work_item.transition",
-            json!({"id": wi_id, "target": "complete", "role": "coordinator"}),
+            json!({"id": wi_id, "target": "done", "role": "coordinator"}),
         );
         assert_ne!(code, 0, "should reject invalid transition");
 
@@ -750,7 +750,7 @@ mod tests {
         let wis = stores.work_items.read().unwrap();
         assert_eq!(
             wis[&wi_id].status,
-            crate::domain::work_item::WorkItemStatus::Open
+            crate::domain::work_item::WorkItemStatus::Draft
         );
     }
 
@@ -871,7 +871,7 @@ mod tests {
         assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Spec));
 
         // Add active Spec → needs Phase
-        let mut spec = Spec::new(plan_id.clone(), "S".into(), "d".into(), "c".into());
+        let mut spec = Spec::new(plan_id.clone(), "S".into(), "d".into());
         spec.status = HierarchyStatus::Active;
         let spec_id = spec.id.clone();
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
@@ -879,7 +879,7 @@ mod tests {
         assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Phase));
 
         // Add active Phase → needs WorkItem
-        let mut phase = Phase::new(spec_id.clone(), "Ph".into(), "d".into(), "c".into());
+        let mut phase = Phase::new(spec_id.clone(), "Ph".into(), "d".into(), 1);
         phase.status = HierarchyStatus::Active;
         stores
             .phases
@@ -951,16 +951,17 @@ mod tests {
     #[test]
     fn test_strategy_knobs_defaults() {
         use crate::config::{
-            BundleSizePolicy, ConflictPolicy, StalePolicy, StrategyConfig,
+            ConflictPolicy, StalePolicy, StrategyConfig,
             TickCadence, ValidatorStrictness,
         };
 
         let config = StrategyConfig::default();
 
-        assert!(matches!(config.stale, StalePolicy::RejectStale));
-        assert!(matches!(config.conflict, ConflictPolicy::FailOnConflict));
-        assert!(matches!(config.cadence, TickCadence::AfterEachBundle));
-        assert!(matches!(config.bundle_size, BundleSizePolicy::SingleWorkItem));
+        assert!(matches!(config.stale_policy, StalePolicy::ReplanAtSafePoint));
+        assert!(matches!(config.conflict_policy, ConflictPolicy::LockAdvisory));
+        assert!(matches!(config.tick_cadence, TickCadence::Continuous));
+        assert_eq!(config.bundle_size.max_files_touched, 8);
+        assert_eq!(config.bundle_size.max_loc_changed, 300);
         assert!(matches!(config.validator_strictness, ValidatorStrictness::HardFailOnAnyAmbiguity));
         assert!(config.promotion.auto_promote);
         assert_eq!(config.promotion.min_reinforcements, 3);
@@ -980,7 +981,7 @@ mod tests {
             "coordinator should not auto-start by default"
         );
         assert!(
-            !config.agents.integrator.enabled,
+            !config.integrator.enabled,
             "integrator should be disabled by default"
         );
     }
@@ -1101,7 +1102,7 @@ mod tests {
         dispatch_ok(&stores, &tx, &wm, &ic, "tick.transition", json!({"id": tick_id, "target": "published", "role": "integrator", "sha": "abc123"}));
 
         // 7. Complete the work item
-        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi_id, "target": "complete", "role": "coordinator"}));
+        dispatch_ok(&stores, &tx, &wm, &ic, "work_item.transition", json!({"id": wi_id, "target": "done", "role": "coordinator"}));
 
         // Verify final state across all stores
         let plans = stores.plans.read().unwrap();
@@ -1114,7 +1115,7 @@ mod tests {
         assert_eq!(ticks[&tick_id].status, TickStatus::Published);
 
         let wis = stores.work_items.read().unwrap();
-        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Complete);
+        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Done);
 
         // Goal is still active
         let goals = stores.coordinator_goals.read().unwrap();
