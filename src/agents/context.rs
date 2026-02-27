@@ -346,6 +346,11 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
+    pub fn with_state_summary(mut self, summary: String) -> Self {
+        self.state_summary = Some(summary);
+        self
+    }
+
     pub fn with_footer(mut self, footer: String) -> Self {
         self.footer = Some(footer);
         self

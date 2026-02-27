@@ -6,6 +6,7 @@ use log::{error, info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::coordinator;
 use crate::agents::implementer::{self, LlmClient};
 use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::reviewer;
@@ -211,8 +212,31 @@ async fn run_agent_loop(
 
             result
         }
-        // Coordinator, Researcher, and Integrator loops are wired in their respective modules
-        AgentType::Coordinator => Err(eyre!("Coordinator agent loop not yet implemented")),
+        AgentType::Coordinator => {
+            let config = stores.config.agents.coordinator.clone();
+            let llm = create_llm_client(&config.role, session_id, event_tx)?;
+
+            let mut session = {
+                let sessions = stores.agent_sessions.read().unwrap();
+                sessions
+                    .get(session_id)
+                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
+                    .clone()
+            };
+
+            let result =
+                coordinator::run_coordinator(llm.as_ref(), &mut session, stores, bridge, &config, event_tx).await;
+
+            // Write back updated session iteration count
+            {
+                let mut sessions = stores.agent_sessions.write().unwrap();
+                if let Some(s) = sessions.get_mut(session_id) {
+                    s.iteration = session.iteration;
+                }
+            }
+
+            result
+        }
         AgentType::Researcher => Err(eyre!("Researcher agent loop not yet implemented")),
         AgentType::Integrator => Err(eyre!("Integrator task loop not yet implemented")),
     }

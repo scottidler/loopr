@@ -1,0 +1,885 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use eyre::{Result, eyre};
+use log::{info, warn};
+use tokio::sync::broadcast;
+
+use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::context::ContextBuilder;
+use crate::agents::executor::{ActionResult, execute_action};
+use crate::agents::implementer::{self, IterationOutcome, LlmClient};
+use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
+use crate::config::CoordinatorConfig;
+use crate::daemon::context::Stores;
+use crate::domain::bundle::BundleStatus;
+use crate::domain::lock::LockStatus;
+use crate::domain::plan::HierarchyStatus;
+use crate::domain::role::Role;
+use crate::domain::tick::TickStatus;
+use crate::domain::work_item::WorkItemStatus;
+use crate::ipc::protocol::DaemonEvent;
+
+const SYSTEM_PROMPT: &str = r#"You are the Coordinator agent in the Loopr development orchestrator. You are the project manager and engineering manager. You own the full pipeline: Plan → Spec → Phase → WorkItem → Bundle → Tick.
+
+## Your Responsibilities
+
+1. Assess the current state of the project
+2. Decide what level needs attention (Plan, Spec, Phase, or Code)
+3. Create hierarchy records (Plans, Specs, Phases, WorkItems)
+4. Triage and accept Bundles (Proposed→Triaged, Reviewed→Accepted)
+5. Assign work to Implementer and Reviewer agents
+6. Manage resource locks (acquire before assignment, release on completion)
+7. Spawn Researchers when you need codebase information
+8. Track progress and mark completed items
+9. Create process-level Learnings
+
+## Your Capabilities
+
+Respond with a JSON array of actions:
+
+1. `create_plan`      {"action": "create_plan", "title": "...", "description": "...", "acceptance_criteria": "..."}
+2. `create_spec`      {"action": "create_spec", "plan_id": "...", "title": "...", "description": "..."}
+3. `create_phase`     {"action": "create_phase", "spec_id": "...", "title": "...", "description": "...", "order": 1}
+4. `create_work_item` {"action": "create_work_item", "phase_id": "...", "title": "...", "description": "..."}
+5. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-item-id"}
+6. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
+7. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-item-id"}
+8. `release_lock`     {"action": "release_lock", "lock_id": "lock-id"}
+9. `validate_document` {"action": "validate_document", "collection": "plans", "id": "plan-id"}
+10. `triage_bundle`   {"action": "triage_bundle", "bundle_id": "..."}
+11. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
+12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_state": "active"}
+13. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
+14. `need_help`       {"action": "need_help", "reason": "..."}
+15. `done`            {"action": "done", "summary": "..."}
+
+## Rules
+
+- Operate at ONE level per iteration. Don't advance all levels at once.
+- Check for existing Drafts before generating new documents.
+- Always validate documents before transitioning Draft → Active.
+- Create WorkItems small enough to fit in half a context window.
+- Don't assign more agents than pool_size allows (check active sessions).
+- Acquire locks on resources BEFORE assigning Implementers.
+- When acceptance criteria are met, mark the Plan Complete.
+
+## Output Format
+
+Respond with ONLY a JSON array of actions."#;
+
+/// Build a state summary string from stores for the Coordinator's context.
+///
+/// Uses lock-snapshot pattern: acquires each lock briefly, clones/summarizes, releases.
+/// The summary is designed to fit within the Coordinator's state_summary token budget (3000 tokens).
+pub fn build_state_summary(stores: &Stores) -> String {
+    let mut summary = String::with_capacity(4096);
+
+    // --- Plans ---
+    {
+        let plans = stores.plans.read().unwrap();
+        let mut non_terminal: Vec<_> = plans
+            .values()
+            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by_key(|p| p.created_at);
+        if !non_terminal.is_empty() {
+            summary.push_str("### Plans\n");
+            for p in &non_terminal {
+                summary.push_str(&format!("- [{}] {} ({})\n", p.id, p.title, p.status));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Specs ---
+    {
+        let specs = stores.specs.read().unwrap();
+        let mut non_terminal: Vec<_> = specs
+            .values()
+            .filter(|s| !matches!(s.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by_key(|s| s.created_at);
+        if !non_terminal.is_empty() {
+            summary.push_str("### Specs\n");
+            for s in &non_terminal {
+                summary.push_str(&format!("- [{}] {} ({}, plan: {})\n", s.id, s.title, s.status, s.plan_id));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Phases ---
+    {
+        let phases = stores.phases.read().unwrap();
+        let mut non_terminal: Vec<_> = phases
+            .values()
+            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by(|a, b| a.order.cmp(&b.order).then(a.created_at.cmp(&b.created_at)));
+        if !non_terminal.is_empty() {
+            summary.push_str("### Phases\n");
+            for p in &non_terminal {
+                summary.push_str(&format!(
+                    "- [{}] {} ({}, spec: {}, order: {})\n",
+                    p.id, p.title, p.status, p.spec_id, p.order
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- WorkItems ---
+    {
+        let work_items = stores.work_items.read().unwrap();
+        let mut non_terminal: Vec<_> = work_items
+            .values()
+            .filter(|w| !matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by_key(|w| w.created_at);
+        if !non_terminal.is_empty() {
+            summary.push_str("### WorkItems\n");
+            for w in &non_terminal {
+                summary.push_str(&format!(
+                    "- [{}] {} ({}, phase: {})\n",
+                    w.id, w.title, w.status, w.phase_id
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Bundles (non-terminal) ---
+    {
+        let bundles = stores.bundles.read().unwrap();
+        let mut pending: Vec<_> = bundles
+            .values()
+            .filter(|b| {
+                !matches!(
+                    b.status,
+                    BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
+                )
+            })
+            .collect();
+        pending.sort_by_key(|b| b.created_at);
+        if !pending.is_empty() {
+            summary.push_str("### Bundles\n");
+            for b in &pending {
+                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_item_id));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Ticks (non-terminal) ---
+    {
+        let ticks = stores.ticks.read().unwrap();
+        let mut active: Vec<_> = ticks
+            .values()
+            .filter(|t| !matches!(t.status, TickStatus::Published | TickStatus::Failed))
+            .collect();
+        active.sort_by_key(|t| t.created_at);
+        if !active.is_empty() {
+            summary.push_str("### Ticks\n");
+            for t in &active {
+                summary.push_str(&format!("- [{}] {}\n", t.id, t.status));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Active Agent Sessions ---
+    {
+        let sessions = stores.agent_sessions.read().unwrap();
+        let mut active: Vec<_> = sessions.values().filter(|s| !s.status.is_terminal()).collect();
+        active.sort_by_key(|s| s.created_at);
+        if !active.is_empty() {
+            summary.push_str("### Active Agents\n");
+            for s in &active {
+                let target = s
+                    .work_item_id
+                    .as_deref()
+                    .or(s.bundle_id.as_deref())
+                    .or(s.target_id.as_deref())
+                    .unwrap_or("global");
+                summary.push_str(&format!("- [{}] {} {} (target: {})\n", s.id, s.agent_type, s.status, target));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Active Locks ---
+    {
+        let locks = stores.locks.read().unwrap();
+        let active: Vec<_> = locks
+            .values()
+            .filter(|l| l.status == LockStatus::Active)
+            .collect();
+        if !active.is_empty() {
+            summary.push_str("### Active Locks\n");
+            for l in &active {
+                summary.push_str(&format!("- [{}] {} (holder: {})\n", l.id, l.resource, l.holder_id));
+            }
+            summary.push('\n');
+        }
+    }
+
+    if summary.is_empty() {
+        summary.push_str("No active records. The project is starting from scratch.\n");
+    }
+
+    summary
+}
+
+/// Check if the session has been cancelled (re-read from stores).
+fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
+    let sessions = stores.agent_sessions.read().unwrap();
+    sessions
+        .get(session_id)
+        .map(|s| s.status == AgentStatus::Cancelled)
+        .unwrap_or(true) // missing session = treat as cancelled
+}
+
+/// Run a single coordinator iteration: load context → call LLM → parse → execute actions.
+async fn run_coordinator_iteration(
+    llm: &dyn LlmClient,
+    session: &AgentSession,
+    stores: &Arc<Stores>,
+    bridge: &AgentIpcBridge,
+    iteration: u32,
+    previous_summary: Option<String>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+) -> Result<IterationOutcome> {
+    let state_summary = build_state_summary(stores);
+
+    // Find active plan for scope_ids (if any)
+    let active_plan_id = {
+        let plans = stores.plans.read().unwrap();
+        plans
+            .values()
+            .find(|p| p.status == HierarchyStatus::Active)
+            .map(|p| p.id.clone())
+    };
+
+    let mut builder = ContextBuilder::new(stores, Role::Coordinator)
+        .with_state_summary(state_summary)
+        .with_previous_summary(previous_summary)
+        .with_iteration(iteration)
+        .with_footer(
+            "Assess the project state and decide what action to take next. \
+             Respond with a JSON array of actions."
+                .into(),
+        );
+
+    // If there's an active plan, add it to scope for learning selection
+    if let Some(ref plan_id) = active_plan_id {
+        let plans = stores.plans.read().unwrap();
+        if let Some(plan) = plans.get(plan_id) {
+            builder = ContextBuilder::new(stores, Role::Coordinator)
+                .with_state_summary(build_state_summary(stores))
+                .with_previous_summary(builder.work_item_title().map(String::from)) // pass through
+                .with_iteration(iteration)
+                .with_footer(
+                    "Assess the project state and decide what action to take next. \
+                     Respond with a JSON array of actions."
+                        .into(),
+                );
+            // We can't easily set scope_ids through the public API since load_work_item_hierarchy
+            // is the only way. For now, the Coordinator gets global learnings only.
+            // This is fine for MVP4 — scope_ids enhancement can come later.
+            let _ = plan; // acknowledge we found it
+        }
+    }
+
+    let assembled = builder.build(SYSTEM_PROMPT);
+
+    info!(
+        "Coordinator {} iteration {} context: ~{} tokens",
+        session.id, iteration, assembled.token_estimate
+    );
+
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(
+        &session.id,
+        AgentStatus::WaitingForLlm,
+    ));
+
+    let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
+    let actions = implementer::parse_actions(&response)?;
+
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session.id, AgentStatus::Running));
+
+    if actions.is_empty() {
+        return Ok(IterationOutcome::Done("No actions needed".to_string()));
+    }
+
+    // Use repo root as the "worktree" path for Coordinator (thinking plane — no actual worktree)
+    let repo_root = &stores.config.project.repo_path;
+    let tool_runner = &*stores.tool_runner;
+
+    let mut last_summary = String::new();
+    for action in &actions {
+        let result = match execute_action(action, tool_runner, bridge, repo_root, None, AgentType::Coordinator).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Coordinator {} action failed (non-fatal): {e}", session.id);
+                ActionResult::ActionError(e.to_string())
+            }
+        };
+
+        let summary = format_action_summary(action, &result);
+        let _ = event_tx.send(DaemonEvent::agent_action_completed(&session.id, &summary));
+
+        match &result {
+            ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
+            ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
+            _ => {}
+        }
+        last_summary = summary;
+    }
+
+    Ok(IterationOutcome::Continue(last_summary))
+}
+
+/// Run the Coordinator's long-lived loop with adaptive timer.
+///
+/// Unlike Implementer (fixed max_iterations), Coordinator runs indefinitely:
+/// - `Done` → sleep idle_interval (30s), then check again
+/// - `Continue` → sleep active_interval (5s), then iterate
+/// - `NeedHelp` or `Err` → exit the loop
+///
+/// Checks for cancellation before each iteration.
+pub async fn run_coordinator(
+    llm: &dyn LlmClient,
+    session: &mut AgentSession,
+    stores: &Arc<Stores>,
+    bridge: &AgentIpcBridge,
+    config: &CoordinatorConfig,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+) -> Result<()> {
+    let mut iteration: u32 = 0;
+    let mut previous_summary: Option<String> = None;
+
+    loop {
+        // Check cancellation
+        if is_session_cancelled(stores, &session.id) {
+            info!("Coordinator {} cancelled, exiting loop", session.id);
+            return Ok(());
+        }
+
+        iteration = iteration.saturating_add(1);
+        session.iteration = iteration;
+        info!("Coordinator {} iteration {}", session.id, iteration);
+
+        let outcome =
+            run_coordinator_iteration(llm, session, stores, bridge, iteration, previous_summary.clone(), event_tx)
+                .await;
+
+        let interval = match &outcome {
+            Ok(IterationOutcome::Done(summary)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
+                info!("Coordinator {} idle: {}", session.id, summary);
+                previous_summary = Some(summary.clone());
+                config.idle_interval_secs
+            }
+            Ok(IterationOutcome::Continue(summary)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
+                info!("Coordinator {} continue: {}", session.id, summary);
+                previous_summary = Some(summary.clone());
+                config.active_interval_secs
+            }
+            Ok(IterationOutcome::NeedHelp(reason)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, reason));
+                warn!("Coordinator {} needs help: {}", session.id, reason);
+                return Err(eyre!("coordinator needs help: {}", reason));
+            }
+            Err(e) => {
+                warn!("Coordinator {} iteration {} failed: {}", session.id, iteration, e);
+                return Err(eyre!("coordinator iteration failed: {}", e));
+            }
+        };
+
+        tokio::time::sleep(Duration::from_secs(interval)).await;
+    }
+}
+
+fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String {
+    match result {
+        ActionResult::ToolRun(tr) => format!("ran {} (exit {})", tr.tool_name, tr.exit_code),
+        ActionResult::FileWritten(p) => format!("wrote {}", p),
+        ActionResult::FileRead(content) => format!("read file ({} bytes)", content.len()),
+        ActionResult::Committed(m) => format!("committed: {}", m),
+        ActionResult::BundleProposed(d) => format!("proposed bundle: {}", d),
+        ActionResult::Transitioned(d) => format!("transitioned: {}", d),
+        ActionResult::LearningCreated(c) => format!("learning: {}", c),
+        ActionResult::Done(s) => format!("done: {}", s),
+        ActionResult::NeedHelp(r) => format!("need help: {}", r),
+        ActionResult::ActionError(e) => format!("ERROR: {}", e),
+        ActionResult::NotYetImplemented(d) => {
+            // Log what the coordinator tried to do — useful for debugging
+            let action_name = match action {
+                AgentAction::CreatePlan { .. } => "create_plan",
+                AgentAction::CreateSpec { .. } => "create_spec",
+                AgentAction::CreatePhase { .. } => "create_phase",
+                AgentAction::CreateWorkItem { .. } => "create_work_item",
+                AgentAction::AssignAgent { .. } => "assign_agent",
+                AgentAction::SpawnResearcher { .. } => "spawn_researcher",
+                AgentAction::ValidateDocument { .. } => "validate_document",
+                AgentAction::AcquireLock { .. } => "acquire_lock",
+                AgentAction::ReleaseLock { .. } => "release_lock",
+                AgentAction::TriageBundle { .. } => "triage_bundle",
+                AgentAction::AcceptBundle { .. } => "accept_bundle",
+                _ => "unknown",
+            };
+            format!("stub({}): {}", action_name, d)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::AgentSession;
+    use crate::config::{Config, ProjectConfig};
+    use crate::domain::bundle::Bundle;
+    use crate::domain::lock::Lock;
+    use crate::domain::phase::Phase;
+    use crate::domain::plan::Plan;
+    use crate::domain::spec::Spec;
+    use crate::domain::tick::Tick;
+    use crate::domain::work_item::WorkItem;
+    use async_trait::async_trait;
+    use std::sync::Mutex as StdMutex;
+    use taskstore::Store;
+
+    /// Mock LLM client for testing.
+    struct MockLlm {
+        responses: StdMutex<Vec<String>>,
+    }
+
+    impl MockLlm {
+        fn new(responses: Vec<String>) -> Self {
+            Self {
+                responses: StdMutex::new(responses),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for MockLlm {
+        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                Ok(r#"[{"action": "done", "summary": "No more responses"}]"#.to_string())
+            } else {
+                Ok(responses.remove(0))
+            }
+        }
+    }
+
+    fn test_stores(dir: &std::path::Path) -> Arc<Stores> {
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(StdMutex::new(store)));
+        stores.config = config;
+        Arc::new(stores)
+    }
+
+    // --- build_state_summary tests ---
+
+    #[test]
+    fn test_build_state_summary_empty() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-empty-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("No active records"));
+    }
+
+    #[test]
+    fn test_build_state_summary_with_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-plan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Test Plan".into(), "A test plan".into(), "Tests pass".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("### Plans"));
+        assert!(summary.contains("Test Plan"));
+        assert!(summary.contains("draft"));
+    }
+
+    #[test]
+    fn test_build_state_summary_excludes_completed() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-excl-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Done Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Complete;
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        let summary = build_state_summary(&stores);
+        assert!(!summary.contains("Done Plan"));
+        assert!(summary.contains("No active records"));
+    }
+
+    #[test]
+    fn test_build_state_summary_with_work_items() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-wi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let wi = WorkItem::new("ph-1".into(), "Add auth".into(), "desc".into());
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("### WorkItems"));
+        assert!(summary.contains("Add auth"));
+    }
+
+    #[test]
+    fn test_build_state_summary_with_bundles() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-bun-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), "claims".into());
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("### Bundles"));
+        assert!(summary.contains("Proposed"));
+    }
+
+    #[test]
+    fn test_build_state_summary_with_active_sessions() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-sess-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let session = AgentSession::new(AgentType::Implementer, "model".into());
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("### Active Agents"));
+        assert!(summary.contains("implementer"));
+    }
+
+    #[test]
+    fn test_build_state_summary_with_locks() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-lock-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let lock = Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into());
+        stores.locks.write().unwrap().insert(lock.id.clone(), lock);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("### Active Locks"));
+        assert!(summary.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn test_build_state_summary_excludes_terminal_sessions() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-termsess-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        session.status = AgentStatus::Completed;
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let summary = build_state_summary(&stores);
+        assert!(!summary.contains("### Active Agents"));
+    }
+
+    // --- is_session_cancelled tests ---
+
+    #[test]
+    fn test_is_session_cancelled_false() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-canc1-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut session = AgentSession::new(AgentType::Coordinator, "model".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        assert!(!is_session_cancelled(&stores, &sid));
+    }
+
+    #[test]
+    fn test_is_session_cancelled_true() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-canc2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut session = AgentSession::new(AgentType::Coordinator, "model".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        let _ = session.transition_to(AgentStatus::Cancelled);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        assert!(is_session_cancelled(&stores, &sid));
+    }
+
+    #[test]
+    fn test_is_session_cancelled_missing() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-canc3-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        assert!(is_session_cancelled(&stores, "nonexistent-id"));
+    }
+
+    // --- run_coordinator_iteration tests ---
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_done() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-itdone-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "done", "summary": "Nothing to do"}]"#.to_string(),
+        ]);
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Nothing to do")));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_need_help() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-ithelp-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "need_help", "reason": "Unclear requirements"}]"#.to_string(),
+        ]);
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, IterationOutcome::NeedHelp(ref s) if s.contains("Unclear")));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_continue_with_stub_actions() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-itstub-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"}]"#.to_string(),
+        ]);
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
+            .await
+            .unwrap();
+
+        // CreatePlan is currently NotYetImplemented — that's ok, returns Continue
+        assert!(matches!(outcome, IterationOutcome::Continue(_)));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_empty_actions_is_done() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-itempty-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec!["[]".to_string()]);
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, IterationOutcome::Done(_)));
+    }
+
+    // --- run_coordinator tests ---
+
+    #[tokio::test]
+    async fn test_coordinator_exits_on_need_help() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-runhelp-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "need_help", "reason": "I'm stuck"}]"#.to_string(),
+        ]);
+
+        let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+
+        let config = CoordinatorConfig::default();
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("needs help"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_exits_on_cancellation() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-runcanc-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec![]);
+
+        let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        let _ = session.transition_to(AgentStatus::Cancelled);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+
+        let config = CoordinatorConfig::default();
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
+
+        let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        assert!(result.is_ok()); // Cancelled = graceful exit
+    }
+
+    // --- format_action_summary tests ---
+
+    #[test]
+    fn test_format_action_summary_done() {
+        let action = AgentAction::Done {
+            summary: "Complete".into(),
+        };
+        let result = ActionResult::Done("Complete".into());
+        assert_eq!(format_action_summary(&action, &result), "done: Complete");
+    }
+
+    #[test]
+    fn test_format_action_summary_not_yet_implemented() {
+        let action = AgentAction::CreatePlan {
+            title: "Auth".into(),
+            description: "desc".into(),
+            acceptance_criteria: "crit".into(),
+        };
+        let result = ActionResult::NotYetImplemented("CreatePlan: Auth".into());
+        let summary = format_action_summary(&action, &result);
+        assert!(summary.contains("stub(create_plan)"));
+        assert!(summary.contains("Auth"));
+    }
+
+    #[test]
+    fn test_format_action_summary_error() {
+        let action = AgentAction::Done {
+            summary: "x".into(),
+        };
+        let result = ActionResult::ActionError("something broke".into());
+        assert_eq!(
+            format_action_summary(&action, &result),
+            "ERROR: something broke"
+        );
+    }
+
+    // --- system prompt tests ---
+
+    #[test]
+    fn test_system_prompt_contains_key_sections() {
+        assert!(SYSTEM_PROMPT.contains("Coordinator agent"));
+        assert!(SYSTEM_PROMPT.contains("create_plan"));
+        assert!(SYSTEM_PROMPT.contains("assign_agent"));
+        assert!(SYSTEM_PROMPT.contains("need_help"));
+        assert!(SYSTEM_PROMPT.contains("JSON array"));
+    }
+
+    // --- comprehensive state summary ---
+
+    #[test]
+    fn test_build_state_summary_comprehensive() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-comp-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Add plan
+        let plan = Plan::new("My Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Add spec
+        let spec = Spec::new(plan_id.clone(), "My Spec".into(), "spec desc".into());
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Add phase
+        let phase = Phase::new(spec_id.clone(), "Phase 1".into(), "phase desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // Add work item
+        let wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "wi desc".into());
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        // Add tick
+        let tick = Tick::new(1);
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        let summary = build_state_summary(&stores);
+        assert!(summary.contains("### Plans"));
+        assert!(summary.contains("### Specs"));
+        assert!(summary.contains("### Phases"));
+        assert!(summary.contains("### WorkItems"));
+        assert!(summary.contains("### Ticks"));
+    }
+}
