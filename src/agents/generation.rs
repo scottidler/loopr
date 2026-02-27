@@ -13,7 +13,11 @@ use crate::daemon::context::Stores;
 use crate::domain::phase::Phase;
 use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::domain::spec::Spec;
+use crate::domain::validation::ValidationReport;
 use crate::domain::work_item::{WorkItem, WorkItemStatus};
+use taskstore::Filter;
+use taskstore::FilterOp;
+use taskstore::record::IndexValue;
 
 /// Which level of the hierarchy to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,6 +448,245 @@ pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
     let work_items = stores.work_items.read().unwrap();
     let phase_wis: Vec<_> = work_items.values().filter(|w| w.phase_id == phase_id).collect();
     !phase_wis.is_empty() && phase_wis.iter().all(|w| w.status == WorkItemStatus::Done)
+}
+
+/// Query failed validation reports for a specific document from TaskStore.
+///
+/// Returns all Fail-verdict reports for the given target, sorted by creation time.
+/// These are used as accumulated failures in the re-generation prompt.
+pub fn find_failed_validations(stores: &Stores, collection: &str, target_id: &str) -> Vec<ValidationReport> {
+    let store = match &stores.store {
+        Some(s) => s,
+        None => return vec![],
+    };
+    let filters = vec![
+        Filter {
+            field: "target_id".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(target_id.to_string()),
+        },
+        Filter {
+            field: "target_collection".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String(collection.to_string()),
+        },
+        Filter {
+            field: "verdict".to_string(),
+            op: FilterOp::Eq,
+            value: IndexValue::String("fail".to_string()),
+        },
+    ];
+    let mut reports: Vec<ValidationReport> = store.lock().unwrap().list(&filters).unwrap_or_default();
+    reports.sort_by_key(|r| r.created_at);
+    reports
+}
+
+/// Extract accumulated failure messages from validation reports.
+///
+/// Collects all issue messages from Fail reports, deduplicating identical messages.
+pub fn collect_failure_messages(reports: &[ValidationReport]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut messages = Vec::new();
+    for report in reports {
+        // Include the summary as a top-level failure message
+        if !report.summary.is_empty() && seen.insert(report.summary.clone()) {
+            messages.push(report.summary.clone());
+        }
+        // Include individual issue messages
+        for issue in &report.issues {
+            if seen.insert(issue.message.clone()) {
+                messages.push(issue.message.clone());
+            }
+        }
+    }
+    messages
+}
+
+/// Information about a Draft document that needs re-generation after failed validation.
+#[derive(Debug)]
+pub struct RegenerationInfo {
+    /// The generation level (Plan, Spec, Phase).
+    pub level: GenerationLevel,
+    /// The collection name ("plans", "specs", "phases").
+    pub collection: String,
+    /// The target document ID.
+    pub target_id: String,
+    /// Accumulated failure messages from all validation attempts.
+    pub accumulated_failures: Vec<String>,
+    /// Number of validation attempts so far.
+    pub attempt_count: usize,
+}
+
+/// Check if there's a Draft document that has failed validation and needs re-generation.
+///
+/// Returns `Some(RegenerationInfo)` if:
+/// 1. A Draft document exists at some level
+/// 2. It has at least one Fail validation report
+/// 3. The number of attempts is less than `max_validation_attempts`
+///
+/// Returns `None` if no Draft needs re-generation, or if max attempts reached.
+pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts: u32) -> Option<RegenerationInfo> {
+    // Check for Draft Plan
+    {
+        let plans = stores.plans.read().unwrap();
+        if let Some(draft_plan) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
+            let target_id = draft_plan.id.clone();
+            drop(plans);
+            let failed = find_failed_validations(stores, "plans", &target_id);
+            if !failed.is_empty() && (failed.len() as u32) < max_validation_attempts {
+                let accumulated_failures = collect_failure_messages(&failed);
+                return Some(RegenerationInfo {
+                    level: GenerationLevel::Plan,
+                    collection: "plans".to_string(),
+                    target_id,
+                    accumulated_failures,
+                    attempt_count: failed.len(),
+                });
+            }
+            // If attempts >= max_validation_attempts, return None (Coordinator should NeedHelp)
+            return None;
+        }
+    }
+
+    // Check for Draft Specs under an active Plan
+    {
+        let plans = stores.plans.read().unwrap();
+        let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active);
+        if let Some(plan) = active_plan {
+            let plan_id = plan.id.clone();
+            drop(plans);
+            let specs = stores.specs.read().unwrap();
+            if let Some(draft_spec) = specs
+                .values()
+                .find(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
+            {
+                let target_id = draft_spec.id.clone();
+                drop(specs);
+                let failed = find_failed_validations(stores, "specs", &target_id);
+                if !failed.is_empty() && (failed.len() as u32) < max_validation_attempts {
+                    let accumulated_failures = collect_failure_messages(&failed);
+                    return Some(RegenerationInfo {
+                        level: GenerationLevel::Spec,
+                        collection: "specs".to_string(),
+                        target_id,
+                        accumulated_failures,
+                        attempt_count: failed.len(),
+                    });
+                }
+                return None;
+            }
+        }
+    }
+
+    // Check for Draft Phases under active Specs
+    {
+        let plans = stores.plans.read().unwrap();
+        let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active);
+        if let Some(plan) = active_plan {
+            let plan_id = plan.id.clone();
+            drop(plans);
+
+            let specs = stores.specs.read().unwrap();
+            let active_spec_ids: Vec<String> = specs
+                .values()
+                .filter(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Active)
+                .map(|s| s.id.clone())
+                .collect();
+            drop(specs);
+
+            let phases = stores.phases.read().unwrap();
+            if let Some(draft_phase) = phases
+                .values()
+                .find(|p| active_spec_ids.contains(&p.spec_id) && p.status == HierarchyStatus::Draft)
+            {
+                let target_id = draft_phase.id.clone();
+                drop(phases);
+                let failed = find_failed_validations(stores, "phases", &target_id);
+                if !failed.is_empty() && (failed.len() as u32) < max_validation_attempts {
+                    let accumulated_failures = collect_failure_messages(&failed);
+                    return Some(RegenerationInfo {
+                        level: GenerationLevel::Phase,
+                        collection: "phases".to_string(),
+                        target_id,
+                        accumulated_failures,
+                        attempt_count: failed.len(),
+                    });
+                }
+                return None;
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if a Draft document has exceeded max_validation_attempts.
+///
+/// Returns true if a Draft exists at any level AND has Fail reports >= max_validation_attempts.
+pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) -> bool {
+    // Check Draft Plan
+    {
+        let plans = stores.plans.read().unwrap();
+        if let Some(draft_plan) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
+            let target_id = draft_plan.id.clone();
+            drop(plans);
+            let failed = find_failed_validations(stores, "plans", &target_id);
+            if !failed.is_empty() && (failed.len() as u32) >= max_validation_attempts {
+                return true;
+            }
+        }
+    }
+
+    // Check Draft Specs
+    {
+        let plans = stores.plans.read().unwrap();
+        if let Some(plan) = plans.values().find(|p| p.status == HierarchyStatus::Active) {
+            let plan_id = plan.id.clone();
+            drop(plans);
+            let specs = stores.specs.read().unwrap();
+            if let Some(spec) = specs
+                .values()
+                .find(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
+            {
+                let target_id = spec.id.clone();
+                drop(specs);
+                let failed = find_failed_validations(stores, "specs", &target_id);
+                if !failed.is_empty() && (failed.len() as u32) >= max_validation_attempts {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Check Draft Phases
+    {
+        let plans = stores.plans.read().unwrap();
+        if let Some(plan) = plans.values().find(|p| p.status == HierarchyStatus::Active) {
+            let plan_id = plan.id.clone();
+            drop(plans);
+            let specs = stores.specs.read().unwrap();
+            let active_spec_ids: Vec<String> = specs
+                .values()
+                .filter(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Active)
+                .map(|s| s.id.clone())
+                .collect();
+            drop(specs);
+            let phases = stores.phases.read().unwrap();
+            if let Some(phase) = phases
+                .values()
+                .find(|p| active_spec_ids.contains(&p.spec_id) && p.status == HierarchyStatus::Draft)
+            {
+                let target_id = phase.id.clone();
+                drop(phases);
+                let failed = find_failed_validations(stores, "phases", &target_id);
+                if !failed.is_empty() && (failed.len() as u32) >= max_validation_attempts {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -946,5 +1189,244 @@ mod tests {
         let stores = test_stores(&dir);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+
+    // --- collect_failure_messages tests ---
+
+    #[test]
+    fn test_collect_failure_messages_empty() {
+        let messages = collect_failure_messages(&[]);
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_collect_failure_messages_deduplicates() {
+        use crate::domain::validation::{IssueSeverity, ValidationIssue, ValidationVerdict};
+        let r1 = ValidationReport::new(
+            "plans".into(),
+            "p1".into(),
+            ValidationVerdict::Fail,
+            vec![ValidationIssue {
+                severity: IssueSeverity::Error,
+                category: "completeness".into(),
+                message: "Missing criteria".into(),
+                suggestion: None,
+            }],
+            "Incomplete".into(),
+            "model".into(),
+        );
+        let r2 = ValidationReport::new(
+            "plans".into(),
+            "p1".into(),
+            ValidationVerdict::Fail,
+            vec![
+                ValidationIssue {
+                    severity: IssueSeverity::Error,
+                    category: "completeness".into(),
+                    message: "Missing criteria".into(), // duplicate
+                    suggestion: None,
+                },
+                ValidationIssue {
+                    severity: IssueSeverity::Warning,
+                    category: "scope".into(),
+                    message: "Too broad".into(),
+                    suggestion: None,
+                },
+            ],
+            "Still incomplete".into(),
+            "model".into(),
+        );
+        let messages = collect_failure_messages(&[r1, r2]);
+        // Should have: "Incomplete", "Missing criteria", "Still incomplete", "Too broad" — no duplicate "Missing criteria"
+        assert_eq!(messages.len(), 4);
+        assert!(messages.contains(&"Missing criteria".to_string()));
+        assert!(messages.contains(&"Too broad".to_string()));
+        assert!(messages.contains(&"Incomplete".to_string()));
+        assert!(messages.contains(&"Still incomplete".to_string()));
+    }
+
+    // --- find_failed_validations tests ---
+
+    #[test]
+    fn test_find_failed_validations_empty_store() {
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-empty-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let reports = find_failed_validations(&stores, "plans", "plan-1");
+        assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn test_find_failed_validations_returns_only_fails() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-fails-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let fail_report = ValidationReport::new(
+            "plans".into(),
+            "plan-1".into(),
+            ValidationVerdict::Fail,
+            vec![],
+            "bad".into(),
+            "m".into(),
+        );
+        let pass_report = ValidationReport::new(
+            "plans".into(),
+            "plan-1".into(),
+            ValidationVerdict::Pass,
+            vec![],
+            "good".into(),
+            "m".into(),
+        );
+        {
+            let store = stores.store.as_ref().unwrap();
+            store.lock().unwrap().create(fail_report.clone()).unwrap();
+            store.lock().unwrap().create(pass_report).unwrap();
+        }
+
+        let reports = find_failed_validations(&stores, "plans", "plan-1");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].id, fail_report.id);
+    }
+
+    // --- find_draft_needing_regeneration tests ---
+
+    #[test]
+    fn test_find_draft_needing_regeneration_no_drafts() {
+        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        assert!(find_draft_needing_regeneration(&stores, 3).is_none());
+    }
+
+    #[test]
+    fn test_find_draft_needing_regeneration_draft_no_failures() {
+        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-nofail-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        // Draft exists but no failed validations → no regeneration needed
+        assert!(find_draft_needing_regeneration(&stores, 3).is_none());
+    }
+
+    #[test]
+    fn test_find_draft_needing_regeneration_plan_with_failures() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-plan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Add a failed validation report
+        let report = ValidationReport::new(
+            "plans".into(),
+            plan_id.clone(),
+            ValidationVerdict::Fail,
+            vec![],
+            "bad plan".into(),
+            "m".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        let regen = find_draft_needing_regeneration(&stores, 3).unwrap();
+        assert_eq!(regen.level, GenerationLevel::Plan);
+        assert_eq!(regen.target_id, plan_id);
+        assert_eq!(regen.attempt_count, 1);
+        assert!(!regen.accumulated_failures.is_empty());
+    }
+
+    #[test]
+    fn test_find_draft_needing_regeneration_cap_reached() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-cap-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Add 3 failed validation reports (= max_validation_attempts)
+        for i in 0..3 {
+            let report = ValidationReport::new(
+                "plans".into(),
+                plan_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("failure {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        // Cap reached → should return None (not regeneration)
+        assert!(find_draft_needing_regeneration(&stores, 3).is_none());
+    }
+
+    // --- is_validation_cap_reached tests ---
+
+    #[test]
+    fn test_is_validation_cap_reached_false_no_drafts() {
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        assert!(!is_validation_cap_reached(&stores, 3));
+    }
+
+    #[test]
+    fn test_is_validation_cap_reached_false_under_cap() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-under-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let report = ValidationReport::new(
+            "plans".into(),
+            plan_id,
+            ValidationVerdict::Fail,
+            vec![],
+            "bad".into(),
+            "m".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        assert!(!is_validation_cap_reached(&stores, 3)); // 1 < 3
+    }
+
+    #[test]
+    fn test_is_validation_cap_reached_true_at_cap() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-at-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        for i in 0..3 {
+            let report = ValidationReport::new(
+                "plans".into(),
+                plan_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("failure {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        assert!(is_validation_cap_reached(&stores, 3)); // 3 >= 3
     }
 }

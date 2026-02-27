@@ -248,35 +248,96 @@ fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
 
 /// Build a generation-specific footer for the Coordinator's context message.
 ///
-/// If the hierarchy needs generation at some level, this produces a targeted prompt
-/// from `generation.rs` to guide the LLM. Otherwise returns None (normal iteration).
-fn build_generation_footer(stores: &Stores, goal: &str) -> Option<String> {
-    let level = generation::determine_generation_level(stores)?;
+/// Handles three cases:
+/// 1. **New generation** — no document at this level → generate from scratch.
+/// 2. **Re-generation** — Draft exists with failed validation → regenerate with accumulated failures.
+/// 3. **Validation cap reached** — Draft has exceeded max_validation_attempts → NeedHelp signal.
+///
+/// Returns None when no generation/re-generation is needed (normal iteration).
+fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts: u32) -> Option<String> {
+    // Case 1: Check if generation is needed at any level (no document exists)
+    if let Some(level) = generation::determine_generation_level(stores) {
+        let prompt = match level {
+            GenerationLevel::Plan => build_plan_prompt(goal, &[], &[]),
+            GenerationLevel::Spec => {
+                let plan = generation::find_active_plan(stores)?;
+                build_spec_prompt(&plan, &[], &[], &[])
+            }
+            GenerationLevel::Phase => {
+                let plan = generation::find_active_plan(stores)?;
+                let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+                let spec = specs.into_iter().next()?;
+                build_phase_prompt(&spec, &[], &[])
+            }
+            GenerationLevel::WorkItem => {
+                let phase = generation::find_phase_needing_work_items(stores)?;
+                let existing = generation::find_work_items_for_phase(stores, &phase.id);
+                build_work_item_prompt(&phase, &existing, &[], &[])
+            }
+        };
 
-    let prompt = match level {
-        GenerationLevel::Plan => build_plan_prompt(goal, &[], &[]),
-        GenerationLevel::Spec => {
-            let plan = generation::find_active_plan(stores)?;
-            build_spec_prompt(&plan, &[], &[], &[])
-        }
-        GenerationLevel::Phase => {
-            let plan = generation::find_active_plan(stores)?;
-            let specs = generation::find_active_specs_for_plan(stores, &plan.id);
-            let spec = specs.into_iter().next()?;
-            build_phase_prompt(&spec, &[], &[])
-        }
-        GenerationLevel::WorkItem => {
-            let phase = generation::find_phase_needing_work_items(stores)?;
-            let existing = generation::find_work_items_for_phase(stores, &phase.id);
-            build_work_item_prompt(&phase, &existing, &[], &[])
-        }
-    };
+        info!(
+            "Coordinator generation needed at level: {} (prompt level: {})",
+            level, prompt.level
+        );
+        return Some(prompt.user_message);
+    }
 
-    info!(
-        "Coordinator generation needed at level: {} (prompt level: {})",
-        level, prompt.level
-    );
-    Some(prompt.user_message)
+    // Case 3: Check if validation cap is reached → signal NeedHelp
+    if generation::is_validation_cap_reached(stores, max_validation_attempts) {
+        info!(
+            "Coordinator: validation cap reached ({} attempts), signaling need_help",
+            max_validation_attempts
+        );
+        return Some(format!(
+            "A Draft document has failed validation {} times (the maximum). \
+             You cannot fix it further. Respond with:\n\
+             [{{\"action\": \"need_help\", \"reason\": \"Document failed validation {} times, needs human review\"}}]",
+            max_validation_attempts, max_validation_attempts
+        ));
+    }
+
+    // Case 2: Check if a Draft exists with failed validation → re-generate with accumulated failures
+    if let Some(regen) = generation::find_draft_needing_regeneration(stores, max_validation_attempts) {
+        info!(
+            "Coordinator re-generation needed: {} {} (attempt {}/{})",
+            regen.collection,
+            regen.target_id,
+            regen.attempt_count + 1,
+            max_validation_attempts
+        );
+        let prompt = match regen.level {
+            GenerationLevel::Plan => build_plan_prompt(goal, &[], &regen.accumulated_failures),
+            GenerationLevel::Spec => {
+                let plan = generation::find_active_plan(stores)?;
+                build_spec_prompt(&plan, &[], &[], &regen.accumulated_failures)
+            }
+            GenerationLevel::Phase => {
+                let plan = generation::find_active_plan(stores)?;
+                let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+                let spec = specs.into_iter().next()?;
+                build_phase_prompt(&spec, &[], &regen.accumulated_failures)
+            }
+            // WorkItems don't go through Draft→Active validation cycle
+            GenerationLevel::WorkItem => return None,
+        };
+
+        // Prepend context about the failed Draft
+        let mut footer = format!(
+            "## Re-generation Required (attempt {}/{})\n\n\
+             The existing Draft document ({}/{}) failed validation. \
+             You must create a NEW, improved version that addresses ALL the failures listed below. \
+             First, transition the failed Draft to 'abandoned', then create a new document.\n\n",
+            regen.attempt_count + 1,
+            max_validation_attempts,
+            regen.collection,
+            regen.target_id,
+        );
+        footer.push_str(&prompt.user_message);
+        return Some(footer);
+    }
+
+    None
 }
 
 /// Check if the Coordinator should mark any Phases as complete based on WorkItem status.
@@ -308,9 +369,9 @@ async fn run_coordinator_iteration(
     session: &AgentSession,
     stores: &Arc<Stores>,
     bridge: &AgentIpcBridge,
+    config: &CoordinatorConfig,
     iteration: u32,
     previous_summary: Option<String>,
-    event_tx: &broadcast::Sender<DaemonEvent>,
 ) -> Result<IterationOutcome> {
     // Check if any phases have completed (all WorkItems Done)
     let completed_phases = check_phase_completion(stores);
@@ -340,7 +401,9 @@ async fn run_coordinator_iteration(
             .unwrap_or_else(|| "No goal set.".to_string())
     };
 
-    let footer = match build_generation_footer(stores, &goal) {
+    let event_tx = bridge.event_tx();
+
+    let footer = match build_generation_footer(stores, &goal, config.max_validation_attempts) {
         Some(gen_footer) => gen_footer,
         None => "Assess the project state and decide what action to take next. \
                  Respond with a JSON array of actions."
@@ -439,9 +502,9 @@ pub async fn run_coordinator(
             session,
             stores,
             bridge,
+            config,
             iteration,
             previous_summary.clone(),
-            event_tx,
         )
         .await;
 
@@ -484,6 +547,17 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::LearningCreated(c) => format!("learning: {}", c),
         ActionResult::LockAcquired(id) => format!("lock acquired: {}", id),
         ActionResult::LockReleased(id) => format!("lock released: {}", id),
+        ActionResult::DocumentValidated {
+            verdict,
+            summary,
+            issues,
+        } => {
+            if issues.is_empty() {
+                format!("validated: {} — {}", verdict, summary)
+            } else {
+                format!("validated: {} — {} ({} issues)", verdict, summary, issues.len())
+            }
+        }
         ActionResult::Done(s) => format!("done: {}", s),
         ActionResult::NeedHelp(r) => format!("need help: {}", r),
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
@@ -738,9 +812,10 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
 
-        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
-            .await
-            .unwrap();
+        let outcome =
+            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
+                .await
+                .unwrap();
 
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Nothing to do")));
     }
@@ -760,9 +835,10 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
 
-        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
-            .await
-            .unwrap();
+        let outcome =
+            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
+                .await
+                .unwrap();
 
         assert!(matches!(outcome, IterationOutcome::NeedHelp(ref s) if s.contains("Unclear")));
     }
@@ -782,9 +858,10 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
 
-        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
-            .await
-            .unwrap();
+        let outcome =
+            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
+                .await
+                .unwrap();
 
         // CreatePlan is currently NotYetImplemented — that's ok, returns Continue
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
@@ -803,9 +880,10 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, Config::default());
 
-        let outcome = run_coordinator_iteration(&llm, &session, &stores, &bridge, 1, None, &event_tx)
-            .await
-            .unwrap();
+        let outcome =
+            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
+                .await
+                .unwrap();
 
         assert!(matches!(outcome, IterationOutcome::Done(_)));
     }
@@ -893,6 +971,39 @@ mod tests {
         let action = AgentAction::Done { summary: "x".into() };
         let result = ActionResult::ActionError("something broke".into());
         assert_eq!(format_action_summary(&action, &result), "ERROR: something broke");
+    }
+
+    #[test]
+    fn test_format_action_summary_document_validated_pass() {
+        let action = AgentAction::ValidateDocument {
+            collection: "plans".into(),
+            id: "plan-1".into(),
+        };
+        let result = ActionResult::DocumentValidated {
+            verdict: "pass".into(),
+            summary: "All criteria met".into(),
+            issues: vec![],
+        };
+        let summary = format_action_summary(&action, &result);
+        assert!(summary.contains("validated: pass"));
+        assert!(summary.contains("All criteria met"));
+        assert!(!summary.contains("issues"));
+    }
+
+    #[test]
+    fn test_format_action_summary_document_validated_fail_with_issues() {
+        let action = AgentAction::ValidateDocument {
+            collection: "plans".into(),
+            id: "plan-1".into(),
+        };
+        let result = ActionResult::DocumentValidated {
+            verdict: "fail".into(),
+            summary: "Incomplete document".into(),
+            issues: vec!["Missing criteria".into(), "Too vague".into()],
+        };
+        let summary = format_action_summary(&action, &result);
+        assert!(summary.contains("validated: fail"));
+        assert!(summary.contains("2 issues"));
     }
 
     // --- system prompt tests ---

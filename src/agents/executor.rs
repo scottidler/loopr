@@ -398,10 +398,60 @@ pub async fn execute_action(
             "SpawnResearcher: {} (scope: {})",
             query, scope_id
         ))),
-        AgentAction::ValidateDocument { collection, id } => Ok(ActionResult::NotYetImplemented(format!(
-            "ValidateDocument: {}/{}",
-            collection, id
-        ))),
+        AgentAction::ValidateDocument { collection, id } => {
+            let resp = bridge.request(
+                "validator.validate",
+                serde_json::json!({ "collection": collection, "id": id }),
+            );
+            if resp.is_error() {
+                let msg = resp
+                    .error
+                    .as_ref()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_else(|| "unknown validation error".to_string());
+                return Ok(ActionResult::ActionError(format!(
+                    "validate_document {}/{} failed: {}",
+                    collection, id, msg
+                )));
+            }
+            let verdict = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("verdict"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let summary = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("summary"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let issues: Vec<String> = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("issues"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|issue| issue.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            info!(
+                "ValidateDocument {}/{}: verdict={}, issues={}",
+                collection,
+                id,
+                verdict,
+                issues.len()
+            );
+            Ok(ActionResult::DocumentValidated {
+                verdict,
+                summary,
+                issues,
+            })
+        }
         AgentAction::AcquireLock { resource, holder_id } => {
             // Check if there's already an active lock on this resource
             let check_resp = bridge.request(
@@ -492,6 +542,12 @@ pub enum ActionResult {
     LockAcquired(String),
     /// Lock released — contains lock_id.
     LockReleased(String),
+    /// Document validated — contains (verdict, summary, issue_messages).
+    DocumentValidated {
+        verdict: String,
+        summary: String,
+        issues: Vec<String>,
+    },
     Done(String),
     NeedHelp(String),
     /// Non-fatal error — fed back to the LLM so it can self-correct.

@@ -36,6 +36,11 @@ impl AgentIpcBridge {
         }
     }
 
+    /// Access the event broadcast channel.
+    pub fn event_tx(&self) -> &broadcast::Sender<DaemonEvent> {
+        &self.event_tx
+    }
+
     /// Send a request through the handler pipeline, same as socket-based IPC.
     pub fn request(&self, method: &str, params: serde_json::Value) -> DaemonResponse {
         let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -47,12 +52,6 @@ impl AgentIpcBridge {
             &self.config.integrator,
             req,
         )
-    }
-
-    /// Get a reference to the event broadcast sender for subscribing to events.
-    #[cfg(test)]
-    pub fn event_tx(&self) -> &broadcast::Sender<DaemonEvent> {
-        &self.event_tx
     }
 }
 
