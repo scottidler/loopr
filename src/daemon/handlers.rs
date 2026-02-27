@@ -2847,6 +2847,7 @@ mod tests {
     fn test_integrator_config() -> IntegratorConfig {
         IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
         }
     }
 
@@ -7058,6 +7059,7 @@ mod tests {
         // Use "echo ok" as validation command (always succeeds)
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
         };
         let resp = dispatch(
             &stores,
@@ -7084,6 +7086,7 @@ mod tests {
         // Use a failing command
         let ic = IntegratorConfig {
             validation_commands: vec!["false".to_string()],
+            ..Default::default()
         };
         let resp = dispatch(
             &stores,
@@ -7170,6 +7173,7 @@ mod tests {
 
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
         };
         dispatch(
             &stores,
@@ -7206,6 +7210,7 @@ mod tests {
         // publish chains Open → Sealing → Validating → Published
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
         };
         let resp = dispatch(
             &stores,
@@ -7228,6 +7233,7 @@ mod tests {
 
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
         };
         let resp = dispatch(
             &stores,
@@ -7288,6 +7294,7 @@ mod tests {
 
         let ic = IntegratorConfig {
             validation_commands: vec!["false".to_string()],
+            ..Default::default()
         };
         let resp = dispatch(
             &stores,
@@ -7337,6 +7344,7 @@ mod tests {
                 "false".to_string(),
                 "echo should-not-run".to_string(),
             ],
+            ..Default::default()
         };
         let resp = dispatch(
             &stores,

@@ -3,6 +3,171 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// --- Strategy Knobs ---
+
+/// How to handle stale Bundles when a new Tick is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StalePolicy {
+    /// Agent rebases and re-tests at next safe point.
+    ReplanAtSafePoint,
+    /// Bundle rejected outright if stale.
+    RejectIfStale,
+    /// Daemon auto-rebases and re-runs validation.
+    AutoReplayAndVerify,
+}
+
+impl Default for StalePolicy {
+    fn default() -> Self {
+        Self::ReplanAtSafePoint
+    }
+}
+
+/// How to handle resource conflicts between agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictPolicy {
+    /// Locks checked, conflicts detected at merge time.
+    LockAdvisory,
+    /// File writes to locked paths rejected by executor.
+    LockStrict,
+}
+
+impl Default for ConflictPolicy {
+    fn default() -> Self {
+        Self::LockAdvisory
+    }
+}
+
+/// When the Integrator creates Ticks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "mode")]
+pub enum TickCadence {
+    /// Create a Tick as soon as any Bundle is Accepted.
+    Continuous,
+    /// Wait for N Accepted Bundles or a timeout before creating a Tick.
+    Batched {
+        min_bundles: u32,
+        timeout_secs: u64,
+    },
+}
+
+impl Default for TickCadence {
+    fn default() -> Self {
+        Self::Continuous
+    }
+}
+
+/// Limits on Bundle size to keep changes reviewable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BundleSizePolicy {
+    pub max_files_touched: u32,
+    pub max_loc_changed: u32,
+}
+
+impl Default for BundleSizePolicy {
+    fn default() -> Self {
+        Self {
+            max_files_touched: 8,
+            max_loc_changed: 300,
+        }
+    }
+}
+
+/// How strict the Doc Validator is about ambiguity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidatorStrictness {
+    /// Any ambiguity in doc = Fail.
+    HardFailOnAnyAmbiguity,
+    /// Ambiguity = Warn, not Fail.
+    AllowAmbiguityWithFlags,
+    /// All issues are Info, never Fail.
+    SuggestOnly,
+}
+
+impl Default for ValidatorStrictness {
+    fn default() -> Self {
+        Self::HardFailOnAnyAmbiguity
+    }
+}
+
+/// Policy for auto-promoting Learnings to Policies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PromotionPolicy {
+    pub min_reinforcements: u32,
+    pub max_age_days: u32,
+    pub auto_promote: bool,
+}
+
+impl Default for PromotionPolicy {
+    fn default() -> Self {
+        Self {
+            min_reinforcements: 3,
+            max_age_days: 30,
+            auto_promote: true,
+        }
+    }
+}
+
+/// Strategy knobs controlling system behavior.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StrategyConfig {
+    pub stale_policy: StalePolicy,
+    pub conflict_policy: ConflictPolicy,
+    pub tick_cadence: TickCadence,
+    pub bundle_size: BundleSizePolicy,
+    pub validator_strictness: ValidatorStrictness,
+    pub promotion: PromotionPolicy,
+    pub max_lock_ttl_minutes: u64,
+}
+
+impl Default for StrategyConfig {
+    fn default() -> Self {
+        Self {
+            stale_policy: StalePolicy::default(),
+            conflict_policy: ConflictPolicy::default(),
+            tick_cadence: TickCadence::default(),
+            bundle_size: BundleSizePolicy::default(),
+            validator_strictness: ValidatorStrictness::default(),
+            promotion: PromotionPolicy::default(),
+            max_lock_ttl_minutes: 60,
+        }
+    }
+}
+
+/// Coordinator-specific config extending AgentRoleConfig.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CoordinatorConfig {
+    #[serde(flatten)]
+    pub role: AgentRoleConfig,
+    pub active_interval_secs: u64,
+    pub idle_interval_secs: u64,
+    pub max_validation_attempts: u32,
+}
+
+impl Default for CoordinatorConfig {
+    fn default() -> Self {
+        Self {
+            role: AgentRoleConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 8192,
+                max_iterations: u32::MAX,
+                pool_size: 1,
+                temperature: 0.2,
+            },
+            active_interval_secs: 5,
+            idle_interval_secs: 30,
+            max_validation_attempts: 3,
+        }
+    }
+}
+
 /// Daemon-specific configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -32,21 +197,27 @@ pub struct ProjectConfig {
 }
 
 /// Integrator configuration — validation commands run during tick validation.
+/// The Integrator is deterministic code (not an LLM agent).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct IntegratorConfig {
     pub validation_commands: Vec<String>,
+    pub interval_secs: u64,
+    pub enabled: bool,
 }
 
-/// Agent system configuration — LLM agents (Implementer, Reviewer) running as Tokio tasks.
+/// Agent system configuration — LLM agents running as Tokio tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AgentConfig {
     pub enabled: bool,
     pub auto_start_implementer: bool,
     pub auto_start_reviewer: bool,
+    pub auto_start_coordinator: bool,
     pub implementer: AgentRoleConfig,
     pub reviewer: AgentRoleConfig,
+    pub coordinator: CoordinatorConfig,
+    pub researcher: AgentRoleConfig,
     pub tools: Vec<ToolEntry>,
 }
 
@@ -56,8 +227,11 @@ impl Default for AgentConfig {
             enabled: false,
             auto_start_implementer: false,
             auto_start_reviewer: false,
+            auto_start_coordinator: false,
             implementer: AgentRoleConfig::default_implementer(),
             reviewer: AgentRoleConfig::default_reviewer(),
+            coordinator: CoordinatorConfig::default(),
+            researcher: AgentRoleConfig::default_researcher(),
             tools: vec![
                 ToolEntry {
                     name: "test".to_string(),
@@ -134,6 +308,17 @@ impl AgentRoleConfig {
             temperature: 0.1,
         }
     }
+
+    pub fn default_researcher() -> Self {
+        Self {
+            model: "claude-sonnet-4-6".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 4096,
+            max_iterations: 10,
+            pool_size: 4,
+            temperature: 0.1,
+        }
+    }
 }
 
 /// A configured tool available to agents.
@@ -178,6 +363,8 @@ impl Default for IntegratorConfig {
                 "cargo clippy -- -D warnings".to_string(),
                 "cargo test".to_string(),
             ],
+            interval_secs: 15,
+            enabled: false,
         }
     }
 }
@@ -201,6 +388,7 @@ pub struct Config {
     pub integrator: IntegratorConfig,
     pub validator: ValidatorConfig,
     pub agents: AgentConfig,
+    pub strategy: StrategyConfig,
 }
 
 impl Default for Config {
@@ -213,6 +401,7 @@ impl Default for Config {
             integrator: IntegratorConfig::default(),
             validator: ValidatorConfig::default(),
             agents: AgentConfig::default(),
+            strategy: StrategyConfig::default(),
         }
     }
 }
@@ -329,6 +518,7 @@ mod tests {
         assert!(!ac.enabled);
         assert!(!ac.auto_start_implementer);
         assert!(!ac.auto_start_reviewer);
+        assert!(!ac.auto_start_coordinator);
     }
 
     #[test]
@@ -416,5 +606,197 @@ tools:
         assert_eq!(ac.reviewer.max_iterations, 3);
         assert_eq!(ac.tools.len(), 1);
         assert_eq!(ac.tools[0].name, "test");
+    }
+
+    // --- Strategy Knobs tests ---
+
+    #[test]
+    fn test_stale_policy_default() {
+        assert_eq!(StalePolicy::default(), StalePolicy::ReplanAtSafePoint);
+    }
+
+    #[test]
+    fn test_stale_policy_serde_roundtrip() {
+        for policy in [
+            StalePolicy::ReplanAtSafePoint,
+            StalePolicy::RejectIfStale,
+            StalePolicy::AutoReplayAndVerify,
+        ] {
+            let json = serde_json::to_string(&policy).unwrap();
+            let deserialized: StalePolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(policy, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_conflict_policy_default() {
+        assert_eq!(ConflictPolicy::default(), ConflictPolicy::LockAdvisory);
+    }
+
+    #[test]
+    fn test_conflict_policy_serde_roundtrip() {
+        for policy in [ConflictPolicy::LockAdvisory, ConflictPolicy::LockStrict] {
+            let json = serde_json::to_string(&policy).unwrap();
+            let deserialized: ConflictPolicy = serde_json::from_str(&json).unwrap();
+            assert_eq!(policy, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_tick_cadence_default() {
+        assert_eq!(TickCadence::default(), TickCadence::Continuous);
+    }
+
+    #[test]
+    fn test_tick_cadence_batched_serde() {
+        let cadence = TickCadence::Batched {
+            min_bundles: 3,
+            timeout_secs: 300,
+        };
+        let json = serde_json::to_string(&cadence).unwrap();
+        let deserialized: TickCadence = serde_json::from_str(&json).unwrap();
+        assert_eq!(cadence, deserialized);
+    }
+
+    #[test]
+    fn test_bundle_size_policy_default() {
+        let bsp = BundleSizePolicy::default();
+        assert_eq!(bsp.max_files_touched, 8);
+        assert_eq!(bsp.max_loc_changed, 300);
+    }
+
+    #[test]
+    fn test_validator_strictness_default() {
+        assert_eq!(
+            ValidatorStrictness::default(),
+            ValidatorStrictness::HardFailOnAnyAmbiguity
+        );
+    }
+
+    #[test]
+    fn test_validator_strictness_serde_roundtrip() {
+        for strictness in [
+            ValidatorStrictness::HardFailOnAnyAmbiguity,
+            ValidatorStrictness::AllowAmbiguityWithFlags,
+            ValidatorStrictness::SuggestOnly,
+        ] {
+            let json = serde_json::to_string(&strictness).unwrap();
+            let deserialized: ValidatorStrictness = serde_json::from_str(&json).unwrap();
+            assert_eq!(strictness, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_promotion_policy_default() {
+        let pp = PromotionPolicy::default();
+        assert_eq!(pp.min_reinforcements, 3);
+        assert_eq!(pp.max_age_days, 30);
+        assert!(pp.auto_promote);
+    }
+
+    #[test]
+    fn test_strategy_config_default() {
+        let sc = StrategyConfig::default();
+        assert_eq!(sc.stale_policy, StalePolicy::ReplanAtSafePoint);
+        assert_eq!(sc.conflict_policy, ConflictPolicy::LockAdvisory);
+        assert_eq!(sc.tick_cadence, TickCadence::Continuous);
+        assert_eq!(sc.bundle_size.max_files_touched, 8);
+        assert_eq!(sc.validator_strictness, ValidatorStrictness::HardFailOnAnyAmbiguity);
+        assert!(sc.promotion.auto_promote);
+        assert_eq!(sc.max_lock_ttl_minutes, 60);
+    }
+
+    #[test]
+    fn test_strategy_config_serde_roundtrip() {
+        let sc = StrategyConfig::default();
+        let json = serde_json::to_string(&sc).unwrap();
+        let deserialized: StrategyConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(sc, deserialized);
+    }
+
+    #[test]
+    fn test_config_has_strategy() {
+        let config = Config::default();
+        assert_eq!(config.strategy.max_lock_ttl_minutes, 60);
+    }
+
+    // --- CoordinatorConfig tests ---
+
+    #[test]
+    fn test_coordinator_config_default() {
+        let cc = CoordinatorConfig::default();
+        assert_eq!(cc.active_interval_secs, 5);
+        assert_eq!(cc.idle_interval_secs, 30);
+        assert_eq!(cc.max_validation_attempts, 3);
+        assert_eq!(cc.role.pool_size, 1);
+        assert!((cc.role.temperature - 0.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_agent_config_has_coordinator() {
+        let ac = AgentConfig::default();
+        assert_eq!(ac.coordinator.role.pool_size, 1);
+        assert!(!ac.auto_start_coordinator);
+    }
+
+    #[test]
+    fn test_agent_role_config_researcher_defaults() {
+        let rc = AgentRoleConfig::default_researcher();
+        assert_eq!(rc.max_iterations, 10);
+        assert_eq!(rc.pool_size, 4);
+        assert_eq!(rc.max_tokens, 4096);
+        assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_agent_config_has_researcher() {
+        let ac = AgentConfig::default();
+        assert_eq!(ac.researcher.pool_size, 4);
+    }
+
+    // --- IntegratorConfig extension tests ---
+
+    #[test]
+    fn test_integrator_config_new_fields() {
+        let ic = IntegratorConfig::default();
+        assert_eq!(ic.interval_secs, 15);
+        assert!(!ic.enabled);
+    }
+
+    #[test]
+    fn test_strategy_config_deserialize_from_yaml() {
+        let yaml = r#"
+stale_policy: reject_if_stale
+conflict_policy: lock_strict
+tick_cadence:
+  mode: batched
+  min_bundles: 5
+  timeout_secs: 600
+bundle_size:
+  max_files_touched: 10
+  max_loc_changed: 500
+validator_strictness: suggest_only
+promotion:
+  min_reinforcements: 5
+  max_age_days: 60
+  auto_promote: false
+max_lock_ttl_minutes: 120
+"#;
+        let sc: StrategyConfig = serde_yaml::from_str(yaml).expect("should parse strategy config");
+        assert_eq!(sc.stale_policy, StalePolicy::RejectIfStale);
+        assert_eq!(sc.conflict_policy, ConflictPolicy::LockStrict);
+        assert_eq!(
+            sc.tick_cadence,
+            TickCadence::Batched {
+                min_bundles: 5,
+                timeout_secs: 600,
+            }
+        );
+        assert_eq!(sc.bundle_size.max_files_touched, 10);
+        assert_eq!(sc.bundle_size.max_loc_changed, 500);
+        assert_eq!(sc.validator_strictness, ValidatorStrictness::SuggestOnly);
+        assert_eq!(sc.promotion.min_reinforcements, 5);
+        assert!(!sc.promotion.auto_promote);
+        assert_eq!(sc.max_lock_ttl_minutes, 120);
     }
 }

@@ -9,6 +9,7 @@ pub enum Role {
     Integrator,
     Implementer,
     Reviewer,
+    Researcher,
 }
 
 impl fmt::Display for Role {
@@ -18,6 +19,7 @@ impl fmt::Display for Role {
             Role::Integrator => write!(f, "integrator"),
             Role::Implementer => write!(f, "implementer"),
             Role::Reviewer => write!(f, "reviewer"),
+            Role::Researcher => write!(f, "researcher"),
         }
     }
 }
@@ -31,8 +33,9 @@ impl FromStr for Role {
             "integrator" => Ok(Role::Integrator),
             "implementer" => Ok(Role::Implementer),
             "reviewer" => Ok(Role::Reviewer),
+            "researcher" => Ok(Role::Researcher),
             _ => Err(format!(
-                "unknown role: '{s}' (expected: Coordinator, Integrator, Implementer, Reviewer)"
+                "unknown role: '{s}' (expected: Coordinator, Integrator, Implementer, Reviewer, Researcher)"
             )),
         }
     }
@@ -48,6 +51,7 @@ mod tests {
         assert_eq!(Role::Integrator.to_string(), "integrator");
         assert_eq!(Role::Implementer.to_string(), "implementer");
         assert_eq!(Role::Reviewer.to_string(), "reviewer");
+        assert_eq!(Role::Researcher.to_string(), "researcher");
     }
 
     #[test]
@@ -66,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_role_serde_roundtrip() {
-        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer] {
+        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer, Role::Researcher] {
             let json = serde_json::to_string(&role).unwrap();
             let deserialized: Role = serde_json::from_str(&json).unwrap();
             assert_eq!(role, deserialized);
@@ -79,13 +83,14 @@ mod tests {
         assert_eq!(serde_json::to_string(&Role::Integrator).unwrap(), "\"integrator\"");
         assert_eq!(serde_json::to_string(&Role::Implementer).unwrap(), "\"implementer\"");
         assert_eq!(serde_json::to_string(&Role::Reviewer).unwrap(), "\"reviewer\"");
+        assert_eq!(serde_json::to_string(&Role::Researcher).unwrap(), "\"researcher\"");
     }
 
     #[test]
     fn test_role_display_matches_serde() {
         // Regression: Display must produce values that serde can deserialize.
         // CLI dispatch uses to_string() but handlers use serde_json::from_value().
-        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer] {
+        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer, Role::Researcher] {
             let display = role.to_string();
             let quoted = format!("\"{}\"", display);
             let deserialized: Role = serde_json::from_str(&quoted)
