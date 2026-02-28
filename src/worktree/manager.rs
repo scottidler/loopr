@@ -116,12 +116,8 @@ impl WorktreeManager {
             return Err(WorktreeError::GitCommand(stderr.to_string()));
         }
 
-        // Clean up the branch too
-        let branch = format!("agent/{}", work_item_id);
-        let _ = Command::new("git")
-            .args(["branch", "-D", &branch])
-            .current_dir(&self.repo_path)
-            .output();
+        // Keep the agent branch alive — the Integrator needs it for merging.
+        // Branch cleanup happens after Tick publishes.
 
         Ok(())
     }
