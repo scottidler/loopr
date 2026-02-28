@@ -1,12 +1,8 @@
 name: "loopr"
 debug: true
 
-project:
-  repo_path: /home/saidler/repos/scottidler/todo-app
-  worktree_dir: .worktrees
-
 validator:
-  enabled: false
+  enabled: true
 
 integrator:
   enabled: true
