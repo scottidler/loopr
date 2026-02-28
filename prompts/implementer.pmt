@@ -42,7 +42,7 @@ Respond with ONLY a JSON array of AgentAction objects. Example:
 ```json
 [
   {"action": "write_file", "path": "src/foo.rs", "content": "..."},
-  {"action": "run_tool", "tool_name": "test", "args": []},
+  {"action": "run_tool", "tool": "test", "args": []},
   {"action": "commit", "message": "feat(foo): add initial implementation", "paths": ["src/foo.rs"]},
   {"action": "done", "summary": "Implemented foo module with tests passing"}
 ]

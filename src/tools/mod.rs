@@ -11,7 +11,7 @@ use crate::config::ToolEntry;
 /// Result of executing a tool subprocess.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    pub tool_name: String,
+    pub tool: String,
     pub exit_code: i32,
     pub stdout: String,
     pub stderr: String,
@@ -50,11 +50,8 @@ impl ToolRunner {
     /// If the tool has `worktree: true`, the command runs in `working_dir`.
     /// Timeout is enforced: SIGTERM first, then SIGKILL after a grace period.
     /// Output is truncated to MAX_OUTPUT bytes per stream.
-    pub async fn run(&self, tool_name: &str, args: &[String], working_dir: &Path) -> Result<ToolResult> {
-        let entry = self
-            .tools
-            .get(tool_name)
-            .ok_or_else(|| eyre!("unknown tool: {}", tool_name))?;
+    pub async fn run(&self, tool: &str, args: &[String], working_dir: &Path) -> Result<ToolResult> {
+        let entry = self.tools.get(tool).ok_or_else(|| eyre!("unknown tool: {}", tool))?;
 
         let full_command = if args.is_empty() {
             entry.command.clone()
@@ -78,12 +75,12 @@ impl ToolRunner {
         let start = Instant::now();
 
         // Spawn child so we control the signal sequence (Gap #10)
-        let child = cmd.spawn().context(format!("failed to spawn tool: {}", tool_name))?;
+        let child = cmd.spawn().context(format!("failed to spawn tool: {}", tool))?;
         #[cfg(unix)]
         let child_pid = child.id();
 
         let output = match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
-            Ok(result) => result.context(format!("failed to execute tool: {}", tool_name))?,
+            Ok(result) => result.context(format!("failed to execute tool: {}", tool))?,
             Err(_) => {
                 // Gap #10: SIGTERM → wait 5s → SIGKILL escalation
                 #[cfg(unix)]
@@ -96,12 +93,12 @@ impl ToolRunner {
                 }
                 let duration = start.elapsed();
                 return Ok(ToolResult {
-                    tool_name: tool_name.to_string(),
+                    tool: tool.to_string(),
                     exit_code: -1,
                     stdout: String::new(),
                     stderr: format!(
                         "tool '{}' timed out after {}s (SIGTERM+SIGKILL)",
-                        tool_name, entry.timeout_secs
+                        tool, entry.timeout_secs
                     ),
                     duration_ms: duration.as_millis() as u64,
                     truncated: false,
@@ -127,7 +124,7 @@ impl ToolRunner {
         }
 
         Ok(ToolResult {
-            tool_name: tool_name.to_string(),
+            tool: tool.to_string(),
             exit_code: output.status.code().unwrap_or(-1),
             stdout,
             stderr,
@@ -211,7 +208,7 @@ mod tests {
         let runner = ToolRunner::new(&test_entries());
         let dir = std::env::temp_dir();
         let result = runner.run("echo-test", &[], &dir).await.unwrap();
-        assert_eq!(result.tool_name, "echo-test");
+        assert_eq!(result.tool, "echo-test");
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.stdout.trim(), "hello");
         assert!(result.stderr.is_empty());
@@ -314,7 +311,7 @@ mod tests {
     #[test]
     fn test_tool_result_serde_roundtrip() {
         let result = ToolResult {
-            tool_name: "test".to_string(),
+            tool: "test".to_string(),
             exit_code: 0,
             stdout: "ok".to_string(),
             stderr: String::new(),
@@ -323,7 +320,7 @@ mod tests {
         };
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: ToolResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.tool_name, "test");
+        assert_eq!(deserialized.tool, "test");
         assert_eq!(deserialized.exit_code, 0);
         assert_eq!(deserialized.stdout, "ok");
         assert!(!deserialized.truncated);
@@ -332,7 +329,7 @@ mod tests {
     #[test]
     fn test_tool_result_truncated_serde() {
         let result = ToolResult {
-            tool_name: "big".to_string(),
+            tool: "big".to_string(),
             exit_code: 0,
             stdout: "lots of output... (truncated)".to_string(),
             stderr: String::new(),

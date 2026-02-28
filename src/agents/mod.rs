@@ -215,8 +215,7 @@ impl Record for AgentSession {
 pub enum AgentAction {
     // === Shared actions (all agent types) ===
     RunTool {
-        #[serde(alias = "tool")]
-        tool_name: String,
+        tool: String,
         #[serde(default)]
         args: Vec<String>,
     },
@@ -351,11 +350,11 @@ pub enum AgentEvent {
     },
     ToolStarted {
         session_id: String,
-        tool_name: String,
+        tool: String,
     },
     ToolCompleted {
         session_id: String,
-        tool_name: String,
+        tool: String,
         exit_code: i32,
         duration_ms: u64,
     },
@@ -684,13 +683,13 @@ mod tests {
     #[test]
     fn test_agent_action_run_tool_serde() {
         let action = AgentAction::RunTool {
-            tool_name: "test".to_string(),
+            tool: "test".to_string(),
             args: vec![],
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        if let AgentAction::RunTool { tool_name, args } = deserialized {
-            assert_eq!(tool_name, "test");
+        if let AgentAction::RunTool { tool, args } = deserialized {
+            assert_eq!(tool, "test");
             assert!(args.is_empty());
         } else {
             panic!("expected RunTool");
@@ -731,7 +730,7 @@ mod tests {
     fn test_agent_action_parse_from_llm_json() {
         let llm_output = r#"[
             {"action": "write_file", "path": "src/foo.rs", "content": "pub fn foo() {}"},
-            {"action": "run_tool", "tool_name": "test", "args": []},
+            {"action": "run_tool", "tool": "test", "args": []},
             {"action": "commit", "message": "feat: add foo", "paths": ["src/foo.rs"]},
             {"action": "done", "summary": "Implemented foo"}
         ]"#;
@@ -1062,7 +1061,7 @@ mod tests {
     fn test_agent_event_tool_completed_serde() {
         let event = AgentEvent::ToolCompleted {
             session_id: "s1".to_string(),
-            tool_name: "test".to_string(),
+            tool: "test".to_string(),
             exit_code: 0,
             duration_ms: 1500,
         };
@@ -1070,13 +1069,13 @@ mod tests {
         let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
         if let AgentEvent::ToolCompleted {
             session_id,
-            tool_name,
+            tool,
             exit_code,
             duration_ms,
         } = deserialized
         {
             assert_eq!(session_id, "s1");
-            assert_eq!(tool_name, "test");
+            assert_eq!(tool, "test");
             assert_eq!(exit_code, 0);
             assert_eq!(duration_ms, 1500);
         } else {

@@ -445,11 +445,11 @@ pub async fn execute_action(
     agent_type: AgentType,
 ) -> Result<ActionResult> {
     match action {
-        AgentAction::RunTool { tool_name, args } => {
+        AgentAction::RunTool { tool, args } => {
             let tool_result = tool_runner
-                .run(tool_name, args, worktree_path)
+                .run(tool, args, worktree_path)
                 .await
-                .map_err(|e| eyre!("run_tool '{}': {}", tool_name, e))?;
+                .map_err(|e| eyre!("run_tool '{}': {}", tool, e))?;
             Ok(ActionResult::ToolRun(tool_result))
         }
         AgentAction::WriteFile { path, content } => {
@@ -1306,7 +1306,7 @@ mod tests {
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::RunTool {
-            tool_name: "echo-test".to_string(),
+            tool: "echo-test".to_string(),
             args: vec![],
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
@@ -1501,7 +1501,7 @@ mod tests {
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::RunTool {
-            tool_name: "nonexistent".to_string(),
+            tool: "nonexistent".to_string(),
             args: vec![],
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;

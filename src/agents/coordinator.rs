@@ -894,8 +894,18 @@ pub async fn run_coordinator(
                 return Err(eyre!("coordinator needs help: {}", reason));
             }
             Err(e) => {
-                warn!("Coordinator {} iteration {} failed: {}", session.id, iteration, e);
-                return Err(eyre!("coordinator iteration failed: {}", e));
+                warn!(
+                    "Coordinator {} iteration {} failed (will retry): {}",
+                    session.id, iteration, e
+                );
+                previous_summary = Some(format!(
+                    "ERROR: Your previous response could not be parsed. \
+                     You MUST respond with ONLY a JSON array of action objects. \
+                     No prose, no markdown, no explanation.\n\
+                     Parse error: {}",
+                    e
+                ));
+                config.active_interval_secs
             }
         };
 
@@ -972,8 +982,18 @@ async fn run_coordinator_legacy(
                 return Err(eyre!("coordinator needs help: {}", reason));
             }
             Err(e) => {
-                warn!("Coordinator {} iteration {} failed: {}", session.id, iteration, e);
-                return Err(eyre!("coordinator iteration failed: {}", e));
+                warn!(
+                    "Coordinator {} iteration {} failed (will retry): {}",
+                    session.id, iteration, e
+                );
+                previous_summary = Some(format!(
+                    "ERROR: Your previous response could not be parsed. \
+                     You MUST respond with ONLY a JSON array of action objects. \
+                     No prose, no markdown, no explanation.\n\
+                     Parse error: {}",
+                    e
+                ));
+                config.active_interval_secs
             }
         };
 
@@ -983,7 +1003,7 @@ async fn run_coordinator_legacy(
 
 fn format_action_summary(result: &ActionResult) -> String {
     match result {
-        ActionResult::ToolRun(tr) => format!("ran {} (exit {})", tr.tool_name, tr.exit_code),
+        ActionResult::ToolRun(tr) => format!("ran {} (exit {})", tr.tool, tr.exit_code),
         ActionResult::FileWritten(p) => format!("wrote {}", p),
         ActionResult::FileRead(content) => format!("read file ({} bytes)", content.len()),
         ActionResult::Committed(m) => format!("committed: {}", m),

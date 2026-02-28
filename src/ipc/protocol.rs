@@ -222,18 +222,18 @@ impl DaemonEvent {
         Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
     }
 
-    pub fn agent_tool_started(session_id: &str, tool_name: &str) -> Self {
+    pub fn agent_tool_started(session_id: &str, tool: &str) -> Self {
         let event = AgentEvent::ToolStarted {
             session_id: session_id.to_string(),
-            tool_name: tool_name.to_string(),
+            tool: tool.to_string(),
         };
         Self::new("agent.tool_started", serde_json::to_value(event).unwrap_or_default())
     }
 
-    pub fn agent_tool_completed(session_id: &str, tool_name: &str, exit_code: i32, duration_ms: u64) -> Self {
+    pub fn agent_tool_completed(session_id: &str, tool: &str, exit_code: i32, duration_ms: u64) -> Self {
         let event = AgentEvent::ToolCompleted {
             session_id: session_id.to_string(),
-            tool_name: tool_name.to_string(),
+            tool: tool.to_string(),
             exit_code,
             duration_ms,
         };

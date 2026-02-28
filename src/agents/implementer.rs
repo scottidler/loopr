@@ -183,10 +183,10 @@ pub async fn run_iteration(
     let mut summaries = Vec::new();
     for action in &actions {
         // Broadcast tool_started event for RunTool actions
-        if let AgentAction::RunTool { tool_name, .. } = action {
+        if let AgentAction::RunTool { tool, .. } = action {
             let _ = params
                 .event_tx
-                .send(DaemonEvent::agent_tool_started(params.session_id, tool_name));
+                .send(DaemonEvent::agent_tool_started(params.session_id, tool));
         }
 
         let result = match execute_action(
@@ -210,7 +210,7 @@ pub async fn run_iteration(
         if let ActionResult::ToolRun(ref tr) = result {
             let _ = params.event_tx.send(DaemonEvent::agent_tool_completed(
                 params.session_id,
-                &tr.tool_name,
+                &tr.tool,
                 tr.exit_code,
                 tr.duration_ms,
             ));
@@ -336,8 +336,16 @@ pub async fn run_implementer(
                 previous_summary = Some(summary);
             }
             Err(e) => {
-                warn!("Implementer {} iteration {} failed: {}", session.id, i, e);
-                return Err(e);
+                warn!("Implementer {} iteration {} failed (will retry): {}", session.id, i, e);
+                previous_summary = Some(format!(
+                    "ERROR: Your previous response could not be parsed. \
+                     You MUST respond with ONLY a JSON array of action objects. \
+                     No prose, no markdown, no explanation. Example: \
+                     [{{\"action\": \"read_file\", \"path\": \"src/main.rs\"}}]\n\
+                     Parse error: {}",
+                    e
+                ));
+                continue;
             }
         }
     }
@@ -359,7 +367,7 @@ fn truncate_content(content: &str, max: usize) -> String {
 fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String {
     match result {
         ActionResult::ToolRun(tr) => {
-            let mut s = format!("ran {} (exit {})", tr.tool_name, tr.exit_code);
+            let mut s = format!("ran {} (exit {})", tr.tool, tr.exit_code);
             if !tr.stdout.is_empty() {
                 s.push_str(&format!(
                     "\nstdout:\n```\n{}\n```",
@@ -529,7 +537,7 @@ mod tests {
     fn test_parse_actions_multiple() {
         let json = r#"[
             {"action": "write_file", "path": "src/foo.rs", "content": "fn foo() {}"},
-            {"action": "run_tool", "tool_name": "test", "args": []},
+            {"action": "run_tool", "tool": "test", "args": []},
             {"action": "done", "summary": "Implemented foo"}
         ]"#;
         let actions = parse_actions(json).unwrap();
@@ -1149,7 +1157,7 @@ mod tests {
         // Create stdout that exceeds MAX_SUMMARY_CONTENT (4000 chars)
         let long_output = "x".repeat(5000);
         let tr = ToolResult {
-            tool_name: "big_tool".to_string(),
+            tool: "big_tool".to_string(),
             exit_code: 0,
             stdout: long_output.clone(),
             stderr: String::new(),
@@ -1157,7 +1165,7 @@ mod tests {
             truncated: false,
         };
         let action = AgentAction::RunTool {
-            tool_name: "big_tool".to_string(),
+            tool: "big_tool".to_string(),
             args: vec![],
         };
         let summary = format_action_summary(&action, &ActionResult::ToolRun(tr));
@@ -1277,6 +1285,68 @@ mod tests {
         assert!(
             user_msg.contains("REST API for user management"),
             "expected goal text in context"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_failure_recovery_via_previous_summary() {
+        // First call returns prose (parse failure), second call returns valid JSON.
+        // Verifies that the implementer retries instead of exiting on parse failure.
+        struct ProsThenValidLlm {
+            call_count: std::sync::atomic::AtomicU32,
+        }
+
+        #[async_trait]
+        impl LlmClient for ProsThenValidLlm {
+            async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    // Return prose — this should trigger a parse failure
+                    Ok("I think we should start by reading the file and understanding the codebase.".to_string())
+                } else {
+                    // On retry, verify the error feedback was included
+                    assert!(
+                        user_msg.contains("ERROR: Your previous response could not be parsed"),
+                        "expected parse error feedback in retry prompt, got: {}",
+                        &user_msg[..user_msg.len().min(500)]
+                    );
+                    Ok(r#"[{"action": "done", "summary": "Recovered from parse failure"}]"#.to_string())
+                }
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parseretry-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let mut config = AgentRoleConfig::default_implementer();
+        config.max_iterations = 3;
+
+        let llm = ProsThenValidLlm {
+            call_count: std::sync::atomic::AtomicU32::new(0),
+        };
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test".into());
+        let session_id = session.id.clone();
+        session.work_item_id = Some(wi_id);
+        session.worktree_path = Some(dir.to_string_lossy().into());
+
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session.clone());
+
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        assert!(result.is_ok(), "Expected success after retry, got: {:?}", result);
+        // Should have used 2 iterations: parse failure + successful recovery
+        assert_eq!(session.iteration, 2, "Should have completed on second iteration");
+        assert_eq!(
+            llm.call_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "LLM should have been called twice"
         );
     }
 

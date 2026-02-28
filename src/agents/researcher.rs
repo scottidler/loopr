@@ -630,7 +630,7 @@ mod tests {
             paths: vec![],
         }));
         assert!(!is_allowed_researcher_action(&AgentAction::RunTool {
-            tool_name: "test".into(),
+            tool: "test".into(),
             args: vec![],
         }));
         assert!(!is_allowed_researcher_action(&AgentAction::ProposeBundle {
