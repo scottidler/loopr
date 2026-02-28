@@ -6,6 +6,7 @@ pub mod domain;
 pub mod error;
 pub mod id;
 pub mod ipc;
+pub mod prompts;
 pub mod tools;
 pub mod tui;
 pub mod validator;

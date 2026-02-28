@@ -1,0 +1,12 @@
+{
+  "verdict": "pass | fail | warn",
+  "issues": [
+    {
+      "severity": "error | warning | info",
+      "category": "completeness | clarity | testability | scope",
+      "message": "description of the issue",
+      "suggestion": "optional suggestion for fixing"
+    }
+  ],
+  "summary": "human-readable summary of the assessment"
+}

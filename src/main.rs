@@ -15,6 +15,7 @@ async fn main() -> Result<()> {
 
     let cli_args = Cli::parse();
     let config = Config::load(cli_args.config.as_ref()).context("Failed to load configuration")?;
+    loopr::prompts::init();
     let role = cli_args.r#as.unwrap_or(domain::role::Role::Coordinator);
 
     match cli_args.command {

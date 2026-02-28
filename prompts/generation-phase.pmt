@@ -1,0 +1,7 @@
+Create ordered implementation Phases for this Spec. Each Phase should have:
+- A clear, actionable title
+- A concrete deliverables description
+- Dependencies on other Phases
+- Be implementable in 1-5 WorkItems
+
+Respond with a JSON array of `create_phase` actions with `spec_id` set to the Spec's ID, ordered by implementation sequence (order: 1, 2, 3, ...).

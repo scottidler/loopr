@@ -25,43 +25,6 @@ pub trait LlmClient: Send + Sync {
     async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String>;
 }
 
-const SYSTEM_PROMPT: &str = r#"You are an Implementer agent in the Loopr development orchestrator. Your role is to implement a specific WorkItem by writing code in a Git worktree.
-
-## Your Capabilities
-
-You can perform the following actions (respond with a JSON array of actions):
-
-1. `write_file` — Create or overwrite a file in the worktree
-2. `read_file` — Read a file from the worktree
-3. `run_tool` — Execute a configured tool (test, clippy, fmt, build)
-4. `commit` — Create a git commit with specified files
-5. `propose_bundle` — Submit your work as a Bundle for review
-6. `create_learning` — Record a discovery or insight
-7. `done` — Signal that you've completed this iteration
-8. `need_help` — Request human Coordinator intervention
-
-## Rules
-
-- Work incrementally. Don't try to implement everything in one iteration.
-- Run tests after making changes. Fix failures before proposing a Bundle.
-- Create small, focused commits with descriptive messages.
-- When you encounter an ambiguity, create a Learning and ask for help.
-- Your code must pass `clippy` and `fmt --check` before proposing a Bundle.
-- Do not modify files outside the WorkItem's scope.
-
-## Output Format
-
-Respond with ONLY a JSON array of AgentAction objects. Example:
-
-```json
-[
-  {"action": "write_file", "path": "src/foo.rs", "content": "..."},
-  {"action": "run_tool", "tool_name": "test", "args": []},
-  {"action": "commit", "message": "feat(foo): add initial implementation", "paths": ["src/foo.rs"]},
-  {"action": "done", "summary": "Implemented foo module with tests passing"}
-]
-```"#;
-
 /// Parse the LLM response into a list of agent actions.
 /// Extracts the first JSON array found in the response text.
 /// Falls back to element-by-element parsing, skipping malformed actions.
@@ -195,7 +158,7 @@ pub async fn run_iteration(
         .with_staleness_note(staleness_note)
         .with_iteration(iteration)
         .with_footer("Implement the WorkItem described above. Respond with a JSON array of actions.".into())
-        .build(SYSTEM_PROMPT);
+        .build(&crate::prompts::store().implementer);
 
     info!(
         "Implementer {} context: ~{} tokens",
@@ -398,17 +361,28 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::ToolRun(tr) => {
             let mut s = format!("ran {} (exit {})", tr.tool_name, tr.exit_code);
             if !tr.stdout.is_empty() {
-                s.push_str(&format!("\nstdout:\n```\n{}\n```", truncate_content(&tr.stdout, MAX_SUMMARY_CONTENT)));
+                s.push_str(&format!(
+                    "\nstdout:\n```\n{}\n```",
+                    truncate_content(&tr.stdout, MAX_SUMMARY_CONTENT)
+                ));
             }
             if !tr.stderr.is_empty() {
-                s.push_str(&format!("\nstderr:\n```\n{}\n```", truncate_content(&tr.stderr, MAX_SUMMARY_CONTENT)));
+                s.push_str(&format!(
+                    "\nstderr:\n```\n{}\n```",
+                    truncate_content(&tr.stderr, MAX_SUMMARY_CONTENT)
+                ));
             }
             s
         }
         ActionResult::FileWritten(p) => format!("wrote {}", p),
         ActionResult::FileRead(content) => {
             let path = if let AgentAction::ReadFile { path } = action { path.as_str() } else { "?" };
-            format!("read {} ({} bytes):\n```\n{}\n```", path, content.len(), truncate_content(content, MAX_SUMMARY_CONTENT))
+            format!(
+                "read {} ({} bytes):\n```\n{}\n```",
+                path,
+                content.len(),
+                truncate_content(content, MAX_SUMMARY_CONTENT)
+            )
         }
         ActionResult::Committed(m) => format!("committed: {}", m),
         ActionResult::BundleProposed(d) => format!("proposed bundle: {}", d),
@@ -588,7 +562,7 @@ mod tests {
             .with_tools(&tool_runner)
             .with_iteration(1)
             .with_footer("Respond with JSON.".into())
-            .build(SYSTEM_PROMPT);
+            .build(&crate::prompts::store().implementer);
 
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
@@ -860,12 +834,14 @@ mod tests {
 
     #[test]
     fn test_system_prompt_contains_key_instructions() {
-        assert!(SYSTEM_PROMPT.contains("Implementer agent"));
-        assert!(SYSTEM_PROMPT.contains("write_file"));
-        assert!(SYSTEM_PROMPT.contains("run_tool"));
-        assert!(SYSTEM_PROMPT.contains("done"));
-        assert!(SYSTEM_PROMPT.contains("need_help"));
-        assert!(SYSTEM_PROMPT.contains("JSON array"));
+        crate::prompts::init_defaults();
+        let prompt = &crate::prompts::store().implementer;
+        assert!(prompt.contains("Implementer agent"));
+        assert!(prompt.contains("write_file"));
+        assert!(prompt.contains("run_tool"));
+        assert!(prompt.contains("done"));
+        assert!(prompt.contains("need_help"));
+        assert!(prompt.contains("JSON array"));
     }
 
     // --- staleness cascade tests ---
@@ -933,7 +909,7 @@ mod tests {
             .unwrap()
             .with_staleness_note(Some("A new Tick 'tick-99' has been published.".into()))
             .with_iteration(2)
-            .build(SYSTEM_PROMPT);
+            .build(&crate::prompts::store().implementer);
         assert!(assembled.user_message.contains("Staleness Warning"));
         assert!(assembled.user_message.contains("tick-99"));
     }

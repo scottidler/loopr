@@ -155,25 +155,25 @@ pub async fn run_agent_task(
     };
 
     // Transition work item based on agent result (implementer only)
-    if agent_type == AgentType::Implementer {
-        if let Some(ref wi_id) = worktree_key {
-            let (wi_method, wi_status) = if result.is_ok() {
-                ("work_item.transition", "InReview")
-            } else {
-                ("work_item.transition", "Blocked")
-            };
-            let resp = bridge.request(
-                wi_method,
-                serde_json::json!({ "id": wi_id, "target_status": wi_status, "role": "implementer" }),
+    if agent_type == AgentType::Implementer
+        && let Some(ref wi_id) = worktree_key
+    {
+        let (wi_method, wi_status) = if result.is_ok() {
+            ("work_item.transition", "InReview")
+        } else {
+            ("work_item.transition", "Blocked")
+        };
+        let resp = bridge.request(
+            wi_method,
+            serde_json::json!({ "id": wi_id, "target_status": wi_status, "role": "implementer" }),
+        );
+        if resp.is_error() {
+            warn!(
+                "Agent {} failed to transition work item {} → {}: {:?}",
+                session_id, wi_id, wi_status, resp.error
             );
-            if resp.is_error() {
-                warn!(
-                    "Agent {} failed to transition work item {} → {}: {:?}",
-                    session_id, wi_id, wi_status, resp.error
-                );
-            } else {
-                info!("Agent {} transitioned work item {} → {}", session_id, wi_id, wi_status);
-            }
+        } else {
+            info!("Agent {} transitioned work item {} → {}", session_id, wi_id, wi_status);
         }
     }
 

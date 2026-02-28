@@ -1,0 +1,7 @@
+Create WorkItems for this Phase. Each WorkItem should be:
+- Small enough for an Implementer to complete in ~5-10 iterations
+- Have a clear title and description with acceptance criteria
+- Include resource_tags identifying affected files/modules
+- Declare dependencies on other WorkItems
+
+Respond with a JSON array of `create_work_item` actions with `phase_id` set to the Phase's ID.

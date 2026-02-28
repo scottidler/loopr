@@ -85,13 +85,7 @@ pub fn build_plan_prompt(goal: &str, learnings: &[String], validation_failures: 
     }
 
     msg.push_str("### Instructions\n");
-    msg.push_str(
-        "Create a Plan with:\n\
-         - A clear, bounded title\n\
-         - A description of what this achieves and why\n\
-         - Measurable acceptance criteria (specific, testable conditions)\n\n\
-         Respond with a JSON array containing a single `create_plan` action.\n",
-    );
+    msg.push_str(&crate::prompts::store().generation_plan);
 
     GenerationPrompt {
         level: GenerationLevel::Plan,
@@ -151,13 +145,7 @@ pub fn build_spec_prompt(
     }
 
     msg.push_str("### Instructions\n");
-    msg.push_str(
-        "Create a Spec for this Plan with:\n\
-         - A title describing the technical approach\n\
-         - A description covering: technical approach to satisfy the Plan, \
-           key design decisions with rationale, testability strategy, risks and dependencies\n\n\
-         Respond with a JSON array containing a single `create_spec` action with `plan_id` set to the Plan's ID.\n",
-    );
+    msg.push_str(&crate::prompts::store().generation_spec);
 
     GenerationPrompt {
         level: GenerationLevel::Spec,
@@ -201,15 +189,7 @@ pub fn build_phase_prompt(spec: &Spec, learnings: &[String], validation_failures
     }
 
     msg.push_str("### Instructions\n");
-    msg.push_str(
-        "Create ordered implementation Phases for this Spec. Each Phase should have:\n\
-         - A clear, actionable title\n\
-         - A concrete deliverables description\n\
-         - Dependencies on other Phases\n\
-         - Be implementable in 1-5 WorkItems\n\n\
-         Respond with a JSON array of `create_phase` actions with `spec_id` set to the Spec's ID, \
-         ordered by implementation sequence (order: 1, 2, 3, ...).\n",
-    );
+    msg.push_str(&crate::prompts::store().generation_phase);
 
     GenerationPrompt {
         level: GenerationLevel::Phase,
@@ -275,14 +255,7 @@ pub fn build_work_item_prompt(
     }
 
     msg.push_str("### Instructions\n");
-    msg.push_str(
-        "Create WorkItems for this Phase. Each WorkItem should be:\n\
-         - Small enough for an Implementer to complete in ~5-10 iterations\n\
-         - Have a clear title and description with acceptance criteria\n\
-         - Include resource_tags identifying affected files/modules\n\
-         - Declare dependencies on other WorkItems\n\n\
-         Respond with a JSON array of `create_work_item` actions with `phase_id` set to the Phase's ID.\n",
-    );
+    msg.push_str(&crate::prompts::store().generation_workitem);
 
     GenerationPrompt {
         level: GenerationLevel::WorkItem,
@@ -712,6 +685,10 @@ mod tests {
         Arc::new(stores)
     }
 
+    fn init() {
+        crate::prompts::init_defaults();
+    }
+
     // --- GenerationLevel tests ---
 
     #[test]
@@ -726,6 +703,7 @@ mod tests {
 
     #[test]
     fn test_plan_prompt_includes_goal() {
+        init();
         let prompt = build_plan_prompt("Build a REST API", &[], &[]);
         assert!(prompt.user_message.contains("Build a REST API"));
         assert_eq!(prompt.level, GenerationLevel::Plan);
@@ -733,6 +711,7 @@ mod tests {
 
     #[test]
     fn test_plan_prompt_includes_learnings() {
+        init();
         let learnings = vec!["Use async handlers".to_string(), "Prefer JSON responses".to_string()];
         let prompt = build_plan_prompt("Build API", &learnings, &[]);
         assert!(prompt.user_message.contains("Use async handlers"));
@@ -742,6 +721,7 @@ mod tests {
 
     #[test]
     fn test_plan_prompt_includes_accumulated_failures() {
+        init();
         let failures = vec!["Missing acceptance criteria".to_string(), "Title too vague".to_string()];
         let prompt = build_plan_prompt("Build API", &[], &failures);
         assert!(prompt.user_message.contains("Previous Validation Failures"));
@@ -752,6 +732,7 @@ mod tests {
 
     #[test]
     fn test_plan_prompt_no_optional_sections_when_empty() {
+        init();
         let prompt = build_plan_prompt("Build API", &[], &[]);
         assert!(!prompt.user_message.contains("Relevant Learnings"));
         assert!(!prompt.user_message.contains("Validation Failures"));
@@ -759,6 +740,7 @@ mod tests {
 
     #[test]
     fn test_plan_prompt_instructions_present() {
+        init();
         let prompt = build_plan_prompt("Build API", &[], &[]);
         assert!(prompt.user_message.contains("create_plan"));
         assert!(prompt.user_message.contains("acceptance criteria"));
@@ -768,6 +750,7 @@ mod tests {
 
     #[test]
     fn test_spec_prompt_includes_plan_context() {
+        init();
         let plan = Plan::new("Auth Plan".into(), "Implement auth".into(), "Tests pass".into());
         let prompt = build_spec_prompt(&plan, &[], &[], &[]);
         assert!(prompt.user_message.contains(&plan.id));
@@ -779,6 +762,7 @@ mod tests {
 
     #[test]
     fn test_spec_prompt_includes_findings() {
+        init();
         let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
         let findings = vec!["src/auth.rs has existing login logic".to_string()];
         let prompt = build_spec_prompt(&plan, &[], &findings, &[]);
@@ -788,6 +772,7 @@ mod tests {
 
     #[test]
     fn test_spec_prompt_includes_accumulated_failures() {
+        init();
         let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
         let failures = vec!["Missing testability strategy".to_string()];
         let prompt = build_spec_prompt(&plan, &[], &[], &failures);
@@ -797,6 +782,7 @@ mod tests {
 
     #[test]
     fn test_spec_prompt_instructions_reference_plan_id() {
+        init();
         let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
         let prompt = build_spec_prompt(&plan, &[], &[], &[]);
         assert!(prompt.user_message.contains("create_spec"));
@@ -807,6 +793,7 @@ mod tests {
 
     #[test]
     fn test_phase_prompt_includes_spec_context() {
+        init();
         let spec = Spec::new("plan-1".into(), "JWT Auth".into(), "Implement JWT".into());
         let prompt = build_phase_prompt(&spec, &[], &[]);
         assert!(prompt.user_message.contains(&spec.id));
@@ -818,6 +805,7 @@ mod tests {
 
     #[test]
     fn test_phase_prompt_includes_accumulated_failures() {
+        init();
         let spec = Spec::new("plan-1".into(), "Spec".into(), "desc".into());
         let failures = vec![
             "Phase 2 depends on Phase 1 but order is wrong".to_string(),
@@ -831,6 +819,7 @@ mod tests {
 
     #[test]
     fn test_phase_prompt_instructions() {
+        init();
         let spec = Spec::new("plan-1".into(), "Spec".into(), "desc".into());
         let prompt = build_phase_prompt(&spec, &[], &[]);
         assert!(prompt.user_message.contains("create_phase"));
@@ -842,6 +831,7 @@ mod tests {
 
     #[test]
     fn test_work_item_prompt_includes_phase_context() {
+        init();
         let phase = Phase::new("spec-1".into(), "Foundation".into(), "Set up base".into(), 1);
         let prompt = build_work_item_prompt(&phase, &[], &[], &[]);
         assert!(prompt.user_message.contains(&phase.id));
@@ -853,6 +843,7 @@ mod tests {
 
     #[test]
     fn test_work_item_prompt_includes_existing_work_items() {
+        init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let wi = WorkItem::new(phase.id.clone(), "Add login".into(), "Login endpoint".into());
         let prompt = build_work_item_prompt(&phase, &[wi], &[], &[]);
@@ -863,6 +854,7 @@ mod tests {
 
     #[test]
     fn test_work_item_prompt_shows_none_when_no_existing() {
+        init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let prompt = build_work_item_prompt(&phase, &[], &[], &[]);
         assert!(prompt.user_message.contains("None yet"));
@@ -870,6 +862,7 @@ mod tests {
 
     #[test]
     fn test_work_item_prompt_includes_findings() {
+        init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let findings = vec!["src/auth/ directory has 5 modules".to_string()];
         let prompt = build_work_item_prompt(&phase, &[], &[], &findings);

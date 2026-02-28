@@ -1,0 +1,5 @@
+Create a Spec for this Plan with:
+- A title describing the technical approach
+- A description covering: technical approach to satisfy the Plan, key design decisions with rationale, testability strategy, risks and dependencies
+
+Respond with a JSON array containing a single `create_spec` action with `plan_id` set to the Plan's ID.

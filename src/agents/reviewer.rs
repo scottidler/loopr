@@ -63,34 +63,6 @@ pub struct ReviewResult {
     pub summary: String,
 }
 
-const SYSTEM_PROMPT: &str = r#"You are a Reviewer agent in the Loopr development orchestrator. Your role is to review a Bundle (proposed code change) and provide structured feedback.
-
-## Review Criteria
-
-1. **Correctness** — Does the code do what the WorkItem requires?
-2. **Quality** — Is the code clean, idiomatic, and maintainable?
-3. **Tests** — Are there adequate tests? Do they cover edge cases?
-4. **Scope** — Does the change stay within the WorkItem's boundaries?
-5. **Safety** — Are there security concerns (OWASP top 10, injection, etc.)?
-
-## Output Format
-
-Respond with ONLY valid JSON matching this schema:
-
-{
-  "verdict": "approve" | "request_changes" | "reject",
-  "issues": [
-    {
-      "severity": "error" | "warning" | "info",
-      "file": "path/to/file.rs",
-      "line": 42,
-      "message": "Description of the issue",
-      "suggestion": "How to fix it (optional)"
-    }
-  ],
-  "summary": "Overall review summary"
-}"#;
-
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
 pub fn parse_review_result(response: &str) -> Result<ReviewResult> {
@@ -139,7 +111,7 @@ pub async fn run_reviewer(
         .load_bundle_hierarchy(&bundle_id)?
         .with_footer("Review this Bundle against the WorkItem requirements and review criteria above. Respond with ONLY valid JSON.".into());
     let work_item_title = ctx.work_item_title().unwrap_or("unknown").to_string();
-    let assembled = ctx.build(SYSTEM_PROMPT);
+    let assembled = ctx.build(&crate::prompts::store().reviewer);
 
     let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
     let review = parse_review_result(&response)?;
@@ -479,7 +451,7 @@ mod tests {
             .with_footer("Review this Bundle.".into());
         assert_eq!(ctx.work_item_title(), Some("Test WorkItem"));
 
-        let assembled = ctx.build(SYSTEM_PROMPT);
+        let assembled = ctx.build(&crate::prompts::store().reviewer);
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
         assert!(assembled.user_message.contains("Test Phase"));
@@ -625,13 +597,15 @@ mod tests {
 
     #[test]
     fn test_system_prompt_contains_key_instructions() {
-        assert!(SYSTEM_PROMPT.contains("Reviewer agent"));
-        assert!(SYSTEM_PROMPT.contains("Correctness"));
-        assert!(SYSTEM_PROMPT.contains("Quality"));
-        assert!(SYSTEM_PROMPT.contains("Tests"));
-        assert!(SYSTEM_PROMPT.contains("verdict"));
-        assert!(SYSTEM_PROMPT.contains("approve"));
-        assert!(SYSTEM_PROMPT.contains("request_changes"));
-        assert!(SYSTEM_PROMPT.contains("reject"));
+        crate::prompts::init_defaults();
+        let prompt = &crate::prompts::store().reviewer;
+        assert!(prompt.contains("Reviewer agent"));
+        assert!(prompt.contains("Correctness"));
+        assert!(prompt.contains("Quality"));
+        assert!(prompt.contains("Tests"));
+        assert!(prompt.contains("verdict"));
+        assert!(prompt.contains("approve"));
+        assert!(prompt.contains("request_changes"));
+        assert!(prompt.contains("reject"));
     }
 }

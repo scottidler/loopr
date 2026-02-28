@@ -1,0 +1,6 @@
+Create a Plan with:
+- A clear, bounded title
+- A description of what this achieves and why
+- Measurable acceptance criteria (specific, testable conditions)
+
+Respond with a JSON array containing a single `create_plan` action.

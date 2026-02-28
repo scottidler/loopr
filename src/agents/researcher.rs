@@ -15,38 +15,6 @@ use crate::daemon::context::Stores;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
-const SYSTEM_PROMPT: &str = r#"You are a Researcher agent in the Loopr development orchestrator. Your role is to investigate the codebase and produce findings that help other agents make decisions.
-
-## Your Query
-
-{query}
-
-## Your Capabilities
-
-Respond with a JSON array of actions:
-
-1. `search_code`     {"action": "search_code", "pattern": "fn\\s+handle_", "glob": "*.rs", "path": "src/"}
-2. `search_files`    {"action": "search_files", "pattern": "**/*test*.rs", "path": "src/"}
-3. `read_file`       {"action": "read_file", "path": "src/agents/mod.rs"}
-4. `list_directory`  {"action": "list_directory", "path": "src/agents"}
-5. `create_learning` {"action": "create_learning", "content": "...", "scope": "spec", "source_id": "...", "resource_tags": ["src/agents/"]}
-6. `done`            {"action": "done", "summary": "Found 3 relevant patterns..."}
-7. `need_help`       {"action": "need_help", "reason": "Cannot find the requested pattern"}
-
-## Rules
-
-- You are read-only. You cannot modify any files.
-- Focus on answering the specific query you were given.
-- Create Learnings for significant findings that other agents should know.
-- Be thorough but concise. Don't dump entire file contents into Learnings.
-- Prioritize: patterns, conventions, dependencies, test coverage, API contracts.
-- All file paths must be relative to the repo root.
-- When acting as a Proposer (query starts with "Propose..."), tag your Learnings with ["proposal:spec", "plan:{plan_id}"] or similar.
-
-## Output Format
-
-Respond with ONLY a JSON array of actions."#;
-
 /// Denylist patterns for path sandboxing. Matched against the file name component.
 const PATH_DENYLIST: &[&str] = &[".env", "credentials.", "secret"];
 const EXT_DENYLIST: &[&str] = &["key", "pem"];
@@ -111,7 +79,7 @@ pub fn validate_path(repo_root: &Path, relative: &str) -> Result<PathBuf> {
 
 /// Build the Researcher system prompt with the query injected.
 fn build_system_prompt(query: &str) -> String {
-    SYSTEM_PROMPT.replace("{query}", query)
+    crate::prompts::store().researcher.replace("{query}", query)
 }
 
 /// Execute a SearchCode action: use grep/ripgrep to search file contents.
@@ -606,7 +574,8 @@ mod tests {
 
     #[test]
     fn test_system_prompt_contains_query_placeholder() {
-        assert!(SYSTEM_PROMPT.contains("{query}"));
+        crate::prompts::init_defaults();
+        assert!(crate::prompts::store().researcher.contains("{query}"));
     }
 
     #[test]
