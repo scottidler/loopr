@@ -302,6 +302,62 @@ fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts:
         return Some(footer);
     }
 
+    // Fix #8: Check if a Draft document exists that needs validation.
+    // When determine_generation_level() returned None (a Draft exists but has no failed
+    // validations yet), the Coordinator needs to be told to validate it.
+    if let Some(draft_info) = find_pending_draft_for_validation(stores) {
+        info!(
+            "Coordinator: Draft {} '{}' needs validation",
+            draft_info.0, draft_info.1
+        );
+        return Some(format!(
+            "A {} is in Draft status and needs validation before proceeding.\n\
+             Use ValidateDocument to validate it.\n\
+             Draft ID: {}\nTitle: {}",
+            draft_info.0, draft_info.1, draft_info.2
+        ));
+    }
+
+    None
+}
+
+/// Fix #12: Mark the Phase domain record as Complete before calling coord_state.complete_phase().
+/// This ensures the Phase record status and CoordinatorState are updated together.
+fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState) {
+    if let Some(ref phase_id) = coord_state.current_phase_id {
+        let mut phases = stores.phases.write().unwrap();
+        if let Some(phase) = phases.get_mut(phase_id) {
+            phase.status = HierarchyStatus::Complete;
+            phase.updated_at = crate::id::now_millis();
+            info!("Phase {} marked Complete (record status updated)", phase_id);
+        }
+    }
+}
+
+/// Find a pending Draft document (Plan, Spec, or Phase) that has no failed validations yet.
+/// Returns (level_name, id, title) if found.
+fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, String, String)> {
+    // Check for Draft Plan
+    {
+        let plans = stores.plans.read().unwrap();
+        if let Some(draft) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
+            return Some(("Plan", draft.id.clone(), draft.title.clone()));
+        }
+    }
+    // Check for Draft Spec
+    {
+        let specs = stores.specs.read().unwrap();
+        if let Some(draft) = specs.values().find(|s| s.status == HierarchyStatus::Draft) {
+            return Some(("Spec", draft.id.clone(), draft.title.clone()));
+        }
+    }
+    // Check for Draft Phase
+    {
+        let phases = stores.phases.read().unwrap();
+        if let Some(draft) = phases.values().find(|p| p.status == HierarchyStatus::Draft) {
+            return Some(("Phase", draft.id.clone(), draft.title.clone()));
+        }
+    }
     None
 }
 
@@ -639,6 +695,8 @@ async fn run_coordinator_iteration(
         if new_state == CoordinatorFsmState::ActivatePhase {
             // If transitioning from PhaseGate, complete the previous phase
             if coord_state.current_phase_id.is_some() {
+                // Fix #12: Mark Phase record Complete atomically
+                mark_phase_record_complete(stores, coord_state);
                 coord_state.complete_phase();
             }
             let next_phase = find_next_phase_to_activate(stores, coord_state);
@@ -663,6 +721,8 @@ async fn run_coordinator_iteration(
         } else if new_state == CoordinatorFsmState::GoalComplete {
             // Complete current phase if transitioning from PhaseGate
             if coord_state.current_phase_id.is_some() {
+                // Fix #12: Mark Phase record Complete atomically
+                mark_phase_record_complete(stores, coord_state);
                 coord_state.complete_phase();
             }
             coord_state.transition_to(CoordinatorFsmState::GoalComplete);
@@ -2552,5 +2612,93 @@ mod tests {
 
         assert!(coord_state.phases_completed.contains(&p1_id));
         assert!(coord_state.current_phase_id.is_none());
+    }
+
+    // --- Fix #8: find_pending_draft_for_validation tests ---
+
+    #[test]
+    fn test_find_pending_draft_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-draft-plan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Insert a Draft plan
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "criteria".into());
+        // Plan::new creates with Draft status by default
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        let result = find_pending_draft_for_validation(&stores);
+        assert!(result.is_some(), "should find Draft plan");
+        let (level, _id, title) = result.unwrap();
+        assert_eq!(level, "Plan");
+        assert_eq!(title, "Draft Plan");
+    }
+
+    #[test]
+    fn test_find_pending_draft_none_when_active() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-draft-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        assert!(find_pending_draft_for_validation(&stores).is_none());
+    }
+
+    #[test]
+    fn test_build_generation_footer_includes_draft_validation() {
+        crate::prompts::init_defaults();
+        let dir = std::env::temp_dir().join(format!("loopr-coord-draftfooter-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create an Active plan
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create a Draft spec under the active plan (awaiting first validation)
+        let spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        let footer = build_generation_footer(&stores, "Build a todo app", 3);
+        assert!(footer.is_some(), "should emit footer for Draft validation");
+        let footer_text = footer.unwrap();
+        assert!(
+            footer_text.contains("Draft"),
+            "footer should mention Draft: {}",
+            footer_text
+        );
+        assert!(
+            footer_text.contains("ValidateDocument") || footer_text.contains("validation"),
+            "footer should instruct validation: {}",
+            footer_text
+        );
+    }
+
+    // --- Fix #12: mark_phase_record_complete tests ---
+
+    #[test]
+    fn test_mark_phase_record_complete() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-phasecomplete-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut phase = Phase::new("spec-1".into(), "Test Phase".into(), "desc".into(), 1);
+        phase.status = HierarchyStatus::Active;
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.current_phase_id = Some(phase_id.clone());
+
+        mark_phase_record_complete(&stores, &coord_state);
+
+        let phases = stores.phases.read().unwrap();
+        let updated = phases.get(&phase_id).unwrap();
+        assert_eq!(updated.status, HierarchyStatus::Complete);
     }
 }

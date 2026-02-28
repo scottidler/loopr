@@ -421,11 +421,15 @@ pub fn find_phase_needing_work_items(stores: &Stores) -> Option<Phase> {
     None
 }
 
-/// Check if all WorkItems in a Phase are Done.
+/// Check if all WorkItems in a Phase are in a terminal state (Done or Abandoned).
+/// This matches the FSM's check_fsm_transition() predicate exactly.
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
     let work_items = stores.work_items.read().unwrap();
     let phase_wis: Vec<_> = work_items.values().filter(|w| w.phase_id == phase_id).collect();
-    !phase_wis.is_empty() && phase_wis.iter().all(|w| w.status == WorkItemStatus::Done)
+    !phase_wis.is_empty()
+        && phase_wis
+            .iter()
+            .all(|w| matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
 }
 
 /// Query failed validation reports for a specific document from TaskStore.
@@ -1212,6 +1216,41 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-empty-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
+
+        assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+
+    // Fix #6: is_phase_complete now accepts Abandoned as terminal
+    #[test]
+    fn test_is_phase_complete_true_with_abandoned() {
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-aband-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut wi1 = WorkItem::new("phase-1".into(), "WI Done".into(), "desc".into());
+        wi1.status = WorkItemStatus::Done;
+        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let mut wi2 = WorkItem::new("phase-1".into(), "WI Abandoned".into(), "desc".into());
+        wi2.status = WorkItemStatus::Abandoned;
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        assert!(is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_false_mixed_nonterminal() {
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-mixed-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut wi1 = WorkItem::new("phase-1".into(), "WI Done".into(), "desc".into());
+        wi1.status = WorkItemStatus::Done;
+        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let wi2 = WorkItem::new("phase-1".into(), "WI InProgress".into(), "desc".into());
+        // Default status is Draft which is not terminal
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
     }
