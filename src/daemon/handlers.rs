@@ -78,14 +78,22 @@ fn check_validation_gate(
         // Find the latest report (highest updated_at)
         let latest = reports.iter().max_by_key(|r| r.created_at);
 
+        // Gap #23: Apply ValidatorStrictness
+        let strictness = stores.config.strategy.validator_strictness;
         match latest {
-            Some(report) => {
-                if report.verdict == ValidationVerdict::Fail {
-                    return Some(RpcError::validation_required(collection, id));
-                }
-                // Pass or Warn → allowed
-                None
-            }
+            Some(report) => match report.verdict {
+                ValidationVerdict::Fail => match strictness {
+                    crate::config::ValidatorStrictness::SuggestOnly => None,
+                    _ => Some(RpcError::validation_required(collection, id)),
+                },
+                ValidationVerdict::Warn => match strictness {
+                    crate::config::ValidatorStrictness::HardFailOnAnyAmbiguity => {
+                        Some(RpcError::validation_required(collection, id))
+                    }
+                    _ => None,
+                },
+                ValidationVerdict::Pass => None,
+            },
             None => {
                 // No report exists → block
                 Some(RpcError::validation_required(collection, id))
@@ -3708,6 +3716,30 @@ mod tests {
 
     /// Creates stores with TaskStore AND a validator (DocValidator placeholder via Arc).
     /// This activates the validation gate for Draft → Active transitions.
+    fn test_stores_with_validator_strictness(strictness: crate::config::ValidatorStrictness) -> Arc<Stores> {
+        let id = crate::id::generate_id();
+        let dir = std::env::temp_dir().join(format!("loopr-handler-test-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .expect("git init failed");
+        let mut store = taskstore::Store::open(&dir).unwrap();
+        store.rebuild_indexes::<Plan>().unwrap();
+        store.rebuild_indexes::<ValidationReport>().unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
+        let validator_config = crate::config::ValidatorConfig {
+            enabled: true,
+            api_key_env: "NONEXISTENT_TEST_KEY".to_string(),
+            ..crate::config::ValidatorConfig::default()
+        };
+        stores.validator = Some(Arc::new(crate::validator::DocValidator::new(validator_config)));
+        stores.config.strategy.validator_strictness = strictness;
+        Arc::new(stores)
+    }
+
     fn test_stores_with_validator() -> Arc<Stores> {
         let id = crate::id::generate_id();
         let dir = std::env::temp_dir().join(format!("loopr-handler-test-{id}"));
@@ -8632,7 +8664,7 @@ mod tests {
 
     #[test]
     fn test_plan_transition_allowed_with_warn_report() {
-        let stores = test_stores_with_validator();
+        let stores = test_stores_with_validator_strictness(crate::config::ValidatorStrictness::AllowAmbiguityWithFlags);
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 

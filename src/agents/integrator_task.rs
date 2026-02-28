@@ -203,23 +203,74 @@ pub fn run_integrator_cycle(
         }
     }
 
-    // 5. Reject stale bundles
+    // 5. Handle stale bundles per StalePolicy (Gaps #19, #20)
+    let stale_policy = stores.config.strategy.stale_policy;
     for stale_id in &stale_bundle_ids {
-        let resp = bridge.request(
-            "bundle.transition",
-            serde_json::json!({
-                "id": stale_id,
-                "target_status": "Rejected",
-                "role": "integrator",
-            }),
-        );
-        if resp.is_error() {
-            warn!(
-                "Integrator: failed to reject stale bundle {}: {:?}",
-                stale_id, resp.error
-            );
-        } else {
-            info!("Integrator: rejected stale bundle {}", stale_id);
+        match stale_policy {
+            crate::config::StalePolicy::RejectIfStale => {
+                let resp = bridge.request(
+                    "bundle.transition",
+                    serde_json::json!({
+                        "id": stale_id,
+                        "target_status": "Rejected",
+                        "role": "integrator",
+                    }),
+                );
+                if resp.is_error() {
+                    warn!(
+                        "Integrator: failed to reject stale bundle {}: {:?}",
+                        stale_id, resp.error
+                    );
+                } else {
+                    info!("Integrator: rejected stale bundle {}", stale_id);
+                }
+            }
+            crate::config::StalePolicy::ReplanAtSafePoint => {
+                // Reject the bundle but emit a replan event for the Coordinator
+                let resp = bridge.request(
+                    "bundle.transition",
+                    serde_json::json!({
+                        "id": stale_id,
+                        "target_status": "Rejected",
+                        "role": "integrator",
+                    }),
+                );
+                if !resp.is_error() {
+                    // Find the work_item_id for this bundle
+                    let wi_id = stores
+                        .bundles
+                        .read()
+                        .unwrap()
+                        .get(stale_id.as_str())
+                        .map(|b| b.work_item_id.clone())
+                        .unwrap_or_default();
+                    let _ = bridge.event_tx().send(DaemonEvent::new(
+                        "bundle.stale_replan_needed",
+                        serde_json::json!({"bundle_id": stale_id, "work_item_id": wi_id, "reason": "stale_base_tick"}),
+                    ));
+                    info!("Integrator: rejected stale bundle {} (replan at safe point)", stale_id);
+                }
+            }
+            crate::config::StalePolicy::AutoReplayAndVerify => {
+                // Refresh worktree and update bundle's base_tick_id to latest
+                let refresh_resp = bridge.request("worktree.refresh", serde_json::json!({}));
+                if refresh_resp.is_error() {
+                    // Can't refresh — fall back to reject
+                    let _ = bridge.request(
+                        "bundle.transition",
+                        serde_json::json!({"id": stale_id, "target_status": "Rejected", "role": "integrator"}),
+                    );
+                    warn!("Integrator: auto-replay failed for bundle {}, rejected", stale_id);
+                } else {
+                    // Update bundle's base_tick_id to latest and move to valid
+                    let _ = bridge.request(
+                        "bundle.update",
+                        serde_json::json!({"id": stale_id, "base_tick_id": latest_tick_id}),
+                    );
+                    valid_bundle_ids.push(stale_id.clone());
+                    info!("Integrator: auto-replayed stale bundle {}", stale_id);
+                }
+            }
         }
     }
 
@@ -231,6 +282,34 @@ pub fn run_integrator_cycle(
 
     if valid_bundle_ids.is_empty() {
         return Ok(IntegratorCycleResult::Idle);
+    }
+
+    // Gap #21: TickCadence::Batched check
+    match &stores.config.strategy.tick_cadence {
+        crate::config::TickCadence::Continuous => {
+            // Process immediately — current behavior
+        }
+        crate::config::TickCadence::Batched {
+            min_bundles,
+            timeout_secs,
+        } => {
+            if (valid_bundle_ids.len() as u32) < *min_bundles {
+                // Check if timeout elapsed since earliest accepted bundle
+                let earliest = {
+                    let bundles = stores.bundles.read().unwrap();
+                    valid_bundle_ids
+                        .iter()
+                        .filter_map(|id| bundles.get(id.as_str()).map(|b| b.updated_at))
+                        .min()
+                        .unwrap_or(0)
+                };
+                let elapsed_secs = (crate::id::now_millis() - earliest) / 1000;
+                if elapsed_secs < *timeout_secs as i64 {
+                    return Ok(IntegratorCycleResult::Idle); // Wait for more bundles or timeout
+                }
+                // Timeout elapsed — proceed with what we have
+            }
+        }
     }
 
     // 6. Create Tick
