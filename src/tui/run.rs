@@ -434,7 +434,7 @@ mod tests {
             "wi1".into(),
             None,
             "feature/test".into(),
-            "Test bundle".into(),
+            vec!["Test bundle".into()],
         ));
         app.state.ticks.push(Tick::new(1));
 
@@ -941,7 +941,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-bundle-{}.sock", crate::id::generate_id()));
 
-        let mock_bundle = Bundle::new("wi-1".into(), None, "feature/test".into(), "Test bundle".into());
+        let mock_bundle = Bundle::new("wi-1".into(), None, "feature/test".into(), vec!["Test bundle".into()]);
         let bundles_json = serde_json::to_value(vec![mock_bundle]).unwrap();
 
         let server = IpcServer::new(&path);
@@ -1323,9 +1323,12 @@ mod tests {
         app.state
             .work_items
             .push(WorkItem::new("ph1".into(), "WI 1".into(), "desc".into()));
-        app.state
-            .bundles
-            .push(Bundle::new("wi1".into(), None, "feature/test".into(), "claims".into()));
+        app.state.bundles.push(Bundle::new(
+            "wi1".into(),
+            None,
+            "feature/test".into(),
+            vec!["claims".into()],
+        ));
         app.state.ticks.push(Tick::new(1));
         app.state.learnings.push(crate::domain::learning::Learning::new(
             "wi-1".into(),

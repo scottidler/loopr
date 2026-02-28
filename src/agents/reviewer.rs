@@ -304,7 +304,7 @@ mod tests {
             wi_id,
             Some("tick-001".into()),
             "feature/test".into(),
-            "Added test module with basic functionality".into(),
+            vec!["Added test module with basic functionality".into()],
         );
         bundle.status = BundleStatus::Triaged;
         bundle.touched_paths = vec!["src/test.rs".into(), "src/main.rs".into()];

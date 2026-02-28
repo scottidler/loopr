@@ -556,7 +556,7 @@ mod tests {
             "wi-1".into(),
             Some("tick-1".into()),
             "feature/test".into(),
-            "Test claims".into(),
+            vec!["Test claims".into()],
         );
         let id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(id.clone(), bundle);
@@ -638,7 +638,7 @@ mod tests {
             "wi-1".into(),
             Some("tick-1".into()),
             "feature/orphaned".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         bundle.status = BundleStatus::Integrating;
         let b_id = bundle.id.clone();
@@ -649,7 +649,7 @@ mod tests {
             "wi-2".into(),
             Some("tick-1".into()),
             "feature/normal".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         let b2_id = bundle2.id.clone();
         ctx.stores.bundles.write().unwrap().insert(b2_id.clone(), bundle2);
@@ -676,7 +676,7 @@ mod tests {
             "wi-1".into(),
             Some("tick-1".into()),
             "feature/orphaned".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         bundle.status = BundleStatus::Integrating;
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
@@ -696,7 +696,7 @@ mod tests {
         ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
 
         // Proposed Bundle — not orphaned
-        let bundle = Bundle::new("wi-1".into(), None, "feature/ok".into(), "claims".into());
+        let bundle = Bundle::new("wi-1".into(), None, "feature/ok".into(), vec!["claims".into()]);
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let recovered = ctx.recover_orphaned_records();
@@ -786,7 +786,7 @@ mod tests {
             "wi-1".into(),
             Some("tick-1".into()),
             "feature/orphaned".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         bundle.status = BundleStatus::Integrating;
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);

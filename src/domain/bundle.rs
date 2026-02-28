@@ -132,6 +132,32 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
     ]
 }
 
+/// Backward-compatible deserialization for claims: accepts both String and Vec<String>.
+fn deserialize_claims<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+    struct ClaimsVisitor;
+    impl<'de> de::Visitor<'de> for ClaimsVisitor {
+        type Value = Vec<String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a string or array of strings")
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(if v.is_empty() { Vec::new() } else { vec![v.to_string()] })
+        }
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            let mut v = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                v.push(s);
+            }
+            Ok(v)
+        }
+    }
+    deserializer.deserialize_any(ClaimsVisitor)
+}
+
 /// A proposed change set produced from a worktree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bundle {
@@ -140,7 +166,8 @@ pub struct Bundle {
     pub base_tick_id: Option<String>,
     pub branch_name: String,
     pub touched_paths: Vec<String>,
-    pub claims: String,
+    #[serde(deserialize_with = "deserialize_claims")]
+    pub claims: Vec<String>,
     pub verification: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -152,7 +179,7 @@ pub struct Bundle {
 }
 
 impl Bundle {
-    pub fn new(work_item_id: String, base_tick_id: Option<String>, branch_name: String, claims: String) -> Self {
+    pub fn new(work_item_id: String, base_tick_id: Option<String>, branch_name: String, claims: Vec<String>) -> Self {
         let now = id::now_millis();
         Self {
             id: id::generate_id(),
@@ -240,12 +267,12 @@ mod tests {
             "wi-123".to_string(),
             Some("tick-001".to_string()),
             "feature/jwt".to_string(),
-            "Add JWT signing".to_string(),
+            vec!["Add JWT signing".into()],
         );
         assert_eq!(b.work_item_id, "wi-123");
         assert_eq!(b.base_tick_id, Some("tick-001".to_string()));
         assert_eq!(b.branch_name, "feature/jwt");
-        assert_eq!(b.claims, "Add JWT signing");
+        assert_eq!(b.claims, vec!["Add JWT signing".to_string()]);
         assert!(b.verification.is_empty());
         assert_eq!(b.status, BundleStatus::Proposed);
         assert!(b.touched_paths.is_empty());
@@ -260,7 +287,7 @@ mod tests {
             "wi-456".to_string(),
             None,
             "feature/init".to_string(),
-            "Initial setup".to_string(),
+            vec!["Initial setup".into()],
         );
         assert!(b.base_tick_id.is_none());
     }
@@ -271,7 +298,7 @@ mod tests {
             "wi-789".to_string(),
             Some("tick-002".to_string()),
             "fix/auth".to_string(),
-            "Fix auth bug".to_string(),
+            vec!["Fix auth bug".into()],
         );
         b.touched_paths = vec!["src/auth.rs".to_string(), "src/main.rs".to_string()];
         b.verification = "cargo test passed".to_string();
@@ -290,8 +317,8 @@ mod tests {
 
     #[test]
     fn test_bundle_unique_ids() {
-        let b1 = Bundle::new("wi".to_string(), None, "a".to_string(), "".to_string());
-        let b2 = Bundle::new("wi".to_string(), None, "b".to_string(), "".to_string());
+        let b1 = Bundle::new("wi".to_string(), None, "a".to_string(), vec![]);
+        let b2 = Bundle::new("wi".to_string(), None, "b".to_string(), vec![]);
         assert_ne!(b1.id, b2.id);
     }
 
@@ -498,13 +525,13 @@ mod tests {
 
     #[test]
     fn test_record_id() {
-        let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        let b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
         assert_eq!(Record::id(&b), b.id);
     }
 
     #[test]
     fn test_record_updated_at() {
-        let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        let b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
         assert_eq!(Record::updated_at(&b), b.updated_at);
     }
 
@@ -515,7 +542,7 @@ mod tests {
 
     #[test]
     fn test_record_indexed_fields() {
-        let b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        let b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
         let fields = b.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Proposed".to_string())));
         assert_eq!(
@@ -527,9 +554,40 @@ mod tests {
 
     #[test]
     fn test_record_indexed_fields_reflect_status() {
-        let mut b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+        let mut b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
         b.status = BundleStatus::Merged;
         let fields = b.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Merged".to_string())));
+    }
+
+    // --- M1: Claims backward compatibility tests ---
+
+    #[test]
+    fn test_claims_deserialize_from_string() {
+        let json = r#"{"id":"b-1","work_item_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":"old string claim","verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
+        let b: Bundle = serde_json::from_str(json).unwrap();
+        assert_eq!(b.claims, vec!["old string claim".to_string()]);
+    }
+
+    #[test]
+    fn test_claims_deserialize_from_array() {
+        let json = r#"{"id":"b-2","work_item_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":["c1","c2"],"verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
+        let b: Bundle = serde_json::from_str(json).unwrap();
+        assert_eq!(b.claims, vec!["c1".to_string(), "c2".to_string()]);
+    }
+
+    #[test]
+    fn test_claims_deserialize_from_empty_string() {
+        let json = r#"{"id":"b-3","work_item_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":"","verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
+        let b: Bundle = serde_json::from_str(json).unwrap();
+        assert!(b.claims.is_empty());
+    }
+
+    #[test]
+    fn test_claims_vec_roundtrip() {
+        let b = Bundle::new("wi-1".into(), None, "b".into(), vec!["claim1".into(), "claim2".into()]);
+        let json = serde_json::to_string(&b).unwrap();
+        let restored: Bundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.claims, vec!["claim1".to_string(), "claim2".to_string()]);
     }
 }

@@ -779,7 +779,7 @@ mod tests {
         #[test]
         fn bundle_serde_all_statuses() {
             for status in &ALL_STATES {
-                let mut b = Bundle::new("wi-1".into(), None, "branch".into(), "claims".into());
+                let mut b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
                 b.status = *status;
                 let json = serde_json::to_string(&b).unwrap();
                 let restored: Bundle = serde_json::from_str(&json).unwrap();

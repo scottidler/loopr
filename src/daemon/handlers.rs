@@ -1428,12 +1428,18 @@ fn handle_bundle_create(
         _ => {}
     }
 
-    let claims = req
-        .params
-        .get("claims")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    // M1: Parse claims as array (backward-compat: also accepts string)
+    let claims: Vec<String> = match req.params.get("claims") {
+        Some(serde_json::Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(serde_json::Value::String(s)) => {
+            if s.is_empty() {
+                Vec::new()
+            } else {
+                vec![s.clone()]
+            }
+        }
+        _ => Vec::new(),
+    };
 
     let description = req
         .params
@@ -1944,7 +1950,22 @@ fn handle_learning_create(
         return DaemonResponse::err(req.id, RpcError::invalid_params("content is required"));
     }
 
-    let learning = Learning::new(source_id, scope, content);
+    let mut learning = Learning::new(source_id, scope, content);
+
+    // M3: Parse applicable_roles
+    if let Some(roles_val) = req.params.get("applicable_roles")
+        && let Ok(roles) = serde_json::from_value::<Vec<Role>>(roles_val.clone())
+    {
+        learning.applicable_roles = Some(roles);
+    }
+
+    // M4: Parse resource_tags
+    if let Some(tags_val) = req.params.get("resource_tags")
+        && let Ok(tags) = serde_json::from_value::<Vec<String>>(tags_val.clone())
+    {
+        learning.resource_tags = tags;
+    }
+
     let learning_json = match serde_json::to_value(&learning) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -3699,8 +3720,19 @@ fn handle_bundle_update(
         }
         bundle.touched_paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
     }
-    if let Some(claims) = req.params.get("claims").and_then(|v| v.as_str()) {
-        bundle.claims = claims.to_string();
+    // M1: Parse claims as array (backward-compat: also accepts string)
+    if let Some(claims_val) = req.params.get("claims") {
+        bundle.claims = match claims_val {
+            serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            serde_json::Value::String(s) => {
+                if s.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![s.clone()]
+                }
+            }
+            _ => Vec::new(),
+        };
     }
     if let Some(verification) = req.params.get("verification").and_then(|v| v.as_str()) {
         bundle.verification = verification.to_string();
@@ -5995,7 +6027,7 @@ mod tests {
         let store = stores.store.as_ref().unwrap().lock().unwrap();
         let retrieved: Option<Bundle> = store.get(&bundle_id).unwrap();
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().claims, "Persisted bundle");
+        assert_eq!(retrieved.unwrap().claims, vec!["Persisted bundle".to_string()]);
     }
 
     #[test]
@@ -6021,7 +6053,7 @@ mod tests {
         assert_eq!(result["work_item_id"], wi_id);
         assert_eq!(result["branch_name"], "feature/auth");
         assert_eq!(result["base_tick_id"], "tick-001");
-        assert_eq!(result["claims"], "Add JWT signing");
+        assert_eq!(result["claims"], serde_json::json!(["Add JWT signing"]));
         assert_eq!(result["status"], "Proposed");
         assert_eq!(stores.bundles.read().unwrap().len(), 1);
     }

@@ -16,10 +16,15 @@ fn default_confidence() -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LearningScope {
+    #[serde(alias = "WorkItem", alias = "work_item")]
     WorkItem,
+    #[serde(alias = "Phase")]
     Phase,
+    #[serde(alias = "Spec")]
     Spec,
+    #[serde(alias = "Plan")]
     Plan,
+    #[serde(alias = "Global")]
     Global,
 }
 
@@ -550,5 +555,50 @@ mod tests {
         l.promoted = true;
         let fields = l.indexed_fields();
         assert_eq!(fields.get("promoted"), Some(&IndexValue::String("true".to_string())));
+    }
+
+    // --- M2: LearningScope alias tests ---
+
+    #[test]
+    fn test_learning_scope_pascal_case_alias() {
+        let scope: LearningScope = serde_json::from_str("\"Phase\"").unwrap();
+        assert_eq!(scope, LearningScope::Phase);
+    }
+
+    #[test]
+    fn test_learning_scope_lowercase_canonical() {
+        let scope: LearningScope = serde_json::from_str("\"phase\"").unwrap();
+        assert_eq!(scope, LearningScope::Phase);
+    }
+
+    #[test]
+    fn test_learning_scope_work_item_alias() {
+        // snake_case alias
+        let scope: LearningScope = serde_json::from_str("\"work_item\"").unwrap();
+        assert_eq!(scope, LearningScope::WorkItem);
+        // PascalCase alias
+        let scope2: LearningScope = serde_json::from_str("\"WorkItem\"").unwrap();
+        assert_eq!(scope2, LearningScope::WorkItem);
+    }
+
+    #[test]
+    fn test_learning_scope_all_aliases() {
+        for (input, expected) in [
+            ("\"phase\"", LearningScope::Phase),
+            ("\"Phase\"", LearningScope::Phase),
+            ("\"spec\"", LearningScope::Spec),
+            ("\"Spec\"", LearningScope::Spec),
+            ("\"plan\"", LearningScope::Plan),
+            ("\"Plan\"", LearningScope::Plan),
+            ("\"global\"", LearningScope::Global),
+            ("\"Global\"", LearningScope::Global),
+            ("\"workitem\"", LearningScope::WorkItem),
+            ("\"WorkItem\"", LearningScope::WorkItem),
+            ("\"work_item\"", LearningScope::WorkItem),
+        ] {
+            let scope: LearningScope =
+                serde_json::from_str(input).unwrap_or_else(|e| panic!("Failed to deserialize {}: {}", input, e));
+            assert_eq!(scope, expected, "Failed for input {}", input);
+        }
     }
 }

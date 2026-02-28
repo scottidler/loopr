@@ -979,11 +979,12 @@ async fn run_coordinator_iteration(
                     }),
                 );
                 // Create a Learning about the retry exhaustion
+                // M2: Use lowercase scope to match LearningScope serde format
                 let _ = bridge.request(
                     "learning.create",
                     serde_json::json!({
                         "content": format!("WorkItem '{}' abandoned after {} failed attempts", target_id, attempts),
-                        "scope": "Phase",
+                        "scope": "phase",
                         "source_id": target_id,
                     }),
                 );
@@ -1415,7 +1416,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), "claims".into());
+        let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let summary = build_state_summary(&stores);
@@ -3103,7 +3104,7 @@ mod tests {
         stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
 
         // Create a merged bundle for that WI
-        let mut bundle = Bundle::new(wi_id.clone(), None, "feature/test".into(), "claim".into());
+        let mut bundle = Bundle::new(wi_id.clone(), None, "feature/test".into(), vec!["claim".into()]);
         bundle.status = BundleStatus::Merged;
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
@@ -3130,7 +3131,7 @@ mod tests {
         stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
 
         // Create a merged bundle for that WI
-        let mut bundle = Bundle::new(wi_id.clone(), None, "feature/done".into(), "claim".into());
+        let mut bundle = Bundle::new(wi_id.clone(), None, "feature/done".into(), vec!["claim".into()]);
         bundle.status = BundleStatus::Merged;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 

@@ -252,8 +252,31 @@ pub fn run_integrator_cycle(
                 }
             }
             crate::config::StalePolicy::AutoReplayAndVerify => {
-                // Refresh worktree and update bundle's base_tick_id to latest
-                let refresh_resp = bridge.request("worktree.refresh", serde_json::json!({}));
+                // M5: Pass work_item_id and new_base_ref to worktree.refresh
+                let wi_id = {
+                    let bundles = stores.bundles.read().unwrap();
+                    bundles
+                        .get(stale_id.as_str())
+                        .map(|b| b.work_item_id.clone())
+                        .unwrap_or_default()
+                };
+                let new_base_ref = latest_tick_id
+                    .as_ref()
+                    .and_then(|tid| {
+                        let ticks = stores.ticks.read().unwrap();
+                        ticks
+                            .values()
+                            .find(|t| t.id == *tid)
+                            .and_then(|t| t.integration_sha.clone())
+                    })
+                    .unwrap_or_else(|| "HEAD".to_string());
+                let refresh_resp = bridge.request(
+                    "worktree.refresh",
+                    serde_json::json!({
+                        "work_item_id": wi_id,
+                        "new_base_ref": new_base_ref,
+                    }),
+                );
                 if refresh_resp.is_error() {
                     // Can't refresh — fall back to reject
                     let _ = bridge.request(
@@ -1023,7 +1046,7 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         // Add an accepted bundle
-        let bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), "claims".into());
+        let bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         let mut bundle = bundle;
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
@@ -1057,7 +1080,7 @@ mod tests {
         let config = test_config(); // "true" command → passes
 
         // Add an accepted bundle with no base_tick_id (first tick scenario)
-        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), "claims".into());
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         bundle.status = BundleStatus::Accepted;
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
@@ -1083,7 +1106,7 @@ mod tests {
         let config = failing_config(); // "false" command → fails
 
         // Add an accepted bundle
-        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), "claims".into());
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         bundle.status = BundleStatus::Accepted;
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
@@ -1119,7 +1142,7 @@ mod tests {
             "wi-1".into(),
             Some("wrong-tick-id".into()),
             "feature/x".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         bundle.status = BundleStatus::Accepted;
         let bundle_id = bundle.id.clone();
@@ -1157,7 +1180,7 @@ mod tests {
             "wi-1".into(),
             Some(published_tick_id.clone()),
             "feature/valid".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         valid_bundle.status = BundleStatus::Accepted;
         let valid_id = valid_bundle.id.clone();
@@ -1172,7 +1195,7 @@ mod tests {
             "wi-2".into(),
             Some("old-tick-id".into()),
             "feature/stale".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         stale_bundle.status = BundleStatus::Accepted;
         let stale_id = stale_bundle.id.clone();
@@ -1270,7 +1293,7 @@ mod tests {
             "wi-1".into(),
             Some("wrong-id".into()),
             "feature/x".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         bundle.status = BundleStatus::Accepted;
         let bundle_id = bundle.id.clone();
@@ -1323,7 +1346,7 @@ mod tests {
             "wi-1".into(),
             Some("wrong-id".into()),
             "feature/x".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         bundle.status = BundleStatus::Accepted;
         let bundle_id = bundle.id.clone();
@@ -1346,7 +1369,7 @@ mod tests {
             "wi-2".into(),
             Some(published_tick_id.clone()),
             "feature/valid".into(),
-            "claims".into(),
+            vec!["claims".into()],
         );
         valid_bundle.status = BundleStatus::Accepted;
         let valid_id = valid_bundle.id.clone();
@@ -1426,7 +1449,7 @@ mod tests {
             session_timeout_secs: None,
         };
 
-        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), "claims".into());
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -1452,7 +1475,7 @@ mod tests {
         let config = test_config();
 
         // Add two accepted bundles: one valid, one we'll manually set to wrong state
-        let mut b1 = Bundle::new("wi-1".into(), None, "feature/a".into(), "claims".into());
+        let mut b1 = Bundle::new("wi-1".into(), None, "feature/a".into(), vec!["claims".into()]);
         b1.status = BundleStatus::Accepted;
         let b1_id = b1.id.clone();
         stores.bundles.write().unwrap().insert(b1.id.clone(), b1);
@@ -1486,7 +1509,7 @@ mod tests {
             session_timeout_secs: None,
         };
 
-        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), "claims".into());
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -1514,7 +1537,7 @@ mod tests {
         };
 
         // Need new accepted bundle since previous was processed
-        let mut bundle2 = Bundle::new("wi-2".into(), None, "feature/y".into(), "claims".into());
+        let mut bundle2 = Bundle::new("wi-2".into(), None, "feature/y".into(), vec!["claims".into()]);
         bundle2.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle2.id.clone(), bundle2);
 
@@ -1536,7 +1559,7 @@ mod tests {
         let (bridge, _) = test_bridge(stores.clone(), &dir);
         let config = failing_config();
 
-        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), "claims".into());
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 

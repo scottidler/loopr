@@ -212,7 +212,7 @@ pub struct ContextBuilder<'a> {
     work_item_id: Option<String>,
     phase_id: Option<String>,
     // Optional sections
-    bundle_info: Option<(String, String, Vec<String>)>, // (id, claims, touched_paths)
+    bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, touched_paths)
     bundle_diff: Option<String>,
     tools: Vec<String>,
     previous_summary: Option<String>,
@@ -461,7 +461,7 @@ impl<'a> ContextBuilder<'a> {
             let mut bundle_sec = String::new();
             bundle_sec.push_str("## Bundle Under Review\n\n");
             bundle_sec.push_str(&format!("**Bundle ID:** {}\n", id));
-            bundle_sec.push_str(&format!("**Claims:** {}\n", claims));
+            bundle_sec.push_str(&format!("**Claims:** {}\n", claims.join(", ")));
             if !paths.is_empty() {
                 bundle_sec.push_str("**Touched Paths:**\n");
                 for path in paths {
@@ -1096,7 +1096,7 @@ mod tests {
             wi_id.clone(),
             Some("tick-001".into()),
             "feature/test".into(),
-            "Added test module with basic functionality".into(),
+            vec!["Added test module with basic functionality".into()],
         );
         bundle.status = BundleStatus::Triaged;
         bundle.touched_paths = vec!["src/test.rs".into(), "src/main.rs".into()];
