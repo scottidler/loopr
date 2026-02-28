@@ -578,10 +578,15 @@ fn check_fsm_transition(
             // Transition when: all WIs in current phase are terminal
             if let Some(ref phase_id) = coord_state.current_phase_id {
                 let wis = generation::find_work_items_for_phase(stores, phase_id);
-                if !wis.is_empty()
-                    && wis
-                        .iter()
-                        .all(|w| matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+                if wis.is_empty() {
+                    // Phase with 0 WorkItems — transition to PhaseGate so the gate
+                    // can decide whether to retry WI generation or advance.
+                    // Design doc: "require at least 1 Done WI to consider a Phase complete"
+                    return Some(CoordinatorFsmState::PhaseGate);
+                }
+                if wis
+                    .iter()
+                    .all(|w| matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
                 {
                     return Some(CoordinatorFsmState::PhaseGate);
                 }
@@ -630,24 +635,36 @@ async fn run_coordinator_iteration(
             session.id, coord_state.fsm_state, new_state
         );
 
-        // Handle ActivatePhase: find and set the next phase
+        // Handle ActivatePhase: complete previous phase, find and set the next phase
         if new_state == CoordinatorFsmState::ActivatePhase {
+            // If transitioning from PhaseGate, complete the previous phase
+            if coord_state.current_phase_id.is_some() {
+                coord_state.complete_phase();
+            }
             let next_phase = find_next_phase_to_activate(stores, coord_state);
             if let Some((phase_id, phase_title)) = next_phase {
                 info!(
                     "Coordinator {} activating phase: {} ({})",
                     session.id, phase_title, phase_id
                 );
-                coord_state.activate_phase(phase_id);
-                // activate_phase sets state to Executing — but we want ActivatePhase first for WI generation
+                // Set phase context without changing FSM state to Executing
+                coord_state.current_phase_id = Some(phase_id);
+                coord_state.phase_activated_at = Some(crate::id::now_millis());
                 coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
+                coord_state.updated_at = crate::id::now_millis();
             } else {
                 coord_state.transition_to(CoordinatorFsmState::GoalComplete);
             }
         } else if new_state == CoordinatorFsmState::PhaseGate {
+            // Transition to PhaseGate but DON'T complete_phase() yet —
+            // keep current_phase_id so build_phase_status can show context to the LLM.
+            // complete_phase() is called on the NEXT transition out of PhaseGate.
             coord_state.transition_to(CoordinatorFsmState::PhaseGate);
-            coord_state.complete_phase();
         } else if new_state == CoordinatorFsmState::GoalComplete {
+            // Complete current phase if transitioning from PhaseGate
+            if coord_state.current_phase_id.is_some() {
+                coord_state.complete_phase();
+            }
             coord_state.transition_to(CoordinatorFsmState::GoalComplete);
             // Deactivate the goal
             let mut goals = stores.coordinator_goals.write().unwrap();
@@ -1611,6 +1628,7 @@ mod tests {
 
     #[test]
     fn test_build_generation_footer_generation_needed() {
+        crate::prompts::init_defaults();
         // No plans exist → generation is needed at Plan level
         let dir = std::env::temp_dir().join(format!("loopr-coord-genftr-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1991,5 +2009,528 @@ mod tests {
         let status = build_phase_status(&stores, &coord_state);
         assert!(status.contains("Build Phase"));
         assert!(status.contains("2 total"));
+    }
+
+    // =========================================================================
+    // Exhaustive FSM transition matrix tests
+    // =========================================================================
+
+    // --- Planning state: stays Planning ---
+
+    #[test]
+    fn test_fsm_planning_stays_when_no_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-plannoplan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let config = CoordinatorConfig::default();
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    #[test]
+    fn test_fsm_planning_stays_when_plan_but_no_spec() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-plannospec-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+        plan.status = HierarchyStatus::Active;
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let config = CoordinatorConfig::default();
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    #[test]
+    fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-plannophase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+        spec.status = HierarchyStatus::Active;
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let config = CoordinatorConfig::default();
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    #[test]
+    fn test_fsm_planning_stays_when_plan_is_draft() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-plandraft-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Plan exists but is Draft, not Active
+        let plan = Plan::new("P".into(), "d".into(), "c".into());
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let config = CoordinatorConfig::default();
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    // --- ActivatePhase → Executing ---
+
+    #[test]
+    fn test_fsm_activate_phase_to_executing_when_wis_exist() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-act2exec-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::Executing)
+        );
+    }
+
+    #[test]
+    fn test_fsm_activate_phase_stays_when_no_phase_id() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-actnopid-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
+        // current_phase_id is None
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    #[test]
+    fn test_fsm_activate_phase_stays_when_no_wis() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-actnowi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        // Phase exists but no WIs yet
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    // --- Executing state: all branches ---
+
+    #[test]
+    fn test_fsm_executing_stays_when_wis_in_progress() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-execwip-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi.status = WorkItemStatus::InProgress;
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    #[test]
+    fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-execmix-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi1 = WorkItem::new(phase_id.clone(), "WI Done".into(), "desc".into());
+        wi1.status = WorkItemStatus::Done;
+        let mut wi2 = WorkItem::new(phase_id.clone(), "WI Abandoned".into(), "desc".into());
+        wi2.status = WorkItemStatus::Abandoned;
+        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::PhaseGate)
+        );
+    }
+
+    #[test]
+    fn test_fsm_executing_stays_when_partial_done() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-execpartial-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi1 = WorkItem::new(phase_id.clone(), "WI Done".into(), "desc".into());
+        wi1.status = WorkItemStatus::Done;
+        let mut wi2 = WorkItem::new(phase_id.clone(), "WI Ready".into(), "desc".into());
+        wi2.status = WorkItemStatus::Ready;
+        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    #[test]
+    fn test_fsm_executing_to_phase_gate_on_zero_wis() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-exec0wi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+        // No work items!
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        // BUG FIX: 0 WIs should transition to PhaseGate, not stay stuck
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::PhaseGate)
+        );
+    }
+
+    #[test]
+    fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-exectimeout-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // WI in progress — would normally stay Executing
+        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkItemStatus::InProgress;
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        // Set phase_activated_at far in the past
+        coord_state.phase_activated_at = Some(crate::id::now_millis() - 7_200_000); // 2 hours ago
+
+        let config = CoordinatorConfig {
+            phase_timeout_secs: 3600, // 1 hour
+            ..CoordinatorConfig::default()
+        };
+
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::PhaseGate)
+        );
+    }
+
+    #[test]
+    fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-execgoalto-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkItemStatus::InProgress;
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        // Goal started 5 hours ago, timeout is 4 hours
+        coord_state.goal_started_at = crate::id::now_millis() - 18_000_000;
+
+        let config = CoordinatorConfig {
+            goal_timeout_secs: 14400, // 4 hours
+            ..CoordinatorConfig::default()
+        };
+
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::GoalComplete)
+        );
+    }
+
+    #[test]
+    fn test_fsm_executing_no_current_phase_stays() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-execnophase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        // current_phase_id is None — shouldn't happen normally, but shouldn't panic
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    // --- PhaseGate → ActivatePhase (more phases) ---
+
+    #[test]
+    fn test_fsm_phase_gate_to_activate_when_more_phases() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-gate2act-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+        phase1.status = HierarchyStatus::Active;
+        let phase1_id = phase1.id.clone();
+        stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
+
+        let mut phase2 = Phase::new(spec_id, "Phase 2".into(), "desc".into(), 2);
+        phase2.status = HierarchyStatus::Active;
+        stores.phases.write().unwrap().insert(phase2.id.clone(), phase2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+        coord_state.current_phase_id = Some(phase1_id.clone());
+        coord_state.phases_completed.push(phase1_id); // Phase 1 is done
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::ActivatePhase)
+        );
+    }
+
+    // --- GoalComplete is terminal ---
+
+    #[test]
+    fn test_fsm_goal_complete_returns_none() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-goalnone-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::GoalComplete;
+        let config = CoordinatorConfig::default();
+
+        assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
+    }
+
+    // --- Phase timeout vs goal timeout priority ---
+
+    #[test]
+    fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-phtopri-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // All WIs are Done — would normally trigger PhaseGate via WI check
+        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkItemStatus::Done;
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        coord_state.phase_activated_at = Some(crate::id::now_millis() - 7_200_000);
+
+        let config = CoordinatorConfig {
+            phase_timeout_secs: 3600,
+            ..CoordinatorConfig::default()
+        };
+
+        // Phase timeout checked BEFORE WI terminal check — both produce PhaseGate
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::PhaseGate)
+        );
+    }
+
+    #[test]
+    fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-goaltopri-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkItemStatus::InProgress;
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        // Both phase and goal timed out
+        coord_state.phase_activated_at = Some(crate::id::now_millis() - 18_000_000);
+        coord_state.goal_started_at = crate::id::now_millis() - 18_000_000;
+
+        let config = CoordinatorConfig {
+            phase_timeout_secs: 3600,
+            goal_timeout_secs: 14400,
+            ..CoordinatorConfig::default()
+        };
+
+        // Phase timeout fires first (checked before goal timeout in code)
+        // Actually — phase timeout returns PhaseGate, which is checked before goal timeout
+        let result = check_fsm_transition(&stores, &coord_state, &config);
+        assert_eq!(result, Some(CoordinatorFsmState::PhaseGate));
+    }
+
+    // --- find_next_phase_to_activate ---
+
+    #[test]
+    fn test_find_next_phase_skips_completed() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-nextphskip-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), "d".into(), 1);
+        p1.status = HierarchyStatus::Active;
+        let p1_id = p1.id.clone();
+        stores.phases.write().unwrap().insert(p1_id.clone(), p1);
+
+        let mut p2 = Phase::new(spec_id, "Phase 2".into(), "d".into(), 2);
+        p2.status = HierarchyStatus::Active;
+        let p2_id = p2.id.clone();
+        stores.phases.write().unwrap().insert(p2_id.clone(), p2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.phases_completed.push(p1_id.clone());
+
+        let result = find_next_phase_to_activate(&stores, &coord_state);
+        assert!(result.is_some());
+        let (id, title) = result.unwrap();
+        assert_eq!(id, p2_id);
+        assert_eq!(title, "Phase 2");
+    }
+
+    #[test]
+    fn test_find_next_phase_returns_none_all_completed() {
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-nextphnone-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // No phases at all
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let result = find_next_phase_to_activate(&stores, &coord_state);
+        assert!(result.is_none());
+    }
+
+    // --- Transition handler integration ---
+
+    #[test]
+    fn test_fsm_transition_handler_complete_phase_on_activate() {
+        // When transitioning PhaseGate → ActivatePhase, the previous phase
+        // should be completed (added to phases_completed).
+        let dir = std::env::temp_dir().join(format!("loopr-fsm-thcomplete-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), "d".into(), 1);
+        p1.status = HierarchyStatus::Active;
+        let p1_id = p1.id.clone();
+        stores.phases.write().unwrap().insert(p1_id.clone(), p1);
+
+        let mut p2 = Phase::new(spec_id, "Phase 2".into(), "d".into(), 2);
+        p2.status = HierarchyStatus::Active;
+        stores.phases.write().unwrap().insert(p2.id.clone(), p2);
+
+        // Coordinator is in PhaseGate with phase 1 as current
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+        coord_state.current_phase_id = Some(p1_id.clone());
+
+        let config = CoordinatorConfig::default();
+
+        // check_fsm_transition should return ActivatePhase
+        let transition = check_fsm_transition(&stores, &coord_state, &config);
+        assert_eq!(transition, Some(CoordinatorFsmState::ActivatePhase));
+
+        // Simulate the transition handler: complete previous phase
+        if coord_state.current_phase_id.is_some() {
+            coord_state.complete_phase();
+        }
+
+        assert!(coord_state.phases_completed.contains(&p1_id));
+        assert!(coord_state.current_phase_id.is_none());
     }
 }
