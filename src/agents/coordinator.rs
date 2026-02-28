@@ -56,7 +56,7 @@ Respond with a JSON array of actions:
 1. `create_plan`      {"action": "create_plan", "title": "...", "description": "...", "acceptance_criteria": "..."}
 2. `create_spec`      {"action": "create_spec", "plan_id": "...", "title": "...", "description": "..."}
 3. `create_phase`     {"action": "create_phase", "spec_id": "...", "title": "...", "description": "...", "order": 1}
-4. `create_work_item` {"action": "create_work_item", "phase_id": "...", "title": "...", "description": "..."}
+4. `create_work_item` {"action": "create_work_item", "phase_id": "...", "title": "...", "description": "...", "resource_tags": ["src/file.rs"], "acceptance_criteria": ["tests pass", "cargo build succeeds"]}
 5. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-item-id"}
 6. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
 7. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-item-id"}
@@ -69,19 +69,23 @@ Respond with a JSON array of actions:
 14. `need_help`       {"action": "need_help", "reason": "..."}
 15. `done`            {"action": "done", "summary": "..."}
 
+## Status Transitions
+
+- Plans/Specs/Phases (hierarchy): Draft → Active → Completed (or Abandoned)
+- WorkItems: Draft → Ready → InProgress → InReview → Integrated → Done (or Blocked, Abandoned)
+- Use "active" for plans/specs/phases, use "Ready" for work items (case-sensitive)
+
 ## Rules
 
 - Operate at ONE level per iteration. Don't advance all levels at once.
 - Check for existing Drafts before generating new documents.
-- Always validate documents before transitioning Draft → Active.
+- If validation fails with "validator is not enabled", skip validation and transition directly.
+- WorkItems MUST include acceptance_criteria and resource_tags when created.
 - Create WorkItems small enough to fit in half a context window.
 - Don't assign more agents than pool_size allows (check active sessions).
 - Acquire locks on resources BEFORE assigning Implementers.
 - When acceptance criteria are met, mark the Plan Complete.
-
-## Output Format
-
-Respond with ONLY a JSON array of actions."#;
+- ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking."#;
 
 /// Build a state summary string from stores for the Coordinator's context.
 ///

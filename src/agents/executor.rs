@@ -19,6 +19,21 @@ use crate::ipc::protocol::DaemonEvent;
 use crate::tools::{ToolResult, ToolRunner};
 use crate::worktree::manager::WorktreeManager;
 
+/// Normalize a collection name from plural to singular for IPC method dispatch.
+/// The LLM may emit "plans", "specs", "phases", "work_items", "bundles", "ticks"
+/// but IPC methods use singular: "plan", "spec", "phase", "work_item", "bundle", "tick".
+fn normalize_collection(collection: &str) -> &str {
+    match collection {
+        "plans" => "plan",
+        "specs" => "spec",
+        "phases" => "phase",
+        "work_items" => "work_item",
+        "bundles" => "bundle",
+        "ticks" => "tick",
+        other => other,
+    }
+}
+
 /// Create the LLM client. Fails if the API key env var is not set.
 fn create_llm_client(
     config: &crate::config::AgentRoleConfig,
@@ -454,7 +469,7 @@ pub async fn execute_action(
                 .map(|r| r.to_string())
                 .unwrap_or_else(|| agent_type.default_role().to_string());
             let params = serde_json::json!({ "id": id, "target_status": target_status, "role": effective_role });
-            let method = format!("{}.transition", collection);
+            let method = format!("{}.transition", normalize_collection(collection));
             let resp = bridge.request(&method, params);
             if resp.is_error() {
                 return Err(eyre!("transition failed: {:?}", resp.error));

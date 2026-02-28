@@ -153,7 +153,7 @@ impl TokenBudget {
                 learnings: 2000,
                 state_summary: 2000,
                 tools_or_actions: 500,
-                previous_summary: 1000,
+                previous_summary: 4000,
             },
             Role::Reviewer => Self {
                 system_prompt: 500,
@@ -979,7 +979,7 @@ mod tests {
         assert_eq!(budget.hierarchy, 2000);
         assert_eq!(budget.learnings, 2000);
         assert_eq!(budget.tools_or_actions, 500);
-        assert_eq!(budget.previous_summary, 1000);
+        assert_eq!(budget.previous_summary, 4000);
     }
 
     #[test]

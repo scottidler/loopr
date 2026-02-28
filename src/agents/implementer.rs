@@ -382,11 +382,34 @@ pub async fn run_implementer(
     Err(eyre!("implementer reached max iterations ({})", max_iterations))
 }
 
-fn format_action_summary(_action: &AgentAction, result: &ActionResult) -> String {
+/// Max chars of file/tool output to include in the action summary fed back to the LLM.
+const MAX_SUMMARY_CONTENT: usize = 4000;
+
+fn truncate_content(content: &str, max: usize) -> String {
+    if content.len() <= max {
+        content.to_string()
+    } else {
+        format!("{}...\n[truncated, {} total bytes]", &content[..max], content.len())
+    }
+}
+
+fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String {
     match result {
-        ActionResult::ToolRun(tr) => format!("ran {} (exit {})", tr.tool_name, tr.exit_code),
+        ActionResult::ToolRun(tr) => {
+            let mut s = format!("ran {} (exit {})", tr.tool_name, tr.exit_code);
+            if !tr.stdout.is_empty() {
+                s.push_str(&format!("\nstdout:\n```\n{}\n```", truncate_content(&tr.stdout, MAX_SUMMARY_CONTENT)));
+            }
+            if !tr.stderr.is_empty() {
+                s.push_str(&format!("\nstderr:\n```\n{}\n```", truncate_content(&tr.stderr, MAX_SUMMARY_CONTENT)));
+            }
+            s
+        }
         ActionResult::FileWritten(p) => format!("wrote {}", p),
-        ActionResult::FileRead(content) => format!("read file ({} bytes)", content.len()),
+        ActionResult::FileRead(content) => {
+            let path = if let AgentAction::ReadFile { path } = action { path.as_str() } else { "?" };
+            format!("read {} ({} bytes):\n```\n{}\n```", path, content.len(), truncate_content(content, MAX_SUMMARY_CONTENT))
+        }
         ActionResult::Committed(m) => format!("committed: {}", m),
         ActionResult::BundleProposed(d) => format!("proposed bundle: {}", d),
         ActionResult::Transitioned(d) => format!("transitioned: {}", d),
@@ -1025,7 +1048,7 @@ mod tests {
             // All action summaries should be present, joined by newline
             assert!(summary.contains("wrote a.txt"), "missing a.txt summary: {}", summary);
             assert!(summary.contains("wrote b.txt"), "missing b.txt summary: {}", summary);
-            assert!(summary.contains("read file"), "missing read summary: {}", summary);
+            assert!(summary.contains("read a.txt"), "missing read summary: {}", summary);
         } else {
             panic!("expected Continue, got: {:?}", outcome);
         }
