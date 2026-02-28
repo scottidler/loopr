@@ -544,4 +544,67 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_all_prompts_contain_json_output_instruction() {
+        init_defaults();
+        let s = store();
+        // All agent and generation prompts should instruct JSON output
+        let json_prompts: [(&str, &str); 10] = [
+            ("coordinator", &s.coordinator),
+            ("implementer", &s.implementer),
+            ("reviewer", &s.reviewer),
+            ("researcher", &s.researcher),
+            ("generation_plan", &s.generation_plan),
+            ("generation_spec", &s.generation_spec),
+            ("generation_phase", &s.generation_phase),
+            ("generation_workitem", &s.generation_workitem),
+            ("validator_plan", &s.validator_plan),
+            ("validator_spec", &s.validator_spec),
+        ];
+        for (name, content) in &json_prompts {
+            assert!(
+                content.contains("JSON"),
+                "{}.pmt must contain JSON output format instruction",
+                name,
+            );
+        }
+    }
+
+    #[test]
+    fn test_coordinator_pmt_has_error_handling_guidance() {
+        init_defaults();
+        let p = &store().coordinator;
+        assert!(p.contains("do NOT retry the same action immediately"));
+        assert!(p.contains("need_help"));
+        assert!(p.contains("Lock Management"));
+        assert!(p.contains("Failure Learning"));
+    }
+
+    #[test]
+    fn test_implementer_pmt_has_workflow_and_scope() {
+        init_defaults();
+        let p = &store().implementer;
+        assert!(p.contains("Workflow"));
+        assert!(p.contains("resource_tags"));
+        assert!(p.contains("propose_bundle"));
+    }
+
+    #[test]
+    fn test_reviewer_pmt_has_expanded_criteria() {
+        init_defaults();
+        let p = &store().reviewer;
+        assert!(p.contains("Concurrency"));
+        assert!(p.contains("Architecture"));
+        assert!(p.contains("Verdict Thresholds"));
+    }
+
+    #[test]
+    fn test_researcher_pmt_has_zero_result_handling() {
+        init_defaults();
+        let p = &store().researcher;
+        assert!(p.contains("Zero-Result Handling"));
+        assert!(p.contains("File Size Limits"));
+        assert!(p.contains("Learning Scope Values"));
+    }
 }

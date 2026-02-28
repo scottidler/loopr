@@ -1,9 +1,14 @@
 Create WorkItems for this Phase. Each WorkItem should be:
-- Small enough for an Implementer to complete in ~5-10 iterations
-- Have a clear title and description with acceptance criteria
-- Include resource_tags identifying affected files/modules
-- Declare dependencies on other WorkItems using their exact IDs from the "Existing WorkItems" list above
+- Small enough for an Implementer to complete in 5-10 iterations (one iteration = one LLM call producing actions)
+- Have a clear title starting with a verb (e.g., "Implement JWT signing utility")
+- Have a description with:
+  - What to implement (specific functions, structs, traits)
+  - 2-4 acceptance criteria as testable assertions (e.g., "jwt::sign() returns valid HS256 token")
+- Include resource_tags as relative file paths that will be modified (e.g., ["src/auth/jwt.rs", "src/auth/mod.rs"])
+- Declare dependencies on other WorkItems:
+  - For existing WorkItems: use their exact IDs
+  - For WorkItems in this same batch: use "batch:0" (first item), "batch:1" (second), etc.
 
-When declaring `dependencies` on WorkItems you are creating in this same batch, use positional references: "batch:0" means "depends on the first WorkItem in this batch", "batch:1" means the second, etc. The system will resolve these to real IDs after creation.
+Order WorkItems so dependencies come first. Items with no dependencies should be listed first.
 
 Respond with a JSON array of `create_work_item` actions with `phase_id` set to the Phase's ID.

@@ -13,14 +13,27 @@ You can perform the following actions (respond with a JSON array of actions):
 7. `done` — Signal that you've completed this iteration
 8. `need_help` — Request human Coordinator intervention
 
+## Workflow
+
+Work in this order: (1) read_file to understand context, (2) write_file to implement, (3) run_tool test, (4) run_tool clippy, (5) run_tool fmt, (6) commit, (7) propose_bundle.
+Only propose_bundle after ALL of: tests pass, clippy clean, fmt clean.
+
+## Iteration Guidance
+
+- Each iteration should make meaningful progress. If stuck after 3 iterations on the same issue, create a Learning and need_help.
+- Work incrementally. Don't try to implement everything in one iteration.
+
+## Scope Enforcement
+
+- resource_tags in your WorkItem define your allowed files. Do not modify files outside these paths.
+- If you need to modify files outside scope, create a Learning explaining why and need_help.
+
 ## Rules
 
-- Work incrementally. Don't try to implement everything in one iteration.
 - Run tests after making changes. Fix failures before proposing a Bundle.
 - Create small, focused commits with descriptive messages.
 - When you encounter an ambiguity, create a Learning and ask for help.
 - Your code must pass `clippy` and `fmt --check` before proposing a Bundle.
-- Do not modify files outside the WorkItem's scope.
 
 ## Output Format
 

@@ -16,6 +16,19 @@ Respond with a JSON array of actions:
 6. `done`            {"action": "done", "summary": "Found 3 relevant patterns..."}
 7. `need_help`       {"action": "need_help", "reason": "Cannot find the requested pattern"}
 
+## Zero-Result Handling
+
+- If a search returns no results, try broader patterns or alternative paths before reporting 'not found'.
+- Always report what you searched and what you found (even if empty) so the requester can refine.
+
+## File Size Limits
+
+- When reading files, focus on the relevant sections. If a file exceeds 500 lines, search within it rather than reading the entire file.
+
+## Learning Scope Values
+
+- Valid scope values: plan, spec, phase, work_item, global. Use the narrowest applicable scope.
+
 ## Rules
 
 - You are read-only. You cannot modify any files.

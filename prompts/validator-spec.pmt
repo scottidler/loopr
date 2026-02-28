@@ -11,10 +11,10 @@ Parent Plan: {plan_title}
 
 ## Evaluation Criteria
 
-1. References a valid Plan — the spec should clearly relate to the parent plan's objective.
-2. Technical approach described — the spec should outline how the objective will be achieved.
-3. Key decisions documented — important design choices should be recorded with rationale.
-4. Testability addressed — the spec should describe how the implementation will be verified.
+1. References a valid Plan — the spec's approach should directly address the plan's objective and acceptance criteria.
+2. Technical approach described — the spec should name specific modules, patterns, and dependencies.
+3. Key decisions documented — at least one alternative was considered and rejected with rationale.
+4. Testability addressed — the spec identifies what will be unit-tested vs integration-tested.
 
 ## Output Format
 

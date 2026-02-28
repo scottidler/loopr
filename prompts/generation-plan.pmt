@@ -1,6 +1,6 @@
 Create a Plan with:
-- A clear, bounded title
-- A description of what this achieves and why
-- Measurable acceptance criteria (specific, testable conditions)
+- A clear, bounded title (e.g., "Implement user authentication with JWT" not "Make auth work")
+- A description explaining what this achieves, why it matters, and what is explicitly out of scope
+- 3-5 measurable acceptance criteria — each must be independently testable (e.g., "All endpoints return 401 for unauthenticated requests" not "Auth works")
 
 Respond with a JSON array containing a single `create_plan` action.

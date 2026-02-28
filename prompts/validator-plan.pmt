@@ -12,9 +12,9 @@ Acceptance Criteria:
 
 ## Evaluation Criteria
 
-1. Clear objective stated — the plan should describe what it aims to achieve.
-2. Measurable acceptance criteria defined — there should be concrete criteria to determine when the plan is complete.
-3. Scope is bounded (not open-ended) — the plan should have a clear boundary of what is and isn't included.
+1. Clear objective stated — the plan should describe a specific, achievable outcome (not vague like 'improve performance').
+2. Measurable acceptance criteria defined — each criterion must be independently verifiable through tests or inspection.
+3. Scope is bounded — the plan explicitly states what is included AND what is excluded.
 
 ## Output Format
 

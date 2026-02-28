@@ -1,5 +1,10 @@
 Create a Spec for this Plan with:
-- A title describing the technical approach
-- A description covering: technical approach to satisfy the Plan, key design decisions with rationale, testability strategy, risks and dependencies
+- A title describing the technical approach (e.g., "JWT auth with middleware + SQLite session store")
+- A description covering:
+  - Technical approach: modules, patterns, external dependencies
+  - Key design decisions: what was chosen and why (e.g., "JWT over session cookies because stateless")
+  - Testability: unit test strategy, integration test strategy, what mocks are needed
+  - Risks: what could go wrong and mitigations
+  - Dependencies: external crates, APIs, or other Phases this depends on
 
 Respond with a JSON array containing a single `create_spec` action with `plan_id` set to the Plan's ID.

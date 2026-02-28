@@ -10,3 +10,8 @@
   ],
   "summary": "human-readable summary of the assessment"
 }
+
+Verdict rules:
+- "pass": No errors, no warnings. Document is ready for activation.
+- "warn": No errors, but 1+ warnings. Document can proceed but has minor gaps.
+- "fail": 1+ errors. Document must be revised before activation.
