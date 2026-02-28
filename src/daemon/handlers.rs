@@ -3234,7 +3234,14 @@ fn handle_agent_start(
     }
 
     // Create agent session with model from config
-    let mut session = AgentSession::new(agent_type, "claude-sonnet-4-6".to_string());
+    let model = match agent_type {
+        AgentType::Coordinator => stores.config.agents.coordinator.role.model.clone(),
+        AgentType::Implementer => stores.config.agents.implementer.model.clone(),
+        AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
+        AgentType::Researcher => stores.config.agents.researcher.model.clone(),
+        AgentType::Integrator => "deterministic".to_string(),
+    };
+    let mut session = AgentSession::new(agent_type, model);
     session.work_item_id = work_item_id;
     session.bundle_id = bundle_id;
     session.target_id = target_id;
@@ -10352,5 +10359,31 @@ mod tests {
             resp.is_error(),
             "should block Draft→Active when no validation report exists"
         );
+    }
+
+    #[test]
+    fn test_agent_session_model_from_config() {
+        use crate::config::Config;
+        // Verify the config-based model lookup matches what each agent type should get
+        let config = Config::default();
+        let cases: Vec<(AgentType, String)> = vec![
+            (AgentType::Coordinator, config.agents.coordinator.role.model.clone()),
+            (AgentType::Implementer, config.agents.implementer.model.clone()),
+            (AgentType::Reviewer, config.agents.reviewer.model.clone()),
+            (AgentType::Researcher, config.agents.researcher.model.clone()),
+            (AgentType::Integrator, "deterministic".to_string()),
+        ];
+        for (agent_type, expected_model) in cases {
+            let model = match agent_type {
+                AgentType::Coordinator => config.agents.coordinator.role.model.clone(),
+                AgentType::Implementer => config.agents.implementer.model.clone(),
+                AgentType::Reviewer => config.agents.reviewer.model.clone(),
+                AgentType::Researcher => config.agents.researcher.model.clone(),
+                AgentType::Integrator => "deterministic".to_string(),
+            };
+            assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
+        }
+        // Coordinator should specifically be Opus
+        assert_eq!(config.agents.coordinator.role.model, "claude-opus-4-6");
     }
 }

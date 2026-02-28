@@ -134,7 +134,7 @@ impl Default for CoordinatorConfig {
     fn default() -> Self {
         Self {
             role: AgentRoleConfig {
-                model: "claude-sonnet-4-6".to_string(),
+                model: "claude-opus-4-6".to_string(),
                 api_key_env: "ANTHROPIC_API_KEY".to_string(),
                 max_tokens: 8192,
                 max_iterations: u32::MAX,
