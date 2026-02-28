@@ -96,4 +96,24 @@ mod tests {
     fn test_proposal_record_collection_name() {
         assert_eq!(Proposal::collection_name(), "proposals");
     }
+
+    #[test]
+    fn test_proposal_record_id() {
+        let p = Proposal::new("Title".into(), "Desc".into(), "author-1".into());
+        assert_eq!(Record::id(&p), &p.id);
+    }
+
+    #[test]
+    fn test_proposal_record_updated_at() {
+        let p = Proposal::new("Title".into(), "Desc".into(), "author-1".into());
+        assert_eq!(Record::updated_at(&p), p.updated_at);
+    }
+
+    #[test]
+    fn test_proposal_record_indexed_fields() {
+        let p = Proposal::new("Title".into(), "Desc".into(), "author-1".into());
+        let fields = Record::indexed_fields(&p);
+        assert!(fields.contains_key("status"));
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Draft".to_string())));
+    }
 }

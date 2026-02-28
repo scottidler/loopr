@@ -97,4 +97,24 @@ mod tests {
     fn test_decision_record_collection_name() {
         assert_eq!(Decision::collection_name(), "decisions");
     }
+
+    #[test]
+    fn test_decision_record_id() {
+        let d = Decision::new("Title".into(), "Rationale".into(), "decider-1".into());
+        assert_eq!(Record::id(&d), &d.id);
+    }
+
+    #[test]
+    fn test_decision_record_updated_at() {
+        let d = Decision::new("Title".into(), "Rationale".into(), "decider-1".into());
+        assert_eq!(Record::updated_at(&d), d.updated_at);
+    }
+
+    #[test]
+    fn test_decision_record_indexed_fields() {
+        let d = Decision::new("Title".into(), "Rationale".into(), "decider-1".into());
+        let fields = Record::indexed_fields(&d);
+        assert!(fields.contains_key("status"));
+        assert_eq!(fields.get("status"), Some(&IndexValue::String("Pending".to_string())));
+    }
 }
