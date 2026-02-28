@@ -273,6 +273,45 @@ impl DaemonEvent {
             serde_json::to_value(event).unwrap_or_default(),
         )
     }
+
+    pub fn record_deleted(collection: &str, id: &str) -> Self {
+        Self::new(
+            "record.deleted",
+            serde_json::json!({ "collection": collection, "id": id }),
+        )
+    }
+
+    pub fn transition_rejected(collection: &str, id: &str, from: &str, to: &str, role: &str, reason: &str) -> Self {
+        Self::new(
+            "transition.rejected",
+            serde_json::json!({
+                "collection": collection,
+                "id": id,
+                "from": from,
+                "to": to,
+                "role": role,
+                "reason": reason,
+            }),
+        )
+    }
+
+    pub fn validation_started(tick_id: &str) -> Self {
+        Self::new("validation.started", serde_json::json!({ "tick_id": tick_id }))
+    }
+
+    pub fn validation_completed(tick_id: &str, success: bool, log: &str) -> Self {
+        Self::new(
+            "validation.completed",
+            serde_json::json!({ "tick_id": tick_id, "success": success, "log": log }),
+        )
+    }
+
+    pub fn learning_policy_contradicted(learning_id: &str) -> Self {
+        Self::new(
+            "learning.policy_contradicted",
+            serde_json::json!({ "learning_id": learning_id }),
+        )
+    }
 }
 
 /// Parse a raw JSON line into an IpcMessage.
@@ -441,5 +480,49 @@ mod tests {
     fn test_ipc_message_invalid_json() {
         let result = IpcMessage::from_json("not json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_event_record_deleted() {
+        let event = DaemonEvent::record_deleted("plans", "p1");
+        assert_eq!(event.event, "record.deleted");
+        assert_eq!(event.data["collection"], "plans");
+        assert_eq!(event.data["id"], "p1");
+    }
+
+    #[test]
+    fn test_event_transition_rejected() {
+        let event =
+            DaemonEvent::transition_rejected("plans", "p1", "Draft", "Active", "Coordinator", "validation required");
+        assert_eq!(event.event, "transition.rejected");
+        assert_eq!(event.data["collection"], "plans");
+        assert_eq!(event.data["id"], "p1");
+        assert_eq!(event.data["from"], "Draft");
+        assert_eq!(event.data["to"], "Active");
+        assert_eq!(event.data["role"], "Coordinator");
+        assert_eq!(event.data["reason"], "validation required");
+    }
+
+    #[test]
+    fn test_event_validation_started() {
+        let event = DaemonEvent::validation_started("t1");
+        assert_eq!(event.event, "validation.started");
+        assert_eq!(event.data["tick_id"], "t1");
+    }
+
+    #[test]
+    fn test_event_validation_completed() {
+        let event = DaemonEvent::validation_completed("t1", true, "all passed");
+        assert_eq!(event.event, "validation.completed");
+        assert_eq!(event.data["tick_id"], "t1");
+        assert_eq!(event.data["success"], true);
+        assert_eq!(event.data["log"], "all passed");
+    }
+
+    #[test]
+    fn test_event_learning_policy_contradicted() {
+        let event = DaemonEvent::learning_policy_contradicted("l1");
+        assert_eq!(event.event, "learning.policy_contradicted");
+        assert_eq!(event.data["learning_id"], "l1");
     }
 }

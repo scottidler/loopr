@@ -323,8 +323,12 @@ pub fn run_integrator_cycle(
         ));
     }
 
-    // 10. Run validation commands
+    // 10. Emit validation.started and run validation commands
+    let _ = bridge.event_tx().send(DaemonEvent::validation_started(&tick_id));
     let (passed, validation_log) = run_validation_commands(&config.validation_commands);
+    let _ = bridge
+        .event_tx()
+        .send(DaemonEvent::validation_completed(&tick_id, passed, &validation_log));
 
     // Update tick with validation log — clone-then-drop-then-persist
     let tick_to_persist = {

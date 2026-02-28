@@ -449,6 +449,14 @@ fn handle_plan_transition(
     let from = plan.status;
     let rules = hierarchy_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        let _ = event_tx.send(DaemonEvent::transition_rejected(
+            "plans",
+            &id,
+            &format!("{:?}", from),
+            &format!("{:?}", target_status),
+            &role.to_string(),
+            &e.to_string(),
+        ));
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
@@ -650,6 +658,14 @@ fn handle_spec_transition(
     let from = spec.status;
     let rules = hierarchy_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        let _ = event_tx.send(DaemonEvent::transition_rejected(
+            "specs",
+            &id,
+            &format!("{:?}", from),
+            &format!("{:?}", target_status),
+            &role.to_string(),
+            &e.to_string(),
+        ));
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
@@ -852,6 +868,14 @@ fn handle_phase_transition(
     let from = phase.status;
     let rules = hierarchy_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        let _ = event_tx.send(DaemonEvent::transition_rejected(
+            "phases",
+            &id,
+            &format!("{:?}", from),
+            &format!("{:?}", target_status),
+            &role.to_string(),
+            &e.to_string(),
+        ));
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
@@ -1090,6 +1114,14 @@ fn handle_work_item_transition(
     let from = wi.status;
     let rules = work_item_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        let _ = event_tx.send(DaemonEvent::transition_rejected(
+            "work_items",
+            &id,
+            &format!("{:?}", from),
+            &format!("{:?}", target_status),
+            &role.to_string(),
+            &e.to_string(),
+        ));
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
@@ -1352,6 +1384,14 @@ fn handle_bundle_transition(
 
     let rules = bundle_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        let _ = event_tx.send(DaemonEvent::transition_rejected(
+            "bundles",
+            &id,
+            &format!("{:?}", from),
+            &format!("{:?}", target_status),
+            &role.to_string(),
+            &e.to_string(),
+        ));
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
@@ -1556,6 +1596,14 @@ fn handle_tick_transition(
     let from = tick.status;
     let rules = tick_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
+        let _ = event_tx.send(DaemonEvent::transition_rejected(
+            "ticks",
+            &id,
+            &format!("{:?}", from),
+            &format!("{:?}", target_status),
+            &role.to_string(),
+            &e.to_string(),
+        ));
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
@@ -1789,6 +1837,7 @@ fn handle_learning_contradict(
         None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
     };
 
+    let was_promoted = learning.promoted;
     learning.contradict();
 
     // Persist to TaskStore if available
@@ -1804,6 +1853,9 @@ fn handle_learning_contradict(
     };
 
     let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+    if was_promoted {
+        let _ = event_tx.send(DaemonEvent::learning_policy_contradicted(&id));
+    }
 
     DaemonResponse::ok(req.id, learning_json)
 }
@@ -2366,8 +2418,14 @@ fn handle_integrator_validate(
         "Integrator",
     ));
 
+    // Emit validation.started event
+    let _ = event_tx.send(DaemonEvent::validation_started(&tick_id));
+
     // Run validation commands
     let (all_passed, validation_log) = run_validation_commands(&integrator_config.validation_commands);
+
+    // Emit validation.completed event
+    let _ = event_tx.send(DaemonEvent::validation_completed(&tick_id, all_passed, &validation_log));
 
     // Transition to Published or Failed based on results
     let final_status = if all_passed { TickStatus::Published } else { TickStatus::Failed };
@@ -7720,11 +7778,17 @@ mod tests {
             &ic,
             DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
         );
-        // Should get transition.completed (Sealing→Validating) and tick.published events
+        // Should get transition.completed (Sealing→Validating), validation.started,
+        // validation.completed, and tick.published events
         let event1 = rx.try_recv().unwrap();
         assert_eq!(event1.event, "transition.completed");
         let event2 = rx.try_recv().unwrap();
-        assert_eq!(event2.event, "tick.published");
+        assert_eq!(event2.event, "validation.started");
+        let event3 = rx.try_recv().unwrap();
+        assert_eq!(event3.event, "validation.completed");
+        assert_eq!(event3.data["success"], true);
+        let event4 = rx.try_recv().unwrap();
+        assert_eq!(event4.event, "tick.published");
     }
 
     // --- integrator.publish tests ---
