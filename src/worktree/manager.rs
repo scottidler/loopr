@@ -47,14 +47,14 @@ impl WorktreeManager {
 
     /// Create a worktree for a work item.
     ///
-    /// Runs: `git worktree add <path> -b agent/<work_item_id> <base_ref>`
-    pub fn create(&self, work_item_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
-        let path = self.worktree_dir.join(work_item_id);
+    /// Runs: `git worktree add <path> -b agent/<work_id> <base_ref>`
+    pub fn create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
+        let path = self.worktree_dir.join(work_id);
         if path.exists() {
-            return Err(WorktreeError::AlreadyExists(work_item_id.to_string()));
+            return Err(WorktreeError::AlreadyExists(work_id.to_string()));
         }
 
-        let branch = format!("agent/{}", work_item_id);
+        let branch = format!("agent/{}", work_id);
 
         // Delete stale branch from a previous failed run if it exists
         let _ = Command::new("git")
@@ -78,10 +78,10 @@ impl WorktreeManager {
     /// Refresh a worktree to the latest Published Tick's SHA (clears staleness).
     ///
     /// Runs: `git -C <worktree> rebase <new_base_ref>`
-    pub fn refresh(&self, work_item_id: &str, new_base_ref: &str) -> Result<(), WorktreeError> {
-        let path = self.worktree_dir.join(work_item_id);
+    pub fn refresh(&self, work_id: &str, new_base_ref: &str) -> Result<(), WorktreeError> {
+        let path = self.worktree_dir.join(work_id);
         if !path.exists() {
-            return Err(WorktreeError::NotFound(work_item_id.to_string()));
+            return Err(WorktreeError::NotFound(work_id.to_string()));
         }
 
         let output = Command::new("git")
@@ -99,10 +99,10 @@ impl WorktreeManager {
     /// Clean up a worktree after bundle is merged or abandoned.
     ///
     /// Runs: `git worktree remove <path>`
-    pub fn cleanup(&self, work_item_id: &str) -> Result<(), WorktreeError> {
-        let path = self.worktree_dir.join(work_item_id);
+    pub fn cleanup(&self, work_id: &str) -> Result<(), WorktreeError> {
+        let path = self.worktree_dir.join(work_id);
         if !path.exists() {
-            return Err(WorktreeError::NotFound(work_item_id.to_string()));
+            return Err(WorktreeError::NotFound(work_id.to_string()));
         }
 
         // Use --force to handle worktrees with uncommitted changes
@@ -142,13 +142,13 @@ impl WorktreeManager {
     }
 
     /// Get the worktree path for a work item.
-    pub fn worktree_path(&self, work_item_id: &str) -> PathBuf {
-        self.worktree_dir.join(work_item_id)
+    pub fn worktree_path(&self, work_id: &str) -> PathBuf {
+        self.worktree_dir.join(work_id)
     }
 
     /// Check if a worktree exists for a work item.
-    pub fn exists(&self, work_item_id: &str) -> bool {
-        self.worktree_dir.join(work_item_id).exists()
+    pub fn exists(&self, work_id: &str) -> bool {
+        self.worktree_dir.join(work_id).exists()
     }
 }
 

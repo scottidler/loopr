@@ -15,7 +15,7 @@ const DEFAULT_VALIDATOR_PHASE: &str = include_str!("../prompts/validator-phase.p
 const DEFAULT_GENERATION_PLAN: &str = include_str!("../prompts/generation-plan.pmt");
 const DEFAULT_GENERATION_SPEC: &str = include_str!("../prompts/generation-spec.pmt");
 const DEFAULT_GENERATION_PHASE: &str = include_str!("../prompts/generation-phase.pmt");
-const DEFAULT_GENERATION_WORKITEM: &str = include_str!("../prompts/generation-workitem.pmt");
+const DEFAULT_GENERATION_WORKITEM: &str = include_str!("../prompts/generation-work.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -29,7 +29,7 @@ pub struct PromptStore {
     pub generation_plan: String,
     pub generation_spec: String,
     pub generation_phase: String,
-    pub generation_workitem: String,
+    pub generation_work: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -71,7 +71,7 @@ pub fn init() {
         generation_plan: load("generation-plan.pmt", DEFAULT_GENERATION_PLAN),
         generation_spec: load("generation-spec.pmt", DEFAULT_GENERATION_SPEC),
         generation_phase: load("generation-phase.pmt", DEFAULT_GENERATION_PHASE),
-        generation_workitem: load("generation-workitem.pmt", DEFAULT_GENERATION_WORKITEM),
+        generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORKITEM),
     });
 }
 
@@ -89,7 +89,7 @@ pub fn init_defaults() {
         generation_plan: DEFAULT_GENERATION_PLAN.to_string(),
         generation_spec: DEFAULT_GENERATION_SPEC.to_string(),
         generation_phase: DEFAULT_GENERATION_PHASE.to_string(),
-        generation_workitem: DEFAULT_GENERATION_WORKITEM.to_string(),
+        generation_work: DEFAULT_GENERATION_WORKITEM.to_string(),
     });
 }
 
@@ -120,7 +120,7 @@ mod tests {
         assert!(!s.generation_plan.is_empty());
         assert!(!s.generation_spec.is_empty());
         assert!(!s.generation_phase.is_empty());
-        assert!(!s.generation_workitem.is_empty());
+        assert!(!s.generation_work.is_empty());
     }
 
     #[test]
@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(s.generation_plan, DEFAULT_GENERATION_PLAN);
         assert_eq!(s.generation_spec, DEFAULT_GENERATION_SPEC);
         assert_eq!(s.generation_phase, DEFAULT_GENERATION_PHASE);
-        assert_eq!(s.generation_workitem, DEFAULT_GENERATION_WORKITEM);
+        assert_eq!(s.generation_work, DEFAULT_GENERATION_WORKITEM);
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
             "create_plan",
             "create_spec",
             "create_phase",
-            "create_work_item",
+            "create_work",
             "assign_agent",
             "spawn_researcher",
             "acquire_lock",
@@ -244,7 +244,7 @@ mod tests {
             assert!(p.contains(action), "coordinator.pmt missing action: {}", action);
         }
         // Key rules
-        assert!(p.contains("Create ALL WorkItems for a Phase in a single batch"));
+        assert!(p.contains("Create ALL Works for a Phase in a single batch"));
         assert!(p.contains("ALWAYS respond with ONLY a JSON array"));
     }
 
@@ -452,12 +452,12 @@ mod tests {
     }
 
     #[test]
-    fn test_generation_workitem_pmt_content() {
+    fn test_generation_work_pmt_content() {
         init_defaults();
-        let p = &store().generation_workitem;
-        assert!(p.contains("Create WorkItems for this Phase"));
+        let p = &store().generation_work;
+        assert!(p.contains("Create Works for this Phase"));
         assert!(p.contains("resource_tags"));
-        assert!(p.contains("create_work_item"));
+        assert!(p.contains("create_work"));
         assert!(p.contains("phase_id"));
     }
 
@@ -502,14 +502,14 @@ mod tests {
     }
 
     #[test]
-    fn test_generation_workitem_prompt_contains_pmt_instructions() {
+    fn test_generation_work_prompt_contains_pmt_instructions() {
         init_defaults();
         let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), "d".into(), 1);
-        let prompt = crate::agents::generation::build_work_item_prompt(&phase, &[], &[], &[]);
-        let pmt = &store().generation_workitem;
+        let prompt = crate::agents::generation::build_work_prompt(&phase, &[], &[], &[]);
+        let pmt = &store().generation_work;
         assert!(
             prompt.user_message.contains(pmt.trim()),
-            "WorkItem generation prompt missing .pmt instruction content"
+            "Work generation prompt missing .pmt instruction content"
         );
     }
 
@@ -533,7 +533,7 @@ mod tests {
             ("generation_plan", &s.generation_plan),
             ("generation_spec", &s.generation_spec),
             ("generation_phase", &s.generation_phase),
-            ("generation_workitem", &s.generation_workitem),
+            ("generation_work", &s.generation_work),
         ];
         for (name, content) in &fields {
             assert!(
@@ -558,7 +558,7 @@ mod tests {
             ("generation_plan", &s.generation_plan),
             ("generation_spec", &s.generation_spec),
             ("generation_phase", &s.generation_phase),
-            ("generation_workitem", &s.generation_workitem),
+            ("generation_work", &s.generation_work),
             ("validator_plan", &s.validator_plan),
             ("validator_spec", &s.validator_spec),
         ];

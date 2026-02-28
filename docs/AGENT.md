@@ -13,8 +13,8 @@ This directory contains the design history and reference material for Loopr v3. 
 | `v2-implementation-status.md` | What v2 actually built vs. what was just designed. Includes full module map of v2's 65+ files. | You need to know what the prior build attempt accomplished |
 | `v2-light-loops-heavy-tools.md` | The "Light Loops, Heavy Tools" design principle: Tokio tasks for LLM loops, OS subprocesses for tool execution | You need to understand the concurrency model (relevant for MVP3+) |
 | `v3-preplan-conversation.md` | Conversation that settled key v3 decisions: keep daemon+IPC (not Gas Town's file-based coordination), carry patterns not code, TaskStore is storage not communication bus | You need to understand *why* v3's architecture was chosen |
-| `v3-chatgpt-loopr-architecture-conversation.md` | Original architecture conversation establishing the domain model: Plan/Spec/Phase/WorkItem hierarchy, Ralph Wiggum Loop, persona model, Tick semantics, strategy knobs | You need deep context on the domain model and design rationale |
-| `v3-claude-loopr-mvp-and-fsm-conversation.md` | Conversation that scoped MVP phasing (MVP1=no LLM, MVP2=validator, MVP3+=agents) and designed the 3 FSMs (WorkItem, Bundle, Tick) | You need to understand FSM design decisions and MVP phasing rationale |
+| `v3-chatgpt-loopr-architecture-conversation.md` | Original architecture conversation establishing the domain model: Plan/Spec/Phase/Work hierarchy, Ralph Wiggum Loop, persona model, Tick semantics, strategy knobs | You need deep context on the domain model and design rationale |
+| `v3-claude-loopr-mvp-and-fsm-conversation.md` | Conversation that scoped MVP phasing (MVP1=no LLM, MVP2=validator, MVP3+=agents) and designed the 3 FSMs (Work, Bundle, Tick) | You need to understand FSM design decisions and MVP phasing rationale |
 | `yegge/welcome-to-gas-town.md` | Steve Yegge's Gas Town launch post — the multi-agent orchestration concept that inspired Loopr | You want to understand what Loopr is inspired by (and what it rejects) |
 | `yegge/the-future-of-coding-agents.md` | Yegge's predictions for coding agents in 2026 | Background reading |
 | `yegge/gas-town-emergency-user-manual.md` | Gas Town user guide — illustrates the chaos (Murder Mystery, heresies, stale workers) that Loopr's correctness-first approach is designed to prevent | You want to understand *why* Loopr rejects Gas Town's multi-writer coordination |
@@ -34,7 +34,7 @@ Loopr has been through three major build attempts:
 
 - **v1**: Proof of concept. Completed a 10-phase build but the architecture was unsatisfactory. Established that worktrees + TaskStore could work together.
 - **v2**: Infrastructure push. Built a real daemon, IPC protocol, TUI, LLM client, tool system, and more (65+ source files). Proved that the client-fork-to-daemon pattern, NDJSON IPC, and thin-TUI architecture all work. Hit a wall because the domain model was too generic (single `Loop` type trying to do everything) and complexity grew faster than end-to-end functionality.
-- **v3** (current): Clean-slate rebuild. Carries v2's 13 proven patterns but none of its code. Uses the domain model from the ChatGPT architecture conversation (Plan → Spec → Phase → WorkItem hierarchy, 3 FSMs, role-based guards).
+- **v3** (current): Clean-slate rebuild. Carries v2's 13 proven patterns but none of its code. Uses the domain model from the ChatGPT architecture conversation (Plan → Spec → Phase → Work hierarchy, 3 FSMs, role-based guards).
 
 ### MVP Phases (within v3)
 

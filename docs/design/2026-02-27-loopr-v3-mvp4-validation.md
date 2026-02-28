@@ -19,13 +19,13 @@ MVP4 adds Coordinator, Researcher, Integrator agents plus ContextBuilder, strate
 
 Post-build inspection found:
 
-1. **8 Coordinator actions return `NotYetImplemented`** — The executor stubs CreatePlan/CreateSpec/CreatePhase/CreateWorkItem/AssignAgent/SpawnResearcher/TriageBundle/AcceptBundle even though the daemon handlers exist. The Coordinator LLM loop will call these, get stub responses, and log "stub(create_plan): ..." instead of actually creating records.
+1. **8 Coordinator actions return `NotYetImplemented`** — The executor stubs CreatePlan/CreateSpec/CreatePhase/CreateWork/AssignAgent/SpawnResearcher/TriageBundle/AcceptBundle even though the daemon handlers exist. The Coordinator LLM loop will call these, get stub responses, and log "stub(create_plan): ..." instead of actually creating records.
 
 2. **`coordinator.get_goal` handler missing** — CLI `loopr coordinator status` maps to `"coordinator.get_goal"` but no handler exists in the dispatch table. This will return "method not found" at runtime.
 
 3. **Advisory lock checking not enforced in WriteFile** — `ConflictPolicy::LockStrict` is defined but `WriteFile` in executor.rs has no lock checking. Under strict policy, agents should be blocked from writing to locked resources.
 
-4. **TUI agents view doesn't show target_id/query** — For Researcher/Coordinator/Integrator agents (which lack work_item_id/bundle_id), the display shows nothing for the target column.
+4. **TUI agents view doesn't show target_id/query** — For Researcher/Coordinator/Integrator agents (which lack work_id/bundle_id), the display shows nothing for the target column.
 
 ### Goals
 
@@ -64,14 +64,14 @@ Wire each action:
 | `CreatePlan` | `plan.create` | `{ title, description, acceptance_criteria }` | `RecordCreated { "plans", id }` |
 | `CreateSpec` | `spec.create` | `{ plan_id, title, description }` | `RecordCreated { "specs", id }` |
 | `CreatePhase` | `phase.create` | `{ spec_id, title, description, order }` | `RecordCreated { "phases", id }` |
-| `CreateWorkItem` | `work_item.create` | `{ phase_id, title, description }` | `RecordCreated { "work_items", id }` |
-| `AssignAgent` | `agent.start` | `{ agent_type, work_item_id/bundle_id/target_id }` | `AgentSpawned { session_id, agent_type }` |
+| `CreateWork` | `work.create` | `{ phase_id, title, description }` | `RecordCreated { "works", id }` |
+| `AssignAgent` | `agent.start` | `{ agent_type, work_id/bundle_id/target_id }` | `AgentSpawned { session_id, agent_type }` |
 | `SpawnResearcher` | `agent.start` | `{ agent_type: "researcher", target_id: scope_id, query }` | `AgentSpawned { session_id, "researcher" }` |
 | `TriageBundle` | `bundle.transition` | `{ id, target_status: "Triaged", role: "coordinator" }` | `Transitioned(...)` |
 | `AcceptBundle` | `bundle.transition` | `{ id, target_status: "Accepted", role: "coordinator" }` | `Transitioned(...)` |
 
 For `AssignAgent`, the `target_id` field from the Coordinator LLM maps to:
-- `work_item_id` for Implementer
+- `work_id` for Implementer
 - `bundle_id` for Reviewer
 - `target_id` for Researcher/Coordinator/Integrator
 
@@ -158,7 +158,7 @@ Need: Add `pub fn config(&self) -> &Config` method to `AgentIpcBridge` (it alrea
 
 Update the target display logic at line 28-31:
 ```rust
-let target = match (&session.work_item_id, &session.bundle_id, &session.target_id, &session.query) {
+let target = match (&session.work_id, &session.bundle_id, &session.target_id, &session.query) {
     (Some(wi), _, _, _) => format!(" wi:{}", &wi[..wi.len().min(8)]),
     (_, Some(b), _, _) => format!(" b:{}", &b[..b.len().min(8)]),
     (_, _, Some(t), Some(q)) => format!(" {}:{}", &t[..t.len().min(8)], truncate(q, 20)),
@@ -174,9 +174,9 @@ Add tests that exercise the real action execution path:
 
 1. **`test_coordinator_action_creates_plan`** — Execute `CreatePlan` action through `execute_action()`, verify plan exists in stores.
 
-2. **`test_coordinator_creates_full_hierarchy`** — CreatePlan → CreateSpec → CreatePhase → CreateWorkItem through executor, verify all records exist with correct parent linkage.
+2. **`test_coordinator_creates_full_hierarchy`** — CreatePlan → CreateSpec → CreatePhase → CreateWork through executor, verify all records exist with correct parent linkage.
 
-3. **`test_coordinator_assigns_implementer`** — Create hierarchy → AssignAgent(implementer, work_item_id) → verify session created with correct work_item_id.
+3. **`test_coordinator_assigns_implementer`** — Create hierarchy → AssignAgent(implementer, work_id) → verify session created with correct work_id.
 
 4. **`test_coordinator_spawns_researcher`** — SpawnResearcher(query, scope_id) → verify session created with agent_type=Researcher, correct query and target_id.
 
@@ -188,7 +188,7 @@ Add tests that exercise the real action execution path:
 
 8. **`test_coordinator_get_goal_handler`** — Set goal → get goal → verify response. Clear goal → get goal → verify "no active goal".
 
-9. **`test_full_mvp4_pipeline`** — Set goal → create Plan → create Spec → create Phase → create WorkItem → assign Implementer → propose Bundle → triage → review → accept. Verify the complete chain of records exists.
+9. **`test_full_mvp4_pipeline`** — Set goal → create Plan → create Spec → create Phase → create Work → assign Implementer → propose Bundle → triage → review → accept. Verify the complete chain of records exists.
 
 ## Technical Considerations
 

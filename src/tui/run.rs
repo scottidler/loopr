@@ -24,7 +24,7 @@ use crate::domain::plan::Plan;
 use crate::domain::role::Role;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
-use crate::domain::work_item::WorkItem;
+use crate::domain::work::Work;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::IpcMessage;
 
@@ -192,9 +192,9 @@ async fn refresh_collection(state: &mut AppState, client: &mut IpcClient, collec
                             state.phases = items;
                         }
                     }
-                    "work_item" => {
-                        if let Ok(items) = serde_json::from_value::<Vec<WorkItem>>(result) {
-                            state.work_items = items;
+                    "work" => {
+                        if let Ok(items) = serde_json::from_value::<Vec<Work>>(result) {
+                            state.works = items;
                         }
                     }
                     "bundle" => {
@@ -287,7 +287,7 @@ fn draw_tab_bar(app: &App, frame: &mut Frame, area: Rect) {
 fn draw_content(app: &App, frame: &mut Frame, area: Rect) {
     match app.current_view {
         View::Dashboard => views::dashboard::render(app, frame, area),
-        View::WorkItems => views::work_items::render(app, frame, area),
+        View::Works => views::works::render(app, frame, area),
         View::Bundles => views::bundles::render(app, frame, area),
         View::Ticks => views::ticks::render(app, frame, area),
         View::Learnings => views::learnings::render(app, frame, area),
@@ -324,7 +324,7 @@ pub fn role_actions(role: Role) -> Vec<&'static str> {
     match role {
         Role::Coordinator => vec!["g:Goal", "p:Pause", "r:Resume", "x:Stop", "R:Role"],
         Role::Integrator => vec!["n:New Tick", "t:Transition", "R:Role"],
-        Role::Implementer => vec!["n:New WorkItem", "t:Transition", "R:Role"],
+        Role::Implementer => vec!["n:New Work", "t:Transition", "R:Role"],
         Role::Reviewer => vec!["t:Transition", "R:Role"],
         Role::Researcher => vec!["R:Role"],
     }
@@ -390,7 +390,7 @@ mod tests {
     use super::*;
     use crate::domain::bundle::Bundle;
     use crate::domain::tick::Tick;
-    use crate::domain::work_item::WorkItem;
+    use crate::domain::work::Work;
     use ratatui::backend::TestBackend;
     use std::sync::Arc;
 
@@ -428,8 +428,8 @@ mod tests {
     fn test_draw_with_data() {
         let mut app = App::new();
         app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "Task 1".into(), "desc".into()));
+            .works
+            .push(Work::new("ph1".into(), "Task 1".into(), "desc".into()));
         app.state.bundles.push(Bundle::new(
             "wi1".into(),
             None,
@@ -490,7 +490,7 @@ mod tests {
     fn test_role_actions_implementer() {
         let actions = role_actions(Role::Implementer);
         assert_eq!(actions.len(), 3);
-        assert!(actions[0].contains("WorkItem"));
+        assert!(actions[0].contains("Work"));
     }
 
     #[test]
@@ -625,8 +625,8 @@ mod tests {
     #[test]
     fn test_event_collection_transition_completed() {
         use crate::ipc::protocol::DaemonEvent;
-        let event = DaemonEvent::transition_completed("work_item", "wi1", "Draft", "Ready", "Coordinator");
-        assert_eq!(event_collection(&event), Some("work_item"));
+        let event = DaemonEvent::transition_completed("work", "wi1", "Draft", "Ready", "Coordinator");
+        assert_eq!(event_collection(&event), Some("work"));
     }
 
     #[test]
@@ -708,7 +708,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_refresh_collection_updates_work_items() {
+    async fn test_refresh_collection_updates_works() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
         use serde_json::json;
@@ -717,7 +717,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-wi-{}.sock", crate::id::generate_id()));
 
-        let mock_wi = WorkItem::new("ph1".into(), "Task 1".into(), "desc".into());
+        let mock_wi = Work::new("ph1".into(), "Task 1".into(), "desc".into());
         let wis_json = serde_json::to_value(vec![mock_wi.clone()]).unwrap();
 
         let server = IpcServer::new(&path);
@@ -734,7 +734,7 @@ mod tests {
                     move |req| {
                         if req.method == "system.handshake" {
                             DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
-                        } else if req.method == "work_item.list" {
+                        } else if req.method == "work.list" {
                             DaemonResponse::ok(req.id, wis.clone())
                         } else {
                             DaemonResponse::ok(req.id, json!(null))
@@ -753,11 +753,11 @@ mod tests {
         client.handshake("0.1.0").await.unwrap();
 
         let mut state = AppState::default();
-        assert!(state.work_items.is_empty());
+        assert!(state.works.is_empty());
 
-        refresh_collection(&mut state, &mut client, "work_item").await;
-        assert_eq!(state.work_items.len(), 1);
-        assert_eq!(state.work_items[0].title, "Task 1");
+        refresh_collection(&mut state, &mut client, "work").await;
+        assert_eq!(state.works.len(), 1);
+        assert_eq!(state.works[0].title, "Task 1");
 
         drop(client);
         let _ = server_handle.await;
@@ -806,7 +806,7 @@ mod tests {
         // Refreshing an unknown collection should not panic or modify state
         refresh_collection(&mut state, &mut client, "unknown_collection").await;
         assert!(state.plans.is_empty());
-        assert!(state.work_items.is_empty());
+        assert!(state.works.is_empty());
 
         drop(client);
         let _ = server_handle.await;
@@ -1182,7 +1182,7 @@ mod tests {
         dispatch_ipc_action(
             &mut client,
             IpcAction::NewRecord {
-                collection: "work_item".to_string(),
+                collection: "work".to_string(),
             },
         )
         .await;
@@ -1190,7 +1190,7 @@ mod tests {
         {
             let reqs = captured.lock().unwrap();
             assert_eq!(reqs.len(), 1);
-            assert_eq!(reqs[0].0, "work_item.create");
+            assert_eq!(reqs[0].0, "work.create");
             assert_eq!(reqs[0].1["title"], "New Record");
         }
 
@@ -1273,22 +1273,14 @@ mod tests {
 
         // Each collection should fail silently and leave state empty
         for collection in [
-            "plan",
-            "spec",
-            "phase",
-            "work_item",
-            "bundle",
-            "tick",
-            "learning",
-            "lock",
-            "agent",
+            "plan", "spec", "phase", "work", "bundle", "tick", "learning", "lock", "agent",
         ] {
             refresh_collection(&mut state, &mut client, collection).await;
         }
         assert!(state.plans.is_empty());
         assert!(state.specs.is_empty());
         assert!(state.phases.is_empty());
-        assert!(state.work_items.is_empty());
+        assert!(state.works.is_empty());
         assert!(state.bundles.is_empty());
         assert!(state.ticks.is_empty());
         assert!(state.learnings.is_empty());
@@ -1321,8 +1313,8 @@ mod tests {
         // Verify draw_content renders without panic for every view, including with data
         let mut app = App::new();
         app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "WI 1".into(), "desc".into()));
+            .works
+            .push(Work::new("ph1".into(), "WI 1".into(), "desc".into()));
         app.state.bundles.push(Bundle::new(
             "wi1".into(),
             None,
@@ -1668,8 +1660,8 @@ mod tests {
         assert!(state.specs.is_empty());
         refresh_collection(&mut state, &mut client, "phase").await;
         assert!(state.phases.is_empty());
-        refresh_collection(&mut state, &mut client, "work_item").await;
-        assert!(state.work_items.is_empty());
+        refresh_collection(&mut state, &mut client, "work").await;
+        assert!(state.works.is_empty());
         refresh_collection(&mut state, &mut client, "bundle").await;
         assert!(state.bundles.is_empty());
         refresh_collection(&mut state, &mut client, "tick").await;

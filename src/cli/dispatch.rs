@@ -67,7 +67,7 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         Command::Plan { cmd } => crud_to_ipc("plan", cmd, role),
         Command::Spec { cmd } => crud_to_ipc("spec", cmd, role),
         Command::Phase { cmd } => crud_to_ipc("phase", cmd, role),
-        Command::WorkItem { cmd } => crud_to_ipc("work_item", cmd, role),
+        Command::Work { cmd } => crud_to_ipc("work", cmd, role),
 
         Command::Bundle { cmd } => bundle_to_ipc(cmd, role),
         Command::Tick { cmd } => tick_to_ipc(cmd, role),
@@ -97,7 +97,7 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
     }
 }
 
-/// Map CrudCmd to IPC for Plan/Spec/Phase/WorkItem.
+/// Map CrudCmd to IPC for Plan/Spec/Phase/Work.
 fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_json::Value) {
     match cmd {
         CrudCmd::Create {
@@ -115,7 +115,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
                 let key = match collection {
                     "spec" => "plan_id",
                     "phase" => "spec_id",
-                    "work_item" => "phase_id",
+                    "work" => "phase_id",
                     _ => "parent_id",
                 };
                 params[key] = json!(parent_id);
@@ -132,7 +132,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
                 let key = match collection {
                     "spec" => "plan_id",
                     "phase" => "spec_id",
-                    "work_item" => "phase_id",
+                    "work" => "phase_id",
                     _ => "parent_id",
                 };
                 params[key] = json!(parent_id);
@@ -165,13 +165,13 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
 fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
     match cmd {
         BundleCmd::Create {
-            work_item_id,
+            work_id,
             branch,
             description,
             base_tick_id,
         } => {
             let mut params = json!({
-                "work_item_id": work_item_id,
+                "work_id": work_id,
                 "branch_name": branch,
                 "description": description,
             });
@@ -181,10 +181,10 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             ("bundle.create".to_string(), params)
         }
         BundleCmd::Get { id } => ("bundle.get".to_string(), json!({ "id": id })),
-        BundleCmd::List { work_item_id } => {
+        BundleCmd::List { work_id } => {
             let mut params = json!({});
-            if let Some(wi_id) = work_item_id {
-                params["work_item_id"] = json!(wi_id);
+            if let Some(wi_id) = work_id {
+                params["work_id"] = json!(wi_id);
             }
             ("bundle.list".to_string(), params)
         }
@@ -225,17 +225,15 @@ fn tick_to_ipc(cmd: &TickCmd, role: Role) -> (String, serde_json::Value) {
 
 fn worktree_to_ipc(cmd: &WorktreeCmd) -> (String, serde_json::Value) {
     match cmd {
-        WorktreeCmd::Create { work_item_id, git_ref } => (
+        WorktreeCmd::Create { work_id, git_ref } => (
             "worktree.create".to_string(),
-            json!({ "work_item_id": work_item_id, "ref": git_ref }),
+            json!({ "work_id": work_id, "ref": git_ref }),
         ),
         WorktreeCmd::List => ("worktree.list".to_string(), json!(null)),
-        WorktreeCmd::Cleanup { work_item_id } => {
-            ("worktree.cleanup".to_string(), json!({ "work_item_id": work_item_id }))
-        }
-        WorktreeCmd::Refresh { work_item_id, git_ref } => (
+        WorktreeCmd::Cleanup { work_id } => ("worktree.cleanup".to_string(), json!({ "work_id": work_id })),
+        WorktreeCmd::Refresh { work_id, git_ref } => (
             "worktree.refresh".to_string(),
-            json!({ "work_item_id": work_item_id, "ref": git_ref }),
+            json!({ "work_id": work_id, "ref": git_ref }),
         ),
     }
 }
@@ -261,9 +259,9 @@ fn learning_to_ipc(cmd: &LearningCmd) -> (String, serde_json::Value) {
 
 fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
     match cmd {
-        AgentCmd::StartImplementer { work_item_id } => (
+        AgentCmd::StartImplementer { work_id } => (
             "agent.start".to_string(),
-            json!({ "agent_type": "implementer", "work_item_id": work_item_id }),
+            json!({ "agent_type": "implementer", "work_id": work_id }),
         ),
         AgentCmd::StartReviewer { bundle_id } => (
             "agent.start".to_string(),
@@ -388,8 +386,8 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_transition_mapping() {
-        let cmd = Command::WorkItem {
+    fn test_work_transition_mapping() {
+        let cmd = Command::Work {
             cmd: CrudCmd::Transition {
                 id: "wi-1".to_string(),
                 status: "Ready".to_string(),
@@ -397,7 +395,7 @@ mod tests {
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
-        assert_eq!(method, "work_item.transition");
+        assert_eq!(method, "work.transition");
         assert_eq!(params["id"], "wi-1");
         assert_eq!(params["target_status"], "Ready");
         assert_eq!(params["role"], "coordinator");
@@ -407,7 +405,7 @@ mod tests {
     fn test_bundle_create_mapping() {
         let cmd = Command::Bundle {
             cmd: BundleCmd::Create {
-                work_item_id: "wi-1".to_string(),
+                work_id: "wi-1".to_string(),
                 branch: "feature/foo".to_string(),
                 description: "A bundle".to_string(),
                 base_tick_id: Some("tick-1".to_string()),
@@ -415,7 +413,7 @@ mod tests {
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "bundle.create");
-        assert_eq!(params["work_item_id"], "wi-1");
+        assert_eq!(params["work_id"], "wi-1");
         assert_eq!(params["branch_name"], "feature/foo");
         assert_eq!(params["base_tick_id"], "tick-1");
     }
@@ -444,13 +442,13 @@ mod tests {
     fn test_worktree_create_mapping() {
         let cmd = Command::Worktree {
             cmd: WorktreeCmd::Create {
-                work_item_id: "wi-1".to_string(),
+                work_id: "wi-1".to_string(),
                 git_ref: "main".to_string(),
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "worktree.create");
-        assert_eq!(params["work_item_id"], "wi-1");
+        assert_eq!(params["work_id"], "wi-1");
         assert_eq!(params["ref"], "main");
     }
 
@@ -585,9 +583,9 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_transition_preserves_status_casing() {
-        // WorkItemStatus uses default serde (PascalCase), so dispatch must NOT lowercase.
-        let cmd = Command::WorkItem {
+    fn test_work_transition_preserves_status_casing() {
+        // WorkStatus uses default serde (PascalCase), so dispatch must NOT lowercase.
+        let cmd = Command::Work {
             cmd: CrudCmd::Transition {
                 id: "wi-1".to_string(),
                 status: "InProgress".to_string(),
@@ -676,13 +674,13 @@ mod tests {
     fn test_agent_start_implementer_mapping() {
         let cmd = Command::Agent {
             cmd: AgentCmd::StartImplementer {
-                work_item_id: "wi-1".to_string(),
+                work_id: "wi-1".to_string(),
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "agent.start");
         assert_eq!(params["agent_type"], "implementer");
-        assert_eq!(params["work_item_id"], "wi-1");
+        assert_eq!(params["work_id"], "wi-1");
     }
 
     #[test]
@@ -894,7 +892,7 @@ mod tests {
         // Bundle create without base_tick_id — key should be absent
         let cmd = Command::Bundle {
             cmd: BundleCmd::Create {
-                work_item_id: "wi-5".to_string(),
+                work_id: "wi-5".to_string(),
                 branch: "feat/bar".to_string(),
                 description: "No tick".to_string(),
                 base_tick_id: None,
@@ -902,7 +900,7 @@ mod tests {
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "bundle.create");
-        assert_eq!(params["work_item_id"], "wi-5");
+        assert_eq!(params["work_id"], "wi-5");
         assert_eq!(params["branch_name"], "feat/bar");
         assert_eq!(params["description"], "No tick");
         assert!(params.get("base_tick_id").is_none() || params["base_tick_id"].is_null());
@@ -912,25 +910,25 @@ mod tests {
     fn test_worktree_cleanup_mapping() {
         let cmd = Command::Worktree {
             cmd: WorktreeCmd::Cleanup {
-                work_item_id: "wi-cleanup".to_string(),
+                work_id: "wi-cleanup".to_string(),
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "worktree.cleanup");
-        assert_eq!(params["work_item_id"], "wi-cleanup");
+        assert_eq!(params["work_id"], "wi-cleanup");
     }
 
     #[test]
     fn test_worktree_refresh_mapping() {
         let cmd = Command::Worktree {
             cmd: WorktreeCmd::Refresh {
-                work_item_id: "wi-refresh".to_string(),
+                work_id: "wi-refresh".to_string(),
                 git_ref: "main".to_string(),
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "worktree.refresh");
-        assert_eq!(params["work_item_id"], "wi-refresh");
+        assert_eq!(params["work_id"], "wi-refresh");
         assert_eq!(params["ref"], "main");
     }
 
@@ -973,8 +971,8 @@ mod tests {
     // --- Coverage gap tests for uncovered branches ---
 
     #[test]
-    fn test_work_item_create_with_parent_uses_phase_id() {
-        let cmd = Command::WorkItem {
+    fn test_work_create_with_parent_uses_phase_id() {
+        let cmd = Command::Work {
             cmd: CrudCmd::Create {
                 title: "Implement auth".to_string(),
                 description: "JWT".to_string(),
@@ -983,7 +981,7 @@ mod tests {
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
-        assert_eq!(method, "work_item.create");
+        assert_eq!(method, "work.create");
         assert_eq!(params["phase_id"], "phase-1");
     }
 
@@ -1012,14 +1010,14 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_list_with_parent_uses_phase_id() {
-        let cmd = Command::WorkItem {
+    fn test_work_list_with_parent_uses_phase_id() {
+        let cmd = Command::Work {
             cmd: CrudCmd::List {
                 parent: Some("phase-1".to_string()),
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
-        assert_eq!(method, "work_item.list");
+        assert_eq!(method, "work.list");
         assert_eq!(params["phase_id"], "phase-1");
     }
 
@@ -1047,21 +1045,21 @@ mod tests {
     }
 
     #[test]
-    fn test_bundle_list_with_work_item_filter() {
+    fn test_bundle_list_with_work_filter() {
         let cmd = Command::Bundle {
             cmd: BundleCmd::List {
-                work_item_id: Some("wi-1".to_string()),
+                work_id: Some("wi-1".to_string()),
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "bundle.list");
-        assert_eq!(params["work_item_id"], "wi-1");
+        assert_eq!(params["work_id"], "wi-1");
     }
 
     #[test]
     fn test_bundle_list_no_filter() {
         let cmd = Command::Bundle {
-            cmd: BundleCmd::List { work_item_id: None },
+            cmd: BundleCmd::List { work_id: None },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "bundle.list");

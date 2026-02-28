@@ -126,7 +126,7 @@ impl fmt::Display for AgentStatus {
 pub struct AgentSession {
     pub id: String,
     pub agent_type: AgentType,
-    pub work_item_id: Option<String>,
+    pub work_id: Option<String>,
     pub bundle_id: Option<String>,
     pub status: AgentStatus,
     pub iteration: u32,
@@ -135,9 +135,9 @@ pub struct AgentSession {
     pub error_message: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
-    /// Generic target ID for agents that don't target WorkItems or Bundles.
+    /// Generic target ID for agents that don't target Works or Bundles.
     /// Coordinator: None (operates globally).
-    /// Researcher: the scope_id (Plan/Spec/Phase/WorkItem ID being researched).
+    /// Researcher: the scope_id (Plan/Spec/Phase/Work ID being researched).
     /// Integrator: None (operates on whatever Accepted Bundles exist).
     #[serde(default)]
     pub target_id: Option<String>,
@@ -152,7 +152,7 @@ impl AgentSession {
         Self {
             id: id::generate_id(),
             agent_type,
-            work_item_id: None,
+            work_id: None,
             bundle_id: None,
             status: AgentStatus::Starting,
             iteration: 0,
@@ -195,8 +195,8 @@ impl Record for AgentSession {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
         m.insert("agent_type".into(), IndexValue::String(self.agent_type.to_string()));
-        if let Some(ref wi_id) = self.work_item_id {
-            m.insert("work_item_id".into(), IndexValue::String(wi_id.clone()));
+        if let Some(ref wi_id) = self.work_id {
+            m.insert("work_id".into(), IndexValue::String(wi_id.clone()));
         }
         if let Some(ref b_id) = self.bundle_id {
             m.insert("bundle_id".into(), IndexValue::String(b_id.clone()));
@@ -280,7 +280,7 @@ pub enum AgentAction {
         description: String,
         order: u32,
     },
-    CreateWorkItem {
+    CreateWork {
         phase_id: String,
         title: String,
         description: String,
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(session.status, AgentStatus::Starting);
         assert_eq!(session.iteration, 0);
         assert_eq!(session.model, "claude-sonnet-4-6");
-        assert!(session.work_item_id.is_none());
+        assert!(session.work_id.is_none());
         assert!(session.bundle_id.is_none());
         assert!(session.worktree_path.is_none());
         assert!(session.error_message.is_none());
@@ -587,14 +587,14 @@ mod tests {
     #[test]
     fn test_agent_session_serde_roundtrip() {
         let mut session = AgentSession::new(AgentType::Implementer, "claude-sonnet-4-6".to_string());
-        session.work_item_id = Some("wi-123".to_string());
+        session.work_id = Some("wi-123".to_string());
         session.worktree_path = Some("/tmp/worktree".to_string());
         let json = serde_json::to_string(&session).unwrap();
         let deserialized: AgentSession = serde_json::from_str(&json).unwrap();
         assert_eq!(session.id, deserialized.id);
         assert_eq!(session.agent_type, deserialized.agent_type);
         assert_eq!(session.status, deserialized.status);
-        assert_eq!(session.work_item_id, deserialized.work_item_id);
+        assert_eq!(session.work_id, deserialized.work_id);
         assert_eq!(session.worktree_path, deserialized.worktree_path);
         assert_eq!(session.target_id, deserialized.target_id);
         assert_eq!(session.query, deserialized.query);
@@ -604,7 +604,7 @@ mod tests {
     fn test_agent_session_serde_backward_compat() {
         // Old JSON without target_id/query should deserialize with defaults (None)
         let json = r#"{
-            "id": "test-1", "agent_type": "implementer", "work_item_id": null,
+            "id": "test-1", "agent_type": "implementer", "work_id": null,
             "bundle_id": null, "status": "starting", "iteration": 0,
             "model": "m", "worktree_path": null, "error_message": null,
             "created_at": 1000, "updated_at": 1000
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn test_agent_session_record_indexed_fields() {
         let mut session = AgentSession::new(AgentType::Implementer, "m".to_string());
-        session.work_item_id = Some("wi-1".to_string());
+        session.work_id = Some("wi-1".to_string());
 
         let fields = session.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("starting".to_string())));
@@ -644,10 +644,7 @@ mod tests {
             fields.get("agent_type"),
             Some(&IndexValue::String("implementer".to_string()))
         );
-        assert_eq!(
-            fields.get("work_item_id"),
-            Some(&IndexValue::String("wi-1".to_string()))
-        );
+        assert_eq!(fields.get("work_id"), Some(&IndexValue::String("wi-1".to_string())));
         assert!(!fields.contains_key("bundle_id"));
     }
 
@@ -662,7 +659,7 @@ mod tests {
             Some(&IndexValue::String("reviewer".to_string()))
         );
         assert_eq!(fields.get("bundle_id"), Some(&IndexValue::String("b-1".to_string())));
-        assert!(!fields.contains_key("work_item_id"));
+        assert!(!fields.contains_key("work_id"));
     }
 
     #[test]
@@ -776,7 +773,7 @@ mod tests {
     fn test_agent_action_create_learning_serde() {
         let action = AgentAction::CreateLearning {
             content: "Parser needs error recovery".to_string(),
-            scope: "work_item".to_string(),
+            scope: "work".to_string(),
             source_id: "wi-1".to_string(),
             applicable_roles: Some(vec!["implementer".to_string()]),
             resource_tags: Some(vec!["src/parser.rs".to_string()]),
@@ -792,7 +789,7 @@ mod tests {
         } = deserialized
         {
             assert_eq!(content, "Parser needs error recovery");
-            assert_eq!(scope, "work_item");
+            assert_eq!(scope, "work");
             assert_eq!(source_id, "wi-1");
             assert_eq!(applicable_roles, Some(vec!["implementer".to_string()]));
             assert_eq!(resource_tags, Some(vec!["src/parser.rs".to_string()]));
@@ -822,7 +819,7 @@ mod tests {
     #[test]
     fn test_agent_action_transition_with_role() {
         let action = AgentAction::Transition {
-            collection: "work_item".to_string(),
+            collection: "work".to_string(),
             id: "wi-1".to_string(),
             target_status: "in_progress".to_string(),
             role: Some("implementer".to_string()),
@@ -838,7 +835,7 @@ mod tests {
 
     #[test]
     fn test_agent_action_transition_without_role_backward_compat() {
-        let json = r#"{"action":"transition","collection":"work_item","id":"wi-1","target_status":"done"}"#;
+        let json = r#"{"action":"transition","collection":"work","id":"wi-1","target_status":"done"}"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         if let AgentAction::Transition { role, .. } = action {
             assert!(role.is_none());
@@ -887,8 +884,8 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_action_create_work_item_serde() {
-        let action = AgentAction::CreateWorkItem {
+    fn test_agent_action_create_work_serde() {
+        let action = AgentAction::CreateWork {
             phase_id: "ph-1".to_string(),
             title: "Add login".to_string(),
             description: "Add login endpoint".to_string(),
@@ -898,7 +895,7 @@ mod tests {
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::CreateWorkItem { .. }));
+        assert!(matches!(deserialized, AgentAction::CreateWork { .. }));
     }
 
     #[test]

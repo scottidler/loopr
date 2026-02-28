@@ -236,28 +236,28 @@ pub fn run_integrator_cycle(
                     }),
                 );
                 if !resp.is_error() {
-                    // Find the work_item_id for this bundle
+                    // Find the work_id for this bundle
                     let wi_id = stores
                         .bundles
                         .read()
                         .unwrap()
                         .get(stale_id.as_str())
-                        .map(|b| b.work_item_id.clone())
+                        .map(|b| b.work_id.clone())
                         .unwrap_or_default();
                     let _ = bridge.event_tx().send(DaemonEvent::new(
                         "bundle.stale_replan_needed",
-                        serde_json::json!({"bundle_id": stale_id, "work_item_id": wi_id, "reason": "stale_base_tick"}),
+                        serde_json::json!({"bundle_id": stale_id, "work_id": wi_id, "reason": "stale_base_tick"}),
                     ));
                     info!("Integrator: rejected stale bundle {} (replan at safe point)", stale_id);
                 }
             }
             crate::config::StalePolicy::AutoReplayAndVerify => {
-                // M5: Pass work_item_id and new_base_ref to worktree.refresh
+                // M5: Pass work_id and new_base_ref to worktree.refresh
                 let wi_id = {
                     let bundles = stores.bundles.read().unwrap();
                     bundles
                         .get(stale_id.as_str())
-                        .map(|b| b.work_item_id.clone())
+                        .map(|b| b.work_id.clone())
                         .unwrap_or_default()
                 };
                 let new_base_ref = latest_tick_id
@@ -273,7 +273,7 @@ pub fn run_integrator_cycle(
                 let refresh_resp = bridge.request(
                     "worktree.refresh",
                     serde_json::json!({
-                        "work_item_id": wi_id,
+                        "work_id": wi_id,
                         "new_base_ref": new_base_ref,
                     }),
                 );
@@ -568,13 +568,13 @@ pub fn run_integrator_cycle(
             }
         }
 
-        // C1: Transition parent WorkItems InReview → Integrated
+        // C1: Transition parent Works InReview → Integrated
         let merged_wi_ids: Vec<String> = {
             let bundles = stores.bundles.read().unwrap();
             valid_bundle_ids
                 .iter()
                 .filter_map(|id| bundles.get(id.as_str()))
-                .map(|b| b.work_item_id.clone())
+                .map(|b| b.work_id.clone())
                 .collect::<std::collections::HashSet<_>>()
                 .into_iter()
                 .collect()
@@ -582,14 +582,14 @@ pub fn run_integrator_cycle(
 
         for wi_id in &merged_wi_ids {
             let should_transition = {
-                let wis = stores.work_items.read().unwrap();
+                let wis = stores.works.read().unwrap();
                 wis.get(wi_id)
-                    .map(|w| w.status == crate::domain::work_item::WorkItemStatus::InReview)
+                    .map(|w| w.status == crate::domain::work::WorkStatus::InReview)
                     .unwrap_or(false)
             };
             if should_transition {
                 let resp = bridge.request(
-                    "work_item.transition",
+                    "work.transition",
                     serde_json::json!({
                         "id": wi_id,
                         "target_status": "Integrated",
@@ -602,7 +602,7 @@ pub fn run_integrator_cycle(
                         wi_id, resp.error
                     );
                 } else {
-                    info!("Integrator: WorkItem {} transitioned to Integrated", wi_id);
+                    info!("Integrator: Work {} transitioned to Integrated", wi_id);
                 }
             }
         }

@@ -11,7 +11,7 @@ use crate::domain::plan::Plan;
 use crate::domain::role::Role;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
-use crate::domain::work_item::WorkItem;
+use crate::domain::work::Work;
 
 /// Whether the TUI is in normal mode or capturing text input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +37,7 @@ pub enum IpcAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum View {
     Dashboard,
-    WorkItems,
+    Works,
     Bundles,
     Ticks,
     Learnings,
@@ -49,7 +49,7 @@ impl View {
     /// All views in tab order.
     pub const ALL: [View; 7] = [
         View::Dashboard,
-        View::WorkItems,
+        View::Works,
         View::Bundles,
         View::Ticks,
         View::Learnings,
@@ -74,7 +74,7 @@ impl fmt::Display for View {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             View::Dashboard => write!(f, "Dashboard"),
-            View::WorkItems => write!(f, "Work Items"),
+            View::Works => write!(f, "Work Items"),
             View::Bundles => write!(f, "Bundles"),
             View::Ticks => write!(f, "Ticks"),
             View::Learnings => write!(f, "Learnings"),
@@ -90,7 +90,7 @@ pub struct AppState {
     pub plans: Vec<Plan>,
     pub specs: Vec<Spec>,
     pub phases: Vec<Phase>,
-    pub work_items: Vec<WorkItem>,
+    pub works: Vec<Work>,
     pub bundles: Vec<Bundle>,
     pub ticks: Vec<Tick>,
     pub learnings: Vec<Learning>,
@@ -205,7 +205,7 @@ impl App {
     /// Map current view to an IPC collection name, if applicable.
     pub fn view_collection(&self) -> Option<String> {
         match self.current_view {
-            View::WorkItems => Some("work_item".to_string()),
+            View::Works => Some("work".to_string()),
             View::Bundles => Some("bundle".to_string()),
             View::Ticks => Some("tick".to_string()),
             View::Learnings => Some("learning".to_string()),
@@ -217,7 +217,7 @@ impl App {
     /// Get the ID of the currently selected record, if any.
     pub fn selected_record_id(&self) -> Option<String> {
         match self.current_view {
-            View::WorkItems => self.state.work_items.get(self.selected_index).map(|w| w.id.clone()),
+            View::Works => self.state.works.get(self.selected_index).map(|w| w.id.clone()),
             View::Bundles => self.state.bundles.get(self.selected_index).map(|b| b.id.clone()),
             View::Ticks => self.state.ticks.get(self.selected_index).map(|t| t.id.clone()),
             View::Learnings => self.state.learnings.get(self.selected_index).map(|l| l.id.clone()),
@@ -230,7 +230,7 @@ impl App {
     pub fn current_list_len(&self) -> usize {
         match self.current_view {
             View::Dashboard => 0,
-            View::WorkItems => self.state.work_items.len(),
+            View::Works => self.state.works.len(),
             View::Bundles => self.state.bundles.len(),
             View::Ticks => self.state.ticks.len(),
             View::Learnings => self.state.learnings.len(),
@@ -246,8 +246,8 @@ mod tests {
 
     #[test]
     fn test_view_next_cycles() {
-        assert_eq!(View::Dashboard.next(), View::WorkItems);
-        assert_eq!(View::WorkItems.next(), View::Bundles);
+        assert_eq!(View::Dashboard.next(), View::Works);
+        assert_eq!(View::Works.next(), View::Bundles);
         assert_eq!(View::Bundles.next(), View::Ticks);
         assert_eq!(View::Ticks.next(), View::Learnings);
         assert_eq!(View::Learnings.next(), View::Locks);
@@ -262,14 +262,14 @@ mod tests {
         assert_eq!(View::Locks.prev(), View::Learnings);
         assert_eq!(View::Learnings.prev(), View::Ticks);
         assert_eq!(View::Ticks.prev(), View::Bundles);
-        assert_eq!(View::Bundles.prev(), View::WorkItems);
-        assert_eq!(View::WorkItems.prev(), View::Dashboard);
+        assert_eq!(View::Bundles.prev(), View::Works);
+        assert_eq!(View::Works.prev(), View::Dashboard);
     }
 
     #[test]
     fn test_view_display() {
         assert_eq!(View::Dashboard.to_string(), "Dashboard");
-        assert_eq!(View::WorkItems.to_string(), "Work Items");
+        assert_eq!(View::Works.to_string(), "Work Items");
         assert_eq!(View::Bundles.to_string(), "Bundles");
         assert_eq!(View::Ticks.to_string(), "Ticks");
         assert_eq!(View::Learnings.to_string(), "Learnings");
@@ -308,7 +308,7 @@ mod tests {
         let mut app = App::new();
         app.selected_index = 5;
         app.next_view();
-        assert_eq!(app.current_view, View::WorkItems);
+        assert_eq!(app.current_view, View::Works);
         assert_eq!(app.selected_index, 0);
     }
 
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn test_app_select_next_empty() {
         let mut app = App::new();
-        app.current_view = View::WorkItems;
+        app.current_view = View::Works;
         app.select_next(); // no items, should not panic
         assert_eq!(app.selected_index, 0);
     }
@@ -348,16 +348,10 @@ mod tests {
     #[test]
     fn test_app_select_next_with_items() {
         let mut app = App::new();
-        app.current_view = View::WorkItems;
-        app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "t1".into(), "d1".into()));
-        app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "t2".into(), "d2".into()));
-        app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "t3".into(), "d3".into()));
+        app.current_view = View::Works;
+        app.state.works.push(Work::new("ph1".into(), "t1".into(), "d1".into()));
+        app.state.works.push(Work::new("ph1".into(), "t2".into(), "d2".into()));
+        app.state.works.push(Work::new("ph1".into(), "t3".into(), "d3".into()));
 
         assert_eq!(app.selected_index, 0);
         app.select_next();
@@ -395,12 +389,10 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.current_list_len(), 0); // Dashboard
 
-        app.current_view = View::WorkItems;
+        app.current_view = View::Works;
         assert_eq!(app.current_list_len(), 0);
 
-        app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "t1".into(), "d1".into()));
+        app.state.works.push(Work::new("ph1".into(), "t1".into(), "d1".into()));
         assert_eq!(app.current_list_len(), 1);
 
         app.current_view = View::Bundles;
@@ -417,7 +409,7 @@ mod tests {
         assert!(state.plans.is_empty());
         assert!(state.specs.is_empty());
         assert!(state.phases.is_empty());
-        assert!(state.work_items.is_empty());
+        assert!(state.works.is_empty());
         assert!(state.bundles.is_empty());
         assert!(state.ticks.is_empty());
         assert!(state.learnings.is_empty());

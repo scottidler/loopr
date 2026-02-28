@@ -203,11 +203,11 @@ impl DaemonEvent {
         )
     }
 
-    pub fn bundle_rejected_stale(work_item_id: &str, base_tick_id: &str, latest_tick_id: &str) -> Self {
+    pub fn bundle_rejected_stale(work_id: &str, base_tick_id: &str, latest_tick_id: &str) -> Self {
         Self::new(
             "bundle.rejected_stale",
             serde_json::json!({
-                "bundle_work_item_id": work_item_id,
+                "bundle_work_id": work_id,
                 "base_tick_id": base_tick_id,
                 "latest_tick_id": latest_tick_id,
             }),
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_request_serde_roundtrip() {
-        let req = DaemonRequest::new(1, "work_item.get", json!({"id": "abc123"}));
+        let req = DaemonRequest::new(1, "work.get", json!({"id": "abc123"}));
         let json = serde_json::to_string(&req).unwrap();
         let parsed: DaemonRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, parsed);
@@ -402,9 +402,9 @@ mod tests {
 
     #[test]
     fn test_event_transition_completed() {
-        let event = DaemonEvent::transition_completed("work_item", "wi1", "Draft", "Ready", "Coordinator");
+        let event = DaemonEvent::transition_completed("work", "wi1", "Draft", "Ready", "Coordinator");
         assert_eq!(event.event, "transition.completed");
-        assert_eq!(event.data["collection"], "work_item");
+        assert_eq!(event.data["collection"], "work");
         assert_eq!(event.data["from"], "Draft");
         assert_eq!(event.data["to"], "Ready");
     }

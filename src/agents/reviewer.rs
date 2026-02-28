@@ -109,8 +109,11 @@ pub async fn run_reviewer(
 
     let ctx = ContextBuilder::new(stores, Role::Reviewer)
         .load_bundle_hierarchy(&bundle_id)?
-        .with_footer("Review this Bundle against the WorkItem requirements and review criteria above. Respond with ONLY valid JSON.".into());
-    let work_item_title = ctx.work_item_title().unwrap_or("unknown").to_string();
+        .with_footer(
+            "Review this Bundle against the Work requirements and review criteria above. Respond with ONLY valid JSON."
+                .into(),
+        );
+    let work_title = ctx.work_title().unwrap_or("unknown").to_string();
     let assembled = ctx.build(&crate::prompts::store().reviewer);
 
     let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
@@ -133,8 +136,8 @@ pub async fn run_reviewer(
         "learning.create",
         serde_json::json!({
             "content": learning_content,
-            "scope": "workitem",
-            "source_id": work_item_title,
+            "scope": "work",
+            "source_id": work_title,
         }),
     );
     if learning_resp.is_error() {
@@ -188,8 +191,8 @@ pub async fn run_reviewer(
                 "learning.create",
                 serde_json::json!({
                     "content": format!("Review requested changes: {}", review.summary),
-                    "scope": "workitem",
-                    "source_id": work_item_title,
+                    "scope": "work",
+                    "source_id": work_title,
                 }),
             );
             info!(
@@ -233,7 +236,7 @@ mod tests {
     use crate::domain::phase::Phase;
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
-    use crate::domain::work_item::WorkItem;
+    use crate::domain::work::Work;
     use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
     use std::path::Path;
@@ -295,9 +298,9 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        let wi = WorkItem::new(phase_id.clone(), "Test WorkItem".into(), "Implement the feature".into());
+        let wi = Work::new(phase_id.clone(), "Test Work".into(), "Implement the feature".into());
         let wi_id = wi.id.clone();
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Create a bundle in Triaged state (ready for review)
         let mut bundle = Bundle::new(
@@ -449,13 +452,13 @@ mod tests {
             .load_bundle_hierarchy(&bundle_id)
             .unwrap()
             .with_footer("Review this Bundle.".into());
-        assert_eq!(ctx.work_item_title(), Some("Test WorkItem"));
+        assert_eq!(ctx.work_title(), Some("Test Work"));
 
         let assembled = ctx.build(&crate::prompts::store().reviewer);
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
         assert!(assembled.user_message.contains("Test Phase"));
-        assert!(assembled.user_message.contains("Test WorkItem"));
+        assert!(assembled.user_message.contains("Test Work"));
         assert!(assembled.user_message.contains("Bundle Under Review"));
         assert!(assembled.system_prompt.contains("Reviewer agent"));
     }

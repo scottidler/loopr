@@ -64,7 +64,7 @@ let params = serde_json::json!({ "id": id, "target_status": target_state, "role"
 **Change:** Before the existing `agent.start` bridge call, add status validation for implementer assignments.
 
 Logic:
-1. Read work item via `bridge.request("work_item.get", ...)`
+1. Read work item via `bridge.request("work.get", ...)`
 2. If Draft → auto-transition Draft→Ready→InProgress via bridge with coordinator role
 3. If Ready → auto-transition Ready→InProgress
 4. If InProgress → proceed (already correct)
@@ -121,9 +121,9 @@ session.iteration = iteration;
 
 **Change 1 — context.rs:** Add `with_coordinator_goal()` method to `ContextBuilder`. Reads the active goal from `stores.coordinator_goals` and sets a new `coordinator_goal: Option<String>` field. In `build()`, emit a `## Project Goal` section before the hierarchy. This is a natural extension of the existing builder pattern — same as `with_state_summary()` but for the goal.
 
-**Change 2 — context.rs:** In `build()`, after the hierarchy section, add sibling work items from the same phase. The builder already has `self.work_item` and access to `self.stores` — read `stores.work_items` and filter by matching `phase_id`, excluding the current work item. Format as: `## Sibling Work Items\n- [status] title`. This fits in the existing `state_summary` budget.
+**Change 2 — context.rs:** In `build()`, after the hierarchy section, add sibling work items from the same phase. The builder already has `self.work` and access to `self.stores` — read `stores.works` and filter by matching `phase_id`, excluding the current work item. Format as: `## Sibling Work Items\n- [status] title`. This fits in the existing `state_summary` budget.
 
-**Change 3 — implementer.rs:** In `run_iteration()`, add `.with_coordinator_goal()` and `.with_state_summary(build_implementer_summary(stores, work_item_id))` to the builder chain.
+**Change 3 — implementer.rs:** In `run_iteration()`, add `.with_coordinator_goal()` and `.with_state_summary(build_implementer_summary(stores, work_id))` to the builder chain.
 
 `build_implementer_summary()` is a small helper in implementer.rs that builds a focused string: active locks on resources, active agents working on sibling work items.
 

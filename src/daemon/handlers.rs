@@ -17,7 +17,7 @@ use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::tick::{Tick, TickStatus, tick_transitions};
 use crate::domain::transition::validate_transition;
 use crate::domain::validation::{ValidationReport, ValidationVerdict};
-use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
+use crate::domain::work::{Work, WorkStatus, work_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
@@ -144,11 +144,11 @@ pub fn dispatch(
         "phase.list" => handle_phase_list(stores, req),
         "phase.transition" => handle_phase_transition(stores, event_tx, req),
         "phase.update" => handle_phase_update(stores, event_tx, req),
-        "work_item.create" => handle_work_item_create(stores, event_tx, req),
-        "work_item.get" => handle_work_item_get(stores, req),
-        "work_item.list" => handle_work_item_list(stores, req),
-        "work_item.transition" => handle_work_item_transition(stores, event_tx, req),
-        "work_item.update" => handle_work_item_update(stores, event_tx, req),
+        "work.create" => handle_work_create(stores, event_tx, req),
+        "work.get" => handle_work_get(stores, req),
+        "work.list" => handle_work_list(stores, req),
+        "work.transition" => handle_work_transition(stores, event_tx, req),
+        "work.update" => handle_work_update(stores, event_tx, req),
         "bundle.create" => handle_bundle_create(stores, event_tx, req),
         "bundle.get" => handle_bundle_get(stores, req),
         "bundle.list" => handle_bundle_list(stores, req),
@@ -214,7 +214,7 @@ fn auto_start_agents(
     method: &str,
     params: &serde_json::Value,
 ) {
-    if method == "work_item.transition"
+    if method == "work.transition"
         && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
         && target == "InProgress"
         && stores.config.agents.auto_start_implementer
@@ -224,7 +224,7 @@ fn auto_start_agents(
             0,
             "agent.start",
             json!({
-                "agent_type": "implementer", "work_item_id": wi_id,
+                "agent_type": "implementer", "work_id": wi_id,
             }),
         );
         let _ = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
@@ -298,7 +298,7 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
         Plan::collection_name(),
         Spec::collection_name(),
         Phase::collection_name(),
-        WorkItem::collection_name(),
+        Work::collection_name(),
         Bundle::collection_name(),
         Tick::collection_name(),
         Learning::collection_name(),
@@ -317,7 +317,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     let plans = stores.plans.read().unwrap().len();
     let specs = stores.specs.read().unwrap().len();
     let phases = stores.phases.read().unwrap().len();
-    let work_items = stores.work_items.read().unwrap().len();
+    let works = stores.works.read().unwrap().len();
     let bundles = stores.bundles.read().unwrap().len();
     let ticks = stores.ticks.read().unwrap().len();
     let learnings = stores.learnings.read().unwrap().len();
@@ -330,7 +330,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
         let ts_plans = s.list::<Plan>(&[]).map(|v| v.len()).unwrap_or(0);
         let ts_specs = s.list::<Spec>(&[]).map(|v| v.len()).unwrap_or(0);
         let ts_phases = s.list::<Phase>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_work_items = s.list::<WorkItem>(&[]).map(|v| v.len()).unwrap_or(0);
+        let ts_works = s.list::<Work>(&[]).map(|v| v.len()).unwrap_or(0);
         let ts_bundles = s.list::<Bundle>(&[]).map(|v| v.len()).unwrap_or(0);
         let ts_ticks = s.list::<Tick>(&[]).map(|v| v.len()).unwrap_or(0);
         let ts_learnings = s.list::<Learning>(&[]).map(|v| v.len()).unwrap_or(0);
@@ -341,7 +341,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
                 "plans": ts_plans,
                 "specs": ts_specs,
                 "phases": ts_phases,
-                "work_items": ts_work_items,
+                "works": ts_works,
                 "bundles": ts_bundles,
                 "ticks": ts_ticks,
                 "learnings": ts_learnings,
@@ -373,15 +373,15 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     };
 
     // Gap #33: Stale work items count
-    let stale_work_items: usize = {
-        let wis = stores.work_items.read().unwrap();
+    let stale_works: usize = {
+        let wis = stores.works.read().unwrap();
         let bundles_map = stores.bundles.read().unwrap();
         if let Some(ref latest_tid) = latest_tick_id {
             wis.values()
-                .filter(|wi| wi.status == WorkItemStatus::InProgress)
+                .filter(|wi| wi.status == WorkStatus::InProgress)
                 .filter(|wi| {
                     bundles_map.values().any(|b| {
-                        b.work_item_id == wi.id
+                        b.work_id == wi.id
                             && !matches!(
                                 b.status,
                                 BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
@@ -404,7 +404,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
                 "plans": plans,
                 "specs": specs,
                 "phases": phases,
-                "work_items": work_items,
+                "works": works,
                 "bundles": bundles,
                 "ticks": ticks,
                 "learnings": learnings,
@@ -413,7 +413,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
             },
             "taskstore": taskstore_stats,
             "current_tick_sha": current_tick_sha,
-            "stale_work_items": stale_work_items,
+            "stale_works": stale_works,
         }),
     )
 }
@@ -1067,9 +1067,9 @@ fn handle_phase_transition(
     DaemonResponse::ok(req.id, phase_json)
 }
 
-// --- WorkItem handlers ---
+// --- Work handlers ---
 
-fn handle_work_item_create(
+fn handle_work_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
@@ -1103,11 +1103,11 @@ fn handle_work_item_create(
 
     // Duplicate detection: reject work items with same title in same phase (unless Abandoned)
     {
-        let work_items = stores.work_items.read().unwrap();
-        let duplicate = work_items.values().find(|wi| {
+        let works = stores.works.read().unwrap();
+        let duplicate = works.values().find(|wi| {
             wi.phase_id == phase_id
                 && wi.title.to_lowercase() == title.to_lowercase()
-                && !matches!(wi.status, WorkItemStatus::Abandoned)
+                && !matches!(wi.status, WorkStatus::Abandoned)
         });
         if let Some(dup) = duplicate {
             return DaemonResponse::err(
@@ -1126,11 +1126,11 @@ fn handle_work_item_create(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // #17: WorkItem must have at least one resource_tag
+    // #17: Work must have at least one resource_tag
     if resource_tags.is_empty() {
         return DaemonResponse::err(
             req.id,
-            RpcError::precondition_failed("WorkItem must have at least one resource_tag"),
+            RpcError::precondition_failed("Work must have at least one resource_tag"),
         );
     }
 
@@ -1148,19 +1148,19 @@ fn handle_work_item_create(
 
     // #16: Validate dependencies — skip unknown IDs with warning instead of rejecting
     let dependencies = if !dependencies.is_empty() {
-        let work_items = stores.work_items.read().unwrap();
+        let works = stores.works.read().unwrap();
         let mut valid_deps = Vec::new();
         for dep_id in &dependencies {
             if dep_id.starts_with("batch:") {
                 // Batch references (e.g., "batch:0") can't be resolved here — skip with warning
                 log::warn!(
-                    "WorkItem creation: batch dependency '{}' cannot be resolved at handler level, skipping",
+                    "Work creation: batch dependency '{}' cannot be resolved at handler level, skipping",
                     dep_id
                 );
-            } else if work_items.contains_key(dep_id) {
+            } else if works.contains_key(dep_id) {
                 valid_deps.push(dep_id.clone());
             } else {
-                log::warn!("WorkItem creation: dependency '{}' not found, skipping", dep_id);
+                log::warn!("Work creation: dependency '{}' not found, skipping", dep_id);
             }
         }
         valid_deps
@@ -1168,39 +1168,39 @@ fn handle_work_item_create(
         dependencies
     };
 
-    let mut work_item = WorkItem::new(phase_id, title, description);
-    work_item.resource_tags = resource_tags;
-    work_item.acceptance_criteria = acceptance_criteria.clone();
-    work_item.dependencies = dependencies;
+    let mut work = Work::new(phase_id, title, description);
+    work.resource_tags = resource_tags;
+    work.acceptance_criteria = acceptance_criteria.clone();
+    work.dependencies = dependencies;
 
-    let id = work_item.id.clone();
+    let id = work.id.clone();
 
     // Auto-promote to Ready if acceptance_criteria are provided.
     // Draft→Ready is always valid for Coordinator role.
     if !acceptance_criteria.is_empty() {
-        work_item.status = WorkItemStatus::Ready;
-        work_item.updated_at = crate::id::now_millis();
+        work.status = WorkStatus::Ready;
+        work.updated_at = crate::id::now_millis();
     }
 
     // Persist to TaskStore
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(work_item.clone())
+        && let Err(e) = store.lock().unwrap().create(work.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let wi_json = match serde_json::to_value(&work_item) {
+    let wi_json = match serde_json::to_value(&work) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
 
-    stores.work_items.write().unwrap().insert(id.clone(), work_item);
-    let _ = event_tx.send(DaemonEvent::record_created("work_item", &id));
+    stores.works.write().unwrap().insert(id.clone(), work);
+    let _ = event_tx.send(DaemonEvent::record_created("work", &id));
 
     DaemonResponse::ok(req.id, wi_json)
 }
 
-fn handle_work_item_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1208,7 +1208,7 @@ fn handle_work_item_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespo
 
     // Try TaskStore first, fall back to HashMap
     if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<WorkItem>(id) {
+        match store.lock().unwrap().get::<Work>(id) {
             Ok(Some(wi)) => {
                 return match serde_json::to_value(&wi) {
                     Ok(v) => DaemonResponse::ok(req.id, v),
@@ -1222,17 +1222,17 @@ fn handle_work_item_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespo
         }
     }
 
-    let work_items = stores.work_items.read().unwrap();
-    match work_items.get(id) {
+    let works = stores.works.read().unwrap();
+    match works.get(id) {
         Some(wi) => match serde_json::to_value(wi) {
             Ok(v) => DaemonResponse::ok(req.id, v),
             Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
         },
-        None => DaemonResponse::err(req.id, RpcError::not_found("work_item", id)),
+        None => DaemonResponse::err(req.id, RpcError::not_found("work", id)),
     }
 }
 
-fn handle_work_item_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     let phase_id_filter = req.params.get("phase_id").and_then(|v| v.as_str());
 
     // Try TaskStore first, fall back to HashMap
@@ -1246,9 +1246,9 @@ fn handle_work_item_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResp
         } else {
             vec![]
         };
-        match store.lock().unwrap().list::<WorkItem>(&filters) {
-            Ok(work_items) => {
-                return match serde_json::to_value(&work_items) {
+        match store.lock().unwrap().list::<Work>(&filters) {
+            Ok(works) => {
+                return match serde_json::to_value(&works) {
                     Ok(v) => DaemonResponse::ok(req.id, v),
                     Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
                 };
@@ -1259,8 +1259,8 @@ fn handle_work_item_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResp
         }
     }
 
-    let work_items = stores.work_items.read().unwrap();
-    let wi_list: Vec<&WorkItem> = work_items
+    let works = stores.works.read().unwrap();
+    let wi_list: Vec<&Work> = works
         .values()
         .filter(|wi| phase_id_filter.is_none() || Some(wi.phase_id.as_str()) == phase_id_filter)
         .collect();
@@ -1271,7 +1271,7 @@ fn handle_work_item_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResp
     }
 }
 
-fn handle_work_item_transition(
+fn handle_work_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
@@ -1281,7 +1281,7 @@ fn handle_work_item_transition(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
-    let target_status: WorkItemStatus = match req.params.get("target_status") {
+    let target_status: WorkStatus = match req.params.get("target_status") {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(s) => s,
             Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
@@ -1297,17 +1297,17 @@ fn handle_work_item_transition(
         None => Role::Coordinator,
     };
 
-    let mut work_items = stores.work_items.write().unwrap();
-    let wi = match work_items.get_mut(&id) {
+    let mut works = stores.works.write().unwrap();
+    let wi = match works.get_mut(&id) {
         Some(w) => w,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("work_item", &id)),
+        None => return DaemonResponse::err(req.id, RpcError::not_found("work", &id)),
     };
 
     let from = wi.status;
-    let rules = work_item_transitions();
+    let rules = work_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "work_items",
+            "works",
             &id,
             &format!("{:?}", from),
             &format!("{:?}", target_status),
@@ -1323,26 +1323,26 @@ fn handle_work_item_transition(
     }
 
     // #13: Assignee required for InProgress/InReview
-    if matches!(target_status, WorkItemStatus::InProgress | WorkItemStatus::InReview) && wi.assignee.is_none() {
+    if matches!(target_status, WorkStatus::InProgress | WorkStatus::InReview) && wi.assignee.is_none() {
         return DaemonResponse::err(
             req.id,
-            RpcError::precondition_failed("WorkItem must have an assignee before transitioning to InProgress/InReview"),
+            RpcError::precondition_failed("Work must have an assignee before transitioning to InProgress/InReview"),
         );
     }
 
     // #14: acceptance_criteria required for Ready
-    if target_status == WorkItemStatus::Ready && wi.acceptance_criteria.is_empty() {
+    if target_status == WorkStatus::Ready && wi.acceptance_criteria.is_empty() {
         return DaemonResponse::err(
             req.id,
-            RpcError::precondition_failed("WorkItem must have acceptance_criteria before transitioning to Ready"),
+            RpcError::precondition_failed("Work must have acceptance_criteria before transitioning to Ready"),
         );
     }
 
     // #15: InReview requires active Bundle (not Rejected/Merged/Superseded)
-    if target_status == WorkItemStatus::InReview {
+    if target_status == WorkStatus::InReview {
         let bundles = stores.bundles.read().unwrap();
         let has_active_bundle = bundles.values().any(|b| {
-            b.work_item_id == wi.id
+            b.work_id == wi.id
                 && !matches!(
                     b.status,
                     BundleStatus::Rejected | BundleStatus::Merged | BundleStatus::Superseded
@@ -1351,7 +1351,7 @@ fn handle_work_item_transition(
         if !has_active_bundle {
             return DaemonResponse::err(
                 req.id,
-                RpcError::precondition_failed("WorkItem cannot move to InReview without an active Bundle"),
+                RpcError::precondition_failed("Work cannot move to InReview without an active Bundle"),
             );
         }
     }
@@ -1359,7 +1359,7 @@ fn handle_work_item_transition(
     wi.status = target_status;
     wi.updated_at = crate::id::now_millis();
     let wi_clone = wi.clone();
-    drop(work_items);
+    drop(works);
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
@@ -1374,7 +1374,7 @@ fn handle_work_item_transition(
     };
 
     let _ = event_tx.send(DaemonEvent::transition_completed(
-        "work_item",
+        "work",
         &id,
         &from.to_string(),
         &target_status.to_string(),
@@ -1391,14 +1391,14 @@ fn handle_bundle_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    let work_item_id = match req.params.get("work_item_id").and_then(|v| v.as_str()) {
+    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_item_id is required")),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
     };
 
     // Verify parent work item exists
-    if !stores.work_items.read().unwrap().contains_key(&work_item_id) {
-        return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+    if !stores.works.read().unwrap().contains_key(&work_id) {
+        return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id));
     }
 
     let branch_name = req
@@ -1423,12 +1423,12 @@ fn handle_bundle_create(
     match (&base_tick_id, &latest_published) {
         // Published tick exists but bundle has no base_tick_id
         (None, Some(latest)) => {
-            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_item_id, "(none)", &latest.id));
+            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_id, "(none)", &latest.id));
             return DaemonResponse::err(req.id, RpcError::stale_bundle("(none)", &latest.id));
         }
         // Published tick exists and bundle's base_tick_id doesn't match it
         (Some(base_id), Some(latest)) if base_id != &latest.id => {
-            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_item_id, base_id, &latest.id));
+            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_id, base_id, &latest.id));
             return DaemonResponse::err(req.id, RpcError::stale_bundle(base_id, &latest.id));
         }
         // No published tick and no base_tick_id: bootstrap case, OK
@@ -1455,7 +1455,7 @@ fn handle_bundle_create(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let mut bundle = Bundle::new(work_item_id, base_tick_id, branch_name, claims);
+    let mut bundle = Bundle::new(work_id, base_tick_id, branch_name, claims);
     bundle.description = description;
 
     // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
@@ -1535,13 +1535,13 @@ fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
 }
 
 fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    let wi_filter = req.params.get("work_item_id").and_then(|v| v.as_str());
+    let wi_filter = req.params.get("work_id").and_then(|v| v.as_str());
 
     // Try TaskStore first, fall back to HashMap
     if let Some(store) = &stores.store {
         let filters: Vec<Filter> = if let Some(wid) = wi_filter {
             vec![Filter {
-                field: "work_item_id".to_string(),
+                field: "work_id".to_string(),
                 op: FilterOp::Eq,
                 value: IndexValue::String(wid.to_string()),
             }]
@@ -1564,7 +1564,7 @@ fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
     let bundles = stores.bundles.read().unwrap();
     let bundle_list: Vec<&Bundle> = bundles
         .values()
-        .filter(|b| wi_filter.is_none() || Some(b.work_item_id.as_str()) == wi_filter)
+        .filter(|b| wi_filter.is_none() || Some(b.work_id.as_str()) == wi_filter)
         .collect();
 
     match serde_json::to_value(&bundle_list) {
@@ -1605,7 +1605,7 @@ fn handle_bundle_transition(
     let (from, bundle_wi_id, touched_paths, mut verification) = match bundles.get(&id) {
         Some(b) => (
             b.status,
-            b.work_item_id.clone(),
+            b.work_id.clone(),
             b.touched_paths.clone(),
             b.verification.clone(),
         ),
@@ -1630,15 +1630,15 @@ fn handle_bundle_transition(
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
-    // #18: At most one Accepted Bundle per WorkItem
+    // #18: At most one Accepted Bundle per Work
     if target_status == BundleStatus::Accepted {
         let has_accepted = bundles
             .values()
-            .any(|b| b.work_item_id == bundle_wi_id && b.id != id && b.status == BundleStatus::Accepted);
+            .any(|b| b.work_id == bundle_wi_id && b.id != id && b.status == BundleStatus::Accepted);
         if has_accepted {
             return DaemonResponse::err(
                 req.id,
-                RpcError::precondition_failed("WorkItem already has an Accepted Bundle"),
+                RpcError::precondition_failed("Work already has an Accepted Bundle"),
             );
         }
     }
@@ -1902,7 +1902,7 @@ fn handle_tick_transition(
     let tick_clone = tick.clone();
     drop(ticks);
 
-    // Persist transition to TaskStore if available (matches work_item_transition pattern)
+    // Persist transition to TaskStore if available (matches work_transition pattern)
     if let Some(store) = &stores.store
         && let Err(e) = store.lock().unwrap().update(tick_clone.clone())
     {
@@ -1944,7 +1944,7 @@ fn handle_learning_create(
             Err(_) => {
                 return DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("invalid scope (workitem|phase|spec|plan|global)"),
+                    RpcError::invalid_params("invalid scope (work|phase|spec|plan|global)"),
                 );
             }
         },
@@ -2511,9 +2511,9 @@ fn handle_worktree_create(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    let work_item_id = match req.params.get("work_item_id").and_then(|v| v.as_str()) {
+    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_item_id is required")),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
     };
 
     let base_ref = req
@@ -2526,36 +2526,33 @@ fn handle_worktree_create(
     // Validate the work item exists (TaskStore first, fallback to HashMap)
     {
         let found = if let Some(store) = &stores.store {
-            store.lock().unwrap().get::<WorkItem>(&work_item_id).ok().is_some()
+            store.lock().unwrap().get::<Work>(&work_id).ok().is_some()
         } else {
             false
         };
         if !found {
-            let work_items = stores.work_items.read().unwrap();
-            if !work_items.contains_key(&work_item_id) {
-                return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+            let works = stores.works.read().unwrap();
+            if !works.contains_key(&work_id) {
+                return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id));
             }
         }
     }
 
     // Check if worktree already exists before attempting git operations
-    if worktree_mgr.exists(&work_item_id) {
+    if worktree_mgr.exists(&work_id) {
         return DaemonResponse::err(
             req.id,
-            RpcError::invalid_params(&format!("worktree already exists for work item {work_item_id}")),
+            RpcError::invalid_params(&format!("worktree already exists for work item {work_id}")),
         );
     }
 
-    match worktree_mgr.create(&work_item_id, &base_ref) {
+    match worktree_mgr.create(&work_id, &base_ref) {
         Ok(path) => {
             let _ = event_tx.send(DaemonEvent::new(
                 "worktree.created",
-                json!({ "work_item_id": work_item_id, "path": path.to_string_lossy() }),
+                json!({ "work_id": work_id, "path": path.to_string_lossy() }),
             ));
-            DaemonResponse::ok(
-                req.id,
-                json!({ "work_item_id": work_item_id, "path": path.to_string_lossy() }),
-            )
+            DaemonResponse::ok(req.id, json!({ "work_id": work_id, "path": path.to_string_lossy() }))
         }
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
@@ -2577,36 +2574,36 @@ fn handle_worktree_cleanup(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    let work_item_id = match req.params.get("work_item_id").and_then(|v| v.as_str()) {
+    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_item_id is required")),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
     };
 
     // Validate the work item exists (TaskStore first, fallback to HashMap)
     {
         let found = if let Some(store) = &stores.store {
-            store.lock().unwrap().get::<WorkItem>(&work_item_id).ok().is_some()
+            store.lock().unwrap().get::<Work>(&work_id).ok().is_some()
         } else {
             false
         };
         if !found {
-            let work_items = stores.work_items.read().unwrap();
-            if !work_items.contains_key(&work_item_id) {
-                return DaemonResponse::err(req.id, RpcError::not_found("work_item", &work_item_id));
+            let works = stores.works.read().unwrap();
+            if !works.contains_key(&work_id) {
+                return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id));
             }
         }
     }
 
-    let path = worktree_mgr.worktree_path(&work_item_id);
-    match worktree_mgr.cleanup(&work_item_id) {
+    let path = worktree_mgr.worktree_path(&work_id);
+    match worktree_mgr.cleanup(&work_id) {
         Ok(()) => {
             let _ = event_tx.send(DaemonEvent::new(
                 "worktree.cleaned",
-                json!({ "work_item_id": work_item_id, "path": path.to_string_lossy() }),
+                json!({ "work_id": work_id, "path": path.to_string_lossy() }),
             ));
             DaemonResponse::ok(
                 req.id,
-                json!({ "work_item_id": work_item_id, "path": path.to_string_lossy(), "status": "cleaned" }),
+                json!({ "work_id": work_id, "path": path.to_string_lossy(), "status": "cleaned" }),
             )
         }
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -2614,9 +2611,9 @@ fn handle_worktree_cleanup(
 }
 
 fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
-    let work_item_id = match req.params.get("work_item_id").and_then(|v| v.as_str()) {
+    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_item_id is required")),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
     };
 
     let new_base_ref = req
@@ -2626,8 +2623,8 @@ fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -
         .unwrap_or("HEAD")
         .to_string();
 
-    match worktree_mgr.refresh(&work_item_id, &new_base_ref) {
-        Ok(()) => DaemonResponse::ok(req.id, json!({ "work_item_id": work_item_id, "status": "refreshed" })),
+    match worktree_mgr.refresh(&work_id, &new_base_ref) {
+        Ok(()) => DaemonResponse::ok(req.id, json!({ "work_id": work_id, "status": "refreshed" })),
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
 }
@@ -3182,9 +3179,9 @@ fn handle_agent_start(
         }
     };
 
-    let work_item_id = req
+    let work_id = req
         .params
-        .get("work_item_id")
+        .get("work_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let bundle_id = req
@@ -3193,14 +3190,14 @@ fn handle_agent_start(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Validate: Implementer needs work_item_id, Reviewer needs bundle_id
+    // Validate: Implementer needs work_id, Reviewer needs bundle_id
     // Thinking plane agents (Coordinator, Researcher, Integrator) don't require either.
     match agent_type {
         AgentType::Implementer => {
-            if work_item_id.is_none() {
+            if work_id.is_none() {
                 return DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("work_item_id is required for implementer agents"),
+                    RpcError::invalid_params("work_id is required for implementer agents"),
                 );
             }
         }
@@ -3279,7 +3276,7 @@ fn handle_agent_start(
         AgentType::Integrator => "deterministic".to_string(),
     };
     let mut session = AgentSession::new(agent_type, model);
-    session.work_item_id = work_item_id;
+    session.work_id = work_id;
     session.bundle_id = bundle_id;
     session.target_id = target_id;
     session.query = query;
@@ -3655,7 +3652,7 @@ fn handle_phase_update(
     DaemonResponse::ok(req.id, phase_json)
 }
 
-fn handle_work_item_update(
+fn handle_work_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
@@ -3665,10 +3662,10 @@ fn handle_work_item_update(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
     };
 
-    let mut work_items = stores.work_items.write().unwrap();
-    let wi = match work_items.get_mut(&id) {
+    let mut works = stores.works.write().unwrap();
+    let wi = match works.get_mut(&id) {
         Some(w) => w,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("work_items", &id)),
+        None => return DaemonResponse::err(req.id, RpcError::not_found("works", &id)),
     };
 
     if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
@@ -3698,7 +3695,7 @@ fn handle_work_item_update(
     }
 
     let wi_json = serde_json::to_value(&*wi).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("work_items", &id));
+    let _ = event_tx.send(DaemonEvent::record_updated("works", &id));
     DaemonResponse::ok(req.id, wi_json)
 }
 
@@ -3881,7 +3878,7 @@ mod tests {
         store.rebuild_indexes::<Plan>().unwrap();
         store.rebuild_indexes::<Spec>().unwrap();
         store.rebuild_indexes::<Phase>().unwrap();
-        store.rebuild_indexes::<WorkItem>().unwrap();
+        store.rebuild_indexes::<Work>().unwrap();
         store.rebuild_indexes::<Bundle>().unwrap();
         store.rebuild_indexes::<Tick>().unwrap();
         store.rebuild_indexes::<Learning>().unwrap();
@@ -3931,7 +3928,7 @@ mod tests {
         store.rebuild_indexes::<Plan>().unwrap();
         store.rebuild_indexes::<Spec>().unwrap();
         store.rebuild_indexes::<Phase>().unwrap();
-        store.rebuild_indexes::<WorkItem>().unwrap();
+        store.rebuild_indexes::<Work>().unwrap();
         store.rebuild_indexes::<Bundle>().unwrap();
         store.rebuild_indexes::<Tick>().unwrap();
         store.rebuild_indexes::<Learning>().unwrap();
@@ -4005,7 +4002,7 @@ mod tests {
         assert!(result["version"].is_string());
         assert!(result["pid"].is_number());
         assert_eq!(result["counts"]["plans"], 0);
-        assert_eq!(result["counts"]["work_items"], 0);
+        assert_eq!(result["counts"]["works"], 0);
         // Without TaskStore, reports disabled
         assert_eq!(result["taskstore"]["enabled"], false);
     }
@@ -4019,15 +4016,15 @@ mod tests {
         let plan = Plan::new("Test".into(), "".into(), "".into());
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
         // Insert a work item
-        let wi = WorkItem::new("p-1".into(), "WI".into(), "".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new("p-1".into(), "WI".into(), "".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let req = DaemonRequest::new(1, "system.status", json!(null));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["counts"]["plans"], 1);
-        assert_eq!(result["counts"]["work_items"], 1);
+        assert_eq!(result["counts"]["works"], 1);
         assert_eq!(result["counts"]["specs"], 0);
     }
 
@@ -4062,7 +4059,7 @@ mod tests {
         assert_eq!(result["taskstore"]["counts"]["plans"], 1);
         assert_eq!(result["taskstore"]["counts"]["specs"], 1);
         assert_eq!(result["taskstore"]["counts"]["phases"], 0);
-        assert_eq!(result["taskstore"]["counts"]["work_items"], 0);
+        assert_eq!(result["taskstore"]["counts"]["works"], 0);
 
         // HashMap counts should be 0 (we only wrote to TaskStore)
         assert_eq!(result["counts"]["plans"], 0);
@@ -5458,7 +5455,7 @@ mod tests {
         assert_eq!(phase.status, PhaseStatus::Active);
     }
 
-    // --- work_item handlers ---
+    // --- work handlers ---
 
     /// Helper: create a plan + spec + phase and return (plan_id, spec_id, phase_id)
     fn create_test_phase(
@@ -5483,7 +5480,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_create_success() {
+    fn test_work_create_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5491,7 +5488,7 @@ mod tests {
 
         let req = DaemonRequest::new(
             30,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Implement auth",
@@ -5505,18 +5502,18 @@ mod tests {
         assert_eq!(result["phase_id"], phase_id);
         // Auto-promoted to Ready because acceptance_criteria were provided
         assert_eq!(result["status"], "Ready");
-        assert_eq!(stores.work_items.read().unwrap().len(), 1);
+        assert_eq!(stores.works.read().unwrap().len(), 1);
     }
 
     #[test]
-    fn test_work_item_create_persists_to_taskstore() {
+    fn test_work_create_persists_to_taskstore() {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
         let req = DaemonRequest::new(
             30,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Persisted WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
@@ -5525,19 +5522,19 @@ mod tests {
 
         // Verify it was persisted to TaskStore
         let store = stores.store.as_ref().unwrap().lock().unwrap();
-        let retrieved: Option<WorkItem> = store.get(&wi_id).unwrap();
+        let retrieved: Option<Work> = store.get(&wi_id).unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().title, "Persisted WI");
     }
 
     #[test]
-    fn test_work_item_create_missing_phase_id() {
+    fn test_work_create_missing_phase_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
             1,
-            "work_item.create",
+            "work.create",
             json!({"title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
@@ -5546,13 +5543,13 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_create_phase_not_found() {
+    fn test_work_create_phase_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
             1,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": "nonexistent", "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
@@ -5561,14 +5558,14 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_create_missing_title() {
+    fn test_work_create_missing_title() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
         let req = DaemonRequest::new(
             30,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "description": "no title", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
@@ -5577,7 +5574,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_create_broadcasts_event() {
+    fn test_work_create_broadcasts_event() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5590,17 +5587,17 @@ mod tests {
 
         let req = DaemonRequest::new(
             30,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
-        assert_eq!(event.data["collection"], "work_item");
+        assert_eq!(event.data["collection"], "work");
     }
 
     #[test]
-    fn test_work_item_get_success() {
+    fn test_work_get_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5613,7 +5610,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "My WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5624,25 +5621,25 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(31, "work_item.get", json!({"id": wi_id})),
+            DaemonRequest::new(31, "work.get", json!({"id": wi_id})),
         );
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "My WI");
     }
 
     #[test]
-    fn test_work_item_get_not_found() {
+    fn test_work_get_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "work_item.get", json!({"id": "nonexistent"}));
+        let req = DaemonRequest::new(1, "work.get", json!({"id": "nonexistent"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
     #[test]
-    fn test_work_item_get_reads_from_taskstore() {
+    fn test_work_get_reads_from_taskstore() {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5651,7 +5648,7 @@ mod tests {
         // Create a work item (writes to both TaskStore and HashMap)
         let create_req = DaemonRequest::new(
             30,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "TaskStore WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
@@ -5659,28 +5656,28 @@ mod tests {
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Remove from HashMap to prove get reads from TaskStore
-        stores.work_items.write().unwrap().remove(&wi_id);
+        stores.works.write().unwrap().remove(&wi_id);
 
         // Get should still succeed via TaskStore
-        let get_req = DaemonRequest::new(31, "work_item.get", json!({"id": wi_id}));
+        let get_req = DaemonRequest::new(31, "work.get", json!({"id": wi_id}));
         let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "TaskStore WI");
     }
 
     #[test]
-    fn test_work_item_list_empty() {
+    fn test_work_list_empty() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "work_item.list", json!(null));
+        let req = DaemonRequest::new(1, "work.list", json!(null));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
 
     #[test]
-    fn test_work_item_list_filtered_by_phase_id() {
+    fn test_work_list_filtered_by_phase_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5708,7 +5705,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id_1, "title": "WI A", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5719,7 +5716,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 31,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id_2, "title": "WI B", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5730,7 +5727,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(40, "work_item.list", json!(null)),
+            DaemonRequest::new(40, "work.list", json!(null)),
         );
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
@@ -5740,7 +5737,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(41, "work_item.list", json!({"phase_id": phase_id_1})),
+            DaemonRequest::new(41, "work.list", json!({"phase_id": phase_id_1})),
         );
         let items = filtered_resp.result.unwrap();
         let arr = items.as_array().unwrap();
@@ -5749,7 +5746,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_list_reads_from_taskstore() {
+    fn test_work_list_reads_from_taskstore() {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5777,7 +5774,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id_1, "title": "WI A", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5788,13 +5785,13 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 31,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id_2, "title": "WI B", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
 
         // Clear HashMap to prove list reads from TaskStore
-        stores.work_items.write().unwrap().clear();
+        stores.works.write().unwrap().clear();
 
         // List all should still return both work items via TaskStore
         let all_resp = dispatch(
@@ -5802,13 +5799,13 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(40, "work_item.list", json!(null)),
+            DaemonRequest::new(40, "work.list", json!(null)),
         );
         assert!(!all_resp.is_error());
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
-        let filtered_req = DaemonRequest::new(41, "work_item.list", json!({"phase_id": phase_id_1}));
+        let filtered_req = DaemonRequest::new(41, "work.list", json!({"phase_id": phase_id_1}));
         let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
         assert!(!filtered_resp.is_error());
         let filtered_items = filtered_resp.result.unwrap();
@@ -5818,7 +5815,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_transition_draft_to_ready() {
+    fn test_work_transition_draft_to_ready() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5837,17 +5834,17 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
-        let _ = rx.try_recv(); // consume work_item create event
+        let _ = rx.try_recv(); // consume work create event
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Already Ready — transition to InProgress (with assignee, required by precondition)
         let req = DaemonRequest::new(
             31,
-            "work_item.transition",
+            "work.transition",
             json!({
                 "id": wi_id,
                 "target_status": "InProgress",
@@ -5861,13 +5858,13 @@ mod tests {
 
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "transition.completed");
-        assert_eq!(event.data["collection"], "work_item");
+        assert_eq!(event.data["collection"], "work");
         assert_eq!(event.data["from"], "Ready");
         assert_eq!(event.data["to"], "InProgress");
     }
 
     #[test]
-    fn test_work_item_transition_invalid_skip_state() {
+    fn test_work_transition_invalid_skip_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5880,7 +5877,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5889,7 +5886,7 @@ mod tests {
         // Try Ready → Done (invalid: must go through InProgress, InReview, Integrated)
         let req = DaemonRequest::new(
             31,
-            "work_item.transition",
+            "work.transition",
             json!({
                 "id": wi_id,
                 "target_status": "Done",
@@ -5902,7 +5899,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_transition_wrong_role() {
+    fn test_work_transition_wrong_role() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5915,7 +5912,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5924,7 +5921,7 @@ mod tests {
         // Implementer cannot transition Ready → InProgress (only Coordinator can)
         let req = DaemonRequest::new(
             31,
-            "work_item.transition",
+            "work.transition",
             json!({
                 "id": wi_id,
                 "target_status": "InProgress",
@@ -5937,13 +5934,13 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_transition_not_found() {
+    fn test_work_transition_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
             1,
-            "work_item.transition",
+            "work.transition",
             json!({
                 "id": "nonexistent",
                 "target_status": "Ready"
@@ -5955,7 +5952,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_transition_persists_to_taskstore() {
+    fn test_work_transition_persists_to_taskstore() {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -5969,7 +5966,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 2,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "Transition WI", "description": "Test", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -5979,7 +5976,7 @@ mod tests {
         // Already Ready via auto-promotion (acceptance_criteria present) — transition to InProgress
         let req = DaemonRequest::new(
             3,
-            "work_item.transition",
+            "work.transition",
             json!({
                 "id": wi_id,
                 "target_status": "InProgress",
@@ -5993,16 +5990,16 @@ mod tests {
 
         // Verify TaskStore has the updated status
         let store = stores.store.as_ref().unwrap().lock().unwrap();
-        let retrieved: Option<WorkItem> = store.get(&wi_id).unwrap();
+        let retrieved: Option<Work> = store.get(&wi_id).unwrap();
         assert!(retrieved.is_some());
         let wi = retrieved.unwrap();
-        assert_eq!(wi.status, WorkItemStatus::InProgress);
+        assert_eq!(wi.status, WorkStatus::InProgress);
     }
 
     // --- bundle handlers ---
 
-    /// Helper: create plan + spec + phase + work_item and return (phase_id, work_item_id)
-    fn create_test_work_item(
+    /// Helper: create plan + spec + phase + work and return (phase_id, work_id)
+    fn create_test_work(
         stores: &Arc<Stores>,
         tx: &broadcast::Sender<DaemonEvent>,
         wm: &WorktreeManager,
@@ -6015,7 +6012,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 30,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -6028,13 +6025,13 @@ mod tests {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let req = DaemonRequest::new(
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/persist",
                 "base_tick_id": "tick-001",
                 "claims": "Persisted bundle"
@@ -6056,13 +6053,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let req = DaemonRequest::new(
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/auth",
                 "base_tick_id": "tick-001",
                 "claims": "Add JWT signing"
@@ -6071,7 +6068,7 @@ mod tests {
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
-        assert_eq!(result["work_item_id"], wi_id);
+        assert_eq!(result["work_id"], wi_id);
         assert_eq!(result["branch_name"], "feature/auth");
         assert_eq!(result["base_tick_id"], "tick-001");
         assert_eq!(result["claims"], serde_json::json!(["Add JWT signing"]));
@@ -6084,13 +6081,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let req = DaemonRequest::new(
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/init"
             }),
         );
@@ -6101,25 +6098,25 @@ mod tests {
     }
 
     #[test]
-    fn test_bundle_create_missing_work_item_id() {
+    fn test_bundle_create_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "bundle.create", json!({"branch_name": "feature/x"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("work_item_id"));
+        assert!(resp.error.unwrap().message.contains("work_id"));
     }
 
     #[test]
-    fn test_bundle_create_work_item_not_found() {
+    fn test_bundle_create_work_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
             1,
             "bundle.create",
-            json!({"work_item_id": "nonexistent", "branch_name": "feature/x"}),
+            json!({"work_id": "nonexistent", "branch_name": "feature/x"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
@@ -6131,8 +6128,8 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
-        let req = DaemonRequest::new(40, "bundle.create", json!({"work_item_id": wi_id, "claims": "stuff"}));
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
+        let req = DaemonRequest::new(40, "bundle.create", json!({"work_id": wi_id, "claims": "stuff"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("branch_name"));
@@ -6144,8 +6141,8 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
-        // Drain plan+spec+phase+work_item create events
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
+        // Drain plan+spec+phase+work create events
         let _ = rx.try_recv();
         let _ = rx.try_recv();
         let _ = rx.try_recv();
@@ -6154,7 +6151,7 @@ mod tests {
         let req = DaemonRequest::new(
             40,
             "bundle.create",
-            json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+            json!({"work_id": wi_id, "branch_name": "feature/x"}),
         );
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         let event = rx.try_recv().unwrap();
@@ -6167,7 +6164,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let create_resp = dispatch(
             &stores,
@@ -6177,7 +6174,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/auth"}),
+                json!({"work_id": wi_id, "branch_name": "feature/auth"}),
             ),
         );
         let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -6209,7 +6206,7 @@ mod tests {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         // Create a bundle (writes to both TaskStore and HashMap)
         let create_resp = dispatch(
@@ -6220,7 +6217,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/ts-read"}),
+                json!({"work_id": wi_id, "branch_name": "feature/ts-read"}),
             ),
         );
         assert!(!create_resp.is_error());
@@ -6248,11 +6245,11 @@ mod tests {
     }
 
     #[test]
-    fn test_bundle_list_filtered_by_work_item_id() {
+    fn test_bundle_list_filtered_by_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id_1) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm);
 
         // Create a second work item under the same phase
         let resp2 = dispatch(
@@ -6262,7 +6259,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 31,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": _phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -6277,7 +6274,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id_1, "branch_name": "feature/a"}),
+                json!({"work_id": wi_id_1, "branch_name": "feature/a"}),
             ),
         );
         dispatch(
@@ -6288,7 +6285,7 @@ mod tests {
             DaemonRequest::new(
                 41,
                 "bundle.create",
-                json!({"work_item_id": wi_id_2, "branch_name": "feature/b"}),
+                json!({"work_id": wi_id_2, "branch_name": "feature/b"}),
             ),
         );
 
@@ -6308,7 +6305,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(51, "bundle.list", json!({"work_item_id": wi_id_1})),
+            DaemonRequest::new(51, "bundle.list", json!({"work_id": wi_id_1})),
         );
         let bundles = filtered_resp.result.unwrap();
         let arr = bundles.as_array().unwrap();
@@ -6321,7 +6318,7 @@ mod tests {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id_1) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm);
 
         // Create a second work item under the same phase
         let resp2 = dispatch(
@@ -6331,7 +6328,7 @@ mod tests {
             &test_integrator_config(),
             DaemonRequest::new(
                 31,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": _phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
@@ -6346,7 +6343,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id_1, "branch_name": "feature/a"}),
+                json!({"work_id": wi_id_1, "branch_name": "feature/a"}),
             ),
         );
         dispatch(
@@ -6357,7 +6354,7 @@ mod tests {
             DaemonRequest::new(
                 41,
                 "bundle.create",
-                json!({"work_item_id": wi_id_2, "branch_name": "feature/b"}),
+                json!({"work_id": wi_id_2, "branch_name": "feature/b"}),
             ),
         );
 
@@ -6376,7 +6373,7 @@ mod tests {
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
-        let filtered_req = DaemonRequest::new(51, "bundle.list", json!({"work_item_id": wi_id_1}));
+        let filtered_req = DaemonRequest::new(51, "bundle.list", json!({"work_id": wi_id_1}));
         let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
         assert!(!filtered_resp.is_error());
         let filtered_items = filtered_resp.result.unwrap();
@@ -6391,8 +6388,8 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
-        // Drain plan+spec+phase+work_item create events
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
+        // Drain plan+spec+phase+work create events
         let _ = rx.try_recv();
         let _ = rx.try_recv();
         let _ = rx.try_recv();
@@ -6406,7 +6403,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+                json!({"work_id": wi_id, "branch_name": "feature/x"}),
             ),
         );
         let _ = rx.try_recv(); // consume bundle create event
@@ -6437,7 +6434,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let create_resp = dispatch(
             &stores,
@@ -6447,7 +6444,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+                json!({"work_id": wi_id, "branch_name": "feature/x"}),
             ),
         );
         let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -6472,7 +6469,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let create_resp = dispatch(
             &stores,
@@ -6482,7 +6479,7 @@ mod tests {
             DaemonRequest::new(
                 40,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/x"}),
+                json!({"work_id": wi_id, "branch_name": "feature/x"}),
             ),
         );
         let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -6538,14 +6535,14 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
         let _tick_id = insert_published_tick(&stores, 1);
 
         let req = DaemonRequest::new(
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/auth"
             }),
         );
@@ -6561,7 +6558,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
         let _old_tick_id = insert_published_tick(&stores, 1);
         let latest_tick_id = insert_published_tick(&stores, 2);
 
@@ -6569,7 +6566,7 @@ mod tests {
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/auth",
                 "base_tick_id": "old-stale-tick-id"
             }),
@@ -6587,14 +6584,14 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
         let tick_id = insert_published_tick(&stores, 1);
 
         let req = DaemonRequest::new(
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/auth",
                 "base_tick_id": tick_id,
                 "claims": "Add auth"
@@ -6612,7 +6609,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
         let _tick1_id = insert_published_tick(&stores, 1);
         let tick2_id = insert_published_tick(&stores, 2);
 
@@ -6621,7 +6618,7 @@ mod tests {
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/auth",
                 "base_tick_id": _tick1_id,
                 "claims": "Add auth"
@@ -6638,7 +6635,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
         // Drain create events
         while rx.try_recv().is_ok() {}
 
@@ -6648,7 +6645,7 @@ mod tests {
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/auth",
                 "base_tick_id": "stale-id"
             }),
@@ -6656,7 +6653,7 @@ mod tests {
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "bundle.rejected_stale");
-        assert_eq!(event.data["bundle_work_item_id"], wi_id.as_str());
+        assert_eq!(event.data["bundle_work_id"], wi_id.as_str());
         assert_eq!(event.data["base_tick_id"], "stale-id");
     }
 
@@ -6666,13 +6663,13 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
 
         let req = DaemonRequest::new(
             40,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/init"
             }),
         );
@@ -7231,7 +7228,7 @@ mod tests {
                 "learning.create",
                 json!({
                     "source_id": "wi-123",
-                    "scope": "workitem",
+                    "scope": "work",
                     "content": "Always run tests"
                 }),
             ),
@@ -7251,7 +7248,7 @@ mod tests {
             "learning.create",
             json!({
                 "source_id": "wi-123",
-                "scope": "workitem",
+                "scope": "work",
                 "content": "Always run tests"
             }),
         );
@@ -7283,7 +7280,7 @@ mod tests {
                 "learning.create",
                 json!({
                     "source_id": "wi-123",
-                    "scope": "workitem",
+                    "scope": "work",
                     "content": "Always run tests before committing"
                 }),
             ),
@@ -7291,7 +7288,7 @@ mod tests {
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["source_id"], "wi-123");
-        assert_eq!(result["scope"], "workitem");
+        assert_eq!(result["scope"], "work");
         assert_eq!(result["content"], "Always run tests before committing");
         assert_eq!(result["reinforcements"], 0);
         assert!(!result["promoted"].as_bool().unwrap());
@@ -7450,7 +7447,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        // Create a workitem-scoped learning
+        // Create a work-scoped learning
         create_learning(&stores, &tx, &wm, 1);
         // Create a global-scoped learning
         dispatch(
@@ -7485,7 +7482,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        // Create a workitem-scoped learning (writes to both TaskStore and HashMap)
+        // Create a work-scoped learning (writes to both TaskStore and HashMap)
         create_learning(&stores, &tx, &wm, 1);
         // Create a global-scoped learning
         dispatch(
@@ -8191,7 +8188,7 @@ mod tests {
     // --- Worktree handler tests ---
 
     #[test]
-    fn test_worktree_create_missing_work_item_id() {
+    fn test_worktree_create_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -8203,11 +8200,11 @@ mod tests {
             DaemonRequest::new(1, "worktree.create", json!({})),
         );
         assert!(resp.is_error());
-        assert!(resp.error.as_ref().unwrap().message.contains("work_item_id"));
+        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
     }
 
     #[test]
-    fn test_worktree_create_work_item_not_found() {
+    fn test_worktree_create_work_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -8216,27 +8213,27 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "worktree.create", json!({"work_item_id": "nonexistent"})),
+            DaemonRequest::new(1, "worktree.create", json!({"work_id": "nonexistent"})),
         );
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("not found"));
     }
 
     #[test]
-    fn test_worktree_create_validates_work_item_exists() {
+    fn test_worktree_create_validates_work_exists() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        // Create a full hierarchy so work_item exists
-        let (_phase_id, wi_id) = create_test_work_item(&stores, &tx, &wm);
+        // Create a full hierarchy so work exists
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
         // This will fail at the git level (nonexistent repo path) but should
-        // pass the work_item validation
+        // pass the work validation
         let resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "worktree.create", json!({"work_item_id": wi_id})),
+            DaemonRequest::new(2, "worktree.create", json!({"work_id": wi_id})),
         );
         // The error should be from git, not from "not found"
         assert!(resp.is_error());
@@ -8266,7 +8263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_cleanup_missing_work_item_id() {
+    fn test_worktree_cleanup_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -8278,11 +8275,11 @@ mod tests {
             DaemonRequest::new(1, "worktree.cleanup", json!({})),
         );
         assert!(resp.is_error());
-        assert!(resp.error.as_ref().unwrap().message.contains("work_item_id"));
+        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
     }
 
     #[test]
-    fn test_worktree_cleanup_work_item_not_found() {
+    fn test_worktree_cleanup_work_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -8291,14 +8288,14 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "worktree.cleanup", json!({"work_item_id": "nonexistent"})),
+            DaemonRequest::new(1, "worktree.cleanup", json!({"work_id": "nonexistent"})),
         );
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("not found"));
     }
 
     #[test]
-    fn test_worktree_refresh_missing_work_item_id() {
+    fn test_worktree_refresh_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -8310,7 +8307,7 @@ mod tests {
             DaemonRequest::new(1, "worktree.refresh", json!({})),
         );
         assert!(resp.is_error());
-        assert!(resp.error.as_ref().unwrap().message.contains("work_item_id"));
+        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
     }
 
     #[test]
@@ -8323,7 +8320,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(1, "worktree.refresh", json!({"work_item_id": "nonexistent"})),
+            DaemonRequest::new(1, "worktree.refresh", json!({"work_id": "nonexistent"})),
         );
         // Will error since worktree path doesn't exist
         assert!(resp.is_error());
@@ -8722,7 +8719,7 @@ mod tests {
         assert!(collections.contains(&json!("plans")));
         assert!(collections.contains(&json!("specs")));
         assert!(collections.contains(&json!("phases")));
-        assert!(collections.contains(&json!("work_items")));
+        assert!(collections.contains(&json!("works")));
         assert!(collections.contains(&json!("bundles")));
         assert!(collections.contains(&json!("ticks")));
         assert!(collections.contains(&json!("learnings")));

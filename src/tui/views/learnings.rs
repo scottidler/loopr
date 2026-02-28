@@ -58,7 +58,7 @@ mod tests {
         let mut app = App::new();
         app.state.learnings.push(Learning::new(
             "src1".into(),
-            LearningScope::WorkItem,
+            LearningScope::Work,
             "Test learning content".into(),
         ));
 

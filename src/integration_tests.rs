@@ -138,7 +138,7 @@ mod tests {
 
     // ========================================================================
     // Test 1: Full hierarchy creation via IPC dispatch
-    //         Plan → Spec → Phase → WorkItem → Bundle
+    //         Plan → Spec → Phase → Work → Bundle
     // ========================================================================
 
     #[test]
@@ -214,36 +214,36 @@ mod tests {
             json!({"id": phase_id, "target_status": "active"}),
         );
 
-        // Create WorkItem under Phase
+        // Create Work under Phase
         let wi = dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
         assert_eq!(wi["status"], "Ready");
 
-        // Transition WorkItem: Ready → InProgress (auto-promoted from Draft since acceptance_criteria present)
+        // Transition Work: Ready → InProgress (auto-promoted from Draft since acceptance_criteria present)
         dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
-        // Create Bundle for WorkItem
+        // Create Bundle for Work
         let bundle = dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi_id, "branch_name": "feat/jwt-sign", "claims": "Added sign() function"}),
+            json!({"work_id": wi_id, "branch_name": "feat/jwt-sign", "claims": "Added sign() function"}),
         );
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
         assert_eq!(bundle["status"], "Proposed");
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(stores.plans.read().unwrap().len(), 1);
         assert_eq!(stores.specs.read().unwrap().len(), 1);
         assert_eq!(stores.phases.read().unwrap().len(), 1);
-        assert_eq!(stores.work_items.read().unwrap().len(), 1);
+        assert_eq!(stores.works.read().unwrap().len(), 1);
         assert_eq!(stores.bundles.read().unwrap().len(), 1);
 
         // Verify correct parent-child relationships
@@ -260,10 +260,10 @@ mod tests {
         assert_eq!(specs[&spec_id].plan_id, plan_id);
         let phases = stores.phases.read().unwrap();
         assert_eq!(phases[&phase_id].spec_id, spec_id);
-        let work_items = stores.work_items.read().unwrap();
-        assert_eq!(work_items[&wi_id].phase_id, phase_id);
+        let works = stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].phase_id, phase_id);
         let bundles = stores.bundles.read().unwrap();
-        assert_eq!(bundles[&bundle_id].work_item_id, wi_id);
+        assert_eq!(bundles[&bundle_id].work_id, wi_id);
     }
 
     // ========================================================================
@@ -278,16 +278,16 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        // Create hierarchy so work_item.create can find a valid phase
+        // Create hierarchy so work.create can find a valid phase
         let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
 
-        // Create WorkItem
+        // Create Work
         let wi = dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -299,7 +299,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi_id, "branch_name": "feat/task", "claims": "Did it"}),
+            json!({"work_id": wi_id, "branch_name": "feat/task", "claims": "Did it"}),
         );
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
@@ -361,7 +361,7 @@ mod tests {
             "learning.create",
             json!({
                 "source_id": "wi-123",
-                "scope": "workitem",
+                "scope": "work",
                 "content": "Always check null pointers"
             }),
         );
@@ -642,7 +642,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        // Create hierarchy first so work_item.create can find a valid phase
+        // Create hierarchy first so work.create can find a valid phase
         let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
 
         // Create work item under the real phase
@@ -651,7 +651,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "WI-1", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
 
@@ -685,12 +685,12 @@ mod tests {
         let mut learnings = HashMap::new();
 
         // Create learnings for specific roles
-        let mut l1 = Learning::new("wi-1".into(), LearningScope::WorkItem, "Impl insight".into());
+        let mut l1 = Learning::new("wi-1".into(), LearningScope::Work, "Impl insight".into());
         l1.applicable_roles = Some(vec![Role::Implementer]);
         l1.confidence = 0.8;
         learnings.insert(l1.id.clone(), l1);
 
-        let mut l2 = Learning::new("wi-1".into(), LearningScope::WorkItem, "Review insight".into());
+        let mut l2 = Learning::new("wi-1".into(), LearningScope::Work, "Review insight".into());
         l2.applicable_roles = Some(vec![Role::Reviewer]);
         l2.confidence = 0.8;
         learnings.insert(l2.id.clone(), l2);
@@ -701,7 +701,7 @@ mod tests {
         learnings.insert(l3.id.clone(), l3);
 
         // Select learnings for Implementer
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
         let impl_learnings =
             crate::agents::context::select_learnings(&learnings, &scope_ids, Role::Implementer, 0.3, 100);
 
@@ -799,26 +799,26 @@ mod tests {
     }
 
     // ========================================================================
-    // Test 14: WorkItem FSM rejects invalid transitions
+    // Test 14: Work FSM rejects invalid transitions
     // ========================================================================
 
     #[test]
-    fn test_work_item_fsm_enforcement_via_dispatch() {
+    fn test_work_fsm_enforcement_via_dispatch() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        // Create hierarchy so work_item.create can find a valid phase
+        // Create hierarchy so work.create can find a valid phase
         let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
 
-        // Create WorkItem (starts as Draft)
+        // Create Work (starts as Draft)
         let wi = dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -829,14 +829,14 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
         );
         assert_ne!(code, 0, "should reject invalid transition");
 
         // Verify state unchanged (auto-promoted to Ready since acceptance_criteria present)
-        let wis = stores.work_items.read().unwrap();
-        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Ready);
+        let wis = stores.works.read().unwrap();
+        assert_eq!(wis[&wi_id].status, crate::domain::work::WorkStatus::Ready);
     }
 
     // ========================================================================
@@ -850,7 +850,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        // Start sessions of different types (use types that don't require work_item_id/bundle_id)
+        // Start sessions of different types (use types that don't require work_id/bundle_id)
         let coord = dispatch_ok(
             &stores,
             &tx,
@@ -972,12 +972,12 @@ mod tests {
 
         assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Phase));
 
-        // Add active Phase → needs WorkItem
+        // Add active Phase → needs Work
         let mut phase = Phase::new(spec_id.clone(), "Ph".into(), "d".into(), 1);
         phase.status = HierarchyStatus::Active;
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::WorkItem));
+        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Work));
     }
 
     // ========================================================================
@@ -1187,7 +1187,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "sign()", "description": "Sign JWT", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -1198,7 +1198,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
@@ -1208,7 +1208,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi_id, "branch_name": "feat/sign", "claims": "Added sign()"}),
+            json!({"work_id": wi_id, "branch_name": "feat/sign", "claims": "Added sign()"}),
         );
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
@@ -1274,7 +1274,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
         );
         dispatch_ok(
@@ -1282,7 +1282,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
         );
         dispatch_ok(
@@ -1290,7 +1290,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
         );
 
@@ -1307,8 +1307,8 @@ mod tests {
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks[&tick_id].status, TickStatus::Published);
 
-        let wis = stores.work_items.read().unwrap();
-        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Done);
+        let wis = stores.works.read().unwrap();
+        assert_eq!(wis[&wi_id].status, crate::domain::work::WorkStatus::Done);
 
         // Goal is still active
         let goals = stores.coordinator_goals.read().unwrap();
@@ -1406,7 +1406,7 @@ mod tests {
 
     #[test]
     fn test_coordinator_creates_full_hierarchy_via_executor() {
-        // CreatePlan → CreateSpec → CreatePhase → CreateWorkItem through executor
+        // CreatePlan → CreateSpec → CreatePhase → CreateWork through executor
         use crate::agents::AgentAction;
         use crate::agents::bridge::AgentIpcBridge;
         use crate::agents::executor::{ActionResult, execute_action};
@@ -1483,10 +1483,10 @@ mod tests {
             other => panic!("expected RecordCreated for phase, got: {:?}", other),
         };
 
-        // Create WorkItem
+        // Create Work
         let wi_result = rt
             .block_on(execute_action(
-                &AgentAction::CreateWorkItem {
+                &AgentAction::CreateWork {
                     phase_id: phase_id.clone(),
                     title: "Add login".into(),
                     description: "Add login endpoint".into(),
@@ -1503,10 +1503,10 @@ mod tests {
             .unwrap();
         let wi_id = match wi_result {
             ActionResult::RecordCreated { collection, id } => {
-                assert_eq!(collection, "work_items");
+                assert_eq!(collection, "works");
                 id
             }
-            other => panic!("expected RecordCreated for work_item, got: {:?}", other),
+            other => panic!("expected RecordCreated for work, got: {:?}", other),
         };
 
         // Verify all records exist with correct parent linkage
@@ -1521,7 +1521,7 @@ mod tests {
         let phase = phases.get(&phase_id).unwrap();
         assert_eq!(phase.spec_id, spec_id);
 
-        let wis = stores.work_items.read().unwrap();
+        let wis = stores.works.read().unwrap();
         let wi = wis.get(&wi_id).unwrap();
         assert_eq!(wi.phase_id, phase_id);
     }
@@ -1553,7 +1553,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "WI", "description": "d", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -1564,7 +1564,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
@@ -1576,7 +1576,7 @@ mod tests {
             &ic,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "description": "Auth changes",
                 "files_changed": ["src/auth.rs"],
                 "commit_sha": "abc123",
@@ -1682,7 +1682,7 @@ mod tests {
 
     #[test]
     fn test_full_mvp4_pipeline() {
-        // End-to-end: goal → plan → spec → phase → work_item → bundle → triage → review → accept
+        // End-to-end: goal → plan → spec → phase → work → bundle → triage → review → accept
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1756,24 +1756,24 @@ mod tests {
             json!({"id": phase_id, "target_status": "active"}),
         );
 
-        // 5. Create WorkItem
+        // 5. Create Work
         let wi = dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
-        // 6. Assign WorkItem (transition to InProgress; already Ready via auto-promotion)
+        // 6. Assign Work (transition to InProgress; already Ready via auto-promotion)
         dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
@@ -1785,7 +1785,7 @@ mod tests {
             &ic,
             "bundle.create",
             json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "description": "Created index.html with basic structure",
                 "files_changed": ["index.html"],
                 "commit_sha": "def456",
@@ -1842,7 +1842,7 @@ mod tests {
         assert_eq!(stores.plans.read().unwrap().len(), 1);
         assert_eq!(stores.specs.read().unwrap().len(), 1);
         assert_eq!(stores.phases.read().unwrap().len(), 1);
-        assert_eq!(stores.work_items.read().unwrap().len(), 1);
+        assert_eq!(stores.works.read().unwrap().len(), 1);
         assert_eq!(stores.bundles.read().unwrap().len(), 1);
         assert_eq!(stores.coordinator_goals.read().unwrap().len(), 1);
     }
@@ -1955,7 +1955,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Create index.html", "description": "Homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi1_id = wi1["id"].as_str().unwrap().to_string();
@@ -1965,7 +1965,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Create about.html", "description": "About page", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi2_id = wi2["id"].as_str().unwrap().to_string();
@@ -1996,7 +1996,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
         // Create a bundle before InReview (required by #15 invariant)
@@ -2006,14 +2006,14 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi1_id, "branch_name": "feature/index"}),
+            json!({"work_id": wi1_id, "branch_name": "feature/index"}),
         );
         dispatch_ok(
             &stores,
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi1_id, "target_status": "InReview", "role": "implementer"}),
         );
         dispatch_ok(
@@ -2021,7 +2021,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi1_id, "target_status": "Integrated", "role": "integrator"}),
         );
         dispatch_ok(
@@ -2029,12 +2029,12 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi1_id, "target_status": "Done", "role": "coordinator"}),
         );
         {
-            let wis = stores.work_items.read().unwrap();
-            assert_eq!(wis[&wi1_id].status, crate::domain::work_item::WorkItemStatus::Done);
+            let wis = stores.works.read().unwrap();
+            assert_eq!(wis[&wi1_id].status, crate::domain::work::WorkStatus::Done);
         }
 
         // --- 6. Bundle full lifecycle: Proposed → Triaged → Reviewed → Accepted → Integrating → Merged ---
@@ -2044,7 +2044,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
@@ -2054,7 +2054,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi2_id, "description": "About page", "branch_name": "feature/about"}),
+            json!({"work_id": wi2_id, "description": "About page", "branch_name": "feature/about"}),
         );
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
         assert_eq!(bundle["status"], "Proposed");
@@ -2111,7 +2111,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi2_id, "description": "Bad bundle", "branch_name": "feature/bad"}),
+            json!({"work_id": wi2_id, "description": "Bad bundle", "branch_name": "feature/bad"}),
         );
         let bundle2_id = bundle2["id"].as_str().unwrap().to_string();
         dispatch_ok(
@@ -2137,7 +2137,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi2_id, "description": "Reviewed then rejected", "branch_name": "feature/rev-reject"}),
+            json!({"work_id": wi2_id, "description": "Reviewed then rejected", "branch_name": "feature/rev-reject"}),
         );
         let bundle3_id = bundle3["id"].as_str().unwrap().to_string();
         dispatch_ok(
@@ -2201,7 +2201,7 @@ mod tests {
         assert_eq!(stores.plans.read().unwrap().len(), 1);
         assert_eq!(stores.specs.read().unwrap().len(), 1);
         assert_eq!(stores.phases.read().unwrap().len(), 1);
-        assert_eq!(stores.work_items.read().unwrap().len(), 2);
+        assert_eq!(stores.works.read().unwrap().len(), 2);
         assert_eq!(stores.bundles.read().unwrap().len(), 4);
         assert_eq!(stores.ticks.read().unwrap().len(), 1);
 
@@ -2293,7 +2293,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({"phase_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -2304,7 +2304,7 @@ mod tests {
         stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
 
         // Verify work item starts as Ready (auto-promoted from Draft since acceptance_criteria present)
-        let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
+        let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
         assert_eq!(wi_resp["status"].as_str().unwrap(), "Ready");
 
         // Execute AssignAgent — should auto-transition Ready→InProgress
@@ -2327,7 +2327,7 @@ mod tests {
         .await;
 
         // Verify work item is now InProgress
-        let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
+        let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
         assert_eq!(
             wi_resp["status"].as_str().unwrap(),
             "InProgress",
@@ -2359,7 +2359,7 @@ mod tests {
             stores: &stores,
             tool_runner: &runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-pipeline",
             event_tx: &tx,
@@ -2462,7 +2462,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Create base types",
@@ -2479,7 +2479,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Implement logic",
@@ -2497,7 +2497,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Add integration tests",
@@ -2510,11 +2510,11 @@ mod tests {
         let wi_c_id = wi_c["id"].as_str().unwrap().to_string();
 
         // Verify dependencies are stored correctly
-        let wi_b_get = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_b_id}));
+        let wi_b_get = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_b_id}));
         let b_deps: Vec<String> = serde_json::from_value(wi_b_get["dependencies"].clone()).unwrap();
         assert_eq!(b_deps, vec![wi_a_id.clone()]);
 
-        let wi_c_get = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_c_id}));
+        let wi_c_get = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_c_id}));
         let c_deps: Vec<String> = serde_json::from_value(wi_c_get["dependencies"].clone()).unwrap();
         assert_eq!(c_deps, vec![wi_b_id.clone()]);
 
@@ -2529,7 +2529,7 @@ mod tests {
     /// Test 3: Duplicate work item rejection — creating a WI with the same title
     /// (case-insensitive) in the same phase should fail.
     #[test]
-    fn test_duplicate_work_item_rejection() {
+    fn test_duplicate_work_rejection() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -2543,7 +2543,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Implement auth",
@@ -2559,7 +2559,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "implement auth",
@@ -2578,7 +2578,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Implement authorization",
@@ -2589,7 +2589,7 @@ mod tests {
         );
     }
 
-    /// Test 4: Failure learning creation — verify a Learning with WorkItem scope
+    /// Test 4: Failure learning creation — verify a Learning with Work scope
     /// and resource_tags can be created to represent a failure insight.
     #[test]
     fn test_failure_learning_creation() {
@@ -2606,7 +2606,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase_id,
                 "title": "Add error handling",
@@ -2626,7 +2626,7 @@ mod tests {
             "learning.create",
             json!({
                 "source_id": wi_id,
-                "scope": "workitem",
+                "scope": "work",
                 "content": "thiserror derive requires Display impl on inner types; use #[from] for auto-conversion"
             }),
         );
@@ -2637,7 +2637,7 @@ mod tests {
         // Retrieve and verify the learning
         let retrieved = dispatch_ok(&stores, &tx, &wm, &ic, "learning.get", json!({"id": learning_id}));
         assert_eq!(retrieved["source_id"].as_str().unwrap(), wi_id);
-        assert_eq!(retrieved["scope"].as_str().unwrap(), "workitem");
+        assert_eq!(retrieved["scope"].as_str().unwrap(), "work");
         assert!(retrieved["content"].as_str().unwrap().contains("thiserror"));
 
         // Update with resource_tags (set via learning.update)
@@ -2883,7 +2883,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.create",
+            "work.create",
             json!({
                 "phase_id": phase1_id,
                 "title": "Create base types",
@@ -2900,7 +2900,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
         );
 
@@ -2911,7 +2911,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.create",
-            json!({"work_item_id": wi_id, "branch_name": "agent/test-wi", "claims": "implemented types"}),
+            json!({"work_id": wi_id, "branch_name": "agent/test-wi", "claims": "implemented types"}),
         );
 
         dispatch_ok(
@@ -2919,7 +2919,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
         );
         dispatch_ok(
@@ -2927,7 +2927,7 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
         );
         dispatch_ok(
@@ -2935,12 +2935,12 @@ mod tests {
             &tx,
             &wm,
             &ic,
-            "work_item.transition",
+            "work.transition",
             json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
         );
 
         // Verify WI is Done
-        let wi_final = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
+        let wi_final = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
         assert_eq!(wi_final["status"].as_str().unwrap(), "Done");
 
         // Now simulate Coordinator FSM: Phase 1 complete, advance to Phase 2

@@ -155,7 +155,7 @@ Err(e) => {
 }
 ```
 
-This applies to: `handle_plan_transition`, `handle_spec_transition`, `handle_phase_transition`, `handle_work_item_transition`, `handle_bundle_transition`, `handle_tick_transition`.
+This applies to: `handle_plan_transition`, `handle_spec_transition`, `handle_phase_transition`, `handle_work_transition`, `handle_bundle_transition`, `handle_tick_transition`.
 
 *Tests:* For each collection, test that a rejected transition emits the event via `event_tx.try_recv()`.
 
@@ -263,7 +263,7 @@ if target_status == BundleStatus::Integrating {
     let locks = stores.locks.read().unwrap();
     for path in &bundle.touched_paths {
         if let Some(lock) = locks.values().find(|l| l.resource == *path && l.is_active()) {
-            if lock.holder_id != bundle.work_item_id {
+            if lock.holder_id != bundle.work_id {
                 return DaemonResponse::err(
                     req.id,
                     RpcError::precondition_failed(&format!(
@@ -481,17 +481,17 @@ let latest_tick_id: Option<String> = {
 
 // Stale work items: InProgress work items that have bundles with
 // base_tick_id mismatching the latest published tick
-let stale_work_item_count: usize = {
-    let wis = stores.work_items.read().unwrap();
+let stale_work_count: usize = {
+    let wis = stores.works.read().unwrap();
     let bundles = stores.bundles.read().unwrap();
     if let Some(ref latest_tid) = latest_tick_id {
         wis.values()
-            .filter(|wi| wi.status == WorkItemStatus::InProgress)
+            .filter(|wi| wi.status == WorkStatus::InProgress)
             .filter(|wi| {
                 // Work item is stale if ANY of its non-terminal bundles have
                 // a base_tick_id that doesn't match the latest published tick
                 bundles.values().any(|b| {
-                    b.work_item_id == wi.id
+                    b.work_id == wi.id
                         && !matches!(b.status, BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded)
                         && b.base_tick_id.as_ref().is_some_and(|btid| btid != latest_tid)
                 })
@@ -507,12 +507,12 @@ Add these to the response JSON:
 
 ```rust
 "current_tick_sha": current_tick_sha,
-"stale_work_items": stale_work_item_count,
+"stale_works": stale_work_count,
 ```
 
 *Tests:*
 1. Create and publish a Tick with SHA "abc123". Call system.status — assert `current_tick_sha == "abc123"`.
-2. Create a work item InProgress with a bundle whose base_tick_id is an old tick. Call system.status — assert `stale_work_items == 1`.
+2. Create a work item InProgress with a bundle whose base_tick_id is an old tick. Call system.status — assert `stale_works == 1`.
 
 ---
 
@@ -520,7 +520,7 @@ Add these to the response JSON:
 
 **Gap #1: `*.update` IPC handlers**
 
-*Design:* MVP1 specifies `plan.update`, `spec.update`, `phase.update`, `work_item.update`, `bundle.update`, `tick.update`, `learning.update`.
+*Design:* MVP1 specifies `plan.update`, `spec.update`, `phase.update`, `work.update`, `bundle.update`, `tick.update`, `learning.update`.
 
 *Fix:* Add 7 handlers and 7 dispatch entries following the pattern:
 
@@ -573,7 +573,7 @@ Repeat for all 7 types with their respective updatable fields:
 | Plan | `title`, `description`, `acceptance_criteria` |
 | Spec | `title`, `description` |
 | Phase | `title`, `description`, `order` |
-| WorkItem | `title`, `description`, `assignee`, `resource_tags`, `acceptance_criteria`, `dependencies`, `checklist` |
+| Work | `title`, `description`, `assignee`, `resource_tags`, `acceptance_criteria`, `dependencies`, `checklist` |
 | Bundle | `description`, `touched_paths`, `claims`, `verification`, `locks_used` |
 | Tick | `validation_log`, `bundle_ids`, `attempted_bundle_ids` |
 | Learning | `content`, `applicable_roles`, `resource_tags` |
@@ -584,7 +584,7 @@ Add dispatch entries:
 "plan.update" => handle_plan_update(stores, event_tx, req),
 "spec.update" => handle_spec_update(stores, event_tx, req),
 "phase.update" => handle_phase_update(stores, event_tx, req),
-"work_item.update" => handle_work_item_update(stores, event_tx, req),
+"work.update" => handle_work_update(stores, event_tx, req),
 "bundle.update" => handle_bundle_update(stores, event_tx, req),
 "tick.update" => handle_tick_update(stores, event_tx, req),
 "learning.update" => handle_learning_update(stores, event_tx, req),
@@ -864,7 +864,7 @@ let result = if let Some(secs) = timeout_secs {
 
 ---
 
-**Gap #29: Auto-start agents on WorkItem/Bundle transitions**
+**Gap #29: Auto-start agents on Work/Bundle transitions**
 
 *Design:* MVP3 specifies auto-start when `auto_start_implementer`/`auto_start_reviewer` flags are true.
 
@@ -910,12 +910,12 @@ fn auto_start_agents(
     method: &str,
     params: &serde_json::Value,
 ) {
-    if method == "work_item.transition" {
+    if method == "work.transition" {
         if let Some(target) = params.get("target_status").and_then(|v| v.as_str()) {
             if target == "InProgress" && stores.config.agents.auto_start_implementer {
                 if let Some(wi_id) = params.get("id").and_then(|v| v.as_str()) {
                     let start_req = DaemonRequest::new(0, "agent.start", json!({
-                        "agent_type": "implementer", "work_item_id": wi_id,
+                        "agent_type": "implementer", "work_id": wi_id,
                     }));
                     let _ = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
                 }
@@ -1000,9 +1000,9 @@ match stale_policy {
         }));
         let _ = event_tx.send(DaemonEvent::new(
             "bundle.stale_replan_needed",
-            json!({"bundle_id": bid, "work_item_id": wi_id, "reason": "stale_base_tick"}),
+            json!({"bundle_id": bid, "work_id": wi_id, "reason": "stale_base_tick"}),
         ));
-        // Coordinator listens for this event and transitions WorkItem back to Ready
+        // Coordinator listens for this event and transitions Work back to Ready
         // for re-implementation against the latest tick
     }
     StalePolicy::AutoReplayAndVerify => {
@@ -1026,7 +1026,7 @@ match stale_policy {
 ```rust
 StalePolicy::AutoReplayAndVerify => {
     // Refresh worktree to latest tick
-    let refresh_result = bridge.request("worktree.refresh", json!({"work_item_id": wi_id}));
+    let refresh_result = bridge.request("worktree.refresh", json!({"work_id": wi_id}));
     if refresh_result.is_error() {
         // Can't refresh — fall back to reject
         bridge.request("bundle.transition", json!({"id": bid, "target_status": "Rejected", ...}));
@@ -1265,7 +1265,7 @@ fn indexed_fields(&self) -> HashMap<String, IndexValue> {
 
 *Design:* MVP4 specifies programmatic enforcement that the Coordinator doesn't create duplicates at the same level.
 
-*Fix:* In `execute_action` in `executor.rs`, for `CreatePlan`, `CreateSpec`, `CreatePhase`, `CreateWorkItem`:
+*Fix:* In `execute_action` in `executor.rs`, for `CreatePlan`, `CreateSpec`, `CreatePhase`, `CreateWork`:
 
 ```rust
 AgentAction::CreatePlan { title, description, acceptance_criteria } => {
@@ -1279,7 +1279,7 @@ AgentAction::CreatePlan { title, description, acceptance_criteria } => {
 }
 ```
 
-Similar guards for CreateSpec (check for Draft spec under same plan_id), CreatePhase (check for Draft phase under same spec_id), CreateWorkItem (check for Draft work item under same phase_id).
+Similar guards for CreateSpec (check for Draft spec under same plan_id), CreatePhase (check for Draft phase under same spec_id), CreateWork (check for Draft work item under same phase_id).
 
 *Tests:* Create a Draft plan. Call CreatePlan action again. Assert ActionResult::Error returned.
 
@@ -1297,7 +1297,7 @@ fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
         AgentAction::CreatePlan { .. } => Some("plan"),
         AgentAction::CreateSpec { .. } => Some("spec"),
         AgentAction::CreatePhase { .. } => Some("phase"),
-        AgentAction::CreateWorkItem { .. } | AgentAction::AssignAgent { .. } => Some("work_item"),
+        AgentAction::CreateWork { .. } | AgentAction::AssignAgent { .. } => Some("work"),
         _ => None, // Non-hierarchy actions (transition, learning, lock, done, etc.) are level-agnostic
     }
 }

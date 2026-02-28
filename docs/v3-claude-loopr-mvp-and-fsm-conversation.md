@@ -31,7 +31,7 @@ A **TUI-based "dev team in a box"** that implements the **Ralph Wiggum Loop** (e
 
 ### Key Records (~7 types)
 
-`Iteration`, `WorkItem`, `Lock`, `Proposal`, `Decision`, `Bundle`, `Tick` -- plus `Learning` (scoped, promotable to Policy)
+`Iteration`, `Work`, `Lock`, `Proposal`, `Decision`, `Bundle`, `Tick` -- plus `Learning` (scoped, promotable to Policy)
 
 ### Operating Principles
 
@@ -75,7 +75,7 @@ Before diving into a design doc, I identified several orienting questions:
 Yes! The ChatGPT conversation explicitly laid out an MVP order:
 
 > **What you can implement first (MVP order)**
-> 1. TaskStore records: WorkItem, Bundle, Tick, Lock, Iteration
+> 1. TaskStore records: Work, Bundle, Tick, Lock, Iteration
 > 2. Coordinator: create/assign/lock/accept bundle
 > 3. Implementer process: worktree -> propose bundle
 > 4. Integrator process: merge bundles -> run tests -> publish tick
@@ -151,7 +151,7 @@ Actions:
 **TaskStore schema** -- Implement only these records:
 
 - Plan, Spec, Phase (can just be markdown strings + status + parent IDs)
-- WorkItem
+- Work
 - Bundle
 - Tick
 - Learning (optional in MVP1, but nice)
@@ -159,7 +159,7 @@ Actions:
 
 **Worktree manager (minimal)**
 
-- Create worktree per work item: `git worktree add .worktrees/<work_item_id> -b agent/<id>/<work_item_id> <base_sha>`
+- Create worktree per work item: `git worktree add .worktrees/<work_id> -b agent/<id>/<work_id> <base_sha>`
 - "Bundle propose" command: collect touched paths, commit range, base tick sha; store as Bundle record
 
 **Integrator (manual or semi-automatic)**
@@ -229,7 +229,7 @@ is there an LLM involved in this MVP1 phase? you didnt mention it. can you be ex
 > They are:
 >
 > - Tick semantics
-> - WorkItem -> Bundle -> Tick pipeline
+> - Work -> Bundle -> Tick pipeline
 > - Git worktree isolation
 > - State transitions
 > - Validation gating
@@ -254,7 +254,7 @@ is there an LLM involved in this MVP1 phase? you didnt mention it. can you be ex
 >
 > ### When Implementer LLM Enters
 >
-> Not until WorkItem -> Bundle -> Tick works flawlessly, staleness marking works, replan-at-safe-point works, CI gating is deterministic, and logs are reconstructable.
+> Not until Work -> Bundle -> Tick works flawlessly, staleness marking works, replan-at-safe-point works, CI gating is deterministic, and logs are reconstructable.
 >
 > ### The Big Principle
 >
@@ -314,8 +314,8 @@ The tension is:
 
 ### Why Typestate Doesn't Work Here
 
-- `WorkItem<Draft>` and `WorkItem<Ready>` are different types. Can't deserialize without knowing state at parse time.
-- Can't have `Vec<WorkItem<_>>` with mixed states. Need a wrapper enum, which defeats the typestate benefit.
+- `Work<Draft>` and `Work<Ready>` are different types. Can't deserialize without knowing state at parse time.
+- Can't have `Vec<Work<_>>` with mixed states. Need a wrapper enum, which defeats the typestate benefit.
 - 3 state machines x 6-8 states = massive boilerplate.
 
 ---
@@ -332,19 +332,19 @@ Kagi search confirms the research -- **there is no de facto standard**. The ecos
 
 No crate. Here's why it's the right fit for Loopr:
 
-**The core problem:** Records live in JSONL (serde). When you deserialize a `WorkItem`, you don't know its state at compile time. Pure typestate doesn't work because you can't have `Vec<WorkItem<_>>` with mixed states, and serde round-tripping becomes painful.
+**The core problem:** Records live in JSONL (serde). When you deserialize a `Work`, you don't know its state at compile time. Pure typestate doesn't work because you can't have `Vec<Work<_>>` with mixed states, and serde round-tripping becomes painful.
 
 **The pattern:**
 
 ```rust
 // State is just a serde-friendly enum
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub enum WorkItemStatus {
+pub enum WorkStatus {
     Draft, Ready, InProgress, Blocked, InReview, Integrated, Done, Abandoned,
 }
 
 // Transition table is a const array -- single source of truth, auditable
-const WORK_ITEM_TRANSITIONS: &[(WorkItemStatus, WorkItemStatus, Option<Role>)] = &[
+const WORK_ITEM_TRANSITIONS: &[(WorkStatus, WorkStatus, Option<Role>)] = &[
     (Draft,      Ready,      Some(Role::Coordinator)),
     (Ready,      InProgress, Some(Role::Coordinator)),
     (InProgress, Blocked,    None), // any role
@@ -354,8 +354,8 @@ const WORK_ITEM_TRANSITIONS: &[(WorkItemStatus, WorkItemStatus, Option<Role>)] =
     // ...
 ];
 
-impl WorkItem {
-    pub fn transition(&mut self, target: WorkItemStatus, role: Role) -> Result<()> {
+impl Work {
+    pub fn transition(&mut self, target: WorkStatus, role: Role) -> Result<()> {
         let allowed = WORK_ITEM_TRANSITIONS.iter().any(|(from, to, required)| {
             *from == self.status && *to == target
                 && required.map_or(true, |r| r == role)
@@ -378,7 +378,7 @@ impl WorkItem {
 - **Role guards are declarative** -- one line per transition, not scattered across handler methods
 - **Per-state invariants** via `match` -- compiler warns if you add a state and forget its invariants
 - **No macro magic** -- plain Rust, any developer can read it
-- **Same pattern for all three** -- WorkItem, Bundle, Tick each get their own transition table
+- **Same pattern for all three** -- Work, Bundle, Tick each get their own transition table
 - **Tests are trivial** -- assert every valid transition succeeds, assert every invalid one fails
 
 Can also write a test that exhaustively walks the transition table and generates a dot file for Graphviz visualization -- good for the observability requirement.
@@ -387,7 +387,7 @@ Can also write a test that exhaustively walks the transition table and generates
 
 The ChatGPT conversation defined three explicit state machines with allowed transitions and role-based guards:
 
-#### WorkItem States
+#### Work States
 
 Draft -> Ready -> InProgress -> Blocked -> InReview -> Integrated -> Done -> Abandoned
 
@@ -409,7 +409,7 @@ Invariants:
 2. Ready implies scope is bounded (acceptance_ref or checklist)
 3. InReview implies exactly one "active" Bundle
 4. Dependencies are acyclic
-5. WorkItem must declare resource tags
+5. Work must declare resource tags
 
 #### Bundle States
 
@@ -428,7 +428,7 @@ Transitions:
 
 Required fields:
 
-- `work_item_id`
+- `work_id`
 - `base_tick_sha` (or base tick number)
 - `touched_paths[]`
 - `patch_ref` (branch+range or patch artifact)
@@ -440,7 +440,7 @@ Invariants:
 
 1. Bundle must declare its base
 2. Integrator never merges a stale bundle blindly
-3. At most one Accepted bundle per WorkItem at a time
+3. At most one Accepted bundle per Work at a time
 4. Bundle cannot touch locked resources it doesn't own
 5. Verification metadata is required
 
@@ -486,8 +486,8 @@ Invariants:
 
 ### MVP1 Scope
 
-- TUI with Dashboard, WorkItems, Bundles, Ticks, Learnings views
-- TaskStore records: Plan, Spec, Phase, WorkItem, Bundle, Tick, Learning, Lock
+- TUI with Dashboard, Works, Bundles, Ticks, Learnings views
+- TaskStore records: Plan, Spec, Phase, Work, Bundle, Tick, Learning, Lock
 - Minimal worktree manager (create/cleanup worktrees, propose bundles)
 - Manual/semi-automatic Integrator (configured shell command validation)
 - No LLM. No parallelism. Serial but architecturally honest.
@@ -495,7 +495,7 @@ Invariants:
 ### FSM Architecture
 
 - Hand-rolled enum + const transition table pattern (no crate)
-- Three state machines: WorkItem, Bundle, Tick
+- Three state machines: Work, Bundle, Tick
 - Role-based guards as data in transition table
 - Per-state invariants via `validate_invariants_for()` match
 - Serde-friendly: plain enum derives, JSONL round-trips cleanly

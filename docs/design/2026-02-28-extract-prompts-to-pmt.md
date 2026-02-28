@@ -59,7 +59,7 @@ prompts/                          ← tracked in git, baked via include_str!
   generation-plan.pmt
   generation-spec.pmt
   generation-phase.pmt
-  generation-workitem.pmt
+  generation-work.pmt
 
 ~/.config/loopr/prompts/          ← optional runtime overrides (same filenames)
 
@@ -88,7 +88,7 @@ const DEFAULT_VALIDATOR_PHASE: &str = include_str!("../prompts/validator-phase.p
 const DEFAULT_GENERATION_PLAN: &str = include_str!("../prompts/generation-plan.pmt");
 const DEFAULT_GENERATION_SPEC: &str = include_str!("../prompts/generation-spec.pmt");
 const DEFAULT_GENERATION_PHASE: &str = include_str!("../prompts/generation-phase.pmt");
-const DEFAULT_GENERATION_WORKITEM: &str = include_str!("../prompts/generation-workitem.pmt");
+const DEFAULT_GENERATION_WORKITEM: &str = include_str!("../prompts/generation-work.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -102,7 +102,7 @@ pub struct PromptStore {
     pub generation_plan: String,
     pub generation_spec: String,
     pub generation_phase: String,
-    pub generation_workitem: String,
+    pub generation_work: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -144,7 +144,7 @@ pub fn init() {
         generation_plan: load("generation-plan.pmt", DEFAULT_GENERATION_PLAN),
         generation_spec: load("generation-spec.pmt", DEFAULT_GENERATION_SPEC),
         generation_phase: load("generation-phase.pmt", DEFAULT_GENERATION_PHASE),
-        generation_workitem: load("generation-workitem.pmt", DEFAULT_GENERATION_WORKITEM),
+        generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORKITEM),
     });
 }
 
@@ -162,7 +162,7 @@ pub fn init_defaults() {
         generation_plan: DEFAULT_GENERATION_PLAN.to_string(),
         generation_spec: DEFAULT_GENERATION_SPEC.to_string(),
         generation_phase: DEFAULT_GENERATION_PHASE.to_string(),
-        generation_workitem: DEFAULT_GENERATION_WORKITEM.to_string(),
+        generation_work: DEFAULT_GENERATION_WORKITEM.to_string(),
     });
 }
 
@@ -332,4 +332,4 @@ Each step keeps the build green:
 - `src/agents/generation.rs:88-94` — Plan generation instructions
 - `src/agents/generation.rs:153-160` — Spec generation instructions
 - `src/agents/generation.rs:203-212` — Phase generation instructions
-- `src/agents/generation.rs:277-285` — WorkItem generation instructions
+- `src/agents/generation.rs:277-285` — Work generation instructions

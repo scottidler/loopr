@@ -205,11 +205,11 @@ pub struct ContextBuilder<'a> {
     plan: Option<(String, String)>,
     spec: Option<(String, String)>,
     phase: Option<(String, String)>,
-    work_item: Option<(String, String)>,
+    work: Option<(String, String)>,
     // Learning scope chain
     scope_ids: Vec<(String, LearningScope)>,
     // IDs for sibling lookups
-    work_item_id: Option<String>,
+    work_id: Option<String>,
     phase_id: Option<String>,
     // Optional sections
     bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, touched_paths)
@@ -242,9 +242,9 @@ impl<'a> ContextBuilder<'a> {
             plan: None,
             spec: None,
             phase: None,
-            work_item: None,
+            work: None,
             scope_ids: Vec::new(),
-            work_item_id: None,
+            work_id: None,
             phase_id: None,
             bundle_info: None,
             bundle_diff: None,
@@ -258,13 +258,13 @@ impl<'a> ContextBuilder<'a> {
         }
     }
 
-    /// Load the full hierarchy from a work item ID: WorkItem -> Phase -> Spec -> Plan.
-    pub fn load_work_item_hierarchy(mut self, work_item_id: &str) -> Result<Self> {
+    /// Load the full hierarchy from a work item ID: Work -> Phase -> Spec -> Plan.
+    pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         let (wi_title, wi_desc, phase_id) = {
-            let guard = self.stores.work_items.read().unwrap();
+            let guard = self.stores.works.read().unwrap();
             let wi = guard
-                .get(work_item_id)
-                .ok_or_else(|| eyre!("work item not found: {}", work_item_id))?;
+                .get(work_id)
+                .ok_or_else(|| eyre!("work item not found: {}", work_id))?;
             (wi.title.clone(), wi.description.clone(), wi.phase_id.clone())
         };
 
@@ -305,11 +305,11 @@ impl<'a> ContextBuilder<'a> {
         self.plan = Some((plan_title, plan_desc));
         self.spec = Some((spec_title, spec_desc));
         self.phase = Some((ph_title, ph_desc));
-        self.work_item = Some((wi_title, wi_desc));
-        self.work_item_id = Some(work_item_id.to_string());
+        self.work = Some((wi_title, wi_desc));
+        self.work_id = Some(work_id.to_string());
         self.phase_id = Some(phase_id_owned.clone());
         self.scope_ids = vec![
-            (work_item_id.to_string(), LearningScope::WorkItem),
+            (work_id.to_string(), LearningScope::Work),
             (phase_id_owned, LearningScope::Phase),
             (spec_id_owned, LearningScope::Spec),
             (plan_id_owned, LearningScope::Plan),
@@ -318,9 +318,9 @@ impl<'a> ContextBuilder<'a> {
         Ok(self)
     }
 
-    /// Load hierarchy from a bundle ID: Bundle -> WorkItem -> Phase -> Spec -> Plan.
+    /// Load hierarchy from a bundle ID: Bundle -> Work -> Phase -> Spec -> Plan.
     pub fn load_bundle_hierarchy(mut self, bundle_id: &str) -> Result<Self> {
-        let (bid, claims, touched_paths, work_item_id) = {
+        let (bid, claims, touched_paths, work_id) = {
             let guard = self.stores.bundles.read().unwrap();
             let bundle = guard
                 .get(bundle_id)
@@ -329,7 +329,7 @@ impl<'a> ContextBuilder<'a> {
                 bundle.id.clone(),
                 bundle.claims.clone(),
                 bundle.touched_paths.clone(),
-                bundle.work_item_id.clone(),
+                bundle.work_id.clone(),
             )
         };
 
@@ -337,7 +337,7 @@ impl<'a> ContextBuilder<'a> {
 
         // Load the git diff from the worktree branch so the reviewer can see actual code
         let diff = {
-            let branch = format!("agent/{}", work_item_id);
+            let branch = format!("agent/{}", work_id);
             let repo_path = &self.stores.config.project.repo_path;
             let output = std::process::Command::new("git")
                 .args(["diff", "HEAD", &branch, "--stat", "-p"])
@@ -353,7 +353,7 @@ impl<'a> ContextBuilder<'a> {
         };
         self.bundle_diff = diff;
 
-        self.load_work_item_hierarchy(&work_item_id)
+        self.load_work_hierarchy(&work_id)
     }
 
     pub fn with_tools(mut self, tool_runner: &ToolRunner) -> Self {
@@ -397,8 +397,8 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Access the loaded work item title (available after load_*_hierarchy).
-    pub fn work_item_title(&self) -> Option<&str> {
-        self.work_item.as_ref().map(|(t, _)| t.as_str())
+    pub fn work_title(&self) -> Option<&str> {
+        self.work.as_ref().map(|(t, _)| t.as_str())
     }
 
     /// Build the assembled context with per-section token budgeting.
@@ -413,7 +413,7 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- Hierarchy section ---
-        if self.plan.is_some() || self.spec.is_some() || self.phase.is_some() || self.work_item.is_some() {
+        if self.plan.is_some() || self.spec.is_some() || self.phase.is_some() || self.work.is_some() {
             let mut hierarchy = String::new();
             hierarchy.push_str("## Hierarchy\n\n");
             if let Some((ref title, ref desc)) = self.plan {
@@ -425,8 +425,8 @@ impl<'a> ContextBuilder<'a> {
             if let Some((ref title, ref desc)) = self.phase {
                 hierarchy.push_str(&format!("**Phase:** {} — {}\n", title, desc));
             }
-            if let Some((ref title, ref desc)) = self.work_item {
-                hierarchy.push_str(&format!("**WorkItem:** {} — {}\n", title, desc));
+            if let Some((ref title, ref desc)) = self.work {
+                hierarchy.push_str(&format!("**Work:** {} — {}\n", title, desc));
             }
             hierarchy.push('\n');
 
@@ -439,9 +439,9 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- Sibling Work Items section (after hierarchy) ---
-        if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_item_id) {
-            let work_items = self.stores.work_items.read().unwrap();
-            let siblings: Vec<String> = work_items
+        if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_id) {
+            let works = self.stores.works.read().unwrap();
+            let siblings: Vec<String> = works
                 .values()
                 .filter(|wi| wi.phase_id == *phase_id && wi.id != *current_wi_id)
                 .map(|wi| format!("- [{}] {}", wi.status, wi.title))
@@ -601,7 +601,7 @@ mod tests {
     use crate::domain::phase::Phase;
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
-    use crate::domain::work_item::WorkItem;
+    use crate::domain::work::Work;
     use crate::tools::ToolRunner;
     use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
@@ -634,10 +634,10 @@ mod tests {
     // --- select_learnings: Basic scope filtering ---
 
     #[test]
-    fn test_select_by_scope_workitem() {
-        let l = make_learning("wi-1", LearningScope::WorkItem, "insight");
+    fn test_select_by_scope_work() {
+        let l = make_learning("wi-1", LearningScope::Work, "insight");
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 1);
@@ -646,14 +646,14 @@ mod tests {
 
     #[test]
     fn test_select_by_scope_chain() {
-        let l1 = make_learning("wi-1", LearningScope::WorkItem, "wi insight");
+        let l1 = make_learning("wi-1", LearningScope::Work, "wi insight");
         let l2 = make_learning("phase-1", LearningScope::Phase, "phase insight");
         let l3 = make_learning("spec-1", LearningScope::Spec, "spec insight");
         let l4 = make_learning("plan-1", LearningScope::Plan, "plan insight");
         let map = to_map(vec![l1, l2, l3, l4]);
 
         let scope_ids = [
-            ("wi-1", LearningScope::WorkItem),
+            ("wi-1", LearningScope::Work),
             ("phase-1", LearningScope::Phase),
             ("spec-1", LearningScope::Spec),
             ("plan-1", LearningScope::Plan),
@@ -676,11 +676,11 @@ mod tests {
 
     #[test]
     fn test_select_excludes_unrelated_scope() {
-        let l1 = make_learning("wi-1", LearningScope::WorkItem, "relevant");
-        let l2 = make_learning("wi-999", LearningScope::WorkItem, "unrelated");
+        let l1 = make_learning("wi-1", LearningScope::Work, "relevant");
+        let l2 = make_learning("wi-999", LearningScope::Work, "unrelated");
         let map = to_map(vec![l1, l2]);
 
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "relevant");
@@ -690,9 +690,9 @@ mod tests {
 
     #[test]
     fn test_select_by_role_match() {
-        let l = make_learning_with_role("wi-1", LearningScope::WorkItem, "impl insight", vec![Role::Implementer]);
+        let l = make_learning_with_role("wi-1", LearningScope::Work, "impl insight", vec![Role::Implementer]);
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 1);
@@ -700,9 +700,9 @@ mod tests {
 
     #[test]
     fn test_select_by_role_mismatch() {
-        let l = make_learning_with_role("wi-1", LearningScope::WorkItem, "reviewer only", vec![Role::Reviewer]);
+        let l = make_learning_with_role("wi-1", LearningScope::Work, "reviewer only", vec![Role::Reviewer]);
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 0);
@@ -710,9 +710,9 @@ mod tests {
 
     #[test]
     fn test_select_none_roles_applies_to_all() {
-        let l = make_learning("wi-1", LearningScope::WorkItem, "universal");
+        let l = make_learning("wi-1", LearningScope::Work, "universal");
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         for role in [
             Role::Implementer,
@@ -730,9 +730,9 @@ mod tests {
 
     #[test]
     fn test_select_above_confidence_threshold() {
-        let l = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "high conf", 0.8);
+        let l = make_learning_with_confidence("wi-1", LearningScope::Work, "high conf", 0.8);
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.3, 20);
         assert_eq!(result.len(), 1);
@@ -740,9 +740,9 @@ mod tests {
 
     #[test]
     fn test_select_below_confidence_threshold() {
-        let l = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "low conf", 0.1);
+        let l = make_learning_with_confidence("wi-1", LearningScope::Work, "low conf", 0.1);
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.3, 20);
         assert_eq!(result.len(), 0);
@@ -750,10 +750,10 @@ mod tests {
 
     #[test]
     fn test_select_promoted_always_included_regardless_of_confidence() {
-        let mut l = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "policy", 0.1);
+        let mut l = make_learning_with_confidence("wi-1", LearningScope::Work, "policy", 0.1);
         l.promoted = true;
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.9, 20);
         assert_eq!(result.len(), 1);
@@ -764,13 +764,13 @@ mod tests {
 
     #[test]
     fn test_sort_promoted_first() {
-        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "normal", 0.9);
+        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::Work, "normal", 0.9);
         l1.updated_at = 1000;
-        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "policy", 0.5);
+        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::Work, "policy", 0.5);
         l2.promoted = true;
         l2.updated_at = 500;
         let map = to_map(vec![l1, l2]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 2);
@@ -780,12 +780,12 @@ mod tests {
 
     #[test]
     fn test_sort_by_confidence_desc() {
-        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "low", 0.3);
+        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::Work, "low", 0.3);
         l1.updated_at = 1000;
-        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "high", 0.9);
+        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::Work, "high", 0.9);
         l2.updated_at = 1000;
         let map = to_map(vec![l1, l2]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 2);
@@ -794,12 +794,12 @@ mod tests {
 
     #[test]
     fn test_sort_by_recency_desc() {
-        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "older", 0.5);
+        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::Work, "older", 0.5);
         l1.updated_at = 1000;
-        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "newer", 0.5);
+        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::Work, "newer", 0.5);
         l2.updated_at = 2000;
         let map = to_map(vec![l1, l2]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 2);
@@ -811,10 +811,10 @@ mod tests {
     #[test]
     fn test_max_count_truncation() {
         let learnings: Vec<Learning> = (0..30)
-            .map(|i| make_learning("wi-1", LearningScope::WorkItem, &format!("insight {i}")))
+            .map(|i| make_learning("wi-1", LearningScope::Work, &format!("insight {i}")))
             .collect();
         let map = to_map(learnings);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 10);
         assert_eq!(result.len(), 10);
@@ -822,9 +822,9 @@ mod tests {
 
     #[test]
     fn test_fewer_than_max_count() {
-        let l = make_learning("wi-1", LearningScope::WorkItem, "only one");
+        let l = make_learning("wi-1", LearningScope::Work, "only one");
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 1);
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn test_empty_learnings() {
         let map = HashMap::new();
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert!(result.is_empty());
@@ -843,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_empty_scope_ids_only_global() {
-        let l1 = make_learning("wi-1", LearningScope::WorkItem, "scoped");
+        let l1 = make_learning("wi-1", LearningScope::Work, "scoped");
         let l2 = make_learning("global", LearningScope::Global, "global");
         let map = to_map(vec![l1, l2]);
 
@@ -856,14 +856,14 @@ mod tests {
 
     #[test]
     fn test_combined_scope_role_confidence() {
-        let l1 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "good", 0.8);
-        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "wrong role", 0.8);
+        let l1 = make_learning_with_confidence("wi-1", LearningScope::Work, "good", 0.8);
+        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::Work, "wrong role", 0.8);
         l2.applicable_roles = Some(vec![Role::Reviewer]);
-        let l3 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "low conf", 0.1);
-        let l4 = make_learning_with_confidence("wi-999", LearningScope::WorkItem, "wrong scope", 0.8);
+        let l3 = make_learning_with_confidence("wi-1", LearningScope::Work, "low conf", 0.1);
+        let l4 = make_learning_with_confidence("wi-999", LearningScope::Work, "wrong scope", 0.8);
 
         let map = to_map(vec![l1, l2, l3, l4]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.3, 20);
         assert_eq!(result.len(), 1);
@@ -877,16 +877,16 @@ mod tests {
             max_age_days: 30,
             auto_promote: true,
         };
-        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "unpromoted", 0.9);
+        let mut l1 = make_learning_with_confidence("wi-1", LearningScope::Work, "unpromoted", 0.9);
         l1.updated_at = 2000;
-        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::WorkItem, "promoted", 0.7);
+        let mut l2 = make_learning_with_confidence("wi-1", LearningScope::Work, "promoted", 0.7);
         l2.reinforce(&policy);
         l2.reinforce(&policy);
         l2.updated_at = 1000;
         assert!(l2.promoted, "should be auto-promoted after 2 reinforcements");
 
         let map = to_map(vec![l1, l2]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 20);
         assert_eq!(result.len(), 2);
@@ -898,10 +898,10 @@ mod tests {
 
     #[test]
     fn test_default_confidence_passes_standard_threshold() {
-        let l = make_learning("wi-1", LearningScope::WorkItem, "new insight");
+        let l = make_learning("wi-1", LearningScope::Work, "new insight");
         assert!((l.confidence - 0.5).abs() < f32::EPSILON);
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.3, 20);
         assert_eq!(result.len(), 1);
@@ -909,9 +909,9 @@ mod tests {
 
     #[test]
     fn test_zero_max_count_returns_empty() {
-        let l = make_learning("wi-1", LearningScope::WorkItem, "insight");
+        let l = make_learning("wi-1", LearningScope::Work, "insight");
         let map = to_map(vec![l]);
-        let scope_ids = [("wi-1", LearningScope::WorkItem)];
+        let scope_ids = [("wi-1", LearningScope::Work)];
 
         let result = select_learnings(&map, &scope_ids, Role::Implementer, 0.0, 0);
         assert!(result.is_empty());
@@ -1075,9 +1075,9 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        let wi = WorkItem::new(phase_id.clone(), "Test WorkItem".into(), "Implement the feature".into());
+        let wi = Work::new(phase_id.clone(), "Test Work".into(), "Implement the feature".into());
         let wi_id = wi.id.clone();
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let learning = Learning::new(
             phase_id,
@@ -1107,30 +1107,30 @@ mod tests {
     }
 
     #[test]
-    fn test_context_builder_load_work_item_hierarchy() {
+    fn test_context_builder_load_work_hierarchy() {
         let dir = std::env::temp_dir().join(format!("loopr-ctx-hier-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap();
 
-        assert_eq!(builder.work_item_title(), Some("Test WorkItem"));
+        assert_eq!(builder.work_title(), Some("Test Work"));
         assert!(builder.plan.is_some());
         assert!(builder.spec.is_some());
         assert!(builder.phase.is_some());
-        assert!(builder.work_item.is_some());
+        assert!(builder.work.is_some());
         assert_eq!(builder.scope_ids.len(), 4);
     }
 
     #[test]
-    fn test_context_builder_load_missing_work_item() {
+    fn test_context_builder_load_missing_work() {
         let dir = std::env::temp_dir().join(format!("loopr-ctx-miss-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, _) = setup_stores(&dir);
 
-        let result = ContextBuilder::new(&stores, Role::Implementer).load_work_item_hierarchy("nonexistent");
+        let result = ContextBuilder::new(&stores, Role::Implementer).load_work_hierarchy("nonexistent");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work item not found"));
     }
@@ -1145,7 +1145,7 @@ mod tests {
             .load_bundle_hierarchy(&bundle_id)
             .unwrap();
 
-        assert_eq!(builder.work_item_title(), Some("Test WorkItem"));
+        assert_eq!(builder.work_title(), Some("Test Work"));
         assert!(builder.bundle_info.is_some());
         let (bid, _, paths) = builder.bundle_info.as_ref().unwrap();
         assert_eq!(bid, &bundle_id);
@@ -1176,20 +1176,20 @@ mod tests {
         }]);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_tools(&tool_runner)
             .with_iteration(1)
-            .with_footer("Implement the WorkItem described above.".to_string());
+            .with_footer("Implement the Work described above.".to_string());
 
         let assembled = builder.build("You are an Implementer.");
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
         assert!(assembled.user_message.contains("Test Phase"));
-        assert!(assembled.user_message.contains("Test WorkItem"));
+        assert!(assembled.user_message.contains("Test Work"));
         assert!(assembled.user_message.contains("`test`"));
         assert!(assembled.user_message.contains("Current Iteration: 1"));
-        assert!(assembled.user_message.contains("Implement the WorkItem"));
+        assert!(assembled.user_message.contains("Implement the Work"));
         assert!(assembled.user_message.contains("Learnings"));
         assert_eq!(assembled.system_prompt, "You are an Implementer.");
         assert!(assembled.token_estimate > 0);
@@ -1208,7 +1208,7 @@ mod tests {
 
         let assembled = builder.build("You are a Reviewer.");
         assert!(assembled.user_message.contains("Test Plan"));
-        assert!(assembled.user_message.contains("Test WorkItem"));
+        assert!(assembled.user_message.contains("Test Work"));
         assert!(assembled.user_message.contains("Bundle Under Review"));
         assert!(assembled.user_message.contains(&bundle_id));
         assert!(assembled.user_message.contains("`src/test.rs`"));
@@ -1222,7 +1222,7 @@ mod tests {
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_previous_summary(Some("Last iteration added error types".into()))
             .with_iteration(3);
@@ -1240,7 +1240,7 @@ mod tests {
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_staleness_note(Some("A new Tick 'tick-99' has been published.".into()))
             .with_iteration(2);
@@ -1260,7 +1260,7 @@ mod tests {
         stores.learnings.write().unwrap().clear();
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap();
 
         let assembled = builder.build("system");
@@ -1274,7 +1274,7 @@ mod tests {
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap();
         // No .with_tools() call
 
@@ -1305,7 +1305,7 @@ mod tests {
         let (stores, wi_id) = setup_stores(&dir);
 
         let assembled = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap()
             .build("system prompt");
 

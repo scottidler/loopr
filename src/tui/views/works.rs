@@ -9,7 +9,7 @@ use crate::tui::app::App;
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let items: Vec<ListItem> = app
         .state
-        .work_items
+        .works
         .iter()
         .map(|wi| ListItem::new(Line::from(format!("[{}] {} ({})", wi.status, wi.title, wi.id))))
         .collect();
@@ -20,7 +20,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .highlight_symbol("> ");
 
     let mut state = ListState::default();
-    if !app.state.work_items.is_empty() {
+    if !app.state.works.is_empty() {
         state.select(Some(app.selected_index));
     }
 
@@ -30,7 +30,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::work_item::WorkItem;
+    use crate::domain::work::Work;
 
     #[test]
     fn test_render_empty_does_not_panic() {
@@ -48,11 +48,11 @@ mod tests {
     fn test_render_with_items_does_not_panic() {
         let mut app = App::new();
         app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "Task 1".into(), "desc".into()));
+            .works
+            .push(Work::new("ph1".into(), "Task 1".into(), "desc".into()));
         app.state
-            .work_items
-            .push(WorkItem::new("ph1".into(), "Task 2".into(), "desc".into()));
+            .works
+            .push(Work::new("ph1".into(), "Task 2".into(), "desc".into()));
 
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();

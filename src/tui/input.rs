@@ -276,7 +276,7 @@ mod tests {
     fn test_apply_next_view() {
         let mut app = App::new();
         apply_action(&mut app, Action::NextView);
-        assert_eq!(app.current_view, crate::tui::app::View::WorkItems);
+        assert_eq!(app.current_view, crate::tui::app::View::Works);
     }
 
     #[test]

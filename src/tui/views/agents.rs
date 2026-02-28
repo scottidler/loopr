@@ -25,12 +25,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .agent_sessions
         .iter()
         .map(|session| {
-            let target = match (
-                &session.work_item_id,
-                &session.bundle_id,
-                &session.target_id,
-                &session.query,
-            ) {
+            let target = match (&session.work_id, &session.bundle_id, &session.target_id, &session.query) {
                 (Some(wi), _, _, _) => format!(" wi:{}", &wi[..wi.len().min(8)]),
                 (_, Some(b), _, _) => format!(" b:{}", &b[..b.len().min(8)]),
                 (_, _, Some(t), Some(q)) => {
@@ -95,7 +90,7 @@ mod tests {
     fn test_render_with_sessions_does_not_panic() {
         let mut app = App::new();
         let mut s1 = AgentSession::new(AgentType::Implementer, "claude-sonnet-4-6".to_string());
-        s1.work_item_id = Some("wi-abc123".to_string());
+        s1.work_id = Some("wi-abc123".to_string());
         s1.iteration = 3;
         let _ = s1.transition_to(AgentStatus::Running);
         app.state.agent_sessions.push(s1);

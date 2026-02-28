@@ -21,14 +21,14 @@ use crate::tools::{ToolResult, ToolRunner};
 use crate::worktree::manager::WorktreeManager;
 
 /// Normalize a collection name from plural to singular for IPC method dispatch.
-/// The LLM may emit "plans", "specs", "phases", "work_items", "bundles", "ticks"
-/// but IPC methods use singular: "plan", "spec", "phase", "work_item", "bundle", "tick".
+/// The LLM may emit "plans", "specs", "phases", "works", "bundles", "ticks"
+/// but IPC methods use singular: "plan", "spec", "phase", "work", "bundle", "tick".
 fn normalize_collection(collection: &str) -> &str {
     match collection {
         "plans" => "plan",
         "specs" => "spec",
         "phases" => "phase",
-        "work_items" => "work_item",
+        "works" => "work",
         "bundles" => "bundle",
         "ticks" => "tick",
         other => other,
@@ -84,7 +84,7 @@ pub async fn run_agent_task(
 
     // Create a worktree for the agent before starting the loop.
     // Thinking plane agents (Coordinator, Researcher, Integrator) don't use worktrees.
-    // Implementers key on work_item_id, Reviewers on bundle_id.
+    // Implementers key on work_id, Reviewers on bundle_id.
     let worktree_key = if agent_type.is_thinking_plane() {
         None
     } else {
@@ -97,7 +97,7 @@ pub async fn run_agent_task(
             }
         };
         match agent_type {
-            AgentType::Implementer => session.work_item_id.clone(),
+            AgentType::Implementer => session.work_id.clone(),
             AgentType::Reviewer => session.bundle_id.clone(),
             // Already handled by is_thinking_plane() above
             AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => None,
@@ -185,9 +185,9 @@ pub async fn run_agent_task(
         && let Some(ref wi_id) = worktree_key
     {
         let (wi_method, wi_status) = if result.is_ok() {
-            ("work_item.transition", "InReview")
+            ("work.transition", "InReview")
         } else {
-            ("work_item.transition", "Blocked")
+            ("work.transition", "Blocked")
         };
         let resp = bridge.request(
             wi_method,
@@ -242,11 +242,11 @@ pub async fn run_agent_task(
         let (wi_title, wi_id, iteration_count) = {
             let sessions = stores.agent_sessions.read().unwrap();
             let session = sessions.get(&session_id);
-            let wi_id = session.and_then(|s| s.work_item_id.clone()).unwrap_or_default();
+            let wi_id = session.and_then(|s| s.work_id.clone()).unwrap_or_default();
             let iteration = session.map(|s| s.iteration).unwrap_or(0);
             let title = if !wi_id.is_empty() {
                 stores
-                    .work_items
+                    .works
                     .read()
                     .unwrap()
                     .get(&wi_id)
@@ -452,7 +452,7 @@ pub async fn execute_action(
     tool_runner: &ToolRunner,
     bridge: &AgentIpcBridge,
     worktree_path: &Path,
-    work_item_id: Option<&str>,
+    work_id: Option<&str>,
     agent_type: AgentType,
 ) -> Result<ActionResult> {
     match action {
@@ -538,13 +538,13 @@ pub async fn execute_action(
             let branch_out = branch_cmd.output().await?;
             let branch_name = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
 
-            let wi_id = work_item_id.ok_or_else(|| eyre!("propose_bundle requires work_item_id"))?;
+            let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
 
             // Fix #1: Resolve base_tick_id from latest Published Tick
             let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
 
             let mut params = serde_json::json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": branch_name,
                 "claims": claims,
                 "description": description,
@@ -604,13 +604,13 @@ pub async fn execute_action(
             resource_tags,
         } => {
             // M9: Defense-in-depth — if source_id doesn't look like a record ID,
-            // use work_item_id if available (fixes Reviewer sending title as source_id)
+            // use work_id if available (fixes Reviewer sending title as source_id)
             let effective_source_id = if !source_id.starts_with("wi-")
                 && !source_id.starts_with("phase-")
                 && !source_id.starts_with("plan-")
                 && !source_id.starts_with("spec-")
             {
-                work_item_id.unwrap_or(source_id).to_string()
+                work_id.unwrap_or(source_id).to_string()
             } else {
                 source_id.clone()
             };
@@ -754,7 +754,7 @@ pub async fn execute_action(
                 id,
             })
         }
-        AgentAction::CreateWorkItem {
+        AgentAction::CreateWork {
             phase_id,
             title,
             description,
@@ -763,7 +763,7 @@ pub async fn execute_action(
             dependencies,
         } => {
             let resp = bridge.request(
-                "work_item.create",
+                "work.create",
                 serde_json::json!({
                     "phase_id": phase_id,
                     "title": title,
@@ -775,7 +775,7 @@ pub async fn execute_action(
             );
             if resp.is_error() {
                 let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("create_work_item failed: {}", msg)));
+                return Ok(ActionResult::ActionError(format!("create_work failed: {}", msg)));
             }
             let id = resp
                 .result
@@ -784,9 +784,9 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("CreateWorkItem: {} (id: {}, deps: {:?})", title, id, dependencies);
+            info!("CreateWork: {} (id: {}, deps: {:?})", title, id, dependencies);
             Ok(ActionResult::RecordCreated {
-                collection: "work_items".to_string(),
+                collection: "works".to_string(),
                 id,
             })
         }
@@ -795,7 +795,7 @@ pub async fn execute_action(
         AgentAction::AssignAgent { agent_type, target_id } => {
             // For implementer assignments, check dependencies and auto-transition work item
             if agent_type == "implementer" {
-                let get_resp = bridge.request("work_item.get", serde_json::json!({ "id": target_id }));
+                let get_resp = bridge.request("work.get", serde_json::json!({ "id": target_id }));
 
                 // Check dependencies: all must be Done before assignment
                 if let Some(result) = &get_resp.result {
@@ -805,7 +805,7 @@ pub async fn execute_action(
                         .unwrap_or_default();
 
                     for dep_id in &deps {
-                        let dep_resp = bridge.request("work_item.get", serde_json::json!({ "id": dep_id }));
+                        let dep_resp = bridge.request("work.get", serde_json::json!({ "id": dep_id }));
                         let dep_status = dep_resp
                             .result
                             .as_ref()
@@ -821,7 +821,7 @@ pub async fn execute_action(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown");
                             return Ok(ActionResult::DependencyNotMet {
-                                work_item_id: target_id.clone(),
+                                work_id: target_id.clone(),
                                 message: format!(
                                     "dependency '{}' ({}) is {} (must be Done)",
                                     dep_title, dep_id, dep_status
@@ -842,7 +842,7 @@ pub async fn execute_action(
                     "Draft" => {
                         // Draft → Ready → InProgress (assignee set on InProgress transition)
                         let r1 = bridge.request(
-                            "work_item.transition",
+                            "work.transition",
                             serde_json::json!({ "id": target_id, "target_status": "Ready", "role": "coordinator" }),
                         );
                         if r1.is_error() {
@@ -853,7 +853,7 @@ pub async fn execute_action(
                             )));
                         }
                         let r2 = bridge.request(
-                            "work_item.transition",
+                            "work.transition",
                             serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator", "assignee": agent_type }),
                         );
                         if r2.is_error() {
@@ -871,7 +871,7 @@ pub async fn execute_action(
                     "Ready" => {
                         // Ready → InProgress
                         let r = bridge.request(
-                            "work_item.transition",
+                            "work.transition",
                             serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator", "assignee": agent_type }),
                         );
                         if r.is_error() {
@@ -902,7 +902,7 @@ pub async fn execute_action(
             let mut params = serde_json::json!({ "agent_type": agent_type });
             match agent_type.as_str() {
                 "implementer" => {
-                    params["work_item_id"] = serde_json::json!(target_id);
+                    params["work_id"] = serde_json::json!(target_id);
                 }
                 "reviewer" => {
                     params["bundle_id"] = serde_json::json!(target_id);
@@ -1164,7 +1164,7 @@ pub enum ActionResult {
     },
     /// Work item dependency not met — cannot assign agent until deps are Done.
     DependencyNotMet {
-        work_item_id: String,
+        work_id: String,
         message: String,
     },
     // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — never produced by any code path.
@@ -1200,7 +1200,7 @@ mod tests {
         Arc::new(stores)
     }
 
-    /// Helper: create a full Plan→Spec→Phase→WorkItem hierarchy in stores via bridge.
+    /// Helper: create a full Plan→Spec→Phase→Work hierarchy in stores via bridge.
     fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String, String, String) {
         let plan_resp = bridge.request(
             "plan.create",
@@ -1230,7 +1230,7 @@ mod tests {
             serde_json::json!({"id": phase_id, "target_status": "active", "role": "coordinator", "skip_validation": true}),
         );
         let wi_resp = bridge.request(
-            "work_item.create",
+            "work.create",
             serde_json::json!({"phase_id": phase_id, "title": "Test WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
@@ -1253,7 +1253,7 @@ mod tests {
         // Transition Ready → Abandoned via execute_action (auto-promoted from Draft since acceptance_criteria present)
         // Using Abandoned since InProgress requires assignee which Transition action doesn't support
         let action = AgentAction::Transition {
-            collection: "work_item".to_string(),
+            collection: "work".to_string(),
             id: wi_id.clone(),
             target_status: "Abandoned".to_string(),
             role: Some("coordinator".to_string()),
@@ -1294,7 +1294,7 @@ mod tests {
 
         // The agent.start may fail (no LLM key) but the auto-transition should have happened
         // Check work item status is InProgress
-        let wi_resp = bridge.request("work_item.get", serde_json::json!({"id": wi_id}));
+        let wi_resp = bridge.request("work.get", serde_json::json!({"id": wi_id}));
         let wi_status = wi_resp
             .result
             .as_ref()
@@ -1820,7 +1820,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_create_work_item() {
+    async fn test_execute_create_work() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-createwi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1833,13 +1833,13 @@ mod tests {
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&bridge);
         // Transition existing WI out of Draft so draft guard doesn't block new creation
         bridge.request(
-            "work_item.transition",
+            "work.transition",
             serde_json::json!({
                 "id": wi_id, "target_status": "Ready", "role": "coordinator"
             }),
         );
 
-        let action = AgentAction::CreateWorkItem {
+        let action = AgentAction::CreateWork {
             phase_id,
             title: "New WI".to_string(),
             description: "WI desc".to_string(),
@@ -1851,7 +1851,7 @@ mod tests {
             .await
             .unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
-            assert_eq!(collection, "work_items");
+            assert_eq!(collection, "works");
             assert!(!id.is_empty());
         } else {
             panic!("expected RecordCreated, got: {:?}", result);
@@ -2014,7 +2014,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_propose_bundle_no_work_item() {
+    async fn test_execute_propose_bundle_no_work() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-propnowi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2061,10 +2061,10 @@ mod tests {
             description: "My bundle".to_string(),
             claims: vec![],
         };
-        // work_item_id = None should fail
+        // work_id = None should fail
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("work_item_id"));
+        assert!(result.unwrap_err().to_string().contains("work_id"));
     }
 
     // --- Group C: Agent management + domain actions ---
@@ -2110,7 +2110,7 @@ mod tests {
 
         let action = AgentAction::CreateLearning {
             content: "Minimal learning".to_string(),
-            scope: "workitem".to_string(),
+            scope: "work".to_string(),
             source_id: "wi-1".to_string(),
             applicable_roles: None,
             resource_tags: None,
@@ -2196,7 +2196,7 @@ mod tests {
         let bundle_resp = bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/test",
                 "description": "Test bundle",
             }),
@@ -2234,7 +2234,7 @@ mod tests {
         let bundle_resp = bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/accept",
                 "description": "Accept test",
             }),
@@ -2319,7 +2319,7 @@ mod tests {
         // WI is already Ready (auto-promoted from Draft since acceptance_criteria present)
         // Using Abandoned since InProgress requires assignee which Transition action doesn't support
         let action = AgentAction::Transition {
-            collection: "work_item".to_string(),
+            collection: "work".to_string(),
             id: wi_id,
             target_status: "Abandoned".to_string(),
             role: None, // Should infer "coordinator" from AgentType::Coordinator
@@ -2590,7 +2590,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_agent_task_worktree_cleanup() {
-        // Implementer with work_item_id should attempt worktree creation and cleanup
+        // Implementer with work_id should attempt worktree creation and cleanup
         let dir = std::env::temp_dir().join(format!("loopr-exec-wtcleanup-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2632,7 +2632,7 @@ mod tests {
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
 
         let mut session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
-        session.work_item_id = Some("wi-test-123".to_string());
+        session.work_id = Some("wi-test-123".to_string());
         let session_id = session.id.clone();
         stores
             .agent_sessions
@@ -2726,7 +2726,7 @@ mod tests {
         // Attempt InProgress transition without assignee using Transition action (role = coordinator)
         // This should fail because InProgress requires an assignee
         let action = AgentAction::Transition {
-            collection: "work_item".to_string(),
+            collection: "work".to_string(),
             id: wi_id.clone(),
             target_status: "InProgress".to_string(),
             role: Some("coordinator".to_string()),
@@ -2844,7 +2844,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_create_work_item_error_path() {
+    async fn test_execute_create_work_error_path() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-wierr-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -2855,7 +2855,7 @@ mod tests {
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Use a nonexistent phase_id — should get error from bridge
-        let action = AgentAction::CreateWorkItem {
+        let action = AgentAction::CreateWork {
             phase_id: "nonexistent-phase".to_string(),
             title: "New WI".to_string(),
             description: "desc".to_string(),
@@ -2867,7 +2867,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_work_item failed")),
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_work failed")),
             "expected error for nonexistent phase, got: {:?}",
             result
         );
@@ -2917,7 +2917,7 @@ mod tests {
         let bundle_resp = bridge.request(
             "bundle.create",
             serde_json::json!({
-                "work_item_id": wi_id,
+                "work_id": wi_id,
                 "branch_name": "feature/accepterr",
                 "description": "Accept err test",
             }),
@@ -3124,7 +3124,7 @@ mod tests {
 
         // Create dep_wi (the dependency) — stays in Ready status
         let dep_resp = bridge.request(
-            "work_item.create",
+            "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
                 "title": "Dep WI",
@@ -3137,7 +3137,7 @@ mod tests {
 
         // Create work_wi that depends on dep_wi
         let wi_resp = bridge.request(
-            "work_item.create",
+            "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
                 "title": "Work WI",
@@ -3180,7 +3180,7 @@ mod tests {
 
         // Create dep_wi and manually set to Done by modifying store directly
         let dep_resp = bridge.request(
-            "work_item.create",
+            "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
                 "title": "Dep WI Done",
@@ -3194,9 +3194,9 @@ mod tests {
         // Transition dep to Done: Ready→InProgress→Abandoned (shorter path)
         // Then directly set to Done in both stores and TaskStore
         {
-            let mut wis = stores.work_items.write().unwrap();
+            let mut wis = stores.works.write().unwrap();
             if let Some(wi) = wis.get_mut(&dep_id) {
-                wi.status = crate::domain::work_item::WorkItemStatus::Done;
+                wi.status = crate::domain::work::WorkStatus::Done;
                 wi.updated_at = crate::id::now_millis();
                 if let Some(store_arc) = &stores.store {
                     let _ = store_arc.lock().unwrap().update(wi.clone());
@@ -3206,7 +3206,7 @@ mod tests {
 
         // Create work_wi that depends on dep_wi (now Done)
         let wi_resp = bridge.request(
-            "work_item.create",
+            "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
                 "title": "Work WI With Met Dep",
@@ -3235,7 +3235,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_work_item_with_dependencies() {
+    async fn test_create_work_with_dependencies() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-wideps-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -3248,7 +3248,7 @@ mod tests {
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&bridge);
 
         // Create a second WI that depends on the first
-        let action = AgentAction::CreateWorkItem {
+        let action = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Dependent WI".to_string(),
             description: "depends on first".to_string(),
@@ -3264,13 +3264,13 @@ mod tests {
 
         // Verify the dependency was stored
         if let ActionResult::RecordCreated { id, .. } = result {
-            let wi = stores.work_items.read().unwrap().get(&id).cloned().unwrap();
+            let wi = stores.works.read().unwrap().get(&id).cloned().unwrap();
             assert_eq!(wi.dependencies, vec![wi_id]);
         }
     }
 
     #[tokio::test]
-    async fn test_create_work_item_duplicate_rejected() {
+    async fn test_create_work_duplicate_rejected() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-widup-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -3283,7 +3283,7 @@ mod tests {
         let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
 
         // Create first WI
-        let action1 = AgentAction::CreateWorkItem {
+        let action1 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Unique WI".to_string(),
             description: "desc".to_string(),
@@ -3297,7 +3297,7 @@ mod tests {
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Create duplicate WI with same title — should fail
-        let action2 = AgentAction::CreateWorkItem {
+        let action2 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Unique WI".to_string(),
             description: "different desc".to_string(),
@@ -3316,7 +3316,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_work_item_duplicate_case_insensitive() {
+    async fn test_create_work_duplicate_case_insensitive() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-widupcase-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -3329,7 +3329,7 @@ mod tests {
         let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
 
         // Create first WI
-        let action1 = AgentAction::CreateWorkItem {
+        let action1 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Add Login".to_string(),
             description: "desc".to_string(),
@@ -3340,7 +3340,7 @@ mod tests {
         let _ = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator).await;
 
         // Create duplicate with different case — should also fail
-        let action2 = AgentAction::CreateWorkItem {
+        let action2 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "add login".to_string(),
             description: "desc".to_string(),

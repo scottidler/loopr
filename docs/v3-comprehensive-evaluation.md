@@ -10,8 +10,8 @@
 
 The vision documents describe a "dev team in a box":
 - **5 personas**: Coordinator, Integrator, Implementer(s), Reviewer(s), Researcher(s)
-- **4-level hierarchy**: Plan → Spec → Phase → WorkItem
-- **3 FSMs**: WorkItem (8 states), Bundle (8 states), Tick (5 states)
+- **4-level hierarchy**: Plan → Spec → Phase → Work
+- **3 FSMs**: Work (8 states), Bundle (8 states), Tick (5 states)
 - **Ralph Wiggum Loop**: Fresh context every iteration, state persists in TaskStore only
 - **Single-writer correctness**: All mutations through daemon, no multi-writer chaos
 - **Strategy knobs**: Configurable policies for staleness, locking, tick cadence, validation strictness
@@ -28,12 +28,12 @@ The vision documents describe a "dev team in a box":
 | **Daemon + IPC** | **100%** | 49 methods wired, NDJSON over Unix socket, single-writer via AgentIpcBridge. |
 | **Crash recovery** | **100%** | 4 recovery paths: InProgress→Blocked, Integrating→Accepted, Sealing/Validating→Failed, expired locks. |
 | **Strategy knobs** | **100%** | StalePolicy (3 variants), ConflictPolicy (2), TickCadence (2), BundleSizePolicy, ValidatorStrictness (3), PromotionPolicy — all configurable. |
-| **Hierarchy lifecycle** | **100%** | Plan→Spec→Phase→WorkItem with validation gates, parent entity checks, ordering. |
+| **Hierarchy lifecycle** | **100%** | Plan→Spec→Phase→Work with validation gates, parent entity checks, ordering. |
 | **Learning system** | **100%** | Confidence scoring, reinforce/contradict, auto-promotion with policy thresholds, scoped selection for context. |
 | **Lock system** | **100%** | Advisory + strict modes, TTL, expiry, conflict detection in executor. |
 | **Agent lifecycle** | **100%** | Starting→Running↔WaitingForLlm/Paused→Completed/Failed/Cancelled with pool size enforcement. |
 | **CLI surface** | **100%** | Every entity has create/get/list/transition. Agent start/stop/pause/resume. Coordinator goal ops. |
-| **TUI** | **100%** | 9 views (Dashboard, Plans, Specs, Phases, WorkItems, Bundles, Ticks, Agents, Learnings, Locks), tab nav, streaming display. |
+| **TUI** | **100%** | 9 views (Dashboard, Plans, Specs, Phases, Works, Bundles, Ticks, Agents, Learnings, Locks), tab nav, streaming display. |
 | **Context builder** | **100%** | Token-budgeted, role-aware, learning selection, hierarchy loading, staleness injection. |
 | **Agent loops** | **100%** | Implementer (Ralph Wiggum), Reviewer (single-shot), Coordinator (long-lived), Researcher (max-iter), Integrator (deterministic). |
 | **Tool execution** | **100%** | OS subprocess with timeout, worktree scoping, path sandboxing. |
@@ -50,7 +50,7 @@ The vision documents describe a "dev team in a box":
 | `todo!()` / `unimplemented!()` | **0** |
 | `#[allow(dead_code)]` | **2** (mod re-exports only) |
 | IPC methods wired | **49/49** |
-| FSM transition rules | **69 total** (29 WorkItem + 32 Bundle + 4 Tick + 4 Hierarchy) |
+| FSM transition rules | **69 total** (29 Work + 32 Bundle + 4 Tick + 4 Hierarchy) |
 
 ---
 
@@ -80,8 +80,8 @@ To run Loopr on a todo app project, you'd need:
 3. **Start daemon** → `loopr daemon`
 4. **Set a coordinator goal** → `loopr coordinator set-goal "Build a todo app with Rust + HTML"`
 5. **Coordinator wakes up** → reads goal → generates Plan → validates → activates
-6. **Coordinator iterates** → generates Specs → Phases → WorkItems
-7. **Implementers assigned** → pick up WorkItems → write code in worktrees → propose Bundles
+6. **Coordinator iterates** → generates Specs → Phases → Works
+7. **Implementers assigned** → pick up Works → write code in worktrees → propose Bundles
 8. **Reviewers assigned** → read Bundles → approve/reject
 9. **Integrator** → seals Tick → merges approved branches → runs validation → publishes
 
@@ -121,7 +121,7 @@ The **modularity** is clean. Every agent is a separate loop with a well-defined 
 
 We haven't proven that this thing **works as a dev team**. We've proven the plumbing works, the FSMs are correct, the handlers route properly, the context is built correctly. But we haven't proven that:
 
-1. An LLM can drive the Coordinator loop to produce useful Plans/Specs/Phases/WorkItems
+1. An LLM can drive the Coordinator loop to produce useful Plans/Specs/Phases/Works
 2. An Implementer can write code that passes tests
 3. A Reviewer can meaningfully evaluate code quality
 4. The whole pipeline converges (vs infinite loops of rejection/retry)

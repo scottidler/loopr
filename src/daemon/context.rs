@@ -21,7 +21,7 @@ use crate::domain::proposal::Proposal;
 use crate::domain::spec::Spec;
 use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
-use crate::domain::work_item::{WorkItem, WorkItemStatus};
+use crate::domain::work::{Work, WorkStatus};
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
 use crate::validator::DocValidator;
@@ -33,7 +33,7 @@ pub struct Stores {
     pub plans: StdRwLock<HashMap<String, Plan>>,
     pub specs: StdRwLock<HashMap<String, Spec>>,
     pub phases: StdRwLock<HashMap<String, Phase>>,
-    pub work_items: StdRwLock<HashMap<String, WorkItem>>,
+    pub works: StdRwLock<HashMap<String, Work>>,
     pub bundles: StdRwLock<HashMap<String, Bundle>>,
     pub ticks: StdRwLock<HashMap<String, Tick>>,
     pub learnings: StdRwLock<HashMap<String, Learning>>,
@@ -67,7 +67,7 @@ impl Stores {
             plans: StdRwLock::new(HashMap::new()),
             specs: StdRwLock::new(HashMap::new()),
             phases: StdRwLock::new(HashMap::new()),
-            work_items: StdRwLock::new(HashMap::new()),
+            works: StdRwLock::new(HashMap::new()),
             bundles: StdRwLock::new(HashMap::new()),
             ticks: StdRwLock::new(HashMap::new()),
             learnings: StdRwLock::new(HashMap::new()),
@@ -134,7 +134,7 @@ impl DaemonContext {
         store.rebuild_indexes::<Plan>()?;
         store.rebuild_indexes::<Spec>()?;
         store.rebuild_indexes::<Phase>()?;
-        store.rebuild_indexes::<WorkItem>()?;
+        store.rebuild_indexes::<Work>()?;
         store.rebuild_indexes::<Bundle>()?;
         store.rebuild_indexes::<Tick>()?;
         store.rebuild_indexes::<Learning>()?;
@@ -162,8 +162,8 @@ impl DaemonContext {
             for phase in store.list::<Phase>(&[])? {
                 stores.phases.write().unwrap().insert(phase.id.clone(), phase);
             }
-            for wi in store.list::<WorkItem>(&[])? {
-                stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+            for wi in store.list::<Work>(&[])? {
+                stores.works.write().unwrap().insert(wi.id.clone(), wi);
             }
             for bundle in store.list::<Bundle>(&[])? {
                 stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
@@ -199,7 +199,7 @@ impl DaemonContext {
             let hydrated: usize = stores.plans.read().unwrap().len()
                 + stores.specs.read().unwrap().len()
                 + stores.phases.read().unwrap().len()
-                + stores.work_items.read().unwrap().len()
+                + stores.works.read().unwrap().len()
                 + stores.bundles.read().unwrap().len()
                 + stores.ticks.read().unwrap().len()
                 + stores.learnings.read().unwrap().len()
@@ -249,27 +249,27 @@ impl DaemonContext {
     ///
     /// On daemon startup (especially after crash recovery from persistent storage),
     /// this scans for records stuck in transient states:
-    /// - InProgress WorkItems → reset to Blocked
+    /// - InProgress Works → reset to Blocked
     /// - Integrating Bundles → reset to Accepted
     ///
     /// Returns the number of records recovered.
     pub fn recover_orphaned_records(&self) -> usize {
         let mut recovered = 0;
 
-        // Recover InProgress WorkItems → Blocked
+        // Recover InProgress Works → Blocked
         {
-            let mut work_items = self.stores.work_items.write().unwrap();
+            let mut works = self.stores.works.write().unwrap();
             let store_lock = self.stores.store.as_ref();
-            for (id, wi) in work_items.iter_mut() {
-                if wi.status == WorkItemStatus::InProgress {
-                    warn!("Recovering orphaned InProgress WorkItem: {}", id);
-                    wi.status = WorkItemStatus::Blocked;
+            for (id, wi) in works.iter_mut() {
+                if wi.status == WorkStatus::InProgress {
+                    warn!("Recovering orphaned InProgress Work: {}", id);
+                    wi.status = WorkStatus::Blocked;
                     wi.updated_at = crate::id::now_millis();
                     // Persist recovery to TaskStore
                     if let Some(store_arc) = store_lock
                         && let Err(e) = store_arc.lock().unwrap().update(wi.clone())
                     {
-                        warn!("Failed to persist WorkItem recovery to TaskStore: {}", e);
+                        warn!("Failed to persist Work recovery to TaskStore: {}", e);
                     }
                     recovered += 1;
                 }
@@ -496,7 +496,7 @@ mod tests {
         assert!(stores.plans.read().unwrap().is_empty());
         assert!(stores.specs.read().unwrap().is_empty());
         assert!(stores.phases.read().unwrap().is_empty());
-        assert!(stores.work_items.read().unwrap().is_empty());
+        assert!(stores.works.read().unwrap().is_empty());
         assert!(stores.bundles.read().unwrap().is_empty());
         assert!(stores.ticks.read().unwrap().is_empty());
         assert!(stores.learnings.read().unwrap().is_empty());
@@ -539,14 +539,14 @@ mod tests {
     }
 
     #[test]
-    fn test_stores_work_item_insert_and_read() {
+    fn test_stores_work_insert_and_read() {
         let stores = Stores::new();
-        let wi = WorkItem::new("phase-1".into(), "Test WI".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Test WI".into(), "Desc".into());
         let id = wi.id.clone();
-        stores.work_items.write().unwrap().insert(id.clone(), wi);
-        let work_items = stores.work_items.read().unwrap();
-        assert_eq!(work_items.len(), 1);
-        assert_eq!(work_items[&id].title, "Test WI");
+        stores.works.write().unwrap().insert(id.clone(), wi);
+        let works = stores.works.read().unwrap();
+        assert_eq!(works.len(), 1);
+        assert_eq!(works[&id].title, "Test WI");
     }
 
     #[test]
@@ -592,7 +592,7 @@ mod tests {
         let stores = Stores::new();
         let learning = Learning::new(
             "wi-1".into(),
-            crate::domain::learning::LearningScope::WorkItem,
+            crate::domain::learning::LearningScope::Work,
             "Test insight".into(),
         );
         let id = learning.id.clone();
@@ -603,28 +603,28 @@ mod tests {
     }
 
     #[test]
-    fn test_recover_orphaned_work_items() {
+    fn test_recover_orphaned_works() {
         let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
-        // Insert a WorkItem in InProgress state (orphaned)
-        let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
-        wi.status = WorkItemStatus::InProgress;
+        // Insert a Work in InProgress state (orphaned)
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.status = WorkStatus::InProgress;
         let wi_id = wi.id.clone();
-        ctx.stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
-        // Insert a WorkItem in Draft state (not orphaned)
-        let wi2 = WorkItem::new("phase-1".into(), "Normal WI".into(), "".into());
+        // Insert a Work in Draft state (not orphaned)
+        let wi2 = Work::new("phase-1".into(), "Normal WI".into(), "".into());
         let wi2_id = wi2.id.clone();
-        ctx.stores.work_items.write().unwrap().insert(wi2_id.clone(), wi2);
+        ctx.stores.works.write().unwrap().insert(wi2_id.clone(), wi2);
 
         let recovered = ctx.recover_orphaned_records();
         assert_eq!(recovered, 1);
 
-        let work_items = ctx.stores.work_items.read().unwrap();
-        assert_eq!(work_items[&wi_id].status, WorkItemStatus::Blocked);
-        assert_eq!(work_items[&wi2_id].status, WorkItemStatus::Draft);
+        let works = ctx.stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].status, WorkStatus::Blocked);
+        assert_eq!(works[&wi2_id].status, WorkStatus::Draft);
     }
 
     #[test]
@@ -668,9 +668,9 @@ mod tests {
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
-        let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
-        wi.status = WorkItemStatus::InProgress;
-        ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.status = WorkStatus::InProgress;
+        ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut bundle = Bundle::new(
             "wi-1".into(),
@@ -691,9 +691,9 @@ mod tests {
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
-        // Draft WorkItem — not orphaned
-        let wi = WorkItem::new("phase-1".into(), "Normal WI".into(), "".into());
-        ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        // Draft Work — not orphaned
+        let wi = Work::new("phase-1".into(), "Normal WI".into(), "".into());
+        ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Proposed Bundle — not orphaned
         let bundle = Bundle::new("wi-1".into(), None, "feature/ok".into(), vec!["claims".into()]);
@@ -771,10 +771,10 @@ mod tests {
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
-        // Orphaned InProgress WorkItem
-        let mut wi = WorkItem::new("phase-1".into(), "Orphaned WI".into(), "".into());
-        wi.status = WorkItemStatus::InProgress;
-        ctx.stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        // Orphaned InProgress Work
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.status = WorkStatus::InProgress;
+        ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Stuck Sealing Tick
         let mut tick = Tick::new(1);

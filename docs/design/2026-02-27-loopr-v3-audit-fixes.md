@@ -15,7 +15,7 @@ A comprehensive audit of Loopr v3 (MVP3+MVP4 implementation) against the three d
 
 Loopr v3 MVP4 implementation is largely complete: 10 domain record types, 5 agent types, FSM transition tables, single-writer dispatch, NDJSON IPC, TUI thin client, CLI with auto-daemon, worktree management, and the Integrator pipeline. The core architecture is solid.
 
-However, a line-by-line audit against the design conversations surfaced 23 gaps ranging from resource leaks (worktree cleanup never called) to missing handler guards (Tick singleton, version validation) to unenforced invariants (WorkItem assignee, cycle detection, Bundle uniqueness).
+However, a line-by-line audit against the design conversations surfaced 23 gaps ranging from resource leaks (worktree cleanup never called) to missing handler guards (Tick singleton, version validation) to unenforced invariants (Work assignee, cycle detection, Bundle uniqueness).
 
 ### Problem
 
@@ -64,19 +64,19 @@ Every defect maps to specific source files. This table shows where to make chang
 | #1 | `src/agents/executor.rs` | `src/agents/bridge.rs`, `src/worktree/manager.rs` |
 | #2 | `src/agents/researcher.rs` | — |
 | #3 | `src/agents/integrator_task.rs` | `src/daemon/handlers.rs` (tick transition persist) |
-| #4 | `src/domain/work_item.rs` | — |
+| #4 | `src/domain/work.rs` | — |
 | #5 | (no code change) | `docs/design/` (document the decision) |
 | #6 | `src/daemon/handlers.rs` | `src/domain/tick.rs` (add `is_terminal()`) |
 | #7 | `src/daemon/handlers.rs` | — |
 | #8 | `src/daemon/mod.rs` | `src/daemon/context.rs` (store JoinHandles) |
-| #9 | `src/domain/work_item.rs` | `src/daemon/handlers.rs` (populate fields) |
+| #9 | `src/domain/work.rs` | `src/daemon/handlers.rs` (populate fields) |
 | #10 | `src/domain/bundle.rs` | `src/agents/executor.rs` (populate locks_used) |
 | #11 | `src/domain/lock.rs` | `src/daemon/handlers.rs` (accept ttl_secs) |
 | #12 | `src/domain/tick.rs` | `src/agents/integrator_task.rs` (populate attempted) |
 | #13 | `src/daemon/handlers.rs` | — |
 | #14 | `src/daemon/handlers.rs` | (depends on #9) |
 | #15 | `src/daemon/handlers.rs` | — |
-| #16 | `src/daemon/handlers.rs` | `src/domain/work_item.rs` (add cycle detection fn) |
+| #16 | `src/daemon/handlers.rs` | `src/domain/work.rs` (add cycle detection fn) |
 | #17 | `src/daemon/handlers.rs` | — |
 | #18 | `src/daemon/handlers.rs` | — |
 | #19 | `src/domain/bundle.rs`, `src/agents/executor.rs` | `src/daemon/handlers.rs` |
@@ -198,23 +198,23 @@ Apply the same clone-then-drop-then-persist pattern to `validation_log` and `int
 
 **Lock ordering note:** Always drop the in-memory `RwLock` before acquiring the `Store` mutex. The handlers acquire them in the order `Store → ticks`, so the Integrator must not hold `ticks → Store` simultaneously.
 
-Additionally, fix `handle_tick_transition` (handlers.rs line 1383) which is also missing the TaskStore persist call — add it to match the pattern in `handle_work_item_transition`.
+Additionally, fix `handle_tick_transition` (handlers.rs line 1383) which is also missing the TaskStore persist call — add it to match the pattern in `handle_work_transition`.
 
 **Tests:**
 - Integration test: Create a Tick, update `bundle_ids` via the Integrator path, restart the daemon (reload from JSONL), assert `bundle_ids` is preserved.
 
 ### Phase 2: FSM & Handler Hardening (#4, #5, #6, #7, #8)
 
-#### Defect #4: WorkItem Integrated→Done missing Integrator role
+#### Defect #4: Work Integrated→Done missing Integrator role
 
-**Root cause:** `work_item.rs` line 67-71 only allows `Role::Coordinator` for the Integrated→Done transition. The design says both Coordinator and Integrator should be able to close this.
+**Root cause:** `work.rs` line 67-71 only allows `Role::Coordinator` for the Integrated→Done transition. The design says both Coordinator and Integrator should be able to close this.
 
 **Fix:**
 
 Add a second `TransitionRule` for Integrated→Done with `Role::Integrator`:
 
 ```rust
-// work_item.rs — add to work_item_transitions()
+// work.rs — add to work_transitions()
 TransitionRule {
     from: Integrated,
     to: Done,
@@ -405,12 +405,12 @@ async fn graceful_shutdown(
 
 ### Phase 3: Schema & Invariants (#9-#18)
 
-#### Defect #9: WorkItem missing acceptance_ref / checklist
+#### Defect #9: Work missing acceptance_ref / checklist
 
-**Fix:** Add fields to `WorkItem` struct:
+**Fix:** Add fields to `Work` struct:
 
 ```rust
-pub struct WorkItem {
+pub struct Work {
     // ... existing fields ...
     pub acceptance_criteria: Vec<String>,  // list of acceptance criteria
     pub checklist: Vec<ChecklistItem>,     // completion checklist
@@ -424,7 +424,7 @@ pub struct ChecklistItem {
 ```
 
 - Default to empty vecs for backward compatibility with existing JSONL data.
-- `WorkItem::new()` initializes both as empty.
+- `Work::new()` initializes both as empty.
 - Migration: existing records load with empty vecs (serde default).
 
 #### Defect #10: Bundle missing locks_used[]
@@ -472,34 +472,34 @@ pub struct Tick {
 - `bundle_ids` remains the subset that actually merged successfully.
 - On validation failure, `attempted_bundle_ids` preserves the audit trail.
 
-#### Defect #13: WorkItem assignee set when InProgress/InReview
+#### Defect #13: Work assignee set when InProgress/InReview
 
-**Fix:** Add a post-transition invariant check in `handle_work_item_transition`:
+**Fix:** Add a post-transition invariant check in `handle_work_transition`:
 
 ```rust
 // After successful FSM validation, before applying:
-if matches!(target_status, WorkItemStatus::InProgress | WorkItemStatus::InReview) {
+if matches!(target_status, WorkStatus::InProgress | WorkStatus::InReview) {
     if wi.assignee.is_none() {
         return DaemonResponse::err(
             req.id,
             RpcError::precondition_failed(
-                "WorkItem must have an assignee before transitioning to InProgress/InReview"
+                "Work must have an assignee before transitioning to InProgress/InReview"
             ),
         );
     }
 }
 ```
 
-#### Defect #14: WorkItem acceptance_criteria required for Ready
+#### Defect #14: Work acceptance_criteria required for Ready
 
 **Fix:** Add a pre-transition check for Draft→Ready:
 
 ```rust
-if target_status == WorkItemStatus::Ready && wi.acceptance_criteria.is_empty() {
+if target_status == WorkStatus::Ready && wi.acceptance_criteria.is_empty() {
     return DaemonResponse::err(
         req.id,
         RpcError::precondition_failed(
-            "WorkItem must have acceptance_criteria before transitioning to Ready"
+            "Work must have acceptance_criteria before transitioning to Ready"
         ),
     );
 }
@@ -507,15 +507,15 @@ if target_status == WorkItemStatus::Ready && wi.acceptance_criteria.is_empty() {
 
 This depends on Defect #9 being fixed first (field must exist).
 
-#### Defect #15: WorkItem InReview requires active Bundle
+#### Defect #15: Work InReview requires active Bundle
 
-**Fix:** Add a cross-entity check in `handle_work_item_transition`:
+**Fix:** Add a cross-entity check in `handle_work_transition`:
 
 ```rust
-if target_status == WorkItemStatus::InReview {
+if target_status == WorkStatus::InReview {
     let bundles = stores.bundles.read().unwrap();
     let has_active_bundle = bundles.values().any(|b| {
-        b.work_item_id == wi.id
+        b.work_id == wi.id
             && !matches!(
                 b.status,
                 BundleStatus::Rejected | BundleStatus::Merged | BundleStatus::Superseded
@@ -525,7 +525,7 @@ if target_status == WorkItemStatus::InReview {
         return DaemonResponse::err(
             req.id,
             RpcError::precondition_failed(
-                "WorkItem cannot move to InReview without an active Bundle"
+                "Work cannot move to InReview without an active Bundle"
             ),
         );
     }
@@ -534,13 +534,13 @@ if target_status == WorkItemStatus::InReview {
 
 **Note:** `Superseded`, `Rejected`, and `Merged` bundles are all terminal/inactive — they don't count as "active."
 
-#### Defect #16: WorkItem depends_on acyclic
+#### Defect #16: Work depends_on acyclic
 
-**Fix:** Add cycle detection in `handle_work_item_create` and a new `handle_work_item_update` (or in a shared validation function):
+**Fix:** Add cycle detection in `handle_work_create` and a new `handle_work_update` (or in a shared validation function):
 
 ```rust
 fn detect_dependency_cycle(
-    work_items: &HashMap<String, WorkItem>,
+    works: &HashMap<String, Work>,
     start_id: &str,
     dependencies: &[String],
 ) -> bool {
@@ -553,7 +553,7 @@ fn detect_dependency_cycle(
             return true; // cycle detected
         }
         if visited.insert(current) {
-            if let Some(wi) = work_items.get(current) {
+            if let Some(wi) = works.get(current) {
                 for dep in &wi.dependencies {
                     queue.push_back(dep.as_str());
                 }
@@ -566,9 +566,9 @@ fn detect_dependency_cycle(
 
 Reject creation/update if cycle detected.
 
-#### Defect #17: WorkItem resource_tags non-empty
+#### Defect #17: Work resource_tags non-empty
 
-**Fix:** Validate in `handle_work_item_create`:
+**Fix:** Validate in `handle_work_create`:
 
 ```rust
 let resource_tags: Vec<String> = req.params
@@ -579,12 +579,12 @@ let resource_tags: Vec<String> = req.params
 if resource_tags.is_empty() {
     return DaemonResponse::err(
         req.id,
-        RpcError::precondition_failed("WorkItem must have at least one resource_tag"),
+        RpcError::precondition_failed("Work must have at least one resource_tag"),
     );
 }
 ```
 
-#### Defect #18: Bundle at most one Accepted per WorkItem
+#### Defect #18: Bundle at most one Accepted per Work
 
 **Fix:** Add a uniqueness check in `handle_bundle_transition` when transitioning to Accepted:
 
@@ -592,7 +592,7 @@ if resource_tags.is_empty() {
 if target_status == BundleStatus::Accepted {
     let bundles = stores.bundles.read().unwrap();
     let has_accepted = bundles.values().any(|b| {
-        b.work_item_id == bundle.work_item_id
+        b.work_id == bundle.work_id
             && b.id != bundle.id
             && b.status == BundleStatus::Accepted
     });
@@ -600,7 +600,7 @@ if target_status == BundleStatus::Accepted {
         return DaemonResponse::err(
             req.id,
             RpcError::precondition_failed(
-                "WorkItem already has an Accepted Bundle"
+                "Work already has an Accepted Bundle"
             ),
         );
     }
@@ -622,7 +622,7 @@ if target_status == BundleStatus::Accepted {
 let resp = bridge.request(
     "bundle.create",
     serde_json::json!({
-        "work_item_id": wi_id,
+        "work_id": wi_id,
         "branch_name": branch_name,
         "claims": claims,
         "description": description,  // <-- add this
@@ -659,7 +659,7 @@ This skips worktree creation for Reviewers. The Reviewer reads code context via 
 
 There is no `Triaged → Proposed` rule, and adding backward FSM transitions is architecturally undesirable (the FSM is designed to move forward).
 
-**Fix:** Use `Rejected` for `RequestChanges`, with review feedback stored in a Learning. The Coordinator then decides whether to re-assign the WorkItem to the Implementer (creating a new Bundle cycle):
+**Fix:** Use `Rejected` for `RequestChanges`, with review feedback stored in a Learning. The Coordinator then decides whether to re-assign the Work to the Implementer (creating a new Bundle cycle):
 
 ```rust
 // reviewer.rs
@@ -683,12 +683,12 @@ match review.verdict {
         bridge.request("learning.create", json!({
             "content": format!("Review requested changes: {}", review.feedback),
             "source": "reviewer",
-            "work_item_id": work_item_id,
+            "work_id": work_id,
         }));
-        // Note: WorkItem transition back to InProgress happens via the
+        // Note: Work transition back to InProgress happens via the
         // Coordinator's next iteration. The Coordinator sees a Rejected Bundle
         // with review feedback in the Learning, and decides whether to re-assign.
-        // The Reviewer does NOT directly transition the WorkItem — it lacks
+        // The Reviewer does NOT directly transition the Work — it lacks
         // Coordinator authority for that transition.
     }
     ReviewVerdict::Reject => {
@@ -778,7 +778,7 @@ The view should display: Lock ID, Resource, Holder, Status, Granted By, Created 
 
 - **Description:** Fix #1-#3 now, file issues for #4-#23.
 - **Pros:** Minimal risk, fast.
-- **Cons:** Missing invariants compound over time. The longer they're absent, the more invalid data accumulates and the harder the migration becomes. Fields like `acceptance_criteria` on WorkItem need to be present before the Coordinator can properly generate WorkItems.
+- **Cons:** Missing invariants compound over time. The longer they're absent, the more invalid data accumulates and the harder the migration becomes. Fields like `acceptance_criteria` on Work need to be present before the Coordinator can properly generate Works.
 - **Why not chosen:** The MEDIUM defects (#4-#12) affect agent behavior that is being actively developed. Deferring them creates a moving target.
 
 ### Alternative 2: Single monolithic PR
@@ -815,13 +815,13 @@ The view should display: Lock ID, Resource, Holder, Status, Granted By, Created 
 
 - No new external crate dependencies required.
 - Internal dependency: Defect #14 depends on #9 (field must exist before it can be validated).
-- Internal dependency: Defect #13 requires WorkItem assignee to be settable, which it already is via existing IPC.
+- Internal dependency: Defect #13 requires Work assignee to be settable, which it already is via existing IPC.
 
 ### Performance
 
-- Cycle detection (#16) is O(V+E) on the WorkItem dependency graph. With typical project sizes (< 1000 WorkItems), this is negligible.
+- Cycle detection (#16) is O(V+E) on the Work dependency graph. With typical project sizes (< 1000 Works), this is negligible.
 - Singleton guard (#6) scans all Ticks on each create call. With typical Tick counts (< 100 per project), this is negligible.
-- Bundle uniqueness check (#18) scans all Bundles for a WorkItem. Typical count is < 10 per WorkItem.
+- Bundle uniqueness check (#18) scans all Bundles for a Work. Typical count is < 10 per Work.
 
 ### Security
 
@@ -853,17 +853,17 @@ All tests run under `otto ci` (lint + check + test).
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
 | Schema changes break JSONL deserialization | Low | High | All new fields use `#[serde(default)]`. Test with existing JSONL fixtures. |
-| Invariant enforcement breaks existing tests | Medium | Low | Run `otto ci` after each fix. Existing tests may need updated fixtures (e.g., WorkItems now need resource_tags). |
-| Reviewer request_changes→Rejected creates rework loop | Low | Medium | Coordinator tracks Bundle rejection count per WorkItem. After N rejections (configurable, default 3), Coordinator escalates to NeedHelp instead of re-assigning. |
+| Invariant enforcement breaks existing tests | Medium | Low | Run `otto ci` after each fix. Existing tests may need updated fixtures (e.g., Works now need resource_tags). |
+| Reviewer request_changes→Rejected creates rework loop | Low | Medium | Coordinator tracks Bundle rejection count per Work. After N rejections (configurable, default 3), Coordinator escalates to NeedHelp instead of re-assigning. |
 | Graceful shutdown (#8) adds complexity to daemon lifecycle | Medium | Medium | Feature-flag behind config. Default enabled but can be disabled for debugging. |
 | Cycle detection (#16) false positives on valid DAGs | Low | Low | Standard BFS — well-understood algorithm. Unit tests cover diamond dependencies. |
 | #3 fix introduces deadlock if lock ordering violated | Low | High | Clone-then-drop-then-persist pattern. Document lock ordering rule: never hold in-memory RwLock while acquiring Store mutex. |
-| Existing tests break due to new required fields (#9, #17) | High | Low | Use `#[serde(default)]` on all new fields. Update test fixtures that create WorkItems to include required fields. |
+| Existing tests break due to new required fields (#9, #17) | High | Low | Use `#[serde(default)]` on all new fields. Update test fixtures that create Works to include required fields. |
 
 ## Open Questions
 
 - [x] ~~Should the Tick singleton guard (#6) allow creating a new Open Tick while a Failed one exists?~~ **Resolved:** Yes. #5 keeps Failed as terminal (no Failed→Open), so `is_terminal()` returns true for Failed. No conflict.
-- [x] ~~For #21 (request_changes), should we reuse Proposed or add a dedicated ChangesRequested status?~~ **Resolved:** Use Rejected + Learning. The existing FSM has no backward transitions. Rejected + Learning + WorkItem re-assignment is the cleanest path.
+- [x] ~~For #21 (request_changes), should we reuse Proposed or add a dedicated ChangesRequested status?~~ **Resolved:** Use Rejected + Learning. The existing FSM has no backward transitions. Rejected + Learning + Work re-assignment is the cleanest path.
 - [ ] For #22 (Proposal/Decision), how much of the struct should be scaffolded now vs. designed properly later? (Current fix: minimal stubs with CRUD handlers, no agent integration.)
 - [ ] Should #8 (graceful shutdown) store JoinHandles in `DaemonContext` or in `Stores`? `DaemonContext` is behind `Arc<RwLock<>>` and is the natural home for runtime state. `Stores` is for domain data. Recommend `DaemonContext`.
 
@@ -876,21 +876,21 @@ All 23 defects from the audit are addressed:
 | 1 | Worktree cleanup never called | P1 | Clone mgr, cleanup after agent loop |
 | 2 | Researcher previous_summary always None | P1 | Move declaration before loop, carry forward |
 | 3 | Integrator Tick fields not persisted | P1 | Clone-drop-persist pattern to TaskStore |
-| 4 | WorkItem Integrated→Done missing Integrator | P2 | Add TransitionRule for Role::Integrator |
+| 4 | Work Integrated→Done missing Integrator | P2 | Add TransitionRule for Role::Integrator |
 | 5 | Tick Failed→Open missing | P2 | No code change — intentional divergence (create new Tick) |
 | 6 | tick.create no singleton guard | P2 | Add is_terminal() + guard in handler |
 | 7 | Handshake ignores client version | P2 | Read, compare, warn, include in response |
 | 8 | No SIGKILL escalation on shutdown | P2 | Store JoinHandles, graceful shutdown sequence |
-| 9 | WorkItem missing acceptance_criteria/checklist | P3 | Add fields with #[serde(default)] |
+| 9 | Work missing acceptance_criteria/checklist | P3 | Add fields with #[serde(default)] |
 | 10 | Bundle missing locks_used[] | P3 | Add field, populate from executor |
 | 11 | Lock missing expires_at, renewable | P3 | Add fields + is_expired() method |
 | 12 | Tick missing attempted_bundle_ids[] | P3 | Add field, populate at seal time |
-| 13 | WorkItem assignee required for InProgress/InReview | P3 | Pre-transition check in handler |
-| 14 | WorkItem acceptance_criteria required for Ready | P3 | Pre-transition check (depends on #9) |
-| 15 | WorkItem InReview requires active Bundle | P3 | Cross-entity check in handler |
-| 16 | WorkItem depends_on acyclic | P3 | BFS cycle detection |
-| 17 | WorkItem resource_tags non-empty | P3 | Validate on create |
-| 18 | Bundle at most one Accepted per WorkItem | P3 | Uniqueness check on transition |
+| 13 | Work assignee required for InProgress/InReview | P3 | Pre-transition check in handler |
+| 14 | Work acceptance_criteria required for Ready | P3 | Pre-transition check (depends on #9) |
+| 15 | Work InReview requires active Bundle | P3 | Cross-entity check in handler |
+| 16 | Work depends_on acyclic | P3 | BFS cycle detection |
+| 17 | Work resource_tags non-empty | P3 | Validate on create |
+| 18 | Bundle at most one Accepted per Work | P3 | Uniqueness check on transition |
 | 19 | propose_bundle drops description | P4 | Add description field to Bundle, pass through |
 | 20 | Reviewer creates unused worktree | P4 | Add Reviewer to is_thinking_plane() |
 | 21 | Reviewer request_changes ≡ approve | P4 | Use Rejected + Learning for RequestChanges |

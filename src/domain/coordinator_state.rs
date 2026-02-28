@@ -35,7 +35,7 @@ pub struct CoordinatorState {
     pub goal_id: String,
     pub fsm_state: CoordinatorFsmState,
     pub current_phase_id: Option<String>,
-    pub work_item_attempts: HashMap<String, u32>,
+    pub work_attempts: HashMap<String, u32>,
     pub phase_activated_at: Option<i64>,
     pub goal_started_at: i64,
     pub phases_completed: Vec<String>,
@@ -51,7 +51,7 @@ impl CoordinatorState {
             goal_id,
             fsm_state: CoordinatorFsmState::Planning,
             current_phase_id: None,
-            work_item_attempts: HashMap::new(),
+            work_attempts: HashMap::new(),
             phase_activated_at: None,
             goal_started_at: now,
             phases_completed: Vec::new(),
@@ -85,16 +85,16 @@ impl CoordinatorState {
     }
 
     /// Increment the attempt counter for a work item. Returns the new count.
-    pub fn increment_attempts(&mut self, work_item_id: &str) -> u32 {
-        let count = self.work_item_attempts.entry(work_item_id.to_string()).or_insert(0);
+    pub fn increment_attempts(&mut self, work_id: &str) -> u32 {
+        let count = self.work_attempts.entry(work_id.to_string()).or_insert(0);
         *count += 1;
         self.updated_at = id::now_millis();
         *count
     }
 
     /// Get the attempt count for a work item.
-    pub fn attempts(&self, work_item_id: &str) -> u32 {
-        self.work_item_attempts.get(work_item_id).copied().unwrap_or(0)
+    pub fn attempts(&self, work_id: &str) -> u32 {
+        self.work_attempts.get(work_id).copied().unwrap_or(0)
     }
 }
 
@@ -130,7 +130,7 @@ mod tests {
         assert_eq!(state.goal_id, "goal-1");
         assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
         assert!(state.current_phase_id.is_none());
-        assert!(state.work_item_attempts.is_empty());
+        assert!(state.work_attempts.is_empty());
         assert!(state.phase_activated_at.is_none());
         assert!(state.phases_completed.is_empty());
         assert!(state.created_at > 0);
@@ -163,7 +163,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_attempts() {
+    fn test_work_attempts() {
         let mut state = CoordinatorState::new("goal-1".to_string());
         assert_eq!(state.attempts("wi-1"), 0);
 
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(state.goal_id, deserialized.goal_id);
         assert_eq!(state.fsm_state, deserialized.fsm_state);
         assert_eq!(state.current_phase_id, deserialized.current_phase_id);
-        assert_eq!(state.work_item_attempts, deserialized.work_item_attempts);
+        assert_eq!(state.work_attempts, deserialized.work_attempts);
         assert_eq!(state.phases_completed, deserialized.phases_completed);
     }
 

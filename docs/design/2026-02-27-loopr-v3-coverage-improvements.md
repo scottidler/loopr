@@ -197,7 +197,7 @@ Each Create* action is a bridge wrapper: build JSON params, call `bridge.request
 | `CreatePlan` | `test_execute_create_plan` | Already tested in integration_tests; add unit test in executor for error path |
 | `CreateSpec` | `test_execute_create_spec` | Same pattern |
 | `CreatePhase` | `test_execute_create_phase` | Same pattern |
-| `CreateWorkItem` | `test_execute_create_work_item` | Same pattern |
+| `CreateWork` | `test_execute_create_work` | Same pattern |
 
 **Group B — Git operations (medium complexity):**
 
@@ -211,7 +211,7 @@ Each Create* action is a bridge wrapper: build JSON params, call `bridge.request
 | Action | Test | Approach |
 |--------|------|----------|
 | `SpawnResearcher` | `test_execute_spawn_researcher` | Verify bridge call includes `agent_type: "researcher"`, `query`, `target_id` |
-| `CreateLearning` | `test_execute_create_learning_with_all_fields`, `test_execute_create_learning_minimal` | Test with and without optional fields (confidence, tags, work_item_id) |
+| `CreateLearning` | `test_execute_create_learning_with_all_fields`, `test_execute_create_learning_minimal` | Test with and without optional fields (confidence, tags, work_id) |
 | `ValidateDocument` | `test_execute_validate_document_pass`, `test_execute_validate_document_fail` | Mock bridge response with pass/fail verdicts |
 
 **Group D — Lifecycle paths:**
@@ -252,7 +252,7 @@ Target: 75.3% → 85%+. Focus on testable paths, skip terminal I/O.
 | `dispatch_ipc_action()` error | `test_dispatch_ipc_action_send_failure` | Mock IpcClient that returns Err on send; verify warn logged |
 | `apply_daemon_event()` unknown event | `test_apply_daemon_event_unknown_type` | Send event with unknown type; verify noop |
 | Draw with zero-size terminal | `test_draw_zero_size_terminal` | Create 0x0 terminal backend; verify no panic |
-| `refresh_collection()` for all 8 types | `test_refresh_collection_all_types` | Verify each collection type (plans, specs, phases, work_items, bundles, ticks, learnings, locks) handles valid data |
+| `refresh_collection()` for all 8 types | `test_refresh_collection_all_types` | Verify each collection type (plans, specs, phases, works, bundles, ticks, learnings, locks) handles valid data |
 
 **Expected impact:** +40-60 lines of test code. Target: 85%+ (terminal I/O setup paths remain uncovered by design).
 

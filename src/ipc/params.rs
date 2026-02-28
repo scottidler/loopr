@@ -11,7 +11,7 @@ use crate::domain::role::Role;
 /// Params for `bundle.create` IPC method.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BundleCreateParams {
-    pub work_item_id: String,
+    pub work_id: String,
     pub branch_name: String,
     pub claims: Vec<String>,
     #[serde(default)]
@@ -37,7 +37,7 @@ pub struct LearningCreateParams {
 /// Params for `worktree.refresh` IPC method.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorktreeRefreshParams {
-    pub work_item_id: String,
+    pub work_id: String,
     #[serde(default = "default_base_ref")]
     pub new_base_ref: String,
 }
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn test_bundle_create_params_roundtrip() {
         let params = BundleCreateParams {
-            work_item_id: "wi-1".to_string(),
+            work_id: "wi-1".to_string(),
             branch_name: "feature/test".to_string(),
             claims: vec!["claim1".to_string(), "claim2".to_string()],
             description: Some("A test bundle".to_string()),
@@ -62,7 +62,7 @@ mod tests {
         };
         let json = serde_json::to_value(&params).unwrap();
         let restored: BundleCreateParams = serde_json::from_value(json).unwrap();
-        assert_eq!(restored.work_item_id, "wi-1");
+        assert_eq!(restored.work_id, "wi-1");
         assert_eq!(restored.claims, vec!["claim1", "claim2"]);
         assert_eq!(restored.description, Some("A test bundle".to_string()));
     }
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn test_bundle_create_params_defaults() {
         let json = serde_json::json!({
-            "work_item_id": "wi-1",
+            "work_id": "wi-1",
             "branch_name": "feature/x",
             "claims": ["c1"]
         });
@@ -111,19 +111,19 @@ mod tests {
     #[test]
     fn test_worktree_refresh_params_roundtrip() {
         let params = WorktreeRefreshParams {
-            work_item_id: "wi-1".to_string(),
+            work_id: "wi-1".to_string(),
             new_base_ref: "abc123".to_string(),
         };
         let json = serde_json::to_value(&params).unwrap();
         let restored: WorktreeRefreshParams = serde_json::from_value(json).unwrap();
-        assert_eq!(restored.work_item_id, "wi-1");
+        assert_eq!(restored.work_id, "wi-1");
         assert_eq!(restored.new_base_ref, "abc123");
     }
 
     #[test]
     fn test_worktree_refresh_params_default_base_ref() {
         let json = serde_json::json!({
-            "work_item_id": "wi-1"
+            "work_id": "wi-1"
         });
         let params: WorktreeRefreshParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.new_base_ref, "HEAD");

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::domain::role::Role;
 
-/// CRUD subcommands for Plan, Spec, Phase, WorkItem.
+/// CRUD subcommands for Plan, Spec, Phase, Work.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum CrudCmd {
     /// Create a new record
@@ -15,7 +15,7 @@ pub enum CrudCmd {
         /// Description
         #[arg(short, long, default_value = "")]
         description: String,
-        /// Parent ID (required for spec, phase, work_item)
+        /// Parent ID (required for spec, phase, work)
         #[arg(short, long)]
         parent: Option<String>,
         /// Order (for Phase)
@@ -51,7 +51,7 @@ pub enum BundleCmd {
     /// Create a new bundle
     Create {
         /// Work item ID
-        work_item_id: String,
+        work_id: String,
         /// Branch name
         #[arg(short, long)]
         branch: String,
@@ -67,11 +67,11 @@ pub enum BundleCmd {
         /// Bundle ID
         id: String,
     },
-    /// List bundles (optional work_item_id filter)
+    /// List bundles (optional work_id filter)
     List {
         /// Filter by work item ID
         #[arg(short, long)]
-        work_item_id: Option<String>,
+        work_id: Option<String>,
     },
     /// Transition a bundle's status
     Transition {
@@ -126,7 +126,7 @@ pub enum WorktreeCmd {
     /// Create a worktree for a work item
     Create {
         /// Work item ID
-        work_item_id: String,
+        work_id: String,
         /// Git ref to base the worktree on
         #[arg(short, long, default_value = "HEAD")]
         git_ref: String,
@@ -136,12 +136,12 @@ pub enum WorktreeCmd {
     /// Clean up a worktree
     Cleanup {
         /// Work item ID
-        work_item_id: String,
+        work_id: String,
     },
     /// Refresh a worktree to a new ref
     Refresh {
         /// Work item ID
-        work_item_id: String,
+        work_id: String,
         /// Git ref to reset to
         #[arg(short, long, default_value = "HEAD")]
         git_ref: String,
@@ -155,7 +155,7 @@ pub enum LearningCmd {
     Create {
         /// Source record ID
         source_id: String,
-        /// Scope (WorkItem, Phase, Spec, Plan, Global)
+        /// Scope (Work, Phase, Spec, Plan, Global)
         scope: String,
         /// Content
         content: String,
@@ -196,7 +196,7 @@ pub enum AgentCmd {
     #[command(name = "start-implementer")]
     StartImplementer {
         /// Work item ID
-        work_item_id: String,
+        work_id: String,
     },
     /// Start a reviewer agent for a bundle
     #[command(name = "start-reviewer")]
@@ -215,7 +215,7 @@ pub enum AgentCmd {
     StartResearcher {
         /// Research query
         query: String,
-        /// Target scope ID (plan/spec/phase/work-item ID)
+        /// Target scope ID (plan/spec/phase/work ID)
         #[arg(short, long)]
         target_id: Option<String>,
     },
@@ -351,8 +351,8 @@ pub enum Command {
         cmd: CrudCmd,
     },
     /// Work item operations
-    #[command(name = "work-item")]
-    WorkItem {
+    #[command(name = "work")]
+    Work {
         #[command(subcommand)]
         cmd: CrudCmd,
     },
@@ -510,16 +510,16 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parses_work_item_create() {
-        let cli = Cli::parse_from(["loopr", "work-item", "create", "Task 1", "-p", "phase-1"]);
+    fn test_cli_parses_work_create() {
+        let cli = Cli::parse_from(["loopr", "work", "create", "Task 1", "-p", "phase-1"]);
         match cli.command {
-            Some(Command::WorkItem {
+            Some(Command::Work {
                 cmd: CrudCmd::Create { title, parent, .. },
             }) => {
                 assert_eq!(title, "Task 1");
                 assert_eq!(parent, Some("phase-1".to_string()));
             }
-            _ => panic!("expected WorkItem Create"),
+            _ => panic!("expected Work Create"),
         }
     }
 
@@ -528,11 +528,9 @@ mod tests {
         let cli = Cli::parse_from(["loopr", "bundle", "create", "wi-1", "-b", "feature/foo"]);
         match cli.command {
             Some(Command::Bundle {
-                cmd: BundleCmd::Create {
-                    work_item_id, branch, ..
-                },
+                cmd: BundleCmd::Create { work_id, branch, .. },
             }) => {
-                assert_eq!(work_item_id, "wi-1");
+                assert_eq!(work_id, "wi-1");
                 assert_eq!(branch, "feature/foo");
             }
             _ => panic!("expected Bundle Create"),
@@ -557,9 +555,9 @@ mod tests {
         let cli = Cli::parse_from(["loopr", "worktree", "create", "wi-1"]);
         match cli.command {
             Some(Command::Worktree {
-                cmd: WorktreeCmd::Create { work_item_id, git_ref },
+                cmd: WorktreeCmd::Create { work_id, git_ref },
             }) => {
-                assert_eq!(work_item_id, "wi-1");
+                assert_eq!(work_id, "wi-1");
                 assert_eq!(git_ref, "HEAD");
             }
             _ => panic!("expected Worktree Create"),
@@ -586,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_cli_parses_learning_create() {
-        let cli = Cli::parse_from(["loopr", "learning", "create", "wi-1", "WorkItem", "learned something"]);
+        let cli = Cli::parse_from(["loopr", "learning", "create", "wi-1", "Work", "learned something"]);
         match cli.command {
             Some(Command::Learning {
                 cmd:
@@ -597,7 +595,7 @@ mod tests {
                     },
             }) => {
                 assert_eq!(source_id, "wi-1");
-                assert_eq!(scope, "WorkItem");
+                assert_eq!(scope, "Work");
                 assert_eq!(content, "learned something");
             }
             _ => panic!("expected Learning Create"),
@@ -670,9 +668,9 @@ mod tests {
         let cli = Cli::parse_from(["loopr", "agent", "start-implementer", "wi-1"]);
         match cli.command {
             Some(Command::Agent {
-                cmd: AgentCmd::StartImplementer { work_item_id },
+                cmd: AgentCmd::StartImplementer { work_id },
             }) => {
-                assert_eq!(work_item_id, "wi-1");
+                assert_eq!(work_id, "wi-1");
             }
             _ => panic!("expected Agent StartImplementer"),
         }

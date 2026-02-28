@@ -8,7 +8,7 @@ use crate::domain::transition::TransitionRule;
 use crate::id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WorkItemStatus {
+pub enum WorkStatus {
     Draft,
     Ready,
     InProgress,
@@ -19,15 +19,15 @@ pub enum WorkItemStatus {
     Abandoned,
 }
 
-impl std::fmt::Display for WorkItemStatus {
+impl std::fmt::Display for WorkStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-/// Returns the FSM transition rules for WorkItem status.
-pub fn work_item_transitions() -> Vec<TransitionRule<WorkItemStatus>> {
-    use WorkItemStatus::*;
+/// Returns the FSM transition rules for Work status.
+pub fn work_transitions() -> Vec<TransitionRule<WorkStatus>> {
+    use WorkStatus::*;
     vec![
         TransitionRule {
             from: Draft,
@@ -108,7 +108,7 @@ pub fn work_item_transitions() -> Vec<TransitionRule<WorkItemStatus>> {
     ]
 }
 
-/// A single item in a WorkItem's completion checklist.
+/// A single item in a Work's completion checklist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChecklistItem {
     pub description: String,
@@ -117,13 +117,13 @@ pub struct ChecklistItem {
 
 /// Concrete unit of work within a Phase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkItem {
+pub struct Work {
     pub id: String,
     pub phase_id: String,
     pub title: String,
     pub description: String,
     pub assignee: Option<String>,
-    pub status: WorkItemStatus,
+    pub status: WorkStatus,
     pub resource_tags: Vec<String>,
     pub dependencies: Vec<String>,
     #[serde(default)]
@@ -134,7 +134,7 @@ pub struct WorkItem {
     pub updated_at: i64,
 }
 
-impl WorkItem {
+impl Work {
     pub fn new(phase_id: String, title: String, description: String) -> Self {
         let now = id::now_millis();
         Self {
@@ -143,7 +143,7 @@ impl WorkItem {
             title,
             description,
             assignee: None,
-            status: WorkItemStatus::Draft,
+            status: WorkStatus::Draft,
             resource_tags: Vec::new(),
             dependencies: Vec::new(),
             acceptance_criteria: Vec::new(),
@@ -154,7 +154,7 @@ impl WorkItem {
     }
 }
 
-impl Record for WorkItem {
+impl Record for Work {
     fn id(&self) -> &str {
         &self.id
     }
@@ -164,7 +164,7 @@ impl Record for WorkItem {
     }
 
     fn collection_name() -> &'static str {
-        "work_items"
+        "works"
     }
 
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
@@ -181,44 +181,44 @@ mod tests {
     use crate::domain::transition::validate_transition;
 
     #[test]
-    fn test_work_item_status_display() {
-        assert_eq!(WorkItemStatus::Draft.to_string(), "Draft");
-        assert_eq!(WorkItemStatus::InProgress.to_string(), "InProgress");
-        assert_eq!(WorkItemStatus::Abandoned.to_string(), "Abandoned");
+    fn test_work_status_display() {
+        assert_eq!(WorkStatus::Draft.to_string(), "Draft");
+        assert_eq!(WorkStatus::InProgress.to_string(), "InProgress");
+        assert_eq!(WorkStatus::Abandoned.to_string(), "Abandoned");
     }
 
     #[test]
-    fn test_work_item_status_serde_roundtrip() {
-        let status = WorkItemStatus::InReview;
+    fn test_work_status_serde_roundtrip() {
+        let status = WorkStatus::InReview;
         let json = serde_json::to_string(&status).unwrap();
-        let deserialized: WorkItemStatus = serde_json::from_str(&json).unwrap();
+        let deserialized: WorkStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, deserialized);
     }
 
     #[test]
-    fn test_work_item_status_display_matches_serde() {
+    fn test_work_status_display_matches_serde() {
         // Regression: Display must produce values that serde can deserialize.
         for status in [
-            WorkItemStatus::Draft,
-            WorkItemStatus::Ready,
-            WorkItemStatus::InProgress,
-            WorkItemStatus::Blocked,
-            WorkItemStatus::InReview,
-            WorkItemStatus::Integrated,
-            WorkItemStatus::Done,
-            WorkItemStatus::Abandoned,
+            WorkStatus::Draft,
+            WorkStatus::Ready,
+            WorkStatus::InProgress,
+            WorkStatus::Blocked,
+            WorkStatus::InReview,
+            WorkStatus::Integrated,
+            WorkStatus::Done,
+            WorkStatus::Abandoned,
         ] {
             let display = status.to_string();
             let quoted = format!("\"{}\"", display);
-            let deserialized: WorkItemStatus = serde_json::from_str(&quoted)
+            let deserialized: WorkStatus = serde_json::from_str(&quoted)
                 .unwrap_or_else(|e| panic!("Display output '{}' not deserializable: {}", display, e));
             assert_eq!(status, deserialized);
         }
     }
 
     #[test]
-    fn test_work_item_new() {
-        let wi = WorkItem::new(
+    fn test_work_new() {
+        let wi = Work::new(
             "phase-123".to_string(),
             "Implement JWT".to_string(),
             "Add JWT signing".to_string(),
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(wi.phase_id, "phase-123");
         assert_eq!(wi.title, "Implement JWT");
         assert_eq!(wi.description, "Add JWT signing");
-        assert_eq!(wi.status, WorkItemStatus::Draft);
+        assert_eq!(wi.status, WorkStatus::Draft);
         assert!(wi.assignee.is_none());
         assert!(wi.resource_tags.is_empty());
         assert!(wi.dependencies.is_empty());
@@ -236,8 +236,8 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_serde_roundtrip() {
-        let mut wi = WorkItem::new(
+    fn test_work_serde_roundtrip() {
+        let mut wi = Work::new(
             "phase-456".to_string(),
             "Test WI".to_string(),
             "Description".to_string(),
@@ -247,7 +247,7 @@ mod tests {
         wi.dependencies = vec!["wi-001".to_string()];
 
         let json = serde_json::to_string(&wi).unwrap();
-        let deserialized: WorkItem = serde_json::from_str(&json).unwrap();
+        let deserialized: Work = serde_json::from_str(&json).unwrap();
         assert_eq!(wi.id, deserialized.id);
         assert_eq!(wi.phase_id, deserialized.phase_id);
         assert_eq!(wi.assignee, deserialized.assignee);
@@ -257,9 +257,9 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_unique_ids() {
-        let w1 = WorkItem::new("p".to_string(), "A".to_string(), "".to_string());
-        let w2 = WorkItem::new("p".to_string(), "B".to_string(), "".to_string());
+    fn test_work_unique_ids() {
+        let w1 = Work::new("p".to_string(), "A".to_string(), "".to_string());
+        let w2 = Work::new("p".to_string(), "B".to_string(), "".to_string());
         assert_ne!(w1.id, w2.id);
     }
 
@@ -267,31 +267,23 @@ mod tests {
 
     #[test]
     fn test_valid_draft_to_ready() {
-        let rules = work_item_transitions();
-        assert!(validate_transition(WorkItemStatus::Draft, WorkItemStatus::Ready, Role::Coordinator, &rules,).is_ok());
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Draft, WorkStatus::Ready, Role::Coordinator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_ready_to_in_progress() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::Ready,
-                WorkItemStatus::InProgress,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Ready, WorkStatus::InProgress, Role::Coordinator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_in_progress_to_blocked_any_role() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         // InProgress → Blocked has role: None (any role)
         for role in [Role::Coordinator, Role::Integrator, Role::Implementer] {
             assert!(
-                validate_transition(WorkItemStatus::InProgress, WorkItemStatus::Blocked, role, &rules,).is_ok(),
+                validate_transition(WorkStatus::InProgress, WorkStatus::Blocked, role, &rules,).is_ok(),
                 "Expected InProgress→Blocked to succeed for {:?}",
                 role
             );
@@ -300,102 +292,54 @@ mod tests {
 
     #[test]
     fn test_valid_blocked_to_ready() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::Blocked,
-                WorkItemStatus::Ready,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Blocked, WorkStatus::Ready, Role::Coordinator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_in_progress_to_in_review() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::InProgress,
-                WorkItemStatus::InReview,
-                Role::Implementer,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::InReview, Role::Implementer, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_in_review_to_in_progress_rejection() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::InReview,
-                WorkItemStatus::InProgress,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::InReview, WorkStatus::InProgress, Role::Coordinator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_in_review_to_integrated() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::InReview,
-                WorkItemStatus::Integrated,
-                Role::Integrator,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Integrated, Role::Integrator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_integrated_to_done() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::Integrated,
-                WorkItemStatus::Done,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Integrated, WorkStatus::Done, Role::Coordinator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_integrated_to_done_integrator() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::Integrated,
-                WorkItemStatus::Done,
-                Role::Integrator,
-                &rules,
-            )
-            .is_ok()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Integrated, WorkStatus::Done, Role::Integrator, &rules,).is_ok());
     }
 
     #[test]
     fn test_valid_abandoned_from_all_non_terminal() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         let non_terminal = [
-            WorkItemStatus::Draft,
-            WorkItemStatus::Ready,
-            WorkItemStatus::InProgress,
-            WorkItemStatus::Blocked,
-            WorkItemStatus::InReview,
-            WorkItemStatus::Integrated,
+            WorkStatus::Draft,
+            WorkStatus::Ready,
+            WorkStatus::InProgress,
+            WorkStatus::Blocked,
+            WorkStatus::InReview,
+            WorkStatus::Integrated,
         ];
         for from in non_terminal {
             assert!(
-                validate_transition(from, WorkItemStatus::Abandoned, Role::Coordinator, &rules,).is_ok(),
+                validate_transition(from, WorkStatus::Abandoned, Role::Coordinator, &rules,).is_ok(),
                 "Expected {:?}→Abandoned to succeed",
                 from
             );
@@ -406,31 +350,23 @@ mod tests {
 
     #[test]
     fn test_invalid_draft_to_ready_wrong_role() {
-        let rules = work_item_transitions();
-        assert!(validate_transition(WorkItemStatus::Draft, WorkItemStatus::Ready, Role::Implementer, &rules,).is_err());
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Draft, WorkStatus::Ready, Role::Implementer, &rules,).is_err());
     }
 
     #[test]
     fn test_invalid_skip_draft_to_in_progress() {
-        let rules = work_item_transitions();
-        assert!(
-            validate_transition(
-                WorkItemStatus::Draft,
-                WorkItemStatus::InProgress,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_err()
-        );
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::Draft, WorkStatus::InProgress, Role::Coordinator, &rules,).is_err());
     }
 
     #[test]
     fn test_invalid_done_to_anything() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         // Done is terminal — no transitions out
-        for target in [WorkItemStatus::Draft, WorkItemStatus::Ready, WorkItemStatus::InProgress] {
+        for target in [WorkStatus::Draft, WorkStatus::Ready, WorkStatus::InProgress] {
             assert!(
-                validate_transition(WorkItemStatus::Done, target, Role::Coordinator, &rules,).is_err(),
+                validate_transition(WorkStatus::Done, target, Role::Coordinator, &rules,).is_err(),
                 "Expected Done→{:?} to fail",
                 target
             );
@@ -439,93 +375,61 @@ mod tests {
 
     #[test]
     fn test_invalid_abandoned_to_anything() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         // Abandoned is terminal — no transitions out
-        assert!(
-            validate_transition(
-                WorkItemStatus::Abandoned,
-                WorkItemStatus::Draft,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_err()
-        );
+        assert!(validate_transition(WorkStatus::Abandoned, WorkStatus::Draft, Role::Coordinator, &rules,).is_err());
     }
 
     #[test]
     fn test_invalid_in_review_to_integrated_wrong_role() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         // Only Integrator can move InReview → Integrated
-        assert!(
-            validate_transition(
-                WorkItemStatus::InReview,
-                WorkItemStatus::Integrated,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_err()
-        );
+        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Integrated, Role::Coordinator, &rules,).is_err());
     }
 
     #[test]
     fn test_invalid_in_progress_to_in_review_wrong_role() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         // Only Implementer can move InProgress → InReview
-        assert!(
-            validate_transition(
-                WorkItemStatus::InProgress,
-                WorkItemStatus::InReview,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_err()
-        );
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::InReview, Role::Coordinator, &rules,).is_err());
     }
 
     #[test]
     fn test_invalid_abandoned_not_by_implementer() {
-        let rules = work_item_transitions();
+        let rules = work_transitions();
         // Abandoned requires Coordinator
-        assert!(
-            validate_transition(
-                WorkItemStatus::Ready,
-                WorkItemStatus::Abandoned,
-                Role::Implementer,
-                &rules,
-            )
-            .is_err()
-        );
+        assert!(validate_transition(WorkStatus::Ready, WorkStatus::Abandoned, Role::Implementer, &rules,).is_err());
     }
 
     // --- Record trait tests ---
 
     #[test]
     fn test_record_id() {
-        let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Title".into(), "Desc".into());
         assert_eq!(Record::id(&wi), wi.id);
     }
 
     #[test]
     fn test_record_updated_at() {
-        let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Title".into(), "Desc".into());
         assert_eq!(Record::updated_at(&wi), wi.updated_at);
     }
 
     #[test]
     fn test_record_collection_name() {
-        assert_eq!(WorkItem::collection_name(), "work_items");
+        assert_eq!(Work::collection_name(), "works");
     }
 
     #[test]
     fn test_record_indexed_fields_status() {
-        let wi = WorkItem::new("phase-1".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Title".into(), "Desc".into());
         let fields = wi.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Draft".to_string())));
     }
 
     #[test]
     fn test_record_indexed_fields_phase_id() {
-        let wi = WorkItem::new("phase-abc".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-abc".into(), "Title".into(), "Desc".into());
         let fields = wi.indexed_fields();
         assert_eq!(
             fields.get("phase_id"),

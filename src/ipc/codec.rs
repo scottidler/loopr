@@ -86,10 +86,10 @@ mod tests {
 
     #[test]
     fn test_decode_request() {
-        let json = r#"{"id":1,"method":"work_item.get","params":{"id":"wi1"}}"#;
+        let json = r#"{"id":1,"method":"work.get","params":{"id":"wi1"}}"#;
         let req = decode_request(json).unwrap();
         assert_eq!(req.id, 1);
-        assert_eq!(req.method, "work_item.get");
+        assert_eq!(req.method, "work.get");
         assert_eq!(req.params["id"], "wi1");
     }
 
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_request_roundtrip() {
-        let req = DaemonRequest::new(42, "bundle.propose", json!({"work_item_id": "wi1"}));
+        let req = DaemonRequest::new(42, "bundle.propose", json!({"work_id": "wi1"}));
         let line = encode_request(&req).unwrap();
         let decoded = decode_request(&line).unwrap();
         assert_eq!(req, decoded);
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_event_roundtrip() {
-        let event = DaemonEvent::transition_completed("work_item", "wi1", "Draft", "Ready", "Coordinator");
+        let event = DaemonEvent::transition_completed("work", "wi1", "Draft", "Ready", "Coordinator");
         let line = encode_event(&event).unwrap();
         let msg = decode_client_message(&line).unwrap();
         match msg {

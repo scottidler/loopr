@@ -162,7 +162,7 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bundle {
     pub id: String,
-    pub work_item_id: String,
+    pub work_id: String,
     pub base_tick_id: Option<String>,
     pub branch_name: String,
     pub touched_paths: Vec<String>,
@@ -179,11 +179,11 @@ pub struct Bundle {
 }
 
 impl Bundle {
-    pub fn new(work_item_id: String, base_tick_id: Option<String>, branch_name: String, claims: Vec<String>) -> Self {
+    pub fn new(work_id: String, base_tick_id: Option<String>, branch_name: String, claims: Vec<String>) -> Self {
         let now = id::now_millis();
         Self {
             id: id::generate_id(),
-            work_item_id,
+            work_id,
             base_tick_id,
             branch_name,
             touched_paths: Vec::new(),
@@ -214,7 +214,7 @@ impl Record for Bundle {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
-        m.insert("work_item_id".into(), IndexValue::String(self.work_item_id.clone()));
+        m.insert("work_id".into(), IndexValue::String(self.work_id.clone()));
         m
     }
 }
@@ -269,7 +269,7 @@ mod tests {
             "feature/jwt".to_string(),
             vec!["Add JWT signing".into()],
         );
-        assert_eq!(b.work_item_id, "wi-123");
+        assert_eq!(b.work_id, "wi-123");
         assert_eq!(b.base_tick_id, Some("tick-001".to_string()));
         assert_eq!(b.branch_name, "feature/jwt");
         assert_eq!(b.claims, vec!["Add JWT signing".to_string()]);
@@ -306,7 +306,7 @@ mod tests {
         let json = serde_json::to_string(&b).unwrap();
         let deserialized: Bundle = serde_json::from_str(&json).unwrap();
         assert_eq!(b.id, deserialized.id);
-        assert_eq!(b.work_item_id, deserialized.work_item_id);
+        assert_eq!(b.work_id, deserialized.work_id);
         assert_eq!(b.base_tick_id, deserialized.base_tick_id);
         assert_eq!(b.branch_name, deserialized.branch_name);
         assert_eq!(b.touched_paths, deserialized.touched_paths);
@@ -545,10 +545,7 @@ mod tests {
         let b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
         let fields = b.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Proposed".to_string())));
-        assert_eq!(
-            fields.get("work_item_id"),
-            Some(&IndexValue::String("wi-1".to_string()))
-        );
+        assert_eq!(fields.get("work_id"), Some(&IndexValue::String("wi-1".to_string())));
         assert_eq!(fields.len(), 2);
     }
 
@@ -564,21 +561,21 @@ mod tests {
 
     #[test]
     fn test_claims_deserialize_from_string() {
-        let json = r#"{"id":"b-1","work_item_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":"old string claim","verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
+        let json = r#"{"id":"b-1","work_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":"old string claim","verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
         let b: Bundle = serde_json::from_str(json).unwrap();
         assert_eq!(b.claims, vec!["old string claim".to_string()]);
     }
 
     #[test]
     fn test_claims_deserialize_from_array() {
-        let json = r#"{"id":"b-2","work_item_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":["c1","c2"],"verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
+        let json = r#"{"id":"b-2","work_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":["c1","c2"],"verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
         let b: Bundle = serde_json::from_str(json).unwrap();
         assert_eq!(b.claims, vec!["c1".to_string(), "c2".to_string()]);
     }
 
     #[test]
     fn test_claims_deserialize_from_empty_string() {
-        let json = r#"{"id":"b-3","work_item_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":"","verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
+        let json = r#"{"id":"b-3","work_id":"wi-1","base_tick_id":null,"branch_name":"b","touched_paths":[],"claims":"","verification":"","status":"Proposed","created_at":1,"updated_at":1}"#;
         let b: Bundle = serde_json::from_str(json).unwrap();
         assert!(b.claims.is_empty());
     }

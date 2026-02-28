@@ -31,7 +31,7 @@ Here's my synthesis.
 
 #### What Loopr Is
 
-A TUI-based "dev team in a box" that orchestrates work through a **Plan → Spec → Phase → Code** hierarchy, using the Ralph Wiggum Loop (fresh LLM context each iteration). TaskStore is the persistence spine. Three FSMs (WorkItem, Bundle, Tick) govern state transitions.
+A TUI-based "dev team in a box" that orchestrates work through a **Plan → Spec → Phase → Code** hierarchy, using the Ralph Wiggum Loop (fresh LLM context each iteration). TaskStore is the persistence spine. Three FSMs (Work, Bundle, Tick) govern state transitions.
 
 #### Approved Architecture (from the two conversations)
 
@@ -40,8 +40,8 @@ These are settled decisions:
 - **TaskStore** as persistence spine (JSONL truth, SQLite cache, Git merge driver) — already a mature external crate
 - **Tick** (immutable integration checkpoint, Git SHA) vs **Iteration** (one stateless persona run)
 - **Persona model**: Coordinator, Integrator, Implementers, Spec/Review/Research swarms
-- **Records**: Plan, Spec, Phase, WorkItem, Bundle, Tick, Learning, Lock
-- **FSM**: Hand-rolled enum + const transition table, no crate. Three machines (WorkItem, Bundle, Tick) with role-based guards
+- **Records**: Plan, Spec, Phase, Work, Bundle, Tick, Learning, Lock
+- **FSM**: Hand-rolled enum + const transition table, no crate. Three machines (Work, Bundle, Tick) with role-based guards
 - **MVP phasing**: MVP1 = no LLM (prove the spine), MVP2 = LLM as doc validator, MVP3+ = LLM agents
 - **Light Loops, Heavy Tools**: Loops are Tokio tasks; Tools are OS subprocesses in worktrees
 - **Client fork-to-daemon**: Single binary, auto-starts daemon
@@ -70,7 +70,7 @@ These were **actually implemented and working** — carry the patterns (not the 
 
 | v2 Thing | Why Drop |
 |----------|----------|
-| **v2's "Loop" record model** | v2 had one `Loop` type with `LoopType` enum. The ChatGPT conversation established a cleaner hierarchy: distinct Plan/Spec/Phase/WorkItem records. Don't regress. |
+| **v2's "Loop" record model** | v2 had one `Loop` type with `LoopType` enum. The ChatGPT conversation established a cleaner hierarchy: distinct Plan/Spec/Phase/Work records. Don't regress. |
 | **Runner subprocesses with 3 lanes** | Designed but never actually wired. MVP1 has no LLM and no automated tool execution. When tools are needed (MVP3+), start with simple `Command::new()` before building the full lane system. |
 | **LLM client / tool system / prompt templates** | Not needed for MVP1. Build fresh when MVP2/3 arrives — approach may change (Claude Code SDK? Agent SDK?). |
 | **Network sandboxing / seccomp** | Way premature. Defer indefinitely. |
@@ -85,14 +85,14 @@ v2's **DaemonContext** was shaped around its own domain types (Loop, Event, Sign
 
 ```rust
 DaemonContext {
-    store: TaskStore,          // Plan, Spec, Phase, WorkItem, Bundle, Tick, Learning, Lock
+    store: TaskStore,          // Plan, Spec, Phase, Work, Bundle, Tick, Learning, Lock
     worktrees: WorktreeManager,
     event_tx: broadcast::Sender<Event>,
     // NO llm_client, tool_router, prompt_engine in MVP1
 }
 ```
 
-The daemon handlers would map to the FSM transitions — `workitem.transition(Ready, Role::Coordinator)` etc. — driven by TUI/CLI commands via IPC.
+The daemon handlers would map to the FSM transitions — `work.transition(Ready, Role::Coordinator)` etc. — driven by TUI/CLI commands via IPC.
 
 #### Bottom Line
 
@@ -197,7 +197,7 @@ All of that falls apart if you let multiple writers race on files.
 The v2 daemon/IPC model gives you exactly what Gas Town lacks:
 
 - **Single-writer semantics** — the daemon validates every transition before it's committed. No races.
-- **FSM enforcement at a chokepoint** — every state change goes through `WorkItem::transition()` inside one process. Invalid transitions are rejected, not silently written.
+- **FSM enforcement at a chokepoint** — every state change goes through `Work::transition()` inside one process. Invalid transitions are rejected, not silently written.
 - **Immediate feedback** — "your transition was rejected because Bundle must be in Reviewed state before Accepted" vs. "I wrote a file and hope it's valid."
 - **Real-time push** — TUI shows accurate state, not whatever it last polled.
 - **Centralized coordination** — one process is the authority. Not N agents fighting over who writes last.
@@ -228,8 +228,8 @@ The full v2 IPC stack (NDJSON over Unix socket, version handshake, broadcast eve
 
 1. Rust + ratatui
 2. TaskStore as persistence spine (JSONL truth, SQLite cache, Git merge driver)
-3. Records: Plan, Spec, Phase, WorkItem, Bundle, Tick, Learning, Lock
-4. Three FSMs: WorkItem, Bundle, Tick — hand-rolled enum + const transition table with role-based guards
+3. Records: Plan, Spec, Phase, Work, Bundle, Tick, Learning, Lock
+4. Three FSMs: Work, Bundle, Tick — hand-rolled enum + const transition table with role-based guards
 5. MVP1 = no LLM, human-as-coordinator, prove the spine
 6. MVP2 = LLM as doc validator (read-only, safest entry point)
 7. MVP3+ = LLM implementers + reviewers

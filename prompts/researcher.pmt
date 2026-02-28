@@ -27,7 +27,7 @@ Respond with a JSON array of actions:
 
 ## Learning Scope Values
 
-- Valid scope values: plan, spec, phase, work_item, global. Use the narrowest applicable scope.
+- Valid scope values: plan, spec, phase, work, global. Use the narrowest applicable scope.
 
 ## Rules
 

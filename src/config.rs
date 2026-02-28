@@ -125,7 +125,7 @@ pub struct CoordinatorConfig {
     pub active_interval_secs: u64,
     pub idle_interval_secs: u64,
     pub max_validation_attempts: u32,
-    pub max_work_item_retries: u32,
+    pub max_work_retries: u32,
     pub phase_timeout_secs: u64,
     pub goal_timeout_secs: u64,
 }
@@ -146,7 +146,7 @@ impl Default for CoordinatorConfig {
             active_interval_secs: 5,
             idle_interval_secs: 30,
             max_validation_attempts: 3,
-            max_work_item_retries: 3,
+            max_work_retries: 3,
             phase_timeout_secs: 3600,
             goal_timeout_secs: 14400,
         }

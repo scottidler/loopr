@@ -18,7 +18,7 @@ mod tests {
     use crate::domain::role::Role;
     use crate::domain::tick::{Tick, TickStatus, tick_transitions};
     use crate::domain::transition::validate_transition;
-    use crate::domain::work_item::{WorkItem, WorkItemStatus, work_item_transitions};
+    use crate::domain::work::{Work, WorkStatus, work_transitions};
 
     // ========================================================================
     // Helper: all roles for exhaustive wrong-role testing
@@ -199,36 +199,36 @@ mod tests {
     }
 
     // ========================================================================
-    // FSM 2: WorkItemStatus
+    // FSM 2: WorkStatus
     // States: Draft, Ready, InProgress, Blocked, InReview, Integrated, Done, Abandoned
     // Terminal: Done, Abandoned
     // ========================================================================
 
-    mod work_item {
+    mod work {
         use super::*;
 
-        const ALL_STATES: [WorkItemStatus; 8] = [
-            WorkItemStatus::Draft,
-            WorkItemStatus::Ready,
-            WorkItemStatus::InProgress,
-            WorkItemStatus::Blocked,
-            WorkItemStatus::InReview,
-            WorkItemStatus::Integrated,
-            WorkItemStatus::Done,
-            WorkItemStatus::Abandoned,
+        const ALL_STATES: [WorkStatus; 8] = [
+            WorkStatus::Draft,
+            WorkStatus::Ready,
+            WorkStatus::InProgress,
+            WorkStatus::Blocked,
+            WorkStatus::InReview,
+            WorkStatus::Integrated,
+            WorkStatus::Done,
+            WorkStatus::Abandoned,
         ];
 
-        const TERMINAL: [WorkItemStatus; 2] = [WorkItemStatus::Done, WorkItemStatus::Abandoned];
+        const TERMINAL: [WorkStatus; 2] = [WorkStatus::Done, WorkStatus::Abandoned];
 
         // --- All 15 valid transitions ---
 
         #[test]
         fn valid_draft_to_ready() {
             let r = validate_transition(
-                WorkItemStatus::Draft,
-                WorkItemStatus::Ready,
+                WorkStatus::Draft,
+                WorkStatus::Ready,
                 Role::Coordinator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("Draft", "Ready", &r);
         }
@@ -236,19 +236,19 @@ mod tests {
         #[test]
         fn valid_ready_to_in_progress() {
             let r = validate_transition(
-                WorkItemStatus::Ready,
-                WorkItemStatus::InProgress,
+                WorkStatus::Ready,
+                WorkStatus::InProgress,
                 Role::Coordinator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("Ready", "InProgress", &r);
         }
 
         #[test]
         fn valid_in_progress_to_blocked_any_role() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in &ALL_ROLES {
-                let r = validate_transition(WorkItemStatus::InProgress, WorkItemStatus::Blocked, *role, &rules);
+                let r = validate_transition(WorkStatus::InProgress, WorkStatus::Blocked, *role, &rules);
                 assert_valid("InProgress", format!("Blocked ({:?})", role), &r);
             }
         }
@@ -256,10 +256,10 @@ mod tests {
         #[test]
         fn valid_blocked_to_ready() {
             let r = validate_transition(
-                WorkItemStatus::Blocked,
-                WorkItemStatus::Ready,
+                WorkStatus::Blocked,
+                WorkStatus::Ready,
                 Role::Coordinator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("Blocked", "Ready", &r);
         }
@@ -267,10 +267,10 @@ mod tests {
         #[test]
         fn valid_in_progress_to_in_review() {
             let r = validate_transition(
-                WorkItemStatus::InProgress,
-                WorkItemStatus::InReview,
+                WorkStatus::InProgress,
+                WorkStatus::InReview,
                 Role::Implementer,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("InProgress", "InReview", &r);
         }
@@ -278,10 +278,10 @@ mod tests {
         #[test]
         fn valid_in_review_to_in_progress() {
             let r = validate_transition(
-                WorkItemStatus::InReview,
-                WorkItemStatus::InProgress,
+                WorkStatus::InReview,
+                WorkStatus::InProgress,
                 Role::Coordinator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("InReview", "InProgress", &r);
         }
@@ -289,10 +289,10 @@ mod tests {
         #[test]
         fn valid_in_review_to_integrated() {
             let r = validate_transition(
-                WorkItemStatus::InReview,
-                WorkItemStatus::Integrated,
+                WorkStatus::InReview,
+                WorkStatus::Integrated,
                 Role::Integrator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("InReview", "Integrated", &r);
         }
@@ -300,10 +300,10 @@ mod tests {
         #[test]
         fn valid_integrated_to_done_coordinator() {
             let r = validate_transition(
-                WorkItemStatus::Integrated,
-                WorkItemStatus::Done,
+                WorkStatus::Integrated,
+                WorkStatus::Done,
                 Role::Coordinator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("Integrated", "Done (Coordinator)", &r);
         }
@@ -311,27 +311,27 @@ mod tests {
         #[test]
         fn valid_integrated_to_done_integrator() {
             let r = validate_transition(
-                WorkItemStatus::Integrated,
-                WorkItemStatus::Done,
+                WorkStatus::Integrated,
+                WorkStatus::Done,
                 Role::Integrator,
-                &work_item_transitions(),
+                &work_transitions(),
             );
             assert_valid("Integrated", "Done (Integrator)", &r);
         }
 
         #[test]
         fn valid_abandoned_from_all_non_terminal() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             let non_terminal = [
-                WorkItemStatus::Draft,
-                WorkItemStatus::Ready,
-                WorkItemStatus::InProgress,
-                WorkItemStatus::Blocked,
-                WorkItemStatus::InReview,
-                WorkItemStatus::Integrated,
+                WorkStatus::Draft,
+                WorkStatus::Ready,
+                WorkStatus::InProgress,
+                WorkStatus::Blocked,
+                WorkStatus::InReview,
+                WorkStatus::Integrated,
             ];
             for from in &non_terminal {
-                let r = validate_transition(*from, WorkItemStatus::Abandoned, Role::Coordinator, &rules);
+                let r = validate_transition(*from, WorkStatus::Abandoned, Role::Coordinator, &rules);
                 assert_valid(format!("{:?}", from), "Abandoned", &r);
             }
         }
@@ -340,7 +340,7 @@ mod tests {
 
         #[test]
         fn terminal_states_reject_all_outbound() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for terminal in &TERMINAL {
                 for target in &ALL_STATES {
                     for role in &ALL_ROLES {
@@ -355,7 +355,7 @@ mod tests {
 
         #[test]
         fn self_transitions_rejected() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for state in &ALL_STATES {
                 for role in &ALL_ROLES {
                     let r = validate_transition(*state, *state, *role, &rules);
@@ -368,72 +368,72 @@ mod tests {
 
         #[test]
         fn wrong_role_draft_to_ready() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkItemStatus::Draft, WorkItemStatus::Ready, role, &rules);
+                let r = validate_transition(WorkStatus::Draft, WorkStatus::Ready, role, &rules);
                 assert_invalid("Draft", format!("Ready ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_ready_to_in_progress() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkItemStatus::Ready, WorkItemStatus::InProgress, role, &rules);
+                let r = validate_transition(WorkStatus::Ready, WorkStatus::InProgress, role, &rules);
                 assert_invalid("Ready", format!("InProgress ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_in_progress_to_in_review() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in [Role::Coordinator, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkItemStatus::InProgress, WorkItemStatus::InReview, role, &rules);
+                let r = validate_transition(WorkStatus::InProgress, WorkStatus::InReview, role, &rules);
                 assert_invalid("InProgress", format!("InReview ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_in_review_to_in_progress() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkItemStatus::InReview, WorkItemStatus::InProgress, role, &rules);
+                let r = validate_transition(WorkStatus::InReview, WorkStatus::InProgress, role, &rules);
                 assert_invalid("InReview", format!("InProgress ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_in_review_to_integrated() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in [Role::Coordinator, Role::Implementer, Role::Reviewer, Role::Researcher] {
-                let r = validate_transition(WorkItemStatus::InReview, WorkItemStatus::Integrated, role, &rules);
+                let r = validate_transition(WorkStatus::InReview, WorkStatus::Integrated, role, &rules);
                 assert_invalid("InReview", format!("Integrated ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_integrated_to_done() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher] {
-                let r = validate_transition(WorkItemStatus::Integrated, WorkItemStatus::Done, role, &rules);
+                let r = validate_transition(WorkStatus::Integrated, WorkStatus::Done, role, &rules);
                 assert_invalid("Integrated", format!("Done ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_abandoned() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             let non_terminal = [
-                WorkItemStatus::Draft,
-                WorkItemStatus::Ready,
-                WorkItemStatus::InProgress,
-                WorkItemStatus::Blocked,
-                WorkItemStatus::InReview,
-                WorkItemStatus::Integrated,
+                WorkStatus::Draft,
+                WorkStatus::Ready,
+                WorkStatus::InProgress,
+                WorkStatus::Blocked,
+                WorkStatus::InReview,
+                WorkStatus::Integrated,
             ];
             for from in &non_terminal {
                 for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                    let r = validate_transition(*from, WorkItemStatus::Abandoned, role, &rules);
+                    let r = validate_transition(*from, WorkStatus::Abandoned, role, &rules);
                     assert_invalid(format!("{:?}", from), format!("Abandoned ({:?})", role), &r);
                 }
             }
@@ -443,22 +443,22 @@ mod tests {
 
         #[test]
         fn skip_states_rejected() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             let skip_pairs = [
-                (WorkItemStatus::Draft, WorkItemStatus::InProgress),
-                (WorkItemStatus::Draft, WorkItemStatus::InReview),
-                (WorkItemStatus::Draft, WorkItemStatus::Integrated),
-                (WorkItemStatus::Draft, WorkItemStatus::Done),
-                (WorkItemStatus::Ready, WorkItemStatus::InReview),
-                (WorkItemStatus::Ready, WorkItemStatus::Integrated),
-                (WorkItemStatus::Ready, WorkItemStatus::Done),
-                (WorkItemStatus::Blocked, WorkItemStatus::InProgress),
-                (WorkItemStatus::Blocked, WorkItemStatus::InReview),
-                (WorkItemStatus::Blocked, WorkItemStatus::Integrated),
-                (WorkItemStatus::Blocked, WorkItemStatus::Done),
-                (WorkItemStatus::InProgress, WorkItemStatus::Integrated),
-                (WorkItemStatus::InProgress, WorkItemStatus::Done),
-                (WorkItemStatus::InReview, WorkItemStatus::Done),
+                (WorkStatus::Draft, WorkStatus::InProgress),
+                (WorkStatus::Draft, WorkStatus::InReview),
+                (WorkStatus::Draft, WorkStatus::Integrated),
+                (WorkStatus::Draft, WorkStatus::Done),
+                (WorkStatus::Ready, WorkStatus::InReview),
+                (WorkStatus::Ready, WorkStatus::Integrated),
+                (WorkStatus::Ready, WorkStatus::Done),
+                (WorkStatus::Blocked, WorkStatus::InProgress),
+                (WorkStatus::Blocked, WorkStatus::InReview),
+                (WorkStatus::Blocked, WorkStatus::Integrated),
+                (WorkStatus::Blocked, WorkStatus::Done),
+                (WorkStatus::InProgress, WorkStatus::Integrated),
+                (WorkStatus::InProgress, WorkStatus::Done),
+                (WorkStatus::InReview, WorkStatus::Done),
             ];
             for (from, to) in &skip_pairs {
                 for role in &ALL_ROLES {
@@ -472,16 +472,16 @@ mod tests {
 
         #[test]
         fn reverse_directions_rejected() {
-            let rules = work_item_transitions();
+            let rules = work_transitions();
             let reverse_pairs = [
-                (WorkItemStatus::Ready, WorkItemStatus::Draft),
-                (WorkItemStatus::InProgress, WorkItemStatus::Draft),
-                (WorkItemStatus::InProgress, WorkItemStatus::Ready),
-                (WorkItemStatus::Integrated, WorkItemStatus::InReview),
-                (WorkItemStatus::Integrated, WorkItemStatus::InProgress),
-                (WorkItemStatus::Integrated, WorkItemStatus::Ready),
-                (WorkItemStatus::Integrated, WorkItemStatus::Draft),
-                (WorkItemStatus::Done, WorkItemStatus::Integrated),
+                (WorkStatus::Ready, WorkStatus::Draft),
+                (WorkStatus::InProgress, WorkStatus::Draft),
+                (WorkStatus::InProgress, WorkStatus::Ready),
+                (WorkStatus::Integrated, WorkStatus::InReview),
+                (WorkStatus::Integrated, WorkStatus::InProgress),
+                (WorkStatus::Integrated, WorkStatus::Ready),
+                (WorkStatus::Integrated, WorkStatus::Draft),
+                (WorkStatus::Done, WorkStatus::Integrated),
             ];
             for (from, to) in &reverse_pairs {
                 for role in &ALL_ROLES {
@@ -495,13 +495,13 @@ mod tests {
 
         #[test]
         fn full_lifecycle_happy_path() {
-            let rules = work_item_transitions();
-            let chain: Vec<(WorkItemStatus, WorkItemStatus, Role)> = vec![
-                (WorkItemStatus::Draft, WorkItemStatus::Ready, Role::Coordinator),
-                (WorkItemStatus::Ready, WorkItemStatus::InProgress, Role::Coordinator),
-                (WorkItemStatus::InProgress, WorkItemStatus::InReview, Role::Implementer),
-                (WorkItemStatus::InReview, WorkItemStatus::Integrated, Role::Integrator),
-                (WorkItemStatus::Integrated, WorkItemStatus::Done, Role::Coordinator),
+            let rules = work_transitions();
+            let chain: Vec<(WorkStatus, WorkStatus, Role)> = vec![
+                (WorkStatus::Draft, WorkStatus::Ready, Role::Coordinator),
+                (WorkStatus::Ready, WorkStatus::InProgress, Role::Coordinator),
+                (WorkStatus::InProgress, WorkStatus::InReview, Role::Implementer),
+                (WorkStatus::InReview, WorkStatus::Integrated, Role::Integrator),
+                (WorkStatus::Integrated, WorkStatus::Done, Role::Coordinator),
             ];
             for (from, to, role) in &chain {
                 let r = validate_transition(*from, *to, *role, &rules);
@@ -512,12 +512,12 @@ mod tests {
         // --- Record serde roundtrip ---
 
         #[test]
-        fn work_item_serde_all_statuses() {
+        fn work_serde_all_statuses() {
             for status in &ALL_STATES {
-                let mut wi = WorkItem::new("ph-1".into(), "T".into(), "D".into());
+                let mut wi = Work::new("ph-1".into(), "T".into(), "D".into());
                 wi.status = *status;
                 let json = serde_json::to_string(&wi).unwrap();
-                let restored: WorkItem = serde_json::from_str(&json).unwrap();
+                let restored: Work = serde_json::from_str(&json).unwrap();
                 assert_eq!(restored.status, *status);
             }
         }
@@ -1478,10 +1478,10 @@ mod tests {
             assert_eq!(code, -32000);
         }
 
-        // --- WorkItem full lifecycle through dispatch ---
+        // --- Work full lifecycle through dispatch ---
 
         #[test]
-        fn work_item_full_lifecycle_through_dispatch() {
+        fn work_full_lifecycle_through_dispatch() {
             let (s, tx, wm, ic) = setup();
 
             // Create hierarchy
@@ -1544,7 +1544,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             );
             let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -1556,7 +1556,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.transition",
+                "work.transition",
                 json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
             );
 
@@ -1567,7 +1567,7 @@ mod tests {
                 &wm,
                 &ic,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/test"}),
+                json!({"work_id": wi_id, "branch_name": "feature/test"}),
             );
 
             dispatch_ok(
@@ -1575,7 +1575,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.transition",
+                "work.transition",
                 json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
             );
             dispatch_ok(
@@ -1583,7 +1583,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.transition",
+                "work.transition",
                 json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
             );
             dispatch_ok(
@@ -1591,11 +1591,11 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.transition",
+                "work.transition",
                 json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
             );
 
-            let got = dispatch_ok(&s, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
+            let got = dispatch_ok(&s, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
             assert_eq!(got["status"], "Done");
 
             // Done -> anything should fail
@@ -1604,7 +1604,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.transition",
+                "work.transition",
                 json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
             );
             assert_eq!(code, -32000);
@@ -1673,7 +1673,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
             );
             let wi_id = wi["id"].as_str().unwrap();
@@ -1684,7 +1684,7 @@ mod tests {
                 &wm,
                 &ic,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "feature/test"}),
+                json!({"work_id": wi_id, "branch_name": "feature/test"}),
             );
             let bid = bundle["id"].as_str().unwrap().to_string();
             assert_eq!(bundle["status"], "Proposed");
@@ -1807,7 +1807,7 @@ mod tests {
                 &tx,
                 &wm,
                 &ic,
-                "work_item.create",
+                "work.create",
                 json!({"phase_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
             );
             let wi_id = wi["id"].as_str().unwrap();
@@ -1819,7 +1819,7 @@ mod tests {
                 &wm,
                 &ic,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "f/1"}),
+                json!({"work_id": wi_id, "branch_name": "f/1"}),
             );
             dispatch_ok(
                 &s,
@@ -1837,7 +1837,7 @@ mod tests {
                 &wm,
                 &ic,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "f/2"}),
+                json!({"work_id": wi_id, "branch_name": "f/2"}),
             );
             dispatch_ok(
                 &s,
@@ -1863,7 +1863,7 @@ mod tests {
                 &wm,
                 &ic,
                 "bundle.create",
-                json!({"work_item_id": wi_id, "branch_name": "f/3"}),
+                json!({"work_id": wi_id, "branch_name": "f/3"}),
             );
             dispatch_ok(
                 &s,

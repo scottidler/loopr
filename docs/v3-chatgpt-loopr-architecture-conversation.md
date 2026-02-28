@@ -1170,10 +1170,10 @@ These are the "coordination bottlenecks" you *want*.
 **TaskStore records it owns**
 
 - `Iteration` (source of "what happened")
-- `WorkItem` (the backlog + assignments)
+- `Work` (the backlog + assignments)
 - `Lock` (resource coordination)
 - `Decision` (canonical choices: chosen plan/spec/phase)
-- `PriorityQueue` (or simply fields on WorkItem)
+- `PriorityQueue` (or simply fields on Work)
 
 This is the role that prevents "swarm = chaos."
 
@@ -1214,7 +1214,7 @@ This is your "CI gate with a brain."
 
 **What they do**
 
-- claim a `WorkItem`
+- claim a `Work`
 - (optionally) acquire a `Lock`
 - in their own worktree branch: make changes + tests
 - emit a `Bundle` (atomic patch/commits + notes + touched paths)
@@ -1229,7 +1229,7 @@ This is your "CI gate with a brain."
 **TaskStore records they produce**
 
 - `Bundle`
-- `WorkItemUpdate` (progress notes, blockers)
+- `WorkUpdate` (progress notes, blockers)
 - optionally `Artifact` (logs, screenshots, test output)
 
 **Important invariant**
@@ -1298,7 +1298,7 @@ You don't need a huge schema. You need ~7 record types.
    - `tick_base_sha` (what it started from)
    - `summary`, `outcome`, `next_steps`
 
-2. **`WorkItem`**
+2. **`Work`**
    - `id`, `level`, `title`
    - `status` (Ready/InProgress/Blocked/Done)
    - `assignee_agent_id`
@@ -1326,7 +1326,7 @@ You don't need a huge schema. You need ~7 record types.
    - `touched_paths[]`
    - `claims` (what it satisfies)
    - `requires_tick_sha` (what it was based on)
-   - `work_item_id`
+   - `work_id`
 
 7. **`Tick`**
    - `number`, `integration_sha`
@@ -1343,7 +1343,7 @@ That's enough to run the whole team.
 
 Coordinator is basically a state machine controller:
 
-- reads: WorkItems, Locks, Proposals, Reviews, Ticks
+- reads: Works, Locks, Proposals, Reviews, Ticks
 - writes: Iteration, Decisions, Assignments, Lock grants
 
 #### Connection B: Implementers <-> Git <-> Bundles <-> Integrator
@@ -1387,9 +1387,9 @@ Ok I like it. Do what you suggested
 
 ## ChatGPT said:
 
-Awesome -- here are the **state transitions + invariants** for the 3 core objects that make the whole swarm stable: **WorkItem, Bundle, Tick**. This is the "spine" you can build everything else around.
+Awesome -- here are the **state transitions + invariants** for the 3 core objects that make the whole swarm stable: **Work, Bundle, Tick**. This is the "spine" you can build everything else around.
 
-### 1) WorkItem state machine
+### 1) Work state machine
 
 #### States
 
@@ -1414,7 +1414,7 @@ Awesome -- here are the **state transitions + invariants** for the 3 core object
 - Integrated -> Done (Coordinator/Integrator marks verified)
 - Any -> Abandoned (Coordinator only)
 
-#### WorkItem invariants (the rules that prevent chaos)
+#### Work invariants (the rules that prevent chaos)
 
 1. **Single assignee in InProgress/InReview**
    - `assignee_agent_id` must be set and exclusive.
@@ -1430,7 +1430,7 @@ Awesome -- here are the **state transitions + invariants** for the 3 core object
 4. **Dependencies are acyclic (best-effort)**
    - At minimum, prevent obvious cycles at creation time.
 
-5. **WorkItem must declare resource tags**
+5. **Work must declare resource tags**
    - paths/modules/spec-section IDs; used for impact/staleness routing.
 
 ---
@@ -1463,7 +1463,7 @@ Think of a Bundle as your PR-like object.
 
 #### Bundle required fields (minimum contract)
 
-- `work_item_id`
+- `work_id`
 - `base_tick_sha` (or base tick number)
 - `touched_paths[]`
 - `patch_ref` (branch+range or patch artifact)
@@ -1481,7 +1481,7 @@ Think of a Bundle as your PR-like object.
      - rebase/replay bundle automatically and re-run verification, OR
      - reject with reason "stale; please rebase"
 
-3. **At most one Accepted bundle per WorkItem at a time**
+3. **At most one Accepted bundle per Work at a time**
    - prevents two parallel "final" proposals.
 
 4. **Bundle cannot touch locked resources it doesn't own**
@@ -1534,7 +1534,7 @@ A Tick is a discrete advancement of the shared truth branch.
 
 When a tick is published:
 
-- For every Implementer with `WorkItem` in `InProgress` or `InReview`,
+- For every Implementer with `Work` in `InProgress` or `InReview`,
 - If `touched_paths` intersect with that work item's `resource_tags` (or any open locks),
 - mark their work item as **StaleBase = true** (a field, not a state).
 
@@ -1553,7 +1553,7 @@ This is how you get "rebase when safe" without thrash.
 
 #### Coordinator (single authority)
 
-- Never move a WorkItem to Ready unless:
+- Never move a Work to Ready unless:
   - it has acceptance criteria reference
   - it has resource tags
 - Never allow two implementers to hold overlapping locks unless explicitly allowed.
@@ -1577,7 +1577,7 @@ This is how you get "rebase when safe" without thrash.
 
 If you build just these in order, you'll have a working swarm:
 
-1. TaskStore records: WorkItem, Bundle, Tick, Lock, Iteration
+1. TaskStore records: Work, Bundle, Tick, Lock, Iteration
 2. Coordinator: create/assign/lock/accept bundle
 3. Implementer process: worktree -> propose bundle
 4. Integrator process: merge bundles -> run tests -> publish tick
@@ -1690,7 +1690,7 @@ This is the most important one.
 **What it loads**
 
 - Current active level (Plan/Spec/Phase/Code)
-- Open WorkItems
+- Open Works
 - Current Tick
 - All Decisions
 - High-confidence Learnings
@@ -1728,7 +1728,7 @@ This is the one most people imagine.
 
 **What it loads**
 
-- WorkItem
+- Work
 - Canonical Spec/Decision
 - Relevant Learnings scoped to:
   - affected paths
@@ -1739,13 +1739,13 @@ This is the one most people imagine.
 **What it ignores**
 
 - Unrelated spec proposals
-- Other WorkItems
+- Other Works
 - Global backlog noise
 
 **What it produces**
 
 - Bundle
-- WorkItemUpdate
+- WorkUpdate
 - Code-level Learnings
 
 **Example Code Learnings**
@@ -1765,7 +1765,7 @@ This persona is extremely powerful in a Ralph architecture.
 **What it loads**
 
 - Bundle diff
-- Related WorkItem
+- Related Work
 - Acceptance criteria
 - Past Learnings in same module
 
@@ -2165,7 +2165,7 @@ Each persona should rerun when:
 
 - Relevant Tick changes
 - A dependent Decision changes
-- A WorkItem state changes
+- A Work state changes
 - A Lock changes
 - A Bundle is submitted (for reviewers)
 - A Bundle is merged/rejected (for implementers)
@@ -2352,7 +2352,7 @@ For example:
 
 - Can Plan swarm while Code swarm is running?
 - Can Spec revision interrupt Code execution?
-- Does a Plan change invalidate all WorkItems?
+- Does a Plan change invalidate all Works?
 
 You need one clear rule:
 
@@ -2381,11 +2381,11 @@ This is rarely discussed, but critical.
 
 ---
 
-### 7) What Is the Granularity of WorkItems?
+### 7) What Is the Granularity of Works?
 
 This one matters more than people think.
 
-Are WorkItems:
+Are Works:
 
 - 30-minute microtasks?
 - 2-hour tasks?
@@ -2393,7 +2393,7 @@ Are WorkItems:
 
 Swarming only works if tasks are small and bounded.
 
-If WorkItems are too large:
+If Works are too large:
 
 - Implementers thrash.
 - Rebase pain increases.
@@ -2487,7 +2487,7 @@ Here is the compact briefing I would want handed to me:
 1. Objective function (primary optimization goal)
 2. Trust model (how strict validation is)
 3. Conflict philosophy (replan vs auto-merge)
-4. WorkItem granularity target
+4. Work granularity target
 5. Level reset policy (Plan/Spec/Phase interactions)
 6. Learning lifecycle rules
 7. Human override surface
@@ -2681,7 +2681,7 @@ If you want something you can paste verbatim, here's a compact version:
 - Levels are hierarchical: Plan -> Spec -> Phase -> Code. You can work ahead, but cannot derive a lower level without its parent artifact.
 - Learnings: structured, scoped; can be promoted to Policy (likely by Coordinator) based on reinforcement.
 - Failure handling: tick failures should roll back (prefer "no publish" semantics); revision history exists.
-- WorkItems must be small (fit in ~half of usable LLM context).
+- Works must be small (fit in ~half of usable LLM context).
 - Human control: primarily at Plan creation; must be able to manually edit records and restart from a chosen point.
 - Observability: must reconstruct why decisions were made, which learnings influenced bundles, which tick caused replans; strong structured logging.
 

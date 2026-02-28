@@ -1,4 +1,4 @@
-//! Document generation prompts for the Coordinator's Plan → Spec → Phase → WorkItem pipeline.
+//! Document generation prompts for the Coordinator's Plan → Spec → Phase → Work pipeline.
 //!
 //! Each generation level has a prompt builder that assembles context-aware messages including:
 //! - Current state (active parent records)
@@ -14,7 +14,7 @@ use crate::domain::phase::Phase;
 use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::domain::spec::Spec;
 use crate::domain::validation::ValidationReport;
-use crate::domain::work_item::{WorkItem, WorkItemStatus};
+use crate::domain::work::{Work, WorkStatus};
 use taskstore::Filter;
 use taskstore::FilterOp;
 use taskstore::record::IndexValue;
@@ -25,7 +25,7 @@ pub enum GenerationLevel {
     Plan,
     Spec,
     Phase,
-    WorkItem,
+    Work,
 }
 
 impl std::fmt::Display for GenerationLevel {
@@ -34,7 +34,7 @@ impl std::fmt::Display for GenerationLevel {
             GenerationLevel::Plan => write!(f, "Plan"),
             GenerationLevel::Spec => write!(f, "Spec"),
             GenerationLevel::Phase => write!(f, "Phase"),
-            GenerationLevel::WorkItem => write!(f, "WorkItem"),
+            GenerationLevel::Work => write!(f, "Work"),
         }
     }
 }
@@ -197,22 +197,22 @@ pub fn build_phase_prompt(spec: &Spec, learnings: &[String], validation_failures
     }
 }
 
-/// Build a WorkItem generation prompt.
+/// Build a Work generation prompt.
 ///
 /// Input context:
 /// - Active Phase (title, order, ID, spec reference, description)
-/// - Existing WorkItems in this Phase (to avoid duplicates)
+/// - Existing Works in this Phase (to avoid duplicates)
 /// - Relevant learnings (scoped to Phase + Spec + Plan + Global)
 /// - Codebase context (researcher findings about affected modules)
-pub fn build_work_item_prompt(
+pub fn build_work_prompt(
     phase: &Phase,
-    existing_work_items: &[WorkItem],
+    existing_works: &[Work],
     learnings: &[String],
     findings: &[String],
 ) -> GenerationPrompt {
     let mut msg = String::with_capacity(4096);
 
-    msg.push_str("## Task: Generate WorkItems\n\n");
+    msg.push_str("## Task: Generate Works\n\n");
 
     msg.push_str("### Active Phase\n");
     msg.push_str(&format!("- **ID:** {}\n", phase.id));
@@ -221,11 +221,11 @@ pub fn build_work_item_prompt(
     msg.push_str(&format!("- **Order:** {}\n", phase.order));
     msg.push_str(&format!("- **Description:** {}\n\n", phase.description));
 
-    msg.push_str("### Existing WorkItems in this Phase\n");
-    if existing_work_items.is_empty() {
+    msg.push_str("### Existing Works in this Phase\n");
+    if existing_works.is_empty() {
         msg.push_str("None yet.\n\n");
     } else {
-        for wi in existing_work_items {
+        for wi in existing_works {
             let deps = if wi.dependencies.is_empty() {
                 "no deps".to_string()
             } else {
@@ -260,23 +260,23 @@ pub fn build_work_item_prompt(
     }
 
     msg.push_str("### Instructions\n");
-    msg.push_str(&crate::prompts::store().generation_workitem);
+    msg.push_str(&crate::prompts::store().generation_work);
 
     GenerationPrompt {
-        level: GenerationLevel::WorkItem,
+        level: GenerationLevel::Work,
         user_message: msg,
     }
 }
 
 /// Determine which generation level the Coordinator should focus on, based on current state.
 ///
-/// Returns `None` if no generation is needed (all levels have Active records or WorkItems exist).
+/// Returns `None` if no generation is needed (all levels have Active records or Works exist).
 ///
 /// Decision tree:
 /// 1. No active Plan AND no Draft Plan? → Plan
 /// 2. Active Plan, no active Specs AND no Draft Specs? → Spec
 /// 3. Active Specs, no active Phases AND no Draft Phases? → Phase
-/// 4. Active Phases, no WorkItems for them? → WorkItem
+/// 4. Active Phases, no Works for them? → Work
 /// 5. Otherwise → None (generation not needed)
 pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
     let plans = stores.plans.read().unwrap();
@@ -329,20 +329,18 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
         return None; // Draft Phase exists, wait for validation
     }
 
-    // Check for WorkItems under active Phases
-    let work_items = stores.work_items.read().unwrap();
+    // Check for Works under active Phases
+    let works = stores.works.read().unwrap();
     let active_phase_ids: Vec<_> = spec_phases
         .iter()
         .filter(|p| p.status == HierarchyStatus::Active)
         .map(|p| p.id.as_str())
         .collect();
 
-    let has_work_items = work_items
-        .values()
-        .any(|w| active_phase_ids.contains(&w.phase_id.as_str()));
+    let has_works = works.values().any(|w| active_phase_ids.contains(&w.phase_id.as_str()));
 
-    if !has_work_items {
-        return Some(GenerationLevel::WorkItem);
+    if !has_works {
+        return Some(GenerationLevel::Work);
     }
 
     None
@@ -376,18 +374,14 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
     result
 }
 
-/// Find existing WorkItems for a given Phase.
-pub fn find_work_items_for_phase(stores: &Stores, phase_id: &str) -> Vec<WorkItem> {
-    let work_items = stores.work_items.read().unwrap();
-    work_items
-        .values()
-        .filter(|w| w.phase_id == phase_id)
-        .cloned()
-        .collect()
+/// Find existing Works for a given Phase.
+pub fn find_works_for_phase(stores: &Stores, phase_id: &str) -> Vec<Work> {
+    let works = stores.works.read().unwrap();
+    works.values().filter(|w| w.phase_id == phase_id).cloned().collect()
 }
 
-/// Find the first active Phase that still needs WorkItems.
-pub fn find_phase_needing_work_items(stores: &Stores) -> Option<Phase> {
+/// Find the first active Phase that still needs Works.
+pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
     let plans = stores.plans.read().unwrap();
     let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active)?;
     let plan_id = active_plan.id.clone();
@@ -410,9 +404,9 @@ pub fn find_phase_needing_work_items(stores: &Stores) -> Option<Phase> {
     active_phases.sort_by_key(|p| p.order);
     drop(phases);
 
-    let work_items = stores.work_items.read().unwrap();
+    let works = stores.works.read().unwrap();
     for phase in active_phases {
-        let has_wi = work_items.values().any(|w| w.phase_id == phase.id);
+        let has_wi = works.values().any(|w| w.phase_id == phase.id);
         if !has_wi {
             return Some(phase);
         }
@@ -421,15 +415,15 @@ pub fn find_phase_needing_work_items(stores: &Stores) -> Option<Phase> {
     None
 }
 
-/// Check if all WorkItems in a Phase are in a terminal state (Done or Abandoned).
+/// Check if all Works in a Phase are in a terminal state (Done or Abandoned).
 /// This matches the FSM's check_fsm_transition() predicate exactly.
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
-    let work_items = stores.work_items.read().unwrap();
-    let phase_wis: Vec<_> = work_items.values().filter(|w| w.phase_id == phase_id).collect();
+    let works = stores.works.read().unwrap();
+    let phase_wis: Vec<_> = works.values().filter(|w| w.phase_id == phase_id).collect();
     !phase_wis.is_empty()
         && phase_wis
             .iter()
-            .all(|w| matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+            .all(|w| matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
 }
 
 /// Query failed validation reports for a specific document from TaskStore.
@@ -705,7 +699,7 @@ mod tests {
         assert_eq!(GenerationLevel::Plan.to_string(), "Plan");
         assert_eq!(GenerationLevel::Spec.to_string(), "Spec");
         assert_eq!(GenerationLevel::Phase.to_string(), "Phase");
-        assert_eq!(GenerationLevel::WorkItem.to_string(), "WorkItem");
+        assert_eq!(GenerationLevel::Work.to_string(), "Work");
     }
 
     // --- Plan prompt tests ---
@@ -836,44 +830,44 @@ mod tests {
         assert!(prompt.user_message.contains("order"));
     }
 
-    // --- WorkItem prompt tests ---
+    // --- Work prompt tests ---
 
     #[test]
-    fn test_work_item_prompt_includes_phase_context() {
+    fn test_work_prompt_includes_phase_context() {
         init();
         let phase = Phase::new("spec-1".into(), "Foundation".into(), "Set up base".into(), 1);
-        let prompt = build_work_item_prompt(&phase, &[], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[], &[], &[]);
         assert!(prompt.user_message.contains(&phase.id));
         assert!(prompt.user_message.contains("spec-1"));
         assert!(prompt.user_message.contains("Foundation"));
         assert!(prompt.user_message.contains("Order:** 1"));
-        assert_eq!(prompt.level, GenerationLevel::WorkItem);
+        assert_eq!(prompt.level, GenerationLevel::Work);
     }
 
     #[test]
-    fn test_work_item_prompt_includes_existing_work_items() {
+    fn test_work_prompt_includes_existing_works() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let wi = WorkItem::new(phase.id.clone(), "Add login".into(), "Login endpoint".into());
-        let prompt = build_work_item_prompt(&phase, &[wi], &[], &[]);
+        let wi = Work::new(phase.id.clone(), "Add login".into(), "Login endpoint".into());
+        let prompt = build_work_prompt(&phase, &[wi], &[], &[]);
         assert!(prompt.user_message.contains("Add login"));
         assert!(prompt.user_message.contains("Login endpoint"));
         assert!(!prompt.user_message.contains("None yet"));
     }
 
     #[test]
-    fn test_work_item_prompt_shows_none_when_no_existing() {
+    fn test_work_prompt_shows_none_when_no_existing() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let prompt = build_work_item_prompt(&phase, &[], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[], &[], &[]);
         assert!(prompt.user_message.contains("None yet"));
     }
 
     #[test]
-    fn test_work_item_prompt_includes_dependency_instructions() {
+    fn test_work_prompt_includes_dependency_instructions() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let prompt = build_work_item_prompt(&phase, &[], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[], &[], &[]);
         // Prompt should include batch dependency instructions
         assert!(
             prompt.user_message.contains("batch:0"),
@@ -886,22 +880,22 @@ mod tests {
     }
 
     #[test]
-    fn test_work_item_prompt_shows_dep_info_for_existing() {
+    fn test_work_prompt_shows_dep_info_for_existing() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let mut wi = WorkItem::new(phase.id.clone(), "WI 1".into(), "desc".into());
+        let mut wi = Work::new(phase.id.clone(), "WI 1".into(), "desc".into());
         wi.dependencies = vec!["dep-1".to_string()];
-        let prompt = build_work_item_prompt(&phase, &[wi], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[wi], &[], &[]);
         assert!(prompt.user_message.contains("deps: dep-1"));
         assert!(prompt.user_message.contains("use the exact IDs above"));
     }
 
     #[test]
-    fn test_work_item_prompt_includes_findings() {
+    fn test_work_prompt_includes_findings() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let findings = vec!["src/auth/ directory has 5 modules".to_string()];
-        let prompt = build_work_item_prompt(&phase, &[], &[], &findings);
+        let prompt = build_work_prompt(&phase, &[], &[], &findings);
         assert!(prompt.user_message.contains("Codebase Context"));
         assert!(prompt.user_message.contains("src/auth/ directory has 5 modules"));
     }
@@ -978,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_level_work_item_when_active_phase_no_wis() {
+    fn test_determine_level_work_when_active_phase_no_wis() {
         let dir = std::env::temp_dir().join(format!("loopr-gen-needwi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
@@ -997,7 +991,7 @@ mod tests {
         phase.status = HierarchyStatus::Active;
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::WorkItem));
+        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Work));
     }
 
     #[test]
@@ -1021,8 +1015,8 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let wi = WorkItem::new(phase_id, "WI 1".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new(phase_id, "WI 1".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         assert_eq!(determine_generation_level(&stores), None);
     }
@@ -1106,24 +1100,24 @@ mod tests {
     }
 
     #[test]
-    fn test_find_work_items_for_phase() {
+    fn test_find_works_for_phase() {
         let dir = std::env::temp_dir().join(format!("loopr-gen-fwip-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let wi1 = WorkItem::new("phase-1".into(), "WI 1".into(), "desc".into());
-        let wi2 = WorkItem::new("phase-1".into(), "WI 2".into(), "desc".into());
-        let wi3 = WorkItem::new("phase-2".into(), "WI 3".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
-        stores.work_items.write().unwrap().insert(wi3.id.clone(), wi3);
+        let wi1 = Work::new("phase-1".into(), "WI 1".into(), "desc".into());
+        let wi2 = Work::new("phase-1".into(), "WI 2".into(), "desc".into());
+        let wi3 = Work::new("phase-2".into(), "WI 3".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
 
-        let wis = find_work_items_for_phase(&stores, "phase-1");
+        let wis = find_works_for_phase(&stores, "phase-1");
         assert_eq!(wis.len(), 2);
     }
 
     #[test]
-    fn test_find_phase_needing_work_items() {
+    fn test_find_phase_needing_works() {
         let dir = std::env::temp_dir().join(format!("loopr-gen-fpnwi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
@@ -1149,16 +1143,16 @@ mod tests {
         stores.phases.write().unwrap().insert(phase2_id, phase2);
 
         // Add WI to Phase 1 only
-        let wi = WorkItem::new(phase1_id, "WI".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new(phase1_id, "WI".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Should find Phase 2 (no WIs)
-        let phase = find_phase_needing_work_items(&stores).unwrap();
+        let phase = find_phase_needing_works(&stores).unwrap();
         assert_eq!(phase.title, "Phase 2");
     }
 
     #[test]
-    fn test_find_phase_needing_work_items_none_when_all_have() {
+    fn test_find_phase_needing_works_none_when_all_have() {
         let dir = std::env::temp_dir().join(format!("loopr-gen-fpnwi2-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
@@ -1178,10 +1172,10 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let wi = WorkItem::new(phase_id, "WI".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new(phase_id, "WI".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        assert!(find_phase_needing_work_items(&stores).is_none());
+        assert!(find_phase_needing_works(&stores).is_none());
     }
 
     // --- is_phase_complete tests ---
@@ -1192,9 +1186,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let mut wi = WorkItem::new("phase-1".into(), "WI".into(), "desc".into());
-        wi.status = WorkItemStatus::Done;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
+        wi.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         assert!(is_phase_complete(&stores, "phase-1"));
     }
@@ -1205,8 +1199,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let wi = WorkItem::new("phase-1".into(), "WI".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
     }
@@ -1227,13 +1221,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let mut wi1 = WorkItem::new("phase-1".into(), "WI Done".into(), "desc".into());
-        wi1.status = WorkItemStatus::Done;
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
+        wi1.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
-        let mut wi2 = WorkItem::new("phase-1".into(), "WI Abandoned".into(), "desc".into());
-        wi2.status = WorkItemStatus::Abandoned;
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        let mut wi2 = Work::new("phase-1".into(), "WI Abandoned".into(), "desc".into());
+        wi2.status = WorkStatus::Abandoned;
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         assert!(is_phase_complete(&stores, "phase-1"));
     }
@@ -1244,13 +1238,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let mut wi1 = WorkItem::new("phase-1".into(), "WI Done".into(), "desc".into());
-        wi1.status = WorkItemStatus::Done;
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
+        wi1.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
-        let wi2 = WorkItem::new("phase-1".into(), "WI InProgress".into(), "desc".into());
+        let wi2 = Work::new("phase-1".into(), "WI InProgress".into(), "desc".into());
         // Default status is Draft which is not terminal
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
     }
@@ -1740,26 +1734,26 @@ mod tests {
     }
 
     #[test]
-    fn test_find_work_items_for_phase_ordering() {
-        // find_work_items_for_phase returns all WIs for the phase regardless of status.
+    fn test_find_works_for_phase_ordering() {
+        // find_works_for_phase returns all WIs for the phase regardless of status.
         let dir = std::env::temp_dir().join(format!("loopr-gen-fwip-ord-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let mut wi1 = WorkItem::new("phase-x".into(), "WI A".into(), "desc a".into());
-        wi1.status = WorkItemStatus::Done;
-        let mut wi2 = WorkItem::new("phase-x".into(), "WI B".into(), "desc b".into());
-        wi2.status = WorkItemStatus::InProgress;
-        let wi3 = WorkItem::new("phase-x".into(), "WI C".into(), "desc c".into());
+        let mut wi1 = Work::new("phase-x".into(), "WI A".into(), "desc a".into());
+        wi1.status = WorkStatus::Done;
+        let mut wi2 = Work::new("phase-x".into(), "WI B".into(), "desc b".into());
+        wi2.status = WorkStatus::InProgress;
+        let wi3 = Work::new("phase-x".into(), "WI C".into(), "desc c".into());
         // wi3 stays Draft (default)
-        let wi_other = WorkItem::new("phase-y".into(), "WI Other".into(), "not this phase".into());
+        let wi_other = Work::new("phase-y".into(), "WI Other".into(), "not this phase".into());
 
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
-        stores.work_items.write().unwrap().insert(wi3.id.clone(), wi3);
-        stores.work_items.write().unwrap().insert(wi_other.id.clone(), wi_other);
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
+        stores.works.write().unwrap().insert(wi_other.id.clone(), wi_other);
 
-        let wis = find_work_items_for_phase(&stores, "phase-x");
+        let wis = find_works_for_phase(&stores, "phase-x");
         assert_eq!(wis.len(), 3);
         // All should belong to phase-x
         assert!(wis.iter().all(|w| w.phase_id == "phase-x"));
@@ -1805,14 +1799,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_work_item_prompt_with_learnings_and_findings() {
+    fn test_build_work_prompt_with_learnings_and_findings() {
         crate::prompts::init_defaults();
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
         let learnings = vec!["Use generics".to_string()];
         let findings = vec!["Module at src/lib.rs".to_string()];
 
-        let prompt = build_work_item_prompt(&phase, &[], &learnings, &findings);
-        assert_eq!(prompt.level, GenerationLevel::WorkItem);
+        let prompt = build_work_prompt(&phase, &[], &learnings, &findings);
+        assert_eq!(prompt.level, GenerationLevel::Work);
         assert!(prompt.user_message.contains("### Relevant Learnings"));
         assert!(prompt.user_message.contains("Use generics"));
         assert!(prompt.user_message.contains("### Codebase Context"));

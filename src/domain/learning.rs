@@ -16,8 +16,8 @@ fn default_confidence() -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LearningScope {
-    #[serde(alias = "WorkItem", alias = "work_item")]
-    WorkItem,
+    #[serde(alias = "Work", alias = "work")]
+    Work,
     #[serde(alias = "Phase")]
     Phase,
     #[serde(alias = "Spec")]
@@ -31,7 +31,7 @@ pub enum LearningScope {
 impl fmt::Display for LearningScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LearningScope::WorkItem => write!(f, "WorkItem"),
+            LearningScope::Work => write!(f, "Work"),
             LearningScope::Phase => write!(f, "Phase"),
             LearningScope::Spec => write!(f, "Spec"),
             LearningScope::Plan => write!(f, "Plan"),
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_learning_scope_display() {
-        assert_eq!(LearningScope::WorkItem.to_string(), "WorkItem");
+        assert_eq!(LearningScope::Work.to_string(), "Work");
         assert_eq!(LearningScope::Phase.to_string(), "Phase");
         assert_eq!(LearningScope::Spec.to_string(), "Spec");
         assert_eq!(LearningScope::Plan.to_string(), "Plan");
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_learning_scope_serde_roundtrip() {
         for scope in [
-            LearningScope::WorkItem,
+            LearningScope::Work,
             LearningScope::Phase,
             LearningScope::Spec,
             LearningScope::Plan,
@@ -202,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_learning_scope_serde_format() {
-        assert_eq!(serde_json::to_string(&LearningScope::WorkItem).unwrap(), "\"workitem\"");
+        assert_eq!(serde_json::to_string(&LearningScope::Work).unwrap(), "\"work\"");
         assert_eq!(serde_json::to_string(&LearningScope::Phase).unwrap(), "\"phase\"");
         assert_eq!(serde_json::to_string(&LearningScope::Spec).unwrap(), "\"spec\"");
         assert_eq!(serde_json::to_string(&LearningScope::Plan).unwrap(), "\"plan\"");
@@ -215,11 +215,11 @@ mod tests {
     fn test_learning_new() {
         let learning = Learning::new(
             "wi-123".to_string(),
-            LearningScope::WorkItem,
+            LearningScope::Work,
             "Always run tests before committing".to_string(),
         );
         assert_eq!(learning.source_id, "wi-123");
-        assert_eq!(learning.scope, LearningScope::WorkItem);
+        assert_eq!(learning.scope, LearningScope::Work);
         assert_eq!(learning.content, "Always run tests before committing");
         assert_eq!(learning.reinforcements, 0);
         assert_eq!(learning.contradictions, 0);
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_learning_reinforce() {
         let policy = no_promote();
-        let mut learning = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut learning = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         assert_eq!(learning.reinforcements, 0);
         learning.reinforce(&policy);
         assert_eq!(learning.reinforcements, 1);
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_learning_contradict() {
-        let mut learning = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut learning = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         assert_eq!(learning.contradictions, 0);
         learning.contradict();
         assert_eq!(learning.contradictions, 1);
@@ -322,13 +322,13 @@ mod tests {
 
     #[test]
     fn test_record_id() {
-        let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         assert_eq!(Record::id(&l), l.id);
     }
 
     #[test]
     fn test_record_updated_at() {
-        let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         assert_eq!(Record::updated_at(&l), l.updated_at);
     }
 
@@ -362,20 +362,20 @@ mod tests {
 
     #[test]
     fn test_confidence_default_for_new_learning() {
-        let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         assert!((l.confidence - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_recompute_confidence_zero_observations() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.recompute_confidence();
         assert!((l.confidence - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_recompute_confidence_all_reinforced() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforcements = 5;
         l.contradictions = 0;
         l.recompute_confidence();
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_recompute_confidence_all_contradicted() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforcements = 0;
         l.contradictions = 5;
         l.recompute_confidence();
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_recompute_confidence_mixed() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforcements = 3;
         l.contradictions = 1;
         l.recompute_confidence();
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn test_reinforce_updates_confidence() {
         let policy = no_promote();
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforce(&policy);
         // 1 reinforcement, 0 contradictions → 1.0
         assert!((l.confidence - 1.0).abs() < f32::EPSILON);
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_contradict_updates_confidence() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.contradict();
         // 0 reinforcements, 1 contradiction → 0.0
         assert!((l.confidence - 0.0).abs() < f32::EPSILON);
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn test_confidence_after_mixed_operations() {
         let policy = no_promote();
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforce(&policy); // 1r, 0c → 1.0
         l.reinforce(&policy); // 2r, 0c → 1.0
         l.contradict(); // 2r, 1c → 0.667
@@ -435,7 +435,7 @@ mod tests {
         let json = r#"{
             "id": "learn-old",
             "source_id": "wi-1",
-            "scope": "workitem",
+            "scope": "work",
             "content": "Old learning",
             "reinforcements": 2,
             "contradictions": 0,
@@ -462,7 +462,7 @@ mod tests {
             max_age_days: 30,
             auto_promote: true,
         };
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforce(&policy); // 1
         assert!(!l.promoted);
         l.reinforce(&policy); // 2
@@ -478,7 +478,7 @@ mod tests {
             max_age_days: 30,
             auto_promote: true,
         };
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforce(&policy); // 1
         l.reinforce(&policy); // 2
         l.contradict(); // 1 contradiction blocks auto-promotion
@@ -493,7 +493,7 @@ mod tests {
             max_age_days: 365,
             auto_promote: false,
         };
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.reinforce(&policy);
         l.reinforce(&policy);
         l.reinforce(&policy);
@@ -507,7 +507,7 @@ mod tests {
             max_age_days: 30,
             auto_promote: true,
         };
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         for _ in 0..4 {
             l.reinforce(&policy);
         }
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_applicable_roles_filtering() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.applicable_roles = Some(vec![Role::Implementer, Role::Reviewer]);
         let roles = l.applicable_roles.as_ref().unwrap();
         assert!(roles.contains(&Role::Implementer));
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_applicable_roles_none_means_all() {
-        let l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         assert!(l.applicable_roles.is_none());
         // None means applicable to all roles
         let applies_to_all = l
@@ -543,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_resource_tags() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.resource_tags = vec!["src/main.rs".to_string(), "iteration:5".to_string()];
         assert_eq!(l.resource_tags.len(), 2);
         assert!(l.resource_tags.contains(&"src/main.rs".to_string()));
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn test_indexed_fields_promoted_true() {
-        let mut l = Learning::new("wi-1".to_string(), LearningScope::WorkItem, "insight".to_string());
+        let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
         l.promoted = true;
         let fields = l.indexed_fields();
         assert_eq!(fields.get("promoted"), Some(&IndexValue::String("true".to_string())));
@@ -572,13 +572,13 @@ mod tests {
     }
 
     #[test]
-    fn test_learning_scope_work_item_alias() {
+    fn test_learning_scope_work_alias() {
         // snake_case alias
-        let scope: LearningScope = serde_json::from_str("\"work_item\"").unwrap();
-        assert_eq!(scope, LearningScope::WorkItem);
+        let scope: LearningScope = serde_json::from_str("\"work\"").unwrap();
+        assert_eq!(scope, LearningScope::Work);
         // PascalCase alias
-        let scope2: LearningScope = serde_json::from_str("\"WorkItem\"").unwrap();
-        assert_eq!(scope2, LearningScope::WorkItem);
+        let scope2: LearningScope = serde_json::from_str("\"Work\"").unwrap();
+        assert_eq!(scope2, LearningScope::Work);
     }
 
     #[test]
@@ -592,9 +592,9 @@ mod tests {
             ("\"Plan\"", LearningScope::Plan),
             ("\"global\"", LearningScope::Global),
             ("\"Global\"", LearningScope::Global),
-            ("\"workitem\"", LearningScope::WorkItem),
-            ("\"WorkItem\"", LearningScope::WorkItem),
-            ("\"work_item\"", LearningScope::WorkItem),
+            ("\"work\"", LearningScope::Work),
+            ("\"Work\"", LearningScope::Work),
+            ("\"work\"", LearningScope::Work),
         ] {
             let scope: LearningScope =
                 serde_json::from_str(input).unwrap_or_else(|e| panic!("Failed to deserialize {}: {}", input, e));

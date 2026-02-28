@@ -10,7 +10,7 @@ use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::generation::{
-    self, GenerationLevel, build_phase_prompt, build_plan_prompt, build_spec_prompt, build_work_item_prompt,
+    self, GenerationLevel, build_phase_prompt, build_plan_prompt, build_spec_prompt, build_work_prompt,
 };
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
 use crate::agents::{AgentSession, AgentStatus, AgentType};
@@ -22,7 +22,7 @@ use crate::domain::lock::LockStatus;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::tick::TickStatus;
-use crate::domain::work_item::WorkItemStatus;
+use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::DaemonEvent;
 
 /// Infer the hierarchy level of a coordinator action for one-level-per-iteration guard (Gap #28).
@@ -31,7 +31,7 @@ fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
         AgentAction::CreatePlan { .. } => Some("plan"),
         AgentAction::CreateSpec { .. } => Some("spec"),
         AgentAction::CreatePhase { .. } => Some("phase"),
-        AgentAction::CreateWorkItem { .. } | AgentAction::AssignAgent { .. } => Some("work_item"),
+        AgentAction::CreateWork { .. } | AgentAction::AssignAgent { .. } => Some("work"),
         _ => None,
     }
 }
@@ -100,16 +100,16 @@ pub fn build_state_summary(stores: &Stores) -> String {
         }
     }
 
-    // --- WorkItems ---
+    // --- Works ---
     {
-        let work_items = stores.work_items.read().unwrap();
-        let mut non_terminal: Vec<_> = work_items
+        let works = stores.works.read().unwrap();
+        let mut non_terminal: Vec<_> = works
             .values()
-            .filter(|w| !matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+            .filter(|w| !matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
             .collect();
         non_terminal.sort_by_key(|w| w.created_at);
         if !non_terminal.is_empty() {
-            summary.push_str("### WorkItems\n");
+            summary.push_str("### Works\n");
             for w in &non_terminal {
                 summary.push_str(&format!(
                     "- [{}] {} ({}, phase: {})\n",
@@ -136,7 +136,7 @@ pub fn build_state_summary(stores: &Stores) -> String {
         if !pending.is_empty() {
             summary.push_str("### Bundles\n");
             for b in &pending {
-                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_item_id));
+                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_id));
             }
             summary.push('\n');
         }
@@ -145,14 +145,14 @@ pub fn build_state_summary(stores: &Stores) -> String {
     // C2: Recently Merged Bundles whose parent WI still needs advancing
     {
         let bundles = stores.bundles.read().unwrap();
-        let work_items = stores.work_items.read().unwrap();
+        let works = stores.works.read().unwrap();
         let mut actionable_merged: Vec<_> = bundles
             .values()
             .filter(|b| b.status == BundleStatus::Merged)
             .filter(|b| {
-                work_items
-                    .get(&b.work_item_id)
-                    .map(|w| !matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+                works
+                    .get(&b.work_id)
+                    .map(|w| !matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
                     .unwrap_or(true)
             })
             .collect();
@@ -160,13 +160,13 @@ pub fn build_state_summary(stores: &Stores) -> String {
         if !actionable_merged.is_empty() {
             summary.push_str("### Recently Merged Bundles (WI needs advancing)\n");
             for b in &actionable_merged {
-                let wi_status = work_items
-                    .get(&b.work_item_id)
+                let wi_status = works
+                    .get(&b.work_id)
                     .map(|w| w.status.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
                 summary.push_str(&format!(
                     "- [{}] Merged (wi: {} [{}], branch: {})\n",
-                    b.id, b.work_item_id, wi_status, b.branch_name
+                    b.id, b.work_id, wi_status, b.branch_name
                 ));
             }
             summary.push('\n');
@@ -199,7 +199,7 @@ pub fn build_state_summary(stores: &Stores) -> String {
             summary.push_str("### Active Agents\n");
             for s in &active {
                 let target = s
-                    .work_item_id
+                    .work_id
                     .as_deref()
                     .or(s.bundle_id.as_deref())
                     .or(s.target_id.as_deref())
@@ -265,10 +265,10 @@ fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts:
                 let spec = specs.into_iter().next()?;
                 build_phase_prompt(&spec, &[], &[])
             }
-            GenerationLevel::WorkItem => {
-                let phase = generation::find_phase_needing_work_items(stores)?;
-                let existing = generation::find_work_items_for_phase(stores, &phase.id);
-                build_work_item_prompt(&phase, &existing, &[], &[])
+            GenerationLevel::Work => {
+                let phase = generation::find_phase_needing_works(stores)?;
+                let existing = generation::find_works_for_phase(stores, &phase.id);
+                build_work_prompt(&phase, &existing, &[], &[])
             }
         };
 
@@ -314,8 +314,8 @@ fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts:
                 let spec = specs.into_iter().next()?;
                 build_phase_prompt(&spec, &[], &regen.accumulated_failures)
             }
-            // WorkItems don't go through Draft→Active validation cycle
-            GenerationLevel::WorkItem => return None,
+            // Works don't go through Draft→Active validation cycle
+            GenerationLevel::Work => return None,
         };
 
         // Prepend context about the failed Draft
@@ -352,10 +352,10 @@ fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts:
     None
 }
 
-/// Fix #2: Resolve batch:N dependency references in a CreateWorkItem action.
+/// Fix #2: Resolve batch:N dependency references in a CreateWork action.
 /// Returns Some(modified_action) if batch deps were resolved, None if no changes needed.
 fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]) -> Option<AgentAction> {
-    if let AgentAction::CreateWorkItem {
+    if let AgentAction::CreateWork {
         phase_id,
         title,
         description,
@@ -388,7 +388,7 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
             })
             .collect();
 
-        Some(AgentAction::CreateWorkItem {
+        Some(AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: title.clone(),
             description: description.clone(),
@@ -480,7 +480,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
     None
 }
 
-/// Check if the Coordinator should mark any Phases as complete based on WorkItem status.
+/// Check if the Coordinator should mark any Phases as complete based on Work status.
 /// Returns summaries of any phases that were detected as complete.
 pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
     let plan = match generation::find_active_plan(stores) {
@@ -493,10 +493,7 @@ pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
         let phases = generation::find_active_phases_for_spec(stores, &spec.id);
         for phase in &phases {
             if generation::is_phase_complete(stores, &phase.id) {
-                completed.push(format!(
-                    "Phase '{}' (id: {}) has all WorkItems Done",
-                    phase.title, phase.id
-                ));
+                completed.push(format!("Phase '{}' (id: {}) has all Works Done", phase.title, phase.id));
             }
         }
     }
@@ -567,7 +564,7 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
             }
         }
         CoordinatorFsmState::ActivatePhase => {
-            // Find the next phase to activate and generate WorkItems for it
+            // Find the next phase to activate and generate Works for it
             let phase_info = find_next_phase_to_activate(stores, coord_state);
             match phase_info {
                 Some((phase_id, phase_title)) => {
@@ -576,20 +573,20 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
                         phases.get(&phase_id).cloned()
                     };
                     if let Some(phase) = phase {
-                        let existing = generation::find_work_items_for_phase(stores, &phase.id);
+                        let existing = generation::find_works_for_phase(stores, &phase.id);
                         if existing.is_empty() {
-                            let prompt = build_work_item_prompt(&phase, &existing, &[], &[]);
+                            let prompt = build_work_prompt(&phase, &existing, &[], &[]);
                             format!(
                                 "## Activating Phase: {} (id: {})\n\n\
-                                 Generate WorkItems for this phase. Each WorkItem should have clear \
-                                 acceptance criteria and declare dependencies on other WorkItems in this phase \
+                                 Generate Works for this phase. Each Work should have clear \
+                                 acceptance criteria and declare dependencies on other Works in this phase \
                                  using their IDs.\n\n{}",
                                 phase_title, phase_id, prompt.user_message
                             )
                         } else {
                             format!(
-                                "Phase '{}' already has {} WorkItems. \
-                                 Respond with: [{{\"action\": \"done\", \"summary\": \"Phase {} WorkItems ready\"}}]",
+                                "Phase '{}' already has {} Works. \
+                                 Respond with: [{{\"action\": \"done\", \"summary\": \"Phase {} Works ready\"}}]",
                                 phase_title,
                                 existing.len(),
                                 phase_title
@@ -609,9 +606,9 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
             let phase_status = build_phase_status(stores, coord_state);
             format!(
                 "## Executing Phase\n\n{}\n\n\
-                 Monitor WorkItem statuses. Assign implementers to Ready WorkItems whose dependencies are all Done. \
-                 Triage proposed Bundles. Accept reviewed Bundles. Transition Integrated WorkItems to Done. \
-                 If a WorkItem is Blocked or has failed, consider retrying.\n\n\
+                 Monitor Work statuses. Assign implementers to Ready Works whose dependencies are all Done. \
+                 Triage proposed Bundles. Accept reviewed Bundles. Transition Integrated Works to Done. \
+                 If a Work is Blocked or has failed, consider retrying.\n\n\
                  Respond with a JSON array of actions.",
                 phase_status
             )
@@ -620,7 +617,7 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
             let phase_status = build_phase_status(stores, coord_state);
             format!(
                 "## Phase Gate Check\n\n{}\n\n\
-                 All WorkItems in this phase should be in a terminal state (Done, Abandoned, or NeedHelp). \
+                 All Works in this phase should be in a terminal state (Done, Abandoned, or NeedHelp). \
                  If all are Done, the phase is complete. \
                  Respond with: [{{\"action\": \"done\", \"summary\": \"Phase gate passed\"}}]",
                 phase_status
@@ -673,8 +670,8 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
         phases.get(phase_id).map(|p| p.title.clone()).unwrap_or_default()
     };
 
-    let work_items = stores.work_items.read().unwrap();
-    let phase_wis: Vec<_> = work_items.values().filter(|w| &w.phase_id == phase_id).collect();
+    let works = stores.works.read().unwrap();
+    let phase_wis: Vec<_> = works.values().filter(|w| &w.phase_id == phase_id).collect();
 
     let mut status_counts = std::collections::HashMap::new();
     for wi in &phase_wis {
@@ -682,7 +679,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
     }
 
     let mut summary = format!(
-        "Phase: {} (id: {})\nWorkItems: {} total\n",
+        "Phase: {} (id: {})\nWorks: {} total\n",
         phase_title,
         phase_id,
         phase_wis.len()
@@ -706,19 +703,17 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
                 .dependencies
                 .iter()
                 .map(|dep_id| {
-                    let status = work_items
+                    let status = works
                         .get(dep_id)
                         .map(|d| format!("{}", d.status))
                         .unwrap_or_else(|| "unknown".to_string());
                     format!("{}={}", dep_id, status)
                 })
                 .collect();
-            let all_met = wi.dependencies.iter().all(|dep_id| {
-                work_items
-                    .get(dep_id)
-                    .map(|d| d.status == WorkItemStatus::Done)
-                    .unwrap_or(false)
-            });
+            let all_met = wi
+                .dependencies
+                .iter()
+                .all(|dep_id| works.get(dep_id).map(|d| d.status == WorkStatus::Done).unwrap_or(false));
             summary.push_str(&format!(
                 "  [{}] {} — deps: [{}] ({})\n",
                 wi.id,
@@ -729,9 +724,9 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
         }
     }
 
-    // Fix #9: Collect WI IDs (owned) before dropping work_items lock
+    // Fix #9: Collect WI IDs (owned) before dropping works lock
     let wi_ids: std::collections::HashSet<String> = phase_wis.iter().map(|w| w.id.clone()).collect();
-    drop(work_items);
+    drop(works);
 
     // Surface phase-specific failure Learnings
     {
@@ -773,14 +768,14 @@ fn check_fsm_transition(
             if has_phases { Some(CoordinatorFsmState::ActivatePhase) } else { None }
         }
         CoordinatorFsmState::ActivatePhase => {
-            // Transition when: WorkItems for current phase exist and are Ready
+            // Transition when: Works for current phase exist and are Ready
             if let Some(ref phase_id) = coord_state.current_phase_id {
-                let wis = generation::find_work_items_for_phase(stores, phase_id);
+                let wis = generation::find_works_for_phase(stores, phase_id);
                 if !wis.is_empty() {
                     return Some(CoordinatorFsmState::Executing);
                 }
             }
-            // If we just set current_phase_id, wait for WorkItems to be created
+            // If we just set current_phase_id, wait for Works to be created
             None
         }
         CoordinatorFsmState::Executing => {
@@ -802,16 +797,16 @@ fn check_fsm_transition(
 
             // Transition when: all WIs in current phase are terminal
             if let Some(ref phase_id) = coord_state.current_phase_id {
-                let wis = generation::find_work_items_for_phase(stores, phase_id);
+                let wis = generation::find_works_for_phase(stores, phase_id);
                 if wis.is_empty() {
-                    // Phase with 0 WorkItems — transition to PhaseGate so the gate
+                    // Phase with 0 Works — transition to PhaseGate so the gate
                     // can decide whether to retry WI generation or advance.
                     // Design doc: "require at least 1 Done WI to consider a Phase complete"
                     return Some(CoordinatorFsmState::PhaseGate);
                 }
                 if wis
                     .iter()
-                    .all(|w| matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+                    .all(|w| matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
                 {
                     return Some(CoordinatorFsmState::PhaseGate);
                 }
@@ -911,7 +906,7 @@ async fn run_coordinator_iteration(
         persist_coordinator_state(stores, coord_state);
     }
 
-    // Check if any phases have completed (all WorkItems Done) — legacy helper
+    // Check if any phases have completed (all Works Done) — legacy helper
     let completed_phases = check_phase_completion(stores);
     for cp in &completed_phases {
         info!("Coordinator {} detected: {}", session.id, cp);
@@ -989,28 +984,28 @@ async fn run_coordinator_iteration(
     let repo_root = &stores.config.project.repo_path;
     let tool_runner = &*stores.tool_runner;
 
-    // Fix #2: Track batch-created WorkItem IDs for batch:N dependency resolution
+    // Fix #2: Track batch-created Work IDs for batch:N dependency resolution
     let mut batch_created_ids: Vec<String> = Vec::new();
     let mut last_summary = String::new();
     for action in &actions {
-        // Fix #2: Resolve batch:N dependencies before executing CreateWorkItem
+        // Fix #2: Resolve batch:N dependencies before executing CreateWork
         let resolved_action = resolve_batch_dependencies(action, &batch_created_ids);
         let action_ref = resolved_action.as_ref().unwrap_or(action);
 
-        // Fix #4: Enforce max_work_item_retries for implementer assignments
+        // Fix #4: Enforce max_work_retries for implementer assignments
         if let AgentAction::AssignAgent { agent_type, target_id } = action_ref
             && agent_type == "implementer"
         {
             let attempts = coord_state.increment_attempts(target_id);
-            let max_retries = config.max_work_item_retries;
+            let max_retries = config.max_work_retries;
             if attempts > max_retries {
                 warn!(
-                    "WorkItem {} exceeded max retries ({}/{}), transitioning to Abandoned",
+                    "Work {} exceeded max retries ({}/{}), transitioning to Abandoned",
                     target_id, attempts, max_retries
                 );
                 // Transition to Abandoned via bridge
                 let _ = bridge.request(
-                    "work_item.transition",
+                    "work.transition",
                     serde_json::json!({
                         "id": target_id,
                         "target_status": "Abandoned",
@@ -1022,12 +1017,12 @@ async fn run_coordinator_iteration(
                 let _ = bridge.request(
                     "learning.create",
                     serde_json::json!({
-                        "content": format!("WorkItem '{}' abandoned after {} failed attempts", target_id, attempts),
+                        "content": format!("Work '{}' abandoned after {} failed attempts", target_id, attempts),
                         "scope": "phase",
                         "source_id": target_id,
                     }),
                 );
-                let summary = format!("WorkItem {} abandoned (max retries exceeded)", target_id);
+                let summary = format!("Work {} abandoned (max retries exceeded)", target_id);
                 let _ = event_tx.send(DaemonEvent::agent_action_completed(&session.id, &summary));
                 last_summary = summary;
                 continue;
@@ -1055,23 +1050,23 @@ async fn run_coordinator_iteration(
                 ActionResult::AgentSpawned { .. } => {
                     // Successful spawn — attempt counts (already incremented above)
                 }
-                ActionResult::DependencyNotMet { work_item_id, .. } => {
-                    if let Some(count) = coord_state.work_item_attempts.get_mut(work_item_id) {
+                ActionResult::DependencyNotMet { work_id, .. } => {
+                    if let Some(count) = coord_state.work_attempts.get_mut(work_id) {
                         *count = count.saturating_sub(1);
                     }
                 }
                 _ => {
                     // Action failed before agent spawned — don't count
-                    if let Some(count) = coord_state.work_item_attempts.get_mut(target_id) {
+                    if let Some(count) = coord_state.work_attempts.get_mut(target_id) {
                         *count = count.saturating_sub(1);
                     }
                 }
             }
         }
 
-        // Track created WorkItem IDs for batch dependency resolution
+        // Track created Work IDs for batch dependency resolution
         if let ActionResult::RecordCreated { ref collection, ref id } = result
-            && collection == "work_items"
+            && collection == "works"
         {
             batch_created_ids.push(id.clone());
         }
@@ -1334,8 +1329,8 @@ fn format_action_summary(result: &ActionResult) -> String {
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
         ActionResult::RecordCreated { collection, id } => format!("created {}: {}", collection, id),
         ActionResult::AgentSpawned { session_id, agent_type } => format!("spawned {} ({})", agent_type, session_id),
-        ActionResult::DependencyNotMet { work_item_id, message } => {
-            format!("dep not met for {}: {}", work_item_id, message)
+        ActionResult::DependencyNotMet { work_id, message } => {
+            format!("dep not met for {}: {}", work_id, message)
         } // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — dead variants
     }
 }
@@ -1351,7 +1346,7 @@ mod tests {
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
     use crate::domain::tick::Tick;
-    use crate::domain::work_item::WorkItem;
+    use crate::domain::work::Work;
     use async_trait::async_trait;
     use std::sync::Mutex as StdMutex;
     use taskstore::Store;
@@ -1440,16 +1435,16 @@ mod tests {
     }
 
     #[test]
-    fn test_build_state_summary_with_work_items() {
+    fn test_build_state_summary_with_works() {
         let dir = std::env::temp_dir().join(format!("loopr-coord-wi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let wi = WorkItem::new("ph-1".into(), "Add auth".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let summary = build_state_summary(&stores);
-        assert!(summary.contains("### WorkItems"));
+        assert!(summary.contains("### Works"));
         assert!(summary.contains("Add auth"));
     }
 
@@ -1850,8 +1845,8 @@ mod tests {
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
         // Add work item
-        let wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "wi desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new(phase_id.clone(), "WI 1".into(), "wi desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Add tick
         let tick = Tick::new(1);
@@ -1861,7 +1856,7 @@ mod tests {
         assert!(summary.contains("### Plans"));
         assert!(summary.contains("### Specs"));
         assert!(summary.contains("### Phases"));
-        assert!(summary.contains("### WorkItems"));
+        assert!(summary.contains("### Works"));
         assert!(summary.contains("### Ticks"));
     }
 
@@ -2243,9 +2238,9 @@ mod tests {
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
         // Create a Done work item in the phase
-        let mut wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
-        wi.status = WorkItemStatus::Done;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2300,7 +2295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_phase_status_with_work_items() {
+    fn test_build_phase_status_with_works() {
         let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-phstatus-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
@@ -2309,11 +2304,11 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let wi1 = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
-        let mut wi2 = WorkItem::new(phase_id.clone(), "WI 2".into(), "desc".into());
-        wi2.status = WorkItemStatus::Done;
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        let wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
+        wi2.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.current_phase_id = Some(phase_id);
@@ -2402,8 +2397,8 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
@@ -2461,9 +2456,9 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
-        wi.status = WorkItemStatus::InProgress;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi.status = WorkStatus::InProgress;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2483,12 +2478,12 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi1 = WorkItem::new(phase_id.clone(), "WI Done".into(), "desc".into());
-        wi1.status = WorkItemStatus::Done;
-        let mut wi2 = WorkItem::new(phase_id.clone(), "WI Abandoned".into(), "desc".into());
-        wi2.status = WorkItemStatus::Abandoned;
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        let mut wi1 = Work::new(phase_id.clone(), "WI Done".into(), "desc".into());
+        wi1.status = WorkStatus::Done;
+        let mut wi2 = Work::new(phase_id.clone(), "WI Abandoned".into(), "desc".into());
+        wi2.status = WorkStatus::Abandoned;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2511,12 +2506,12 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi1 = WorkItem::new(phase_id.clone(), "WI Done".into(), "desc".into());
-        wi1.status = WorkItemStatus::Done;
-        let mut wi2 = WorkItem::new(phase_id.clone(), "WI Ready".into(), "desc".into());
-        wi2.status = WorkItemStatus::Ready;
-        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        let mut wi1 = Work::new(phase_id.clone(), "WI Done".into(), "desc".into());
+        wi1.status = WorkStatus::Done;
+        let mut wi2 = Work::new(phase_id.clone(), "WI Ready".into(), "desc".into());
+        wi2.status = WorkStatus::Ready;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2560,9 +2555,9 @@ mod tests {
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
         // WI in progress — would normally stay Executing
-        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
-        wi.status = WorkItemStatus::InProgress;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkStatus::InProgress;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2591,9 +2586,9 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
-        wi.status = WorkItemStatus::InProgress;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkStatus::InProgress;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2693,9 +2688,9 @@ mod tests {
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
         // All WIs are Done — would normally trigger PhaseGate via WI check
-        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
-        wi.status = WorkItemStatus::Done;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2724,9 +2719,9 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi = WorkItem::new(phase_id.clone(), "WI".into(), "desc".into());
-        wi.status = WorkItemStatus::InProgress;
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+        wi.status = WorkStatus::InProgress;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.fsm_state = CoordinatorFsmState::Executing;
@@ -2939,7 +2934,7 @@ mod tests {
     #[test]
     fn test_resolve_batch_deps_resolves_batch_0() {
         let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
-        let action = AgentAction::CreateWorkItem {
+        let action = AgentAction::CreateWork {
             phase_id: "phase-1".into(),
             title: "WI".into(),
             description: "d".into(),
@@ -2949,7 +2944,7 @@ mod tests {
         };
         let resolved = resolve_batch_dependencies(&action, &batch_ids);
         assert!(resolved.is_some());
-        if let Some(AgentAction::CreateWorkItem { dependencies, .. }) = resolved {
+        if let Some(AgentAction::CreateWork { dependencies, .. }) = resolved {
             assert_eq!(dependencies, vec!["wi-aaa".to_string()]);
         }
     }
@@ -2957,7 +2952,7 @@ mod tests {
     #[test]
     fn test_resolve_batch_deps_out_of_range() {
         let batch_ids = vec!["wi-aaa".to_string()];
-        let action = AgentAction::CreateWorkItem {
+        let action = AgentAction::CreateWork {
             phase_id: "phase-1".into(),
             title: "WI".into(),
             description: "d".into(),
@@ -2968,7 +2963,7 @@ mod tests {
         let resolved = resolve_batch_dependencies(&action, &batch_ids);
         assert!(resolved.is_some());
         // Out of range falls through — keeps the original "batch:5" string
-        if let Some(AgentAction::CreateWorkItem { dependencies, .. }) = resolved {
+        if let Some(AgentAction::CreateWork { dependencies, .. }) = resolved {
             assert_eq!(dependencies, vec!["batch:5".to_string()]);
         }
     }
@@ -2976,7 +2971,7 @@ mod tests {
     #[test]
     fn test_resolve_batch_deps_no_batch_refs() {
         let batch_ids = vec!["wi-aaa".to_string()];
-        let action = AgentAction::CreateWorkItem {
+        let action = AgentAction::CreateWork {
             phase_id: "phase-1".into(),
             title: "WI".into(),
             description: "d".into(),
@@ -2993,7 +2988,7 @@ mod tests {
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::Done { summary: "done".into() };
         let resolved = resolve_batch_dependencies(&action, &batch_ids);
-        assert!(resolved.is_none(), "non-CreateWorkItem should return None");
+        assert!(resolved.is_none(), "non-CreateWork should return None");
     }
 
     // --- Fix #5: build_phase_status dependency info tests ---
@@ -3008,15 +3003,15 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi1 = WorkItem::new(phase_id.clone(), "Setup".into(), "d".into());
-        wi1.status = WorkItemStatus::Done;
+        let mut wi1 = Work::new(phase_id.clone(), "Setup".into(), "d".into());
+        wi1.status = WorkStatus::Done;
         let wi1_id = wi1.id.clone();
-        stores.work_items.write().unwrap().insert(wi1_id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
-        let mut wi2 = WorkItem::new(phase_id.clone(), "Build".into(), "d".into());
+        let mut wi2 = Work::new(phase_id.clone(), "Build".into(), "d".into());
         wi2.dependencies = vec![wi1_id.clone()];
         let wi2_id = wi2.id.clone();
-        stores.work_items.write().unwrap().insert(wi2_id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi2_id.clone(), wi2);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.current_phase_id = Some(phase_id);
@@ -3036,14 +3031,14 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let wi1 = WorkItem::new(phase_id.clone(), "Setup".into(), "d".into());
+        let wi1 = Work::new(phase_id.clone(), "Setup".into(), "d".into());
         // Default status is Draft, not Done
         let wi1_id = wi1.id.clone();
-        stores.work_items.write().unwrap().insert(wi1_id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
-        let mut wi2 = WorkItem::new(phase_id.clone(), "Build".into(), "d".into());
+        let mut wi2 = Work::new(phase_id.clone(), "Build".into(), "d".into());
         wi2.dependencies = vec![wi1_id.clone()];
-        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.current_phase_id = Some(phase_id);
@@ -3076,7 +3071,7 @@ mod tests {
         assert_eq!(coord_state.attempts("wi-1"), 1);
 
         // Undo — same as the production code does
-        if let Some(count) = coord_state.work_item_attempts.get_mut("wi-1") {
+        if let Some(count) = coord_state.work_attempts.get_mut("wi-1") {
             *count = count.saturating_sub(1);
         }
         assert_eq!(coord_state.attempts("wi-1"), 0);
@@ -3094,10 +3089,10 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut wi1 = WorkItem::new(phase_id.clone(), "Failing WI".into(), "d".into());
-        wi1.status = WorkItemStatus::InProgress;
+        let mut wi1 = Work::new(phase_id.clone(), "Failing WI".into(), "d".into());
+        wi1.status = WorkStatus::InProgress;
         let wi1_id = wi1.id.clone();
-        stores.work_items.write().unwrap().insert(wi1_id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
         // Insert a failure Learning scoped to this WI's phase
         let learning = crate::domain::learning::Learning {
@@ -3141,10 +3136,10 @@ mod tests {
         let stores = test_stores(&dir);
 
         // Create a WI in Integrated status (not Done)
-        let mut wi = WorkItem::new("phase-1".into(), "Test WI".into(), "desc".into());
-        wi.status = WorkItemStatus::Integrated;
+        let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+        wi.status = WorkStatus::Integrated;
         let wi_id = wi.id.clone();
-        stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
         // Create a merged bundle for that WI
         let mut bundle = Bundle::new(wi_id.clone(), None, "feature/test".into(), vec!["claim".into()]);
@@ -3168,10 +3163,10 @@ mod tests {
         let stores = test_stores(&dir);
 
         // Create a WI in Done status
-        let mut wi = WorkItem::new("phase-1".into(), "Done WI".into(), "desc".into());
-        wi.status = WorkItemStatus::Done;
+        let mut wi = Work::new("phase-1".into(), "Done WI".into(), "desc".into());
+        wi.status = WorkStatus::Done;
         let wi_id = wi.id.clone();
-        stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
         // Create a merged bundle for that WI
         let mut bundle = Bundle::new(wi_id.clone(), None, "feature/done".into(), vec!["claim".into()]);

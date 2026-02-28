@@ -77,7 +77,7 @@ pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
 }
 
 /// Build a focused state summary for the implementer: active locks and sibling agents.
-pub fn build_implementer_summary(stores: &Stores, work_item_id: &str) -> String {
+pub fn build_implementer_summary(stores: &Stores, work_id: &str) -> String {
     use crate::domain::lock::LockStatus;
 
     let mut summary = String::with_capacity(512);
@@ -100,9 +100,7 @@ pub fn build_implementer_summary(stores: &Stores, work_item_id: &str) -> String 
         let sessions = stores.agent_sessions.read().unwrap();
         let siblings: Vec<_> = sessions
             .values()
-            .filter(|s| {
-                !s.status.is_terminal() && s.work_item_id.as_deref() != Some(work_item_id) && s.work_item_id.is_some()
-            })
+            .filter(|s| !s.status.is_terminal() && s.work_id.as_deref() != Some(work_id) && s.work_id.is_some())
             .collect();
         if !siblings.is_empty() {
             summary.push_str("### Sibling Agents\n");
@@ -111,7 +109,7 @@ pub fn build_implementer_summary(stores: &Stores, work_item_id: &str) -> String 
                     "- {} {} (wi: {})\n",
                     s.agent_type,
                     s.status,
-                    s.work_item_id.as_deref().unwrap_or("?")
+                    s.work_id.as_deref().unwrap_or("?")
                 ));
             }
             summary.push('\n');
@@ -135,7 +133,7 @@ pub struct IterationParams<'a> {
     pub stores: &'a Arc<Stores>,
     pub tool_runner: &'a ToolRunner,
     pub bridge: &'a AgentIpcBridge,
-    pub work_item_id: &'a str,
+    pub work_id: &'a str,
     pub worktree_path: &'a Path,
     pub session_id: &'a str,
     pub event_tx: &'a broadcast::Sender<DaemonEvent>,
@@ -148,16 +146,16 @@ pub async fn run_iteration(
     previous_summary: Option<String>,
     staleness_note: Option<String>,
 ) -> Result<IterationOutcome> {
-    let state_summary = build_implementer_summary(params.stores, params.work_item_id);
+    let state_summary = build_implementer_summary(params.stores, params.work_id);
     let assembled = ContextBuilder::new(params.stores, Role::Implementer)
-        .load_work_item_hierarchy(params.work_item_id)?
+        .load_work_hierarchy(params.work_id)?
         .with_coordinator_goal()
         .with_state_summary(state_summary)
         .with_tools(params.tool_runner)
         .with_previous_summary(previous_summary)
         .with_staleness_note(staleness_note)
         .with_iteration(iteration)
-        .with_footer("Implement the WorkItem described above. Respond with a JSON array of actions.".into())
+        .with_footer("Implement the Work described above. Respond with a JSON array of actions.".into())
         .build(&crate::prompts::store().implementer);
 
     info!(
@@ -194,7 +192,7 @@ pub async fn run_iteration(
             params.tool_runner,
             params.bridge,
             params.worktree_path,
-            Some(params.work_item_id),
+            Some(params.work_id),
             AgentType::Implementer,
         )
         .await
@@ -263,10 +261,10 @@ pub async fn run_implementer(
     config: &AgentRoleConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
 ) -> Result<()> {
-    let work_item_id = session
-        .work_item_id
+    let work_id = session
+        .work_id
         .as_ref()
-        .ok_or_else(|| eyre!("implementer session missing work_item_id"))?
+        .ok_or_else(|| eyre!("implementer session missing work_id"))?
         .clone();
 
     let worktree_path = session
@@ -284,7 +282,7 @@ pub async fn run_implementer(
         stores,
         tool_runner,
         bridge,
-        work_item_id: &work_item_id,
+        work_id: &work_id,
         worktree_path: &worktree_path,
         session_id: &session.id,
         event_tx,
@@ -408,8 +406,8 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::AgentSpawned { session_id, agent_type } => {
             format!("spawned {} ({})", agent_type, session_id)
         }
-        ActionResult::DependencyNotMet { work_item_id, message } => {
-            format!("dep not met for {}: {}", work_item_id, message)
+        ActionResult::DependencyNotMet { work_id, message } => {
+            format!("dep not met for {}: {}", work_id, message)
         } // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — dead variants
     }
 }
@@ -423,7 +421,7 @@ mod tests {
     use crate::domain::phase::Phase;
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
-    use crate::domain::work_item::WorkItem;
+    use crate::domain::work::Work;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
     use std::sync::Mutex as StdMutex;
@@ -486,8 +484,8 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        let wi = WorkItem::new(phase_id.clone(), "Test WorkItem".into(), "Implement the feature".into());
-        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+        let wi = Work::new(phase_id.clone(), "Test Work".into(), "Implement the feature".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Add a learning
         let learning = Learning::new(
@@ -500,8 +498,8 @@ mod tests {
         Arc::new(stores)
     }
 
-    fn get_work_item_id(stores: &Stores) -> String {
-        stores.work_items.read().unwrap().keys().next().unwrap().clone()
+    fn get_work_id(stores: &Stores) -> String {
+        stores.works.read().unwrap().keys().next().unwrap().clone()
     }
 
     fn test_bridge_with_tx(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
@@ -565,10 +563,10 @@ mod tests {
             timeout_secs: 10,
             worktree: true,
         }]);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
 
         let assembled = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_tools(&tool_runner)
             .with_iteration(1)
@@ -578,19 +576,19 @@ mod tests {
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
         assert!(assembled.user_message.contains("Test Phase"));
-        assert!(assembled.user_message.contains("Test WorkItem"));
+        assert!(assembled.user_message.contains("Test Work"));
         assert!(assembled.user_message.contains("`test`"));
         assert!(assembled.user_message.contains("Current Iteration: 1"));
         assert!(assembled.system_prompt.contains("Implementer agent"));
     }
 
     #[test]
-    fn test_context_builder_missing_work_item() {
+    fn test_context_builder_missing_work() {
         let dir = std::env::temp_dir().join(format!("loopr-impl-miss-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
 
-        let result = ContextBuilder::new(&stores, Role::Implementer).load_work_item_hierarchy("nonexistent");
+        let result = ContextBuilder::new(&stores, Role::Implementer).load_work_hierarchy("nonexistent");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work item not found"));
     }
@@ -602,7 +600,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-iter-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -612,7 +610,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -627,7 +625,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-help-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -637,7 +635,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -652,7 +650,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-cont-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -667,7 +665,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -684,7 +682,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-fail-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -694,7 +692,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -709,7 +707,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-bad-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -719,7 +717,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -734,7 +732,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-empty-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -744,7 +742,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -762,7 +760,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-run-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let config = AgentRoleConfig::default_implementer();
@@ -770,7 +768,7 @@ mod tests {
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "Complete"}]"#);
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
-        session.work_item_id = Some(wi_id);
+        session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
         let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
@@ -783,7 +781,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-max-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let mut config = AgentRoleConfig::default_implementer();
@@ -793,7 +791,7 @@ mod tests {
         let llm = MockLlm::new(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#);
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
-        session.work_item_id = Some(wi_id);
+        session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
         let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
@@ -803,7 +801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_implementer_missing_work_item_id() {
+    async fn test_run_implementer_missing_work_id() {
         let dir = std::env::temp_dir().join(format!("loopr-impl-nowi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
@@ -813,11 +811,11 @@ mod tests {
         let llm = MockLlm::new("[]");
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
-        // No work_item_id set
+        // No work_id set
 
         let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing work_item_id"));
+        assert!(result.unwrap_err().to_string().contains("missing work_id"));
     }
 
     #[tokio::test]
@@ -825,7 +823,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-helpstop-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let config = AgentRoleConfig::default_implementer();
@@ -833,7 +831,7 @@ mod tests {
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Stuck"}]"#);
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
-        session.work_item_id = Some(wi_id);
+        session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
         let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
@@ -886,7 +884,7 @@ mod tests {
     #[test]
     fn test_drain_tick_published_ignores_other_events() {
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
-        let _ = tx.send(DaemonEvent::record_created("work_item", "wi-1"));
+        let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
         let _ = tx.send(DaemonEvent::transition_completed(
             "bundle",
             "b-1",
@@ -901,7 +899,7 @@ mod tests {
     #[test]
     fn test_drain_tick_published_mixed_events() {
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
-        let _ = tx.send(DaemonEvent::record_created("work_item", "wi-1"));
+        let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
         let _ = tx.send(DaemonEvent::tick_published("tick-5", "sha5"));
         let _ = tx.send(DaemonEvent::record_updated("bundle", "b-1"));
         let result = drain_tick_published(&mut rx);
@@ -913,10 +911,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-stale2-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
 
         let assembled = ContextBuilder::new(&stores, Role::Implementer)
-            .load_work_item_hierarchy(&wi_id)
+            .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_staleness_note(Some("A new Tick 'tick-99' has been published.".into()))
             .with_iteration(2)
@@ -930,7 +928,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-stale-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -940,7 +938,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
@@ -956,7 +954,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-staleness-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let mut config = AgentRoleConfig::default_implementer();
@@ -995,7 +993,7 @@ mod tests {
         };
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
-        session.work_item_id = Some(wi_id);
+        session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
         let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
@@ -1007,7 +1005,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-accum-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -1024,7 +1022,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-accum",
             event_tx: &event_tx,
@@ -1079,7 +1077,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-emptysummary-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
 
         // No active locks, no sibling agents — summary should be empty
         let summary = build_implementer_summary(&stores, &wi_id);
@@ -1092,7 +1090,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-donestop-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
 
@@ -1108,7 +1106,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-donestop",
             event_tx: &event_tx,
@@ -1175,7 +1173,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-persist-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let mut config = AgentRoleConfig::default_implementer();
@@ -1204,7 +1202,7 @@ mod tests {
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
         let session_id = session.id.clone();
-        session.work_item_id = Some(wi_id);
+        session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
         // Insert session into stores so the loop can update it
@@ -1232,7 +1230,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-goal-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
 
         // Set a coordinator goal
         let goal = CoordinatorGoal::new("Build a REST API for user management".to_string());
@@ -1262,7 +1260,7 @@ mod tests {
             stores: &stores,
             tool_runner: &tool_runner,
             bridge: &bridge,
-            work_item_id: &wi_id,
+            work_id: &wi_id,
             worktree_path: &dir,
             session_id: "test-goal",
             event_tx: &event_tx,
@@ -1313,7 +1311,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-parseretry-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
         let mut config = AgentRoleConfig::default_implementer();
@@ -1325,7 +1323,7 @@ mod tests {
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
         let session_id = session.id.clone();
-        session.work_item_id = Some(wi_id);
+        session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
         stores
@@ -1351,17 +1349,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-impl-fullsummary-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = setup_stores(&dir);
-        let wi_id = get_work_item_id(&stores);
+        let wi_id = get_work_id(&stores);
 
         // Add an active lock
         let mut lock = Lock::new("src/main.rs".into(), "wi-other".into(), "coordinator".into());
         lock.status = LockStatus::Active;
         stores.locks.write().unwrap().insert(lock.id.clone(), lock);
 
-        // Add a sibling agent session (different work_item_id, not terminal)
+        // Add a sibling agent session (different work_id, not terminal)
         let mut session =
             crate::agents::AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
-        session.work_item_id = Some("wi-sibling".to_string());
+        session.work_id = Some("wi-sibling".to_string());
         stores
             .agent_sessions
             .write()
@@ -1375,6 +1373,6 @@ mod tests {
             summary.contains("### Sibling Agents"),
             "should contain siblings section"
         );
-        assert!(summary.contains("wi-sibling"), "should contain sibling work_item_id");
+        assert!(summary.contains("wi-sibling"), "should contain sibling work_id");
     }
 }
