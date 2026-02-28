@@ -181,6 +181,7 @@ pub async fn run_reviewer(
                     "id": bundle_id,
                     "target_status": "Reviewed",
                     "role": "reviewer",
+                    "verification": format!("Reviewer approved: {}", review.summary),
                 }),
             );
             if resp.is_error() {

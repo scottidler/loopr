@@ -2024,7 +2024,7 @@ mod tests {
         );
         bridge.request(
             "bundle.transition",
-            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
 
         let action = AgentAction::AcceptBundle {

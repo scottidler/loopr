@@ -276,6 +276,49 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
         json!({ "enabled": false })
     };
 
+    // Gap #33: Current Tick SHA — find the latest Published tick
+    let current_tick_sha: Option<String> = {
+        let ticks_map = stores.ticks.read().unwrap();
+        ticks_map
+            .values()
+            .filter(|t| t.status == TickStatus::Published)
+            .max_by_key(|t| t.number)
+            .and_then(|t| t.integration_sha.clone())
+    };
+
+    // Gap #33: Latest published tick ID for staleness check
+    let latest_tick_id: Option<String> = {
+        let ticks_map = stores.ticks.read().unwrap();
+        ticks_map
+            .values()
+            .filter(|t| t.status == TickStatus::Published)
+            .max_by_key(|t| t.number)
+            .map(|t| t.id.clone())
+    };
+
+    // Gap #33: Stale work items count
+    let stale_work_items: usize = {
+        let wis = stores.work_items.read().unwrap();
+        let bundles_map = stores.bundles.read().unwrap();
+        if let Some(ref latest_tid) = latest_tick_id {
+            wis.values()
+                .filter(|wi| wi.status == WorkItemStatus::InProgress)
+                .filter(|wi| {
+                    bundles_map.values().any(|b| {
+                        b.work_item_id == wi.id
+                            && !matches!(
+                                b.status,
+                                BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
+                            )
+                            && b.base_tick_id.as_ref().is_some_and(|btid| btid != latest_tid)
+                    })
+                })
+                .count()
+        } else {
+            0
+        }
+    };
+
     DaemonResponse::ok(
         req.id,
         json!({
@@ -293,6 +336,8 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
                 "agent_sessions": agent_sessions,
             },
             "taskstore": taskstore_stats,
+            "current_tick_sha": current_tick_sha,
+            "stale_work_items": stale_work_items,
         }),
     )
 }
@@ -1257,6 +1302,27 @@ fn handle_bundle_create(
 
     let mut bundle = Bundle::new(work_item_id, base_tick_id, branch_name, claims);
     bundle.description = description;
+
+    // Parse optional files_changed into touched_paths
+    if let Some(files) = req.params.get("files_changed").and_then(|v| v.as_array()) {
+        bundle.touched_paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+
+    // Gap #22: BundleSizePolicy enforcement on create
+    if !bundle.touched_paths.is_empty() {
+        let policy = &stores.config.strategy.bundle_size;
+        if bundle.touched_paths.len() as u32 > policy.max_files_touched {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(&format!(
+                    "Bundle touches {} files, exceeds max_files_touched={}",
+                    bundle.touched_paths.len(),
+                    policy.max_files_touched
+                )),
+            );
+        }
+    }
+
     let bundle_json = match serde_json::to_value(&bundle) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
@@ -1377,10 +1443,20 @@ fn handle_bundle_transition(
     let mut bundles = stores.bundles.write().unwrap();
 
     // Read bundle info first for validation
-    let (from, bundle_wi_id) = match bundles.get(&id) {
-        Some(b) => (b.status, b.work_item_id.clone()),
+    let (from, bundle_wi_id, touched_paths, mut verification) = match bundles.get(&id) {
+        Some(b) => (
+            b.status,
+            b.work_item_id.clone(),
+            b.touched_paths.clone(),
+            b.verification.clone(),
+        ),
         None => return DaemonResponse::err(req.id, RpcError::not_found("bundle", &id)),
     };
+
+    // Allow setting verification during transition (e.g., Reviewer sets it when transitioning to Reviewed)
+    if let Some(v) = req.params.get("verification").and_then(|v| v.as_str()) {
+        verification = v.to_string();
+    }
 
     let rules = bundle_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
@@ -1408,10 +1484,47 @@ fn handle_bundle_transition(
         }
     }
 
+    // Gap #17: Bundle cannot touch locked resources it doesn't own
+    if target_status == BundleStatus::Integrating {
+        let locks = stores.locks.read().unwrap();
+        for path in &touched_paths {
+            if let Some(lock) = locks.values().find(|l| l.resource == *path && l.is_active())
+                && lock.holder_id != bundle_wi_id
+            {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Bundle touches locked resource '{}' owned by '{}'",
+                        path, lock.holder_id
+                    )),
+                );
+            }
+        }
+    }
+
+    // Gap #18: Verification metadata required for Reviewed+
+    if matches!(
+        target_status,
+        BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating | BundleStatus::Merged
+    ) && !matches!(
+        from,
+        BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating
+    ) && verification.is_empty()
+    {
+        return DaemonResponse::err(
+            req.id,
+            RpcError::precondition_failed("Bundle must have verification metadata before Reviewed+"),
+        );
+    }
+
     // Now get mutable reference and apply the transition
     let bundle = bundles.get_mut(&id).unwrap();
     bundle.status = target_status;
     bundle.updated_at = crate::id::now_millis();
+    // Apply verification from transition params if provided
+    if !verification.is_empty() && bundle.verification.is_empty() {
+        bundle.verification = verification;
+    }
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
@@ -1588,12 +1701,13 @@ fn handle_tick_transition(
     };
 
     let mut ticks = stores.ticks.write().unwrap();
-    let tick = match ticks.get_mut(&id) {
-        Some(t) => t,
+
+    // Read current status immutably first for validation
+    let from = match ticks.get(&id) {
+        Some(t) => t.status,
         None => return DaemonResponse::err(req.id, RpcError::not_found("tick", &id)),
     };
 
-    let from = tick.status;
     let rules = tick_transitions();
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         let _ = event_tx.send(DaemonEvent::transition_rejected(
@@ -1607,6 +1721,21 @@ fn handle_tick_transition(
         return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
     }
 
+    // Gap #16: Only one Tick in Sealing/Validating at a time
+    if matches!(target_status, TickStatus::Sealing | TickStatus::Validating) {
+        let has_active = ticks
+            .values()
+            .any(|t| t.id != id && matches!(t.status, TickStatus::Sealing | TickStatus::Validating));
+        if has_active {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("Another Tick is already in Sealing/Validating"),
+            );
+        }
+    }
+
+    // Now get mutable reference and apply the transition
+    let tick = ticks.get_mut(&id).unwrap();
     tick.status = target_status;
     tick.updated_at = crate::id::now_millis();
 
@@ -1800,8 +1929,7 @@ fn handle_learning_reinforce(
         None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
     };
 
-    // TODO: thread PromotionPolicy from StrategyConfig through dispatch when available
-    let promotion = crate::config::PromotionPolicy::default();
+    let promotion = stores.config.strategy.promotion;
     learning.reinforce(&promotion);
 
     // Persist to TaskStore if available
@@ -1973,6 +2101,14 @@ fn handle_lock_create(
     // #11: Accept optional ttl_secs param; compute expires_at
     if let Some(ttl_secs) = req.params.get("ttl_secs").and_then(|v| v.as_u64()) {
         lock.expires_at = Some(crate::id::now_millis() + (ttl_secs as i64 * 1000));
+    }
+
+    // Gap #25: If no explicit TTL, apply max_lock_ttl_minutes from config
+    if lock.expires_at.is_none() {
+        let ttl_minutes = stores.config.strategy.max_lock_ttl_minutes;
+        if ttl_minutes > 0 {
+            lock.expires_at = Some(crate::id::now_millis() + (ttl_minutes as i64 * 60 * 1000));
+        }
     }
     if let Some(renewable) = req.params.get("renewable").and_then(|v| v.as_bool()) {
         lock.renewable = renewable;
@@ -2892,6 +3028,24 @@ fn handle_agent_start(
                 req.id,
                 RpcError::pool_exhausted(&format!("global agent cap exceeded: {total_active}/20 active sessions")),
             );
+        }
+
+        // Gap #26: Researcher dedup by target_id
+        if agent_type == AgentType::Researcher
+            && let Some(tid) = req.params.get("target_id").and_then(|v| v.as_str())
+        {
+            let has_existing = sessions.values().any(|s| {
+                s.agent_type == AgentType::Researcher && !s.status.is_terminal() && s.target_id.as_deref() == Some(tid)
+            });
+            if has_existing {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Non-terminal Researcher session already exists for target_id '{}'",
+                        tid
+                    )),
+                );
+            }
         }
     }
 

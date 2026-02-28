@@ -328,7 +328,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.transition",
-            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
 
         // Reviewed → Accepted (Coordinator accepts)
@@ -1243,7 +1243,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.transition",
-            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
 
         // 5. Coordinator accepts
@@ -1640,7 +1640,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.transition",
-            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
 
         // AcceptBundle via executor
@@ -1842,7 +1842,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.transition",
-            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
 
         // 10. Accept (Coordinator)
@@ -2119,7 +2119,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.transition",
-            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+            json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
         dispatch_ok(
             &stores,
@@ -2200,7 +2200,7 @@ mod tests {
             &wm,
             &ic,
             "bundle.transition",
-            json!({"id": bundle3_id, "target_status": "Reviewed", "role": "reviewer"}),
+            json!({"id": bundle3_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
         dispatch_ok(
             &stores,
