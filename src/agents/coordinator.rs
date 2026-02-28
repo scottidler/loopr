@@ -321,6 +321,55 @@ fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts:
     None
 }
 
+/// Fix #2: Resolve batch:N dependency references in a CreateWorkItem action.
+/// Returns Some(modified_action) if batch deps were resolved, None if no changes needed.
+fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]) -> Option<AgentAction> {
+    if let AgentAction::CreateWorkItem {
+        phase_id,
+        title,
+        description,
+        resource_tags,
+        acceptance_criteria,
+        dependencies,
+    } = action
+    {
+        let has_batch_refs = dependencies.iter().any(|d| d.starts_with("batch:"));
+        if !has_batch_refs {
+            return None;
+        }
+
+        let resolved_deps: Vec<String> = dependencies
+            .iter()
+            .map(|dep| {
+                if let Some(idx_str) = dep.strip_prefix("batch:")
+                    && let Ok(idx) = idx_str.parse::<usize>()
+                {
+                    if let Some(resolved_id) = batch_created_ids.get(idx) {
+                        return resolved_id.clone();
+                    }
+                    warn!(
+                        "batch:{} out of range (only {} items created so far)",
+                        idx,
+                        batch_created_ids.len()
+                    );
+                }
+                dep.clone()
+            })
+            .collect();
+
+        Some(AgentAction::CreateWorkItem {
+            phase_id: phase_id.clone(),
+            title: title.clone(),
+            description: description.clone(),
+            resource_tags: resource_tags.clone(),
+            acceptance_criteria: acceptance_criteria.clone(),
+            dependencies: resolved_deps,
+        })
+    } else {
+        None
+    }
+}
+
 /// Fix #12: Mark the Phase domain record as Complete before calling coord_state.complete_phase().
 /// This ensures the Phase record status and CoordinatorState are updated together.
 fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState) {
@@ -580,6 +629,36 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
         }
     }
 
+    // Fix #5: Show per-WI dependency info with satisfaction status
+    for wi in &phase_wis {
+        if !wi.dependencies.is_empty() {
+            let dep_status: Vec<String> = wi
+                .dependencies
+                .iter()
+                .map(|dep_id| {
+                    let status = work_items
+                        .get(dep_id)
+                        .map(|d| format!("{}", d.status))
+                        .unwrap_or_else(|| "unknown".to_string());
+                    format!("{}={}", dep_id, status)
+                })
+                .collect();
+            let all_met = wi.dependencies.iter().all(|dep_id| {
+                work_items
+                    .get(dep_id)
+                    .map(|d| d.status == WorkItemStatus::Done)
+                    .unwrap_or(false)
+            });
+            summary.push_str(&format!(
+                "  [{}] {} — deps: [{}] ({})\n",
+                wi.id,
+                wi.title,
+                dep_status.join(", "),
+                if all_met { "READY" } else { "BLOCKED" }
+            ));
+        }
+    }
+
     summary
 }
 
@@ -820,15 +899,29 @@ async fn run_coordinator_iteration(
     let repo_root = &stores.config.project.repo_path;
     let tool_runner = &*stores.tool_runner;
 
+    // Fix #2: Track batch-created WorkItem IDs for batch:N dependency resolution
+    let mut batch_created_ids: Vec<String> = Vec::new();
     let mut last_summary = String::new();
     for action in &actions {
-        let result = match execute_action(action, tool_runner, bridge, repo_root, None, AgentType::Coordinator).await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("Coordinator {} action failed (non-fatal): {e}", session.id);
-                ActionResult::ActionError(e.to_string())
-            }
-        };
+        // Fix #2: Resolve batch:N dependencies before executing CreateWorkItem
+        let resolved_action = resolve_batch_dependencies(action, &batch_created_ids);
+        let action_ref = resolved_action.as_ref().unwrap_or(action);
+
+        let result =
+            match execute_action(action_ref, tool_runner, bridge, repo_root, None, AgentType::Coordinator).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Coordinator {} action failed (non-fatal): {e}", session.id);
+                    ActionResult::ActionError(e.to_string())
+                }
+            };
+
+        // Track created WorkItem IDs for batch dependency resolution
+        if let ActionResult::RecordCreated { ref collection, ref id } = result
+            && collection == "work_items"
+        {
+            batch_created_ids.push(id.clone());
+        }
 
         let summary = format_action_summary(&result);
         let _ = event_tx.send(DaemonEvent::agent_action_completed(&session.id, &summary));
@@ -2700,5 +2793,127 @@ mod tests {
         let phases = stores.phases.read().unwrap();
         let updated = phases.get(&phase_id).unwrap();
         assert_eq!(updated.status, HierarchyStatus::Complete);
+    }
+
+    // --- Fix #2: resolve_batch_dependencies tests ---
+
+    #[test]
+    fn test_resolve_batch_deps_resolves_batch_0() {
+        let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
+        let action = AgentAction::CreateWorkItem {
+            phase_id: "phase-1".into(),
+            title: "WI".into(),
+            description: "d".into(),
+            resource_tags: vec![],
+            acceptance_criteria: vec![],
+            dependencies: vec!["batch:0".to_string()],
+        };
+        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        assert!(resolved.is_some());
+        if let Some(AgentAction::CreateWorkItem { dependencies, .. }) = resolved {
+            assert_eq!(dependencies, vec!["wi-aaa".to_string()]);
+        }
+    }
+
+    #[test]
+    fn test_resolve_batch_deps_out_of_range() {
+        let batch_ids = vec!["wi-aaa".to_string()];
+        let action = AgentAction::CreateWorkItem {
+            phase_id: "phase-1".into(),
+            title: "WI".into(),
+            description: "d".into(),
+            resource_tags: vec![],
+            acceptance_criteria: vec![],
+            dependencies: vec!["batch:5".to_string()],
+        };
+        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        assert!(resolved.is_some());
+        // Out of range falls through — keeps the original "batch:5" string
+        if let Some(AgentAction::CreateWorkItem { dependencies, .. }) = resolved {
+            assert_eq!(dependencies, vec!["batch:5".to_string()]);
+        }
+    }
+
+    #[test]
+    fn test_resolve_batch_deps_no_batch_refs() {
+        let batch_ids = vec!["wi-aaa".to_string()];
+        let action = AgentAction::CreateWorkItem {
+            phase_id: "phase-1".into(),
+            title: "WI".into(),
+            description: "d".into(),
+            resource_tags: vec![],
+            acceptance_criteria: vec![],
+            dependencies: vec!["wi-existing".to_string()],
+        };
+        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        assert!(resolved.is_none(), "no batch refs should return None");
+    }
+
+    #[test]
+    fn test_resolve_batch_deps_non_create_action() {
+        let batch_ids = vec!["wi-aaa".to_string()];
+        let action = AgentAction::Done { summary: "done".into() };
+        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        assert!(resolved.is_none(), "non-CreateWorkItem should return None");
+    }
+
+    // --- Fix #5: build_phase_status dependency info tests ---
+
+    #[test]
+    fn test_build_phase_status_shows_dependencies() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-depstatus-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi1 = WorkItem::new(phase_id.clone(), "Setup".into(), "d".into());
+        wi1.status = WorkItemStatus::Done;
+        let wi1_id = wi1.id.clone();
+        stores.work_items.write().unwrap().insert(wi1_id.clone(), wi1);
+
+        let mut wi2 = WorkItem::new(phase_id.clone(), "Build".into(), "d".into());
+        wi2.dependencies = vec![wi1_id.clone()];
+        let wi2_id = wi2.id.clone();
+        stores.work_items.write().unwrap().insert(wi2_id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.current_phase_id = Some(phase_id);
+
+        let status = build_phase_status(&stores, &coord_state);
+        assert!(status.contains("READY"), "dependency met should show READY: {}", status);
+        assert!(status.contains("deps:"), "should show deps info: {}", status);
+    }
+
+    #[test]
+    fn test_build_phase_status_shows_blocked_deps() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-depblocked-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let wi1 = WorkItem::new(phase_id.clone(), "Setup".into(), "d".into());
+        // Default status is Draft, not Done
+        let wi1_id = wi1.id.clone();
+        stores.work_items.write().unwrap().insert(wi1_id.clone(), wi1);
+
+        let mut wi2 = WorkItem::new(phase_id.clone(), "Build".into(), "d".into());
+        wi2.dependencies = vec![wi1_id.clone()];
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.current_phase_id = Some(phase_id);
+
+        let status = build_phase_status(&stores, &coord_state);
+        assert!(
+            status.contains("BLOCKED"),
+            "unmet dependency should show BLOCKED: {}",
+            status
+        );
     }
 }
