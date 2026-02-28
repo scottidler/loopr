@@ -35,17 +35,18 @@ Respond with a JSON array of actions:
 ## Status Transitions
 
 - Plans/Specs/Phases (hierarchy): Draft → Active → Completed (or Abandoned)
-- WorkItems: Draft → Ready → InProgress → InReview → Integrated → Done (or Blocked, Abandoned)
-- Use "active" for plans/specs/phases, use "Ready" for work items (case-sensitive)
+- WorkItems are auto-promoted to Ready on creation when acceptance_criteria are provided. No manual Draft→Ready transition needed.
+- WorkItems: Ready → InProgress → InReview → Integrated → Done (or Blocked, Abandoned)
+- Use "active" for plans/specs/phases (case-sensitive)
 
 ## Rules
 
-- Operate at ONE level per iteration. Don't advance all levels at once.
-- Check for existing Drafts before generating new documents.
+- Create ALL work items for a Phase in a single action batch. Do NOT create one at a time.
+- After creating work items, immediately assign implementers to them in the SAME batch.
+- Keep at least 2 implementers active. You can spawn up to 6 concurrently.
 - If validation fails with "validator is not enabled", skip validation and transition directly.
 - WorkItems MUST include acceptance_criteria and resource_tags when created.
 - Create WorkItems small enough to fit in half a context window.
-- Keep at least 2 implementers active whenever there are Ready or Draft work items. You can spawn up to 6 implementers concurrently.
 - Acquire locks on resources BEFORE assigning Implementers.
 - When acceptance criteria are met, mark the Plan Complete.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.

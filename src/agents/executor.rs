@@ -623,20 +623,6 @@ pub async fn execute_action(
             description,
             order,
         } => {
-            // Gap #27: Draft-awareness guard for phases under same spec
-            let list_resp = bridge.request("phase.list", serde_json::json!({}));
-            if let Some(phases) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
-                let has_draft = phases.iter().any(|p| {
-                    p.get("spec_id").and_then(|v| v.as_str()) == Some(spec_id)
-                        && p.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase())
-                            == Some("draft".to_string())
-                });
-                if has_draft {
-                    return Ok(ActionResult::ActionError(
-                        "A Draft Phase already exists under this Spec. Iterate on the existing Draft.".into(),
-                    ));
-                }
-            }
             let resp = bridge.request(
                 "phase.create",
                 serde_json::json!({
@@ -670,20 +656,6 @@ pub async fn execute_action(
             resource_tags,
             acceptance_criteria,
         } => {
-            // Gap #27: Draft-awareness guard for work items under same phase
-            let list_resp = bridge.request("work_item.list", serde_json::json!({}));
-            if let Some(items) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
-                let has_draft = items.iter().any(|w| {
-                    w.get("phase_id").and_then(|v| v.as_str()) == Some(phase_id)
-                        && w.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase())
-                            == Some("draft".to_string())
-                });
-                if has_draft {
-                    return Ok(ActionResult::ActionError(
-                        "A Draft WorkItem already exists under this Phase. Iterate on the existing Draft.".into(),
-                    ));
-                }
-            }
             let resp = bridge.request(
                 "work_item.create",
                 serde_json::json!({
@@ -1130,11 +1102,12 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
 
-        // Transition Draft → Ready via execute_action
+        // Transition Ready → Abandoned via execute_action (auto-promoted from Draft since acceptance_criteria present)
+        // Using Abandoned since InProgress requires assignee which Transition action doesn't support
         let action = AgentAction::Transition {
             collection: "work_item".to_string(),
             id: wi_id.clone(),
-            target_status: "Ready".to_string(),
+            target_status: "Abandoned".to_string(),
             role: Some("coordinator".to_string()),
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
@@ -1162,7 +1135,7 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
 
-        // Work item starts as Draft — AssignAgent should auto-transition to InProgress
+        // Work item starts as Ready (auto-promoted from Draft) — AssignAgent should auto-transition to InProgress
         let action = AgentAction::AssignAgent {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
@@ -2194,10 +2167,12 @@ mod tests {
         let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
 
         // Transition without explicit role — should infer from agent type
+        // WI is already Ready (auto-promoted from Draft since acceptance_criteria present)
+        // Using Abandoned since InProgress requires assignee which Transition action doesn't support
         let action = AgentAction::Transition {
             collection: "work_item".to_string(),
             id: wi_id,
-            target_status: "Ready".to_string(),
+            target_status: "Abandoned".to_string(),
             role: None, // Should infer "coordinator" from AgentType::Coordinator
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)

@@ -1548,15 +1548,8 @@ mod tests {
             );
             let wi_id = wi["id"].as_str().unwrap().to_string();
 
-            // Draft -> Ready -> InProgress -> InReview -> Integrated -> Done
-            dispatch_ok(
-                &s,
-                &tx,
-                &wm,
-                &ic,
-                "work_item.transition",
-                json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
-            );
+            // Ready -> InProgress -> InReview -> Integrated -> Done
+            // (auto-promoted from Draft to Ready since acceptance_criteria present)
             dispatch_ok(
                 &s,
                 &tx,

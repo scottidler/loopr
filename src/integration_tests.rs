@@ -224,17 +224,9 @@ mod tests {
             json!({"phase_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
-        assert_eq!(wi["status"], "Draft");
+        assert_eq!(wi["status"], "Ready");
 
-        // Transition WorkItem: Draft → Ready → InProgress (both require Coordinator)
-        dispatch_ok(
-            &stores,
-            &tx,
-            &wm,
-            &ic,
-            "work_item.transition",
-            json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
-        );
+        // Transition WorkItem: Ready → InProgress (auto-promoted from Draft since acceptance_criteria present)
         dispatch_ok(
             &stores,
             &tx,
@@ -831,7 +823,7 @@ mod tests {
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
-        // Invalid: Draft → Done (must go through Ready → InProgress first)
+        // Invalid: Ready → Done (must go through InProgress first)
         let code = dispatch_err(
             &stores,
             &tx,
@@ -842,9 +834,9 @@ mod tests {
         );
         assert_ne!(code, 0, "should reject invalid transition");
 
-        // Verify state unchanged
+        // Verify state unchanged (auto-promoted to Ready since acceptance_criteria present)
         let wis = stores.work_items.read().unwrap();
-        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Draft);
+        assert_eq!(wis[&wi_id].status, crate::domain::work_item::WorkItemStatus::Ready);
     }
 
     // ========================================================================
@@ -1200,15 +1192,7 @@ mod tests {
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
-        // 3. Coordinator assigns, implementer works on it
-        dispatch_ok(
-            &stores,
-            &tx,
-            &wm,
-            &ic,
-            "work_item.transition",
-            json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
-        );
+        // 3. Coordinator assigns, implementer works on it (already Ready via auto-promotion)
         dispatch_ok(
             &stores,
             &tx,
@@ -1573,15 +1557,7 @@ mod tests {
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
-        // Transition WI to InProgress so bundle can be proposed
-        dispatch_ok(
-            &stores,
-            &tx,
-            &wm,
-            &ic,
-            "work_item.transition",
-            json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
-        );
+        // Transition WI to InProgress so bundle can be proposed (already Ready via auto-promotion)
         dispatch_ok(
             &stores,
             &tx,
@@ -1790,15 +1766,7 @@ mod tests {
         );
         let wi_id = wi["id"].as_str().unwrap().to_string();
 
-        // 6. Assign WorkItem (transition to InProgress)
-        dispatch_ok(
-            &stores,
-            &tx,
-            &wm,
-            &ic,
-            "work_item.transition",
-            json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
-        );
+        // 6. Assign WorkItem (transition to InProgress; already Ready via auto-promotion)
         dispatch_ok(
             &stores,
             &tx,
@@ -2020,15 +1988,8 @@ mod tests {
         let released = dispatch_ok(&stores, &tx, &wm, &ic, "lock.get", json!({"id": lock_id}));
         assert_eq!(released["status"], "released");
 
-        // --- 5. Full work item lifecycle: Draft → Ready → InProgress → InReview → Integrated → Done ---
-        dispatch_ok(
-            &stores,
-            &tx,
-            &wm,
-            &ic,
-            "work_item.transition",
-            json!({"id": wi1_id, "target_status": "Ready", "role": "coordinator"}),
-        );
+        // --- 5. Full work item lifecycle: Ready → InProgress → InReview → Integrated → Done ---
+        // (auto-promoted from Draft to Ready since acceptance_criteria present)
         dispatch_ok(
             &stores,
             &tx,
@@ -2076,15 +2037,7 @@ mod tests {
         }
 
         // --- 6. Bundle full lifecycle: Proposed → Triaged → Reviewed → Accepted → Integrating → Merged ---
-        // First get wi2 to InReview so we can create a bundle
-        dispatch_ok(
-            &stores,
-            &tx,
-            &wm,
-            &ic,
-            "work_item.transition",
-            json!({"id": wi2_id, "target_status": "Ready", "role": "coordinator"}),
-        );
+        // WI2 already Ready via auto-promotion; transition to InProgress
         dispatch_ok(
             &stores,
             &tx,
@@ -2349,11 +2302,11 @@ mod tests {
         let goal = CoordinatorGoal::new("Build a hello world project".to_string());
         stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
 
-        // Verify work item starts as Draft
+        // Verify work item starts as Ready (auto-promoted from Draft since acceptance_criteria present)
         let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work_item.get", json!({"id": wi_id}));
-        assert_eq!(wi_resp["status"].as_str().unwrap(), "Draft");
+        assert_eq!(wi_resp["status"].as_str().unwrap(), "Ready");
 
-        // Execute AssignAgent — should auto-transition Draft→Ready→InProgress
+        // Execute AssignAgent — should auto-transition Ready→InProgress
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, stores.config.clone());
 

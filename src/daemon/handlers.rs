@@ -1134,22 +1134,29 @@ fn handle_work_item_create(
 
     let mut work_item = WorkItem::new(phase_id, title, description);
     work_item.resource_tags = resource_tags;
-    work_item.acceptance_criteria = acceptance_criteria;
+    work_item.acceptance_criteria = acceptance_criteria.clone();
     work_item.dependencies = dependencies;
-
-    let wi_json = match serde_json::to_value(&work_item) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
 
     let id = work_item.id.clone();
 
-    // Persist to TaskStore if available
+    // Auto-promote to Ready if acceptance_criteria are provided.
+    // Draft→Ready is always valid for Coordinator role.
+    if !acceptance_criteria.is_empty() {
+        work_item.status = WorkItemStatus::Ready;
+        work_item.updated_at = crate::id::now_millis();
+    }
+
+    // Persist to TaskStore
     if let Some(store) = &stores.store
         && let Err(e) = store.lock().unwrap().create(work_item.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
+
+    let wi_json = match serde_json::to_value(&work_item) {
+        Ok(v) => v,
+        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    };
 
     stores.work_items.write().unwrap().insert(id.clone(), work_item);
     let _ = event_tx.send(DaemonEvent::record_created("work_item", &id));
@@ -5363,7 +5370,8 @@ mod tests {
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Implement auth");
         assert_eq!(result["phase_id"], phase_id);
-        assert_eq!(result["status"], "Draft");
+        // Auto-promoted to Ready because acceptance_criteria were provided
+        assert_eq!(result["status"], "Ready");
         assert_eq!(stores.work_items.read().unwrap().len(), 1);
     }
 
@@ -5688,6 +5696,7 @@ mod tests {
         let _ = rx.try_recv();
         let _ = rx.try_recv();
 
+        // With acceptance_criteria, WI is auto-promoted to Ready on creation
         let create_resp = dispatch(
             &stores,
             &tx,
@@ -5702,24 +5711,26 @@ mod tests {
         let _ = rx.try_recv(); // consume work_item create event
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
+        // Already Ready — transition to InProgress (with assignee, required by precondition)
         let req = DaemonRequest::new(
             31,
             "work_item.transition",
             json!({
                 "id": wi_id,
-                "target_status": "Ready",
-                "role": "coordinator"
+                "target_status": "InProgress",
+                "role": "coordinator",
+                "assignee": "agent-1"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
-        assert_eq!(resp.result.unwrap()["status"], "Ready");
+        assert_eq!(resp.result.unwrap()["status"], "InProgress");
 
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "transition.completed");
         assert_eq!(event.data["collection"], "work_item");
-        assert_eq!(event.data["from"], "Draft");
-        assert_eq!(event.data["to"], "Ready");
+        assert_eq!(event.data["from"], "Ready");
+        assert_eq!(event.data["to"], "InProgress");
     }
 
     #[test]
@@ -5742,13 +5753,13 @@ mod tests {
         );
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        // Try Draft → InProgress (invalid: must go through Ready)
+        // Try Ready → Done (invalid: must go through InProgress, InReview, Integrated)
         let req = DaemonRequest::new(
             31,
             "work_item.transition",
             json!({
                 "id": wi_id,
-                "target_status": "InProgress",
+                "target_status": "Done",
                 "role": "coordinator"
             , "assignee": "agent-1"}),
         );
@@ -5777,13 +5788,13 @@ mod tests {
         );
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        // Implementer cannot transition Draft → Ready
+        // Implementer cannot transition Ready → InProgress (only Coordinator can)
         let req = DaemonRequest::new(
             31,
             "work_item.transition",
             json!({
                 "id": wi_id,
-                "target_status": "Ready",
+                "target_status": "InProgress",
                 "role": "implementer"
             }),
         );
@@ -5832,26 +5843,27 @@ mod tests {
         assert!(!create_resp.is_error());
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        // Transition Draft → Ready
+        // Already Ready via auto-promotion (acceptance_criteria present) — transition to InProgress
         let req = DaemonRequest::new(
             3,
             "work_item.transition",
             json!({
                 "id": wi_id,
-                "target_status": "Ready",
-                "role": "coordinator"
+                "target_status": "InProgress",
+                "role": "coordinator",
+                "assignee": "agent-1"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
-        assert_eq!(resp.result.unwrap()["status"], "Ready");
+        assert_eq!(resp.result.unwrap()["status"], "InProgress");
 
         // Verify TaskStore has the updated status
         let store = stores.store.as_ref().unwrap().lock().unwrap();
         let retrieved: Option<WorkItem> = store.get(&wi_id).unwrap();
         assert!(retrieved.is_some());
         let wi = retrieved.unwrap();
-        assert_eq!(wi.status, WorkItemStatus::Ready);
+        assert_eq!(wi.status, WorkItemStatus::InProgress);
     }
 
     // --- bundle handlers ---

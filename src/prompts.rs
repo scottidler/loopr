@@ -244,7 +244,7 @@ mod tests {
             assert!(p.contains(action), "coordinator.pmt missing action: {}", action);
         }
         // Key rules
-        assert!(p.contains("Operate at ONE level per iteration"));
+        assert!(p.contains("Create ALL work items for a Phase in a single action batch"));
         assert!(p.contains("ALWAYS respond with ONLY a JSON array"));
     }
 
