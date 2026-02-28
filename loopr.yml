@@ -8,5 +8,9 @@ project:
 validator:
   enabled: false
 
+integrator:
+  enabled: true
+  interval_secs: 10
+
 agents:
   enabled: true
