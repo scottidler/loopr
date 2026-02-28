@@ -213,6 +213,7 @@ pub struct ContextBuilder<'a> {
     phase_id: Option<String>,
     // Optional sections
     bundle_info: Option<(String, String, Vec<String>)>, // (id, claims, touched_paths)
+    bundle_diff: Option<String>,
     tools: Vec<String>,
     previous_summary: Option<String>,
     staleness_note: Option<String>,
@@ -246,6 +247,7 @@ impl<'a> ContextBuilder<'a> {
             work_item_id: None,
             phase_id: None,
             bundle_info: None,
+            bundle_diff: None,
             tools: Vec::new(),
             previous_summary: None,
             staleness_note: None,
@@ -332,6 +334,25 @@ impl<'a> ContextBuilder<'a> {
         };
 
         self.bundle_info = Some((bid, claims, touched_paths));
+
+        // Load the git diff from the worktree branch so the reviewer can see actual code
+        let diff = {
+            let branch = format!("agent/{}", work_item_id);
+            let repo_path = &self.stores.config.project.repo_path;
+            let output = std::process::Command::new("git")
+                .args(["diff", "HEAD", &branch, "--stat", "-p"])
+                .current_dir(repo_path)
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {
+                    let d = String::from_utf8_lossy(&o.stdout).to_string();
+                    if d.trim().is_empty() { None } else { Some(d) }
+                }
+                _ => None,
+            }
+        };
+        self.bundle_diff = diff;
+
         self.load_work_item_hierarchy(&work_item_id)
     }
 
@@ -448,6 +469,19 @@ impl<'a> ContextBuilder<'a> {
                 }
             }
             bundle_sec.push('\n');
+
+            // Include the actual code diff so the reviewer can see the changes
+            if let Some(ref diff) = self.bundle_diff {
+                bundle_sec.push_str("**Code Changes:**\n```diff\n");
+                // Truncate if too large
+                if diff.len() > 8000 {
+                    bundle_sec.push_str(&diff[..8000]);
+                    bundle_sec.push_str("\n... [truncated]\n");
+                } else {
+                    bundle_sec.push_str(diff);
+                }
+                bundle_sec.push_str("```\n\n");
+            }
 
             if estimate_tokens(&bundle_sec) > self.budget.work_target {
                 warn!("Bundle section exceeds token budget, truncating");
