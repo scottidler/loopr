@@ -126,6 +126,12 @@ pub struct App {
     pub pending_ipc: Option<IpcAction>,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
