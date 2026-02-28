@@ -450,4 +450,153 @@ mod tests {
         }
         assert_eq!(accumulated, r#"[{"action": "done", "summary": "All complete"}]"#);
     }
+
+    // --- Error path tests ---
+
+    #[test]
+    fn test_parse_sse_malformed_json() {
+        // Partial/broken JSON should return None (graceful handling)
+        let line = "data: {broken";
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_missing_delta_field() {
+        // Valid JSON but missing delta.text
+        let line = r#"data: {"type":"content_block_delta","index":0}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_missing_type_field() {
+        // Valid JSON but no "type" field
+        let line = r#"data: {"index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_wrong_delta_type() {
+        // type is content_block_delta but delta type is not text_delta
+        let line =
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_emit_chunk_no_subscribers() {
+        // No receiver subscribed — emit_chunk should not panic
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        // Drop the only receiver
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string());
+
+        // This should not panic even with no subscribers
+        client.emit_chunk("Hello", false);
+        client.emit_chunk("", true);
+    }
+
+    #[test]
+    fn test_emit_status_no_subscribers() {
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string());
+
+        // Should not panic
+        client.emit_status(AgentStatus::Running);
+        client.emit_status(AgentStatus::WaitingForLlm);
+    }
+
+    #[tokio::test]
+    async fn test_call_streaming_network_error() {
+        let mut config = AgentRoleConfig::default_implementer();
+        config.model = "test-model".to_string();
+        let (event_tx, _) = broadcast::channel(16);
+
+        // Use a non-routable address to trigger network error
+        let client = AgentLlmClient {
+            client: Client::new(),
+            config,
+            api_key: "test-key".to_string(),
+            session_id: "s1".to_string(),
+            event_tx,
+        };
+
+        // Override the URL by calling call_streaming which always uses api.anthropic.com
+        // We can't easily override the URL, but we can test with an invalid key
+        // The call will fail either with network error or auth error
+        let result = client.call_streaming("system", "hello").await;
+        // Should fail (either network or auth error)
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_agent_llm_client_debug() {
+        let config = AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        let client =
+            AgentLlmClient::with_api_key(config, "debug-session".to_string(), event_tx, "secret-key".to_string());
+
+        let debug_str = format!("{:?}", client);
+        assert!(debug_str.contains("debug-session"));
+        // Should NOT contain the API key
+        assert!(!debug_str.contains("secret-key"));
+    }
+
+    #[test]
+    fn test_parse_sse_unicode_text() {
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello \u00e9\u00e8\u00ea"}}"#;
+        let result = parse_sse_text_delta(line);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_parse_sse_large_text_chunk() {
+        // Simulate a large text chunk
+        let large_text = "x".repeat(10000);
+        let line = format!(
+            r#"data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{}"}}}}"#,
+            large_text
+        );
+        let result = parse_sse_text_delta(&line);
+        assert_eq!(result, Some(large_text));
+    }
+
+    #[test]
+    fn test_parse_sse_null_text_field() {
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":null}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_sse_numeric_text_field() {
+        // text is a number, not a string
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":42}}"#;
+        let result = parse_sse_text_delta(line);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_accumulate_sse_with_empty_lines() {
+        // SSE streams have blank lines between events
+        let lines = vec![
+            "",
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"A"}}"#,
+            "",
+            "",
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"B"}}"#,
+            "",
+        ];
+        let mut accumulated = String::new();
+        for line in &lines {
+            if let Some(text) = parse_sse_text_delta(line) {
+                accumulated.push_str(&text);
+            }
+        }
+        assert_eq!(accumulated, "AB");
+    }
 }
