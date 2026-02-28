@@ -56,6 +56,9 @@ pub struct Stores {
     pub agent_handles: StdMutex<HashMap<String, JoinHandle<()>>>,
     /// Per-session ring buffer of agent events for agent.output IPC method.
     pub agent_events: StdRwLock<HashMap<String, VecDeque<AgentEvent>>>,
+    /// Fix #10: Advisory lock for main repo git operations (merge, reset).
+    /// Prevents concurrent Integrator merges from racing.
+    pub git_lock: StdMutex<()>,
 }
 
 impl Stores {
@@ -80,6 +83,7 @@ impl Stores {
             config: Config::default(),
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
+            git_lock: StdMutex::new(()),
         }
     }
 }

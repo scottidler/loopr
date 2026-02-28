@@ -399,6 +399,8 @@ pub fn run_integrator_cycle(
     let repo_path = &stores.config.project.repo_path;
     let is_git_repo = repo_path.join(".git").exists();
     if !branches.is_empty() && is_git_repo {
+        // Fix #10: Acquire advisory lock for main repo git operations
+        let _git_guard = stores.git_lock.lock().unwrap();
         match merge_bundle_branches(repo_path, &branches) {
             Ok(sha) => {
                 let mut ticks = stores.ticks.write().unwrap();

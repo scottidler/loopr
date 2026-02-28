@@ -659,6 +659,26 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
         }
     }
 
+    // Fix #9: Collect WI IDs (owned) before dropping work_items lock
+    let wi_ids: std::collections::HashSet<String> = phase_wis.iter().map(|w| w.id.clone()).collect();
+    drop(work_items);
+
+    // Surface phase-specific failure Learnings
+    {
+        let learnings = stores.learnings.read().unwrap();
+        let phase_failures: Vec<_> = learnings
+            .values()
+            .filter(|l| l.scope == crate::domain::learning::LearningScope::Phase && wi_ids.contains(&l.source_id))
+            .collect();
+
+        if !phase_failures.is_empty() {
+            summary.push_str("\nRecent failure learnings:\n");
+            for learning in phase_failures.iter().take(5) {
+                summary.push_str(&format!("  - {}\n", learning.content));
+            }
+        }
+    }
+
     summary
 }
 
@@ -907,6 +927,42 @@ async fn run_coordinator_iteration(
         let resolved_action = resolve_batch_dependencies(action, &batch_created_ids);
         let action_ref = resolved_action.as_ref().unwrap_or(action);
 
+        // Fix #4: Enforce max_work_item_retries for implementer assignments
+        if let AgentAction::AssignAgent { agent_type, target_id } = action_ref
+            && agent_type == "implementer"
+        {
+            let attempts = coord_state.increment_attempts(target_id);
+            let max_retries = config.max_work_item_retries;
+            if attempts > max_retries {
+                warn!(
+                    "WorkItem {} exceeded max retries ({}/{}), transitioning to Abandoned",
+                    target_id, attempts, max_retries
+                );
+                // Transition to Abandoned via bridge
+                let _ = bridge.request(
+                    "work_item.transition",
+                    serde_json::json!({
+                        "id": target_id,
+                        "target_status": "Abandoned",
+                        "role": "coordinator"
+                    }),
+                );
+                // Create a Learning about the retry exhaustion
+                let _ = bridge.request(
+                    "learning.create",
+                    serde_json::json!({
+                        "content": format!("WorkItem '{}' abandoned after {} failed attempts", target_id, attempts),
+                        "scope": "Phase",
+                        "source_id": target_id,
+                    }),
+                );
+                let summary = format!("WorkItem {} abandoned (max retries exceeded)", target_id);
+                let _ = event_tx.send(DaemonEvent::agent_action_completed(&session.id, &summary));
+                last_summary = summary;
+                continue;
+            }
+        }
+
         let result =
             match execute_action(action_ref, tool_runner, bridge, repo_root, None, AgentType::Coordinator).await {
                 Ok(r) => r,
@@ -915,6 +971,14 @@ async fn run_coordinator_iteration(
                     ActionResult::ActionError(e.to_string())
                 }
             };
+
+        // Fix #4: Don't count DependencyNotMet as an actual attempt
+        if let ActionResult::DependencyNotMet { ref work_item_id, .. } = result {
+            // Undo the increment — this wasn't a real attempt
+            if let Some(count) = coord_state.work_item_attempts.get_mut(work_item_id) {
+                *count = count.saturating_sub(1);
+            }
+        }
 
         // Track created WorkItem IDs for batch dependency resolution
         if let ActionResult::RecordCreated { ref collection, ref id } = result
@@ -2913,6 +2977,82 @@ mod tests {
         assert!(
             status.contains("BLOCKED"),
             "unmet dependency should show BLOCKED: {}",
+            status
+        );
+    }
+
+    // --- Fix #4: retry enforcement tests ---
+
+    #[test]
+    fn test_increment_attempts_tracks_retries() {
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        assert_eq!(coord_state.attempts("wi-1"), 0);
+        assert_eq!(coord_state.increment_attempts("wi-1"), 1);
+        assert_eq!(coord_state.increment_attempts("wi-1"), 2);
+        assert_eq!(coord_state.increment_attempts("wi-1"), 3);
+        assert_eq!(coord_state.attempts("wi-1"), 3);
+    }
+
+    #[test]
+    fn test_decrement_attempts_on_dependency_not_met() {
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        // Simulate: increment, then undo (DependencyNotMet)
+        coord_state.increment_attempts("wi-1");
+        assert_eq!(coord_state.attempts("wi-1"), 1);
+
+        // Undo — same as the production code does
+        if let Some(count) = coord_state.work_item_attempts.get_mut("wi-1") {
+            *count = count.saturating_sub(1);
+        }
+        assert_eq!(coord_state.attempts("wi-1"), 0);
+    }
+
+    // --- Fix #9: failure learnings in build_phase_status ---
+
+    #[test]
+    fn test_build_phase_status_includes_failure_learnings() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-learnings-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi1 = WorkItem::new(phase_id.clone(), "Failing WI".into(), "d".into());
+        wi1.status = WorkItemStatus::InProgress;
+        let wi1_id = wi1.id.clone();
+        stores.work_items.write().unwrap().insert(wi1_id.clone(), wi1);
+
+        // Insert a failure Learning scoped to this WI's phase
+        let learning = crate::domain::learning::Learning {
+            id: crate::id::generate_id(),
+            source_id: wi1_id,
+            scope: crate::domain::learning::LearningScope::Phase,
+            content: "Build failed due to missing dependency".to_string(),
+            reinforcements: 0,
+            contradictions: 0,
+            promoted: false,
+            created_at: crate::id::now_millis(),
+            updated_at: crate::id::now_millis(),
+            applicable_roles: None,
+            resource_tags: vec![],
+            confidence: 0.5,
+        };
+        stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.current_phase_id = Some(phase_id);
+
+        let status = build_phase_status(&stores, &coord_state);
+        assert!(
+            status.contains("failure learnings"),
+            "should include failure learnings section: {}",
+            status
+        );
+        assert!(
+            status.contains("missing dependency"),
+            "should include learning content: {}",
             status
         );
     }
