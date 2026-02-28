@@ -209,4 +209,339 @@ mod tests {
 
         assert_eq!(load("coordinator.pmt", "default value"), "default value");
     }
+
+    // =========================================================================
+    // Agent prompt content identity tests
+    //
+    // These verify the .pmt files contain the same key content that was
+    // previously hardcoded in each agent's const SYSTEM_PROMPT.
+    // =========================================================================
+
+    #[test]
+    fn test_coordinator_pmt_identity() {
+        init_defaults();
+        let p = &store().coordinator;
+        // Opening identity line
+        assert!(p.starts_with("You are the Coordinator agent in the Loopr development orchestrator."));
+        // All 15 action types
+        for action in [
+            "create_plan",
+            "create_spec",
+            "create_phase",
+            "create_work_item",
+            "assign_agent",
+            "spawn_researcher",
+            "acquire_lock",
+            "release_lock",
+            "validate_document",
+            "triage_bundle",
+            "accept_bundle",
+            "transition",
+            "create_learning",
+            "need_help",
+            "done",
+        ] {
+            assert!(p.contains(action), "coordinator.pmt missing action: {}", action);
+        }
+        // Key rules
+        assert!(p.contains("Operate at ONE level per iteration"));
+        assert!(p.contains("ALWAYS respond with ONLY a JSON array"));
+    }
+
+    #[test]
+    fn test_implementer_pmt_identity() {
+        init_defaults();
+        let p = &store().implementer;
+        assert!(p.starts_with("You are an Implementer agent in the Loopr development orchestrator."));
+        for action in [
+            "write_file",
+            "read_file",
+            "run_tool",
+            "commit",
+            "propose_bundle",
+            "create_learning",
+            "done",
+            "need_help",
+        ] {
+            assert!(p.contains(action), "implementer.pmt missing action: {}", action);
+        }
+        assert!(p.contains("Work incrementally"));
+        assert!(p.contains("clippy"));
+    }
+
+    #[test]
+    fn test_reviewer_pmt_identity() {
+        init_defaults();
+        let p = &store().reviewer;
+        assert!(p.starts_with("You are a Reviewer agent in the Loopr development orchestrator."));
+        for criterion in ["Correctness", "Quality", "Tests", "Scope", "Safety"] {
+            assert!(p.contains(criterion), "reviewer.pmt missing criterion: {}", criterion);
+        }
+        assert!(p.contains("approve"));
+        assert!(p.contains("request_changes"));
+        assert!(p.contains("reject"));
+    }
+
+    #[test]
+    fn test_researcher_pmt_identity() {
+        init_defaults();
+        let p = &store().researcher;
+        assert!(p.starts_with("You are a Researcher agent in the Loopr development orchestrator."));
+        for action in [
+            "search_code",
+            "search_files",
+            "read_file",
+            "list_directory",
+            "create_learning",
+            "done",
+            "need_help",
+        ] {
+            assert!(p.contains(action), "researcher.pmt missing action: {}", action);
+        }
+        assert!(p.contains("read-only"));
+        assert!(
+            p.contains("{query}"),
+            "researcher.pmt must retain {{query}} placeholder"
+        );
+    }
+
+    // =========================================================================
+    // Validator output equivalence tests
+    //
+    // The highest-risk migration: format!() → .replace(). These verify the
+    // assembled output matches what the old format!() code produced.
+    // =========================================================================
+
+    #[test]
+    fn test_validator_plan_output_equivalence() {
+        init_defaults();
+        let title = "Implement Auth";
+        let desc = "Add JWT-based authentication to the API";
+        let criteria = "All endpoints require valid token; tests pass";
+
+        let output = crate::validator::prompts::plan_prompt(title, desc, criteria);
+
+        // Verify structure matches old format! output
+        assert!(output.contains(&format!("Title: {}", title)));
+        assert!(output.contains(desc));
+        assert!(output.contains(&format!("Acceptance Criteria:\n{}", criteria)));
+        // Schema was inlined by the old RESPONSE_SCHEMA const
+        assert!(output.contains("\"verdict\": \"pass | fail | warn\""));
+        assert!(output.contains("\"severity\": \"error | warning | info\""));
+        // No residual placeholders
+        assert!(!output.contains("{title}"));
+        assert!(!output.contains("{description}"));
+        assert!(!output.contains("{acceptance_criteria}"));
+        assert!(!output.contains("{schema}"));
+    }
+
+    #[test]
+    fn test_validator_spec_output_equivalence() {
+        init_defaults();
+        let title = "JWT Auth Spec";
+        let desc = "Use RS256 tokens with 15-minute expiry";
+        let plan_title = "Implement Auth";
+
+        let output = crate::validator::prompts::spec_prompt(title, desc, plan_title);
+
+        assert!(output.contains(&format!("Title: {}", title)));
+        assert!(output.contains(desc));
+        assert!(output.contains(&format!("Parent Plan: {}", plan_title)));
+        assert!(output.contains("\"verdict\": \"pass | fail | warn\""));
+        // No residual placeholders
+        assert!(!output.contains("{title}"));
+        assert!(!output.contains("{description}"));
+        assert!(!output.contains("{plan_title}"));
+        assert!(!output.contains("{schema}"));
+    }
+
+    #[test]
+    fn test_validator_phase_output_equivalence() {
+        init_defaults();
+        let title = "Token Validation";
+        let desc = "Implement middleware for JWT validation";
+        let order: u32 = 2;
+        let spec_title = "JWT Auth Spec";
+
+        let output = crate::validator::prompts::phase_prompt(title, desc, order, spec_title);
+
+        assert!(output.contains(&format!("Title: {}", title)));
+        assert!(output.contains(desc));
+        assert!(output.contains(&format!("Order: {}", order)));
+        assert!(output.contains(&format!("Parent Spec: {}", spec_title)));
+        assert!(output.contains("\"verdict\": \"pass | fail | warn\""));
+        // No residual placeholders
+        assert!(!output.contains("{title}"));
+        assert!(!output.contains("{description}"));
+        assert!(!output.contains("{order}"));
+        assert!(!output.contains("{spec_title}"));
+        assert!(!output.contains("{schema}"));
+    }
+
+    #[test]
+    fn test_validator_schema_pmt_is_valid_json_structure() {
+        init_defaults();
+        let schema = &store().validator_schema;
+        // The schema template itself isn't valid JSON (contains "pass | fail"),
+        // but it must contain the structural keys
+        assert!(schema.contains("\"verdict\""));
+        assert!(schema.contains("\"issues\""));
+        assert!(schema.contains("\"severity\""));
+        assert!(schema.contains("\"category\""));
+        assert!(schema.contains("\"message\""));
+        assert!(schema.contains("\"summary\""));
+    }
+
+    // =========================================================================
+    // Researcher .replace("{query}") correctness
+    // =========================================================================
+
+    #[test]
+    fn test_researcher_query_replacement_no_residual() {
+        init_defaults();
+        let prompt = store()
+            .researcher
+            .replace("{query}", "Find all error handling patterns");
+        assert!(prompt.contains("Find all error handling patterns"));
+        assert!(!prompt.contains("{query}"));
+    }
+
+    #[test]
+    fn test_researcher_query_with_special_chars() {
+        init_defaults();
+        let query = r#"Find patterns matching fn\s+handle_ in {src/}"#;
+        let prompt = store().researcher.replace("{query}", query);
+        assert!(prompt.contains(query));
+        assert!(!prompt.contains("{query}"));
+    }
+
+    // =========================================================================
+    // Generation prompt content tests
+    //
+    // Verify the .pmt instruction text appears correctly in assembled prompts.
+    // =========================================================================
+
+    #[test]
+    fn test_generation_plan_pmt_content() {
+        init_defaults();
+        let p = &store().generation_plan;
+        assert!(p.contains("Create a Plan with:"));
+        assert!(p.contains("bounded title"));
+        assert!(p.contains("acceptance criteria"));
+        assert!(p.contains("create_plan"));
+    }
+
+    #[test]
+    fn test_generation_spec_pmt_content() {
+        init_defaults();
+        let p = &store().generation_spec;
+        assert!(p.contains("Create a Spec for this Plan with:"));
+        assert!(p.contains("technical approach"));
+        assert!(p.contains("create_spec"));
+        assert!(p.contains("plan_id"));
+    }
+
+    #[test]
+    fn test_generation_phase_pmt_content() {
+        init_defaults();
+        let p = &store().generation_phase;
+        assert!(p.contains("Create ordered implementation Phases"));
+        assert!(p.contains("deliverables"));
+        assert!(p.contains("create_phase"));
+        assert!(p.contains("spec_id"));
+    }
+
+    #[test]
+    fn test_generation_workitem_pmt_content() {
+        init_defaults();
+        let p = &store().generation_workitem;
+        assert!(p.contains("Create WorkItems for this Phase"));
+        assert!(p.contains("resource_tags"));
+        assert!(p.contains("create_work_item"));
+        assert!(p.contains("phase_id"));
+    }
+
+    // =========================================================================
+    // Generation prompt integration — verify .pmt content lands in assembled msg
+    // =========================================================================
+
+    #[test]
+    fn test_generation_plan_prompt_contains_pmt_instructions() {
+        init_defaults();
+        let prompt = crate::agents::generation::build_plan_prompt("Test goal", &[], &[]);
+        let pmt = &store().generation_plan;
+        // The .pmt content should appear in the assembled user_message
+        assert!(
+            prompt.user_message.contains(pmt.trim()),
+            "Plan generation prompt missing .pmt instruction content"
+        );
+    }
+
+    #[test]
+    fn test_generation_spec_prompt_contains_pmt_instructions() {
+        init_defaults();
+        let plan = crate::domain::plan::Plan::new("P".into(), "d".into(), "c".into());
+        let prompt = crate::agents::generation::build_spec_prompt(&plan, &[], &[], &[]);
+        let pmt = &store().generation_spec;
+        assert!(
+            prompt.user_message.contains(pmt.trim()),
+            "Spec generation prompt missing .pmt instruction content"
+        );
+    }
+
+    #[test]
+    fn test_generation_phase_prompt_contains_pmt_instructions() {
+        init_defaults();
+        let spec = crate::domain::spec::Spec::new("p1".into(), "S".into(), "d".into());
+        let prompt = crate::agents::generation::build_phase_prompt(&spec, &[], &[]);
+        let pmt = &store().generation_phase;
+        assert!(
+            prompt.user_message.contains(pmt.trim()),
+            "Phase generation prompt missing .pmt instruction content"
+        );
+    }
+
+    #[test]
+    fn test_generation_workitem_prompt_contains_pmt_instructions() {
+        init_defaults();
+        let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), "d".into(), 1);
+        let prompt = crate::agents::generation::build_work_item_prompt(&phase, &[], &[], &[]);
+        let pmt = &store().generation_workitem;
+        assert!(
+            prompt.user_message.contains(pmt.trim()),
+            "WorkItem generation prompt missing .pmt instruction content"
+        );
+    }
+
+    // =========================================================================
+    // All 12 .pmt files: no accidental empty or whitespace-only content
+    // =========================================================================
+
+    #[test]
+    fn test_all_pmt_files_have_substantial_content() {
+        init_defaults();
+        let s = store();
+        let fields: [(&str, &str); 12] = [
+            ("coordinator", &s.coordinator),
+            ("implementer", &s.implementer),
+            ("reviewer", &s.reviewer),
+            ("researcher", &s.researcher),
+            ("validator_schema", &s.validator_schema),
+            ("validator_plan", &s.validator_plan),
+            ("validator_spec", &s.validator_spec),
+            ("validator_phase", &s.validator_phase),
+            ("generation_plan", &s.generation_plan),
+            ("generation_spec", &s.generation_spec),
+            ("generation_phase", &s.generation_phase),
+            ("generation_workitem", &s.generation_workitem),
+        ];
+        for (name, content) in &fields {
+            assert!(
+                content.trim().len() > 50,
+                "{}.pmt is suspiciously short ({} chars): possibly truncated or empty",
+                name,
+                content.len()
+            );
+        }
+    }
 }
