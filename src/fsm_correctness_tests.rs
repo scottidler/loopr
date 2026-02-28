@@ -912,7 +912,7 @@ mod tests {
                 (TickStatus::Open, TickStatus::Published),
                 (TickStatus::Open, TickStatus::Failed),
                 (TickStatus::Sealing, TickStatus::Published),
-                (TickStatus::Sealing, TickStatus::Failed),
+                // B3: Sealing→Failed is now valid (merge failure path), removed from skip list
             ];
             for (from, to) in &skip_pairs {
                 for role in &ALL_ROLES {

@@ -433,12 +433,37 @@ pub fn run_integrator_cycle(
             }
             Err(e) => {
                 warn!("Integrator: merge failed: {}", e);
-                // Fail the tick
-                let mut ticks = stores.ticks.write().unwrap();
-                if let Some(tick) = ticks.get_mut(&tick_id) {
-                    tick.status = TickStatus::Failed;
-                    tick.validation_log = format!("Merge failed: {}", e);
+                // B3: Transition tick Sealing → Failed via IPC (FSM + events + persistence)
+                let fail_resp = bridge.request(
+                    "tick.transition",
+                    serde_json::json!({
+                        "id": tick_id,
+                        "target_status": "Failed",
+                        "role": "integrator",
+                    }),
+                );
+                if fail_resp.is_error() {
+                    error!("Integrator: failed to fail tick {}: {:?}", tick_id, fail_resp.error);
                 }
+
+                // B2: Transition bundles Integrating → Rejected
+                for bundle_id in &valid_bundle_ids {
+                    let resp = bridge.request(
+                        "bundle.transition",
+                        serde_json::json!({
+                            "id": bundle_id,
+                            "target_status": "Rejected",
+                            "role": "integrator",
+                        }),
+                    );
+                    if resp.is_error() {
+                        warn!(
+                            "Integrator: failed to reject bundle {} after merge failure: {:?}",
+                            bundle_id, resp.error
+                        );
+                    }
+                }
+
                 return Ok(IntegratorCycleResult::ValidationFailed {
                     tick_id,
                     log: format!("Merge failed: {}", e),

@@ -53,6 +53,12 @@ pub fn tick_transitions() -> Vec<TransitionRule<TickStatus>> {
             to: Failed,
             role: Some(Role::Integrator),
         },
+        // B3: Merge failure during Sealing can transition to Failed
+        TransitionRule {
+            from: Sealing,
+            to: Failed,
+            role: Some(Role::Integrator),
+        },
     ]
 }
 
@@ -322,6 +328,20 @@ mod tests {
     fn test_invalid_validating_to_sealing() {
         let rules = tick_transitions();
         assert!(validate_transition(TickStatus::Validating, TickStatus::Sealing, Role::Integrator, &rules).is_err());
+    }
+
+    // --- B3: Sealing → Failed transition (merge failure) ---
+
+    #[test]
+    fn test_valid_sealing_to_failed() {
+        let rules = tick_transitions();
+        assert!(validate_transition(TickStatus::Sealing, TickStatus::Failed, Role::Integrator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_sealing_to_failed_wrong_role() {
+        let rules = tick_transitions();
+        assert!(validate_transition(TickStatus::Sealing, TickStatus::Failed, Role::Coordinator, &rules).is_err());
     }
 
     // --- Record trait tests ---

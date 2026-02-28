@@ -1004,11 +1004,29 @@ async fn run_coordinator_iteration(
                 }
             };
 
-        // Fix #4: Don't count DependencyNotMet as an actual attempt
-        if let ActionResult::DependencyNotMet { ref work_item_id, .. } = result {
-            // Undo the increment — this wasn't a real attempt
-            if let Some(count) = coord_state.work_item_attempts.get_mut(work_item_id) {
-                *count = count.saturating_sub(1);
+        // B4: Only count successful AgentSpawned as actual attempts.
+        // DependencyNotMet and ActionError/other non-spawn results should not burn retry slots.
+        if let AgentAction::AssignAgent {
+            target_id,
+            agent_type: at,
+        } = action_ref
+            && at == "implementer"
+        {
+            match &result {
+                ActionResult::AgentSpawned { .. } => {
+                    // Successful spawn — attempt counts (already incremented above)
+                }
+                ActionResult::DependencyNotMet { work_item_id, .. } => {
+                    if let Some(count) = coord_state.work_item_attempts.get_mut(work_item_id) {
+                        *count = count.saturating_sub(1);
+                    }
+                }
+                _ => {
+                    // Action failed before agent spawned — don't count
+                    if let Some(count) = coord_state.work_item_attempts.get_mut(target_id) {
+                        *count = count.saturating_sub(1);
+                    }
+                }
             }
         }
 
