@@ -115,29 +115,36 @@ pub fn dispatch(
         "plan.get" => handle_plan_get(stores, req),
         "plan.list" => handle_plan_list(stores, req),
         "plan.transition" => handle_plan_transition(stores, event_tx, req),
+        "plan.update" => handle_plan_update(stores, event_tx, req),
         "spec.create" => handle_spec_create(stores, event_tx, req),
         "spec.get" => handle_spec_get(stores, req),
         "spec.list" => handle_spec_list(stores, req),
         "spec.transition" => handle_spec_transition(stores, event_tx, req),
+        "spec.update" => handle_spec_update(stores, event_tx, req),
         "phase.create" => handle_phase_create(stores, event_tx, req),
         "phase.get" => handle_phase_get(stores, req),
         "phase.list" => handle_phase_list(stores, req),
         "phase.transition" => handle_phase_transition(stores, event_tx, req),
+        "phase.update" => handle_phase_update(stores, event_tx, req),
         "work_item.create" => handle_work_item_create(stores, event_tx, req),
         "work_item.get" => handle_work_item_get(stores, req),
         "work_item.list" => handle_work_item_list(stores, req),
         "work_item.transition" => handle_work_item_transition(stores, event_tx, req),
+        "work_item.update" => handle_work_item_update(stores, event_tx, req),
         "bundle.create" => handle_bundle_create(stores, event_tx, req),
         "bundle.get" => handle_bundle_get(stores, req),
         "bundle.list" => handle_bundle_list(stores, req),
         "bundle.transition" => handle_bundle_transition(stores, event_tx, req),
+        "bundle.update" => handle_bundle_update(stores, event_tx, req),
         "tick.create" => handle_tick_create(stores, event_tx, req),
         "tick.get" => handle_tick_get(stores, req),
         "tick.list" => handle_tick_list(stores, req),
         "tick.transition" => handle_tick_transition(stores, event_tx, req),
+        "tick.update" => handle_tick_update(stores, event_tx, req),
         "learning.create" => handle_learning_create(stores, event_tx, req),
         "learning.get" => handle_learning_get(stores, req),
         "learning.list" => handle_learning_list(stores, req),
+        "learning.update" => handle_learning_update(stores, event_tx, req),
         "learning.reinforce" => handle_learning_reinforce(stores, event_tx, req),
         "learning.contradict" => handle_learning_contradict(stores, event_tx, req),
         "learning.promote" => handle_learning_promote(stores, event_tx, req),
@@ -3295,6 +3302,305 @@ fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
         Ok(v) => DaemonResponse::ok(req.id, v),
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
+}
+
+// --- Update handlers (Gap #1) ---
+
+fn handle_plan_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut plans = stores.plans.write().unwrap();
+    let plan = match plans.get_mut(&id) {
+        Some(p) => p,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("plans", &id)),
+    };
+
+    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+        plan.title = title.to_string();
+    }
+    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+        plan.description = desc.to_string();
+    }
+    if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_str()) {
+        plan.acceptance_criteria = criteria.to_string();
+    }
+    plan.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(plan.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let plan_json = serde_json::to_value(&*plan).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("plans", &id));
+    DaemonResponse::ok(req.id, plan_json)
+}
+
+fn handle_spec_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut specs = stores.specs.write().unwrap();
+    let spec = match specs.get_mut(&id) {
+        Some(s) => s,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("specs", &id)),
+    };
+
+    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+        spec.title = title.to_string();
+    }
+    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+        spec.description = desc.to_string();
+    }
+    spec.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(spec.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let spec_json = serde_json::to_value(&*spec).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("specs", &id));
+    DaemonResponse::ok(req.id, spec_json)
+}
+
+fn handle_phase_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut phases = stores.phases.write().unwrap();
+    let phase = match phases.get_mut(&id) {
+        Some(p) => p,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("phases", &id)),
+    };
+
+    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+        phase.title = title.to_string();
+    }
+    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+        phase.description = desc.to_string();
+    }
+    if let Some(order) = req.params.get("order").and_then(|v| v.as_u64()) {
+        phase.order = order as u32;
+    }
+    phase.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(phase.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let phase_json = serde_json::to_value(&*phase).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("phases", &id));
+    DaemonResponse::ok(req.id, phase_json)
+}
+
+fn handle_work_item_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut work_items = stores.work_items.write().unwrap();
+    let wi = match work_items.get_mut(&id) {
+        Some(w) => w,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("work_items", &id)),
+    };
+
+    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+        wi.title = title.to_string();
+    }
+    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+        wi.description = desc.to_string();
+    }
+    if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
+        wi.assignee = Some(assignee.to_string());
+    }
+    if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
+        wi.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_array()) {
+        wi.acceptance_criteria = criteria.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
+        wi.dependencies = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    wi.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(wi.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let wi_json = serde_json::to_value(&*wi).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("work_items", &id));
+    DaemonResponse::ok(req.id, wi_json)
+}
+
+fn handle_bundle_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut bundles = stores.bundles.write().unwrap();
+    let bundle = match bundles.get_mut(&id) {
+        Some(b) => b,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("bundles", &id)),
+    };
+
+    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+        bundle.description = Some(desc.to_string());
+    }
+    if let Some(paths) = req.params.get("touched_paths").and_then(|v| v.as_array()) {
+        // Gap #22: BundleSizePolicy enforcement on update
+        let policy = &stores.config.strategy.bundle_size;
+        if paths.len() as u32 > policy.max_files_touched {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(&format!(
+                    "Bundle touches {} files, exceeds max_files_touched={}",
+                    paths.len(),
+                    policy.max_files_touched
+                )),
+            );
+        }
+        bundle.touched_paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    if let Some(claims) = req.params.get("claims").and_then(|v| v.as_str()) {
+        bundle.claims = claims.to_string();
+    }
+    if let Some(verification) = req.params.get("verification").and_then(|v| v.as_str()) {
+        bundle.verification = verification.to_string();
+    }
+    if let Some(locks) = req.params.get("locks_used").and_then(|v| v.as_array()) {
+        bundle.locks_used = locks.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    if let Some(base_tick_id) = req.params.get("base_tick_id").and_then(|v| v.as_str()) {
+        bundle.base_tick_id = Some(base_tick_id.to_string());
+    }
+    bundle.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(bundle.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let bundle_json = serde_json::to_value(&*bundle).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("bundles", &id));
+    DaemonResponse::ok(req.id, bundle_json)
+}
+
+fn handle_tick_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut ticks = stores.ticks.write().unwrap();
+    let tick = match ticks.get_mut(&id) {
+        Some(t) => t,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("ticks", &id)),
+    };
+
+    if let Some(log) = req.params.get("validation_log").and_then(|v| v.as_str()) {
+        tick.validation_log = log.to_string();
+    }
+    if let Some(bids) = req.params.get("bundle_ids").and_then(|v| v.as_array()) {
+        tick.bundle_ids = bids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    if let Some(abids) = req.params.get("attempted_bundle_ids").and_then(|v| v.as_array()) {
+        tick.attempted_bundle_ids = abids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    tick.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(tick.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let tick_json = serde_json::to_value(&*tick).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("ticks", &id));
+    DaemonResponse::ok(req.id, tick_json)
+}
+
+fn handle_learning_update(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let id = match req.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
+    };
+
+    let mut learnings = stores.learnings.write().unwrap();
+    let learning = match learnings.get_mut(&id) {
+        Some(l) => l,
+        None => return DaemonResponse::err(req.id, RpcError::not_found("learnings", &id)),
+    };
+
+    if let Some(content) = req.params.get("content").and_then(|v| v.as_str()) {
+        learning.content = content.to_string();
+    }
+    if let Some(roles) = req.params.get("applicable_roles").and_then(|v| v.as_array()) {
+        let parsed: Vec<Role> = roles
+            .iter()
+            .filter_map(|v| serde_json::from_value(v.clone()).ok())
+            .collect();
+        learning.applicable_roles = if parsed.is_empty() { None } else { Some(parsed) };
+    }
+    if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
+        learning.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    }
+    learning.updated_at = crate::id::now_millis();
+
+    if let Some(store) = &stores.store
+        && let Err(e) = store.lock().unwrap().update(learning.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let learning_json = serde_json::to_value(&*learning).unwrap();
+    let _ = event_tx.send(DaemonEvent::record_updated("learnings", &id));
+    DaemonResponse::ok(req.id, learning_json)
 }
 
 #[cfg(test)]
