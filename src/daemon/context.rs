@@ -11,6 +11,7 @@ use crate::agents::{AgentEvent, AgentSession};
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_goal::CoordinatorGoal;
+use crate::domain::coordinator_state::CoordinatorState;
 use crate::domain::decision::Decision;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -38,6 +39,7 @@ pub struct Stores {
     pub learnings: StdRwLock<HashMap<String, Learning>>,
     pub locks: StdRwLock<HashMap<String, Lock>>,
     pub coordinator_goals: StdRwLock<HashMap<String, CoordinatorGoal>>,
+    pub coordinator_states: StdRwLock<HashMap<String, CoordinatorState>>,
     pub proposals: StdRwLock<HashMap<String, Proposal>>,
     pub decisions: StdRwLock<HashMap<String, Decision>>,
     pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
@@ -68,6 +70,7 @@ impl Stores {
             learnings: StdRwLock::new(HashMap::new()),
             locks: StdRwLock::new(HashMap::new()),
             coordinator_goals: StdRwLock::new(HashMap::new()),
+            coordinator_states: StdRwLock::new(HashMap::new()),
             proposals: StdRwLock::new(HashMap::new()),
             decisions: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
@@ -133,6 +136,7 @@ impl DaemonContext {
         store.rebuild_indexes::<Learning>()?;
         store.rebuild_indexes::<Lock>()?;
         store.rebuild_indexes::<CoordinatorGoal>()?;
+        store.rebuild_indexes::<CoordinatorState>()?;
         store.rebuild_indexes::<Proposal>()?;
         store.rebuild_indexes::<Decision>()?;
         store.rebuild_indexes::<ValidationReport>()?;
@@ -172,6 +176,9 @@ impl DaemonContext {
             for goal in store.list::<CoordinatorGoal>(&[])? {
                 stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
             }
+            for cs in store.list::<CoordinatorState>(&[])? {
+                stores.coordinator_states.write().unwrap().insert(cs.id.clone(), cs);
+            }
             for proposal in store.list::<Proposal>(&[])? {
                 stores.proposals.write().unwrap().insert(proposal.id.clone(), proposal);
             }
@@ -194,6 +201,7 @@ impl DaemonContext {
                 + stores.learnings.read().unwrap().len()
                 + stores.locks.read().unwrap().len()
                 + stores.coordinator_goals.read().unwrap().len()
+                + stores.coordinator_states.read().unwrap().len()
                 + stores.proposals.read().unwrap().len()
                 + stores.decisions.read().unwrap().len()
                 + stores.agent_sessions.read().unwrap().len();

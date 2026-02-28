@@ -17,6 +17,7 @@ use crate::agents::{AgentSession, AgentStatus, AgentType};
 use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
+use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::lock::LockStatus;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
@@ -327,17 +328,344 @@ pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
     completed
 }
 
-/// Run a single coordinator iteration: load context → call LLM → parse → execute actions.
-async fn run_coordinator_iteration(
-    llm: &dyn LlmClient,
-    session: &AgentSession,
-    stores: &Arc<Stores>,
-    bridge: &AgentIpcBridge,
+// ---------------------------------------------------------------------------
+// FSM state management helpers
+// ---------------------------------------------------------------------------
+
+/// Load or create the CoordinatorState for the active goal.
+fn load_or_create_coordinator_state(stores: &Stores) -> Option<CoordinatorState> {
+    // Find active goal
+    let goal_id = {
+        let goals = stores.coordinator_goals.read().unwrap();
+        goals.values().find(|g| g.active).map(|g| g.id.clone())?
+    };
+
+    // Check if we already have a non-terminal state for this goal
+    {
+        let states = stores.coordinator_states.read().unwrap();
+        if let Some(existing) = states
+            .values()
+            .find(|s| s.goal_id == goal_id && !s.fsm_state.is_terminal())
+        {
+            return Some(existing.clone());
+        }
+    }
+
+    // Create new state
+    let state = CoordinatorState::new(goal_id);
+    let id = state.id.clone();
+    stores
+        .coordinator_states
+        .write()
+        .unwrap()
+        .insert(id.clone(), state.clone());
+    if let Some(store_arc) = &stores.store {
+        let _ = store_arc.lock().unwrap().create(state.clone());
+    }
+    Some(state)
+}
+
+/// Persist the CoordinatorState to both in-memory and TaskStore.
+fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
+    stores
+        .coordinator_states
+        .write()
+        .unwrap()
+        .insert(state.id.clone(), state.clone());
+    if let Some(store_arc) = &stores.store {
+        let _ = store_arc.lock().unwrap().update(state.clone());
+    }
+}
+
+/// Determine the FSM state footer — state-specific instructions for the LLM.
+fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str, config: &CoordinatorConfig) -> String {
+    match coord_state.fsm_state {
+        CoordinatorFsmState::Planning => {
+            // Use existing generation footer logic for Plan→Spec→Phase hierarchy
+            if let Some(gen_footer) = build_generation_footer(stores, goal, config.max_validation_attempts) {
+                gen_footer
+            } else {
+                // All hierarchy levels exist — ready to transition to ActivatePhase
+                "All planning artifacts (Plan, Spec, Phases) are created and active. \
+                 Respond with: [{\"action\": \"done\", \"summary\": \"Planning complete, ready to activate first phase\"}]"
+                    .to_string()
+            }
+        }
+        CoordinatorFsmState::ActivatePhase => {
+            // Find the next phase to activate and generate WorkItems for it
+            let phase_info = find_next_phase_to_activate(stores, coord_state);
+            match phase_info {
+                Some((phase_id, phase_title)) => {
+                    let phase = {
+                        let phases = stores.phases.read().unwrap();
+                        phases.get(&phase_id).cloned()
+                    };
+                    if let Some(phase) = phase {
+                        let existing = generation::find_work_items_for_phase(stores, &phase.id);
+                        if existing.is_empty() {
+                            let prompt = build_work_item_prompt(&phase, &existing, &[], &[]);
+                            format!(
+                                "## Activating Phase: {} (id: {})\n\n\
+                                 Generate WorkItems for this phase. Each WorkItem should have clear \
+                                 acceptance criteria and declare dependencies on other WorkItems in this phase \
+                                 using their IDs.\n\n{}",
+                                phase_title, phase_id, prompt.user_message
+                            )
+                        } else {
+                            format!(
+                                "Phase '{}' already has {} WorkItems. \
+                                 Respond with: [{{\"action\": \"done\", \"summary\": \"Phase {} WorkItems ready\"}}]",
+                                phase_title,
+                                existing.len(),
+                                phase_title
+                            )
+                        }
+                    } else {
+                        "No phase found to activate. Respond with: [{\"action\": \"done\", \"summary\": \"No phases available\"}]".to_string()
+                    }
+                }
+                None => "All phases have been completed. \
+                     Respond with: [{\"action\": \"done\", \"summary\": \"All phases complete\"}]"
+                    .to_string(),
+            }
+        }
+        CoordinatorFsmState::Executing => {
+            // Build executing context — monitor work items, assign agents, triage bundles
+            let phase_status = build_phase_status(stores, coord_state);
+            format!(
+                "## Executing Phase\n\n{}\n\n\
+                 Monitor WorkItem statuses. Assign implementers to Ready WorkItems whose dependencies are all Done. \
+                 Triage proposed Bundles. Accept reviewed Bundles. Transition Integrated WorkItems to Done. \
+                 If a WorkItem is Blocked or has failed, consider retrying.\n\n\
+                 Respond with a JSON array of actions.",
+                phase_status
+            )
+        }
+        CoordinatorFsmState::PhaseGate => {
+            let phase_status = build_phase_status(stores, coord_state);
+            format!(
+                "## Phase Gate Check\n\n{}\n\n\
+                 All WorkItems in this phase should be in a terminal state (Done, Abandoned, or NeedHelp). \
+                 If all are Done, the phase is complete. \
+                 Respond with: [{{\"action\": \"done\", \"summary\": \"Phase gate passed\"}}]",
+                phase_status
+            )
+        }
+        CoordinatorFsmState::GoalComplete => {
+            format!(
+                "Goal is complete. {} phases were completed. \
+                 Respond with: [{{\"action\": \"done\", \"summary\": \"Goal complete\"}}]",
+                coord_state.phases_completed.len()
+            )
+        }
+    }
+}
+
+/// Find the next phase that hasn't been completed yet (by order).
+fn find_next_phase_to_activate(stores: &Stores, coord_state: &CoordinatorState) -> Option<(String, String)> {
+    let plan = generation::find_active_plan(stores)?;
+    let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+
+    for spec in &specs {
+        let phases = generation::find_active_phases_for_spec(stores, &spec.id);
+        for phase in &phases {
+            if !coord_state.phases_completed.contains(&phase.id) {
+                return Some((phase.id.clone(), phase.title.clone()));
+            }
+        }
+    }
+
+    // Also check for phases that are still in Draft/Active status
+    let phases = stores.phases.read().unwrap();
+    let mut ordered: Vec<_> = phases
+        .values()
+        .filter(|p| !coord_state.phases_completed.contains(&p.id))
+        .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+        .collect();
+    ordered.sort_by_key(|p| p.order);
+    ordered.first().map(|p| (p.id.clone(), p.title.clone()))
+}
+
+/// Build a status summary for the current phase's work items.
+fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String {
+    let phase_id = match &coord_state.current_phase_id {
+        Some(id) => id,
+        None => return "No active phase.".to_string(),
+    };
+
+    let phase_title = {
+        let phases = stores.phases.read().unwrap();
+        phases.get(phase_id).map(|p| p.title.clone()).unwrap_or_default()
+    };
+
+    let work_items = stores.work_items.read().unwrap();
+    let phase_wis: Vec<_> = work_items.values().filter(|w| &w.phase_id == phase_id).collect();
+
+    let mut status_counts = std::collections::HashMap::new();
+    for wi in &phase_wis {
+        *status_counts.entry(format!("{}", wi.status)).or_insert(0u32) += 1;
+    }
+
+    let mut summary = format!(
+        "Phase: {} (id: {})\nWorkItems: {} total\n",
+        phase_title,
+        phase_id,
+        phase_wis.len()
+    );
+    for (status, count) in &status_counts {
+        summary.push_str(&format!("  - {}: {}\n", status, count));
+    }
+
+    // Show retry counts for items with attempts
+    for wi in &phase_wis {
+        let attempts = coord_state.attempts(&wi.id);
+        if attempts > 0 {
+            summary.push_str(&format!("  [{}] {} — {} attempts\n", wi.id, wi.title, attempts));
+        }
+    }
+
+    summary
+}
+
+/// Advance the FSM state based on the current iteration outcome.
+/// Returns the new FSM state if a transition should occur.
+fn check_fsm_transition(
+    stores: &Stores,
+    coord_state: &CoordinatorState,
     config: &CoordinatorConfig,
+) -> Option<CoordinatorFsmState> {
+    match coord_state.fsm_state {
+        CoordinatorFsmState::Planning => {
+            // Transition when: Active Plan AND Active Spec AND all Phases Active
+            let plan = generation::find_active_plan(stores)?;
+            let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+            if specs.is_empty() {
+                return None;
+            }
+            let has_phases = specs
+                .iter()
+                .any(|s| !generation::find_active_phases_for_spec(stores, &s.id).is_empty());
+            if has_phases { Some(CoordinatorFsmState::ActivatePhase) } else { None }
+        }
+        CoordinatorFsmState::ActivatePhase => {
+            // Transition when: WorkItems for current phase exist and are Ready
+            if let Some(ref phase_id) = coord_state.current_phase_id {
+                let wis = generation::find_work_items_for_phase(stores, phase_id);
+                if !wis.is_empty() {
+                    return Some(CoordinatorFsmState::Executing);
+                }
+            }
+            // If we just set current_phase_id, wait for WorkItems to be created
+            None
+        }
+        CoordinatorFsmState::Executing => {
+            // Check phase timeout
+            if let Some(activated_at) = coord_state.phase_activated_at {
+                let elapsed_ms = crate::id::now_millis() - activated_at;
+                let timeout_ms = config.phase_timeout_secs as i64 * 1000;
+                if elapsed_ms > timeout_ms {
+                    return Some(CoordinatorFsmState::PhaseGate);
+                }
+            }
+
+            // Check goal timeout
+            let goal_elapsed_ms = crate::id::now_millis() - coord_state.goal_started_at;
+            let goal_timeout_ms = config.goal_timeout_secs as i64 * 1000;
+            if goal_elapsed_ms > goal_timeout_ms {
+                return Some(CoordinatorFsmState::GoalComplete);
+            }
+
+            // Transition when: all WIs in current phase are terminal
+            if let Some(ref phase_id) = coord_state.current_phase_id {
+                let wis = generation::find_work_items_for_phase(stores, phase_id);
+                if !wis.is_empty()
+                    && wis
+                        .iter()
+                        .all(|w| matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+                {
+                    return Some(CoordinatorFsmState::PhaseGate);
+                }
+            }
+            None
+        }
+        CoordinatorFsmState::PhaseGate => {
+            // Check if there are more phases
+            let next = find_next_phase_to_activate(stores, coord_state);
+            if next.is_some() {
+                Some(CoordinatorFsmState::ActivatePhase)
+            } else {
+                Some(CoordinatorFsmState::GoalComplete)
+            }
+        }
+        CoordinatorFsmState::GoalComplete => None,
+    }
+}
+
+/// Context for a single coordinator iteration, bundled to avoid too-many-arguments.
+struct IterationContext<'a> {
+    llm: &'a dyn LlmClient,
+    session: &'a AgentSession,
+    stores: &'a Arc<Stores>,
+    bridge: &'a AgentIpcBridge,
+    config: &'a CoordinatorConfig,
     iteration: u32,
     previous_summary: Option<String>,
+}
+
+/// Run a single coordinator iteration: load context → call LLM → parse → execute actions.
+/// Now dispatches based on FSM state.
+async fn run_coordinator_iteration(
+    ctx: &IterationContext<'_>,
+    coord_state: &mut CoordinatorState,
 ) -> Result<IterationOutcome> {
-    // Check if any phases have completed (all WorkItems Done)
+    let session = ctx.session;
+    let stores = ctx.stores;
+    let config = ctx.config;
+    let bridge = ctx.bridge;
+    let iteration = ctx.iteration;
+    // Check for FSM state transitions before the iteration
+    if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
+        info!(
+            "Coordinator {} FSM transition: {} → {}",
+            session.id, coord_state.fsm_state, new_state
+        );
+
+        // Handle ActivatePhase: find and set the next phase
+        if new_state == CoordinatorFsmState::ActivatePhase {
+            let next_phase = find_next_phase_to_activate(stores, coord_state);
+            if let Some((phase_id, phase_title)) = next_phase {
+                info!(
+                    "Coordinator {} activating phase: {} ({})",
+                    session.id, phase_title, phase_id
+                );
+                coord_state.activate_phase(phase_id);
+                // activate_phase sets state to Executing — but we want ActivatePhase first for WI generation
+                coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
+            } else {
+                coord_state.transition_to(CoordinatorFsmState::GoalComplete);
+            }
+        } else if new_state == CoordinatorFsmState::PhaseGate {
+            coord_state.transition_to(CoordinatorFsmState::PhaseGate);
+            coord_state.complete_phase();
+        } else if new_state == CoordinatorFsmState::GoalComplete {
+            coord_state.transition_to(CoordinatorFsmState::GoalComplete);
+            // Deactivate the goal
+            let mut goals = stores.coordinator_goals.write().unwrap();
+            if let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id) {
+                goal.deactivate();
+            }
+            persist_coordinator_state(stores, coord_state);
+            return Ok(IterationOutcome::Done(format!(
+                "Goal complete: {} phases completed",
+                coord_state.phases_completed.len()
+            )));
+        } else {
+            coord_state.transition_to(new_state);
+        }
+        persist_coordinator_state(stores, coord_state);
+    }
+
+    // Check if any phases have completed (all WorkItems Done) — legacy helper
     let completed_phases = check_phase_completion(stores);
     for cp in &completed_phases {
         info!("Coordinator {} detected: {}", session.id, cp);
@@ -345,17 +673,6 @@ async fn run_coordinator_iteration(
 
     let state_summary = build_state_summary(stores);
 
-    // Find active plan for scope_ids (if any)
-    let active_plan_id = {
-        let plans = stores.plans.read().unwrap();
-        plans
-            .values()
-            .find(|p| p.status == HierarchyStatus::Active)
-            .map(|p| p.id.clone())
-    };
-
-    // Check if generation is needed — if so, use a targeted generation prompt as footer.
-    // Otherwise use the default "assess and act" footer.
     let goal = {
         let goals = stores.coordinator_goals.read().unwrap();
         goals
@@ -367,26 +684,28 @@ async fn run_coordinator_iteration(
 
     let event_tx = bridge.event_tx();
 
-    let footer = match build_generation_footer(stores, &goal, config.max_validation_attempts) {
-        Some(gen_footer) => gen_footer,
-        None => "Assess the project state and decide what action to take next. \
-                 Respond with a JSON array of actions."
-            .to_string(),
-    };
+    // Build FSM-aware footer
+    let footer = build_fsm_footer(stores, coord_state, &goal, config);
+
+    // Add FSM state context to state summary
+    let fsm_context = format!(
+        "## Coordinator FSM State: {}\nCurrent Phase: {}\nPhases Completed: {}\n\n",
+        coord_state.fsm_state,
+        coord_state.current_phase_id.as_deref().unwrap_or("none"),
+        coord_state.phases_completed.len()
+    );
 
     let builder = ContextBuilder::new(stores, Role::Coordinator)
-        .with_state_summary(state_summary)
-        .with_previous_summary(previous_summary)
+        .with_state_summary(format!("{}{}", fsm_context, state_summary))
+        .with_previous_summary(ctx.previous_summary.clone())
         .with_iteration(iteration)
         .with_footer(footer);
-
-    let _ = active_plan_id; // used in generation footer indirectly via stores
 
     let assembled = builder.build(&crate::prompts::store().coordinator);
 
     info!(
-        "Coordinator {} iteration {} context: ~{} tokens",
-        session.id, iteration, assembled.token_estimate
+        "Coordinator {} iteration {} (FSM: {}) context: ~{} tokens",
+        session.id, iteration, coord_state.fsm_state, assembled.token_estimate
     );
 
     let _ = event_tx.send(DaemonEvent::agent_status_changed(
@@ -394,7 +713,7 @@ async fn run_coordinator_iteration(
         AgentStatus::WaitingForLlm,
     ));
 
-    let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
+    let response = ctx.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
     info!(
         "Coordinator {} raw LLM response ({} chars): {}",
         session.id,
@@ -445,17 +764,22 @@ async fn run_coordinator_iteration(
         last_summary = summary;
     }
 
+    // Persist state after each iteration
+    coord_state.updated_at = crate::id::now_millis();
+    persist_coordinator_state(stores, coord_state);
+
     Ok(IterationOutcome::Continue(last_summary))
 }
 
-/// Run the Coordinator's long-lived loop with adaptive timer.
+/// Run the Coordinator's long-lived loop with adaptive timer and FSM state dispatch.
 ///
 /// Unlike Implementer (fixed max_iterations), Coordinator runs indefinitely:
-/// - `Done` → sleep idle_interval (30s), then check again
+/// - `Done` → check FSM state, sleep idle_interval (30s) or active_interval (5s)
 /// - `Continue` → sleep active_interval (5s), then iterate
 /// - `NeedHelp` or `Err` → exit the loop
 ///
 /// Checks for cancellation before each iteration.
+/// FSM state is persisted after each iteration for crash recovery.
 pub async fn run_coordinator(
     llm: &dyn LlmClient,
     session: &mut AgentSession,
@@ -467,10 +791,33 @@ pub async fn run_coordinator(
     let mut iteration: u32 = 0;
     let mut previous_summary: Option<String> = None;
 
+    // Load or create FSM state
+    let mut coord_state = match load_or_create_coordinator_state(stores) {
+        Some(state) => {
+            info!(
+                "Coordinator {} resuming FSM state: {} (phase: {:?})",
+                session.id, state.fsm_state, state.current_phase_id
+            );
+            state
+        }
+        None => {
+            info!("Coordinator {} no active goal, waiting", session.id);
+            // No active goal — run in legacy mode (idle until goal is set)
+            // Fall through to loop, which will sleep idle_interval
+            return run_coordinator_legacy(llm, session, stores, bridge, config, event_tx).await;
+        }
+    };
+
     loop {
         // Check cancellation
         if is_session_cancelled(stores, &session.id) {
             info!("Coordinator {} cancelled, exiting loop", session.id);
+            return Ok(());
+        }
+
+        // Check if goal is complete
+        if coord_state.fsm_state.is_terminal() {
+            info!("Coordinator {} goal complete, exiting loop", session.id);
             return Ok(());
         }
 
@@ -483,29 +830,122 @@ pub async fn run_coordinator(
                 s.iteration = session.iteration;
             }
         }
-        info!("Coordinator {} iteration {}", session.id, iteration);
+        info!(
+            "Coordinator {} iteration {} (FSM: {})",
+            session.id, iteration, coord_state.fsm_state
+        );
 
-        let outcome = run_coordinator_iteration(
+        let ctx = IterationContext {
             llm,
             session,
             stores,
             bridge,
             config,
             iteration,
-            previous_summary.clone(),
-        )
-        .await;
+            previous_summary: previous_summary.clone(),
+        };
+        let outcome = run_coordinator_iteration(&ctx, &mut coord_state).await;
 
         let interval = match &outcome {
             Ok(IterationOutcome::Done(summary)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
-                info!("Coordinator {} idle: {}", session.id, summary);
+                info!(
+                    "Coordinator {} idle (FSM: {}): {}",
+                    session.id, coord_state.fsm_state, summary
+                );
+                previous_summary = Some(summary.clone());
+                // Use active interval for FSM states that need quick transitions
+                match coord_state.fsm_state {
+                    CoordinatorFsmState::Planning
+                    | CoordinatorFsmState::ActivatePhase
+                    | CoordinatorFsmState::PhaseGate => config.active_interval_secs,
+                    _ => config.idle_interval_secs,
+                }
+            }
+            Ok(IterationOutcome::Continue(summary)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
+                info!(
+                    "Coordinator {} continue (FSM: {}): {}",
+                    session.id, coord_state.fsm_state, summary
+                );
+                previous_summary = Some(summary.clone());
+                config.active_interval_secs
+            }
+            Ok(IterationOutcome::NeedHelp(reason)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, reason));
+                warn!("Coordinator {} needs help: {}", session.id, reason);
+                return Err(eyre!("coordinator needs help: {}", reason));
+            }
+            Err(e) => {
+                warn!("Coordinator {} iteration {} failed: {}", session.id, iteration, e);
+                return Err(eyre!("coordinator iteration failed: {}", e));
+            }
+        };
+
+        tokio::time::sleep(Duration::from_secs(interval)).await;
+    }
+}
+
+/// Legacy coordinator loop for when no goal is active.
+/// Keeps the original behavior: call LLM, execute actions, sleep.
+async fn run_coordinator_legacy(
+    llm: &dyn LlmClient,
+    session: &mut AgentSession,
+    stores: &Arc<Stores>,
+    bridge: &AgentIpcBridge,
+    config: &CoordinatorConfig,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+) -> Result<()> {
+    let mut iteration: u32 = 0;
+    let mut previous_summary: Option<String> = None;
+
+    // Create a dummy coord_state for the legacy path
+    let mut coord_state = CoordinatorState::new("legacy".to_string());
+
+    loop {
+        if is_session_cancelled(stores, &session.id) {
+            info!("Coordinator {} cancelled, exiting loop", session.id);
+            return Ok(());
+        }
+
+        // Check if a goal has been set since we started
+        let has_goal = {
+            let goals = stores.coordinator_goals.read().unwrap();
+            goals.values().any(|g| g.active)
+        };
+        if has_goal && let Some(state) = load_or_create_coordinator_state(stores) {
+            coord_state = state;
+        }
+
+        iteration = iteration.saturating_add(1);
+        session.iteration = iteration;
+        {
+            let mut sessions = stores.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&session.id) {
+                s.iteration = session.iteration;
+            }
+        }
+        info!("Coordinator {} iteration {}", session.id, iteration);
+
+        let ctx = IterationContext {
+            llm,
+            session,
+            stores,
+            bridge,
+            config,
+            iteration,
+            previous_summary: previous_summary.clone(),
+        };
+        let outcome = run_coordinator_iteration(&ctx, &mut coord_state).await;
+
+        let interval = match &outcome {
+            Ok(IterationOutcome::Done(summary)) => {
+                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
                 previous_summary = Some(summary.clone());
                 config.idle_interval_secs
             }
             Ok(IterationOutcome::Continue(summary)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
-                info!("Coordinator {} continue: {}", session.id, summary);
                 previous_summary = Some(summary.clone());
                 config.active_interval_secs
             }
@@ -786,10 +1226,20 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let outcome =
-            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
-                .await
-                .unwrap();
+        let outcome = run_coordinator_iteration(
+            &IterationContext {
+                llm: &llm,
+                session: &session,
+                stores: &stores,
+                bridge: &bridge,
+                config: &CoordinatorConfig::default(),
+                iteration: 1,
+                previous_summary: None,
+            },
+            &mut CoordinatorState::new("test-goal".to_string()),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Nothing to do")));
     }
@@ -810,10 +1260,20 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let outcome =
-            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
-                .await
-                .unwrap();
+        let outcome = run_coordinator_iteration(
+            &IterationContext {
+                llm: &llm,
+                session: &session,
+                stores: &stores,
+                bridge: &bridge,
+                config: &CoordinatorConfig::default(),
+                iteration: 1,
+                previous_summary: None,
+            },
+            &mut CoordinatorState::new("test-goal".to_string()),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(outcome, IterationOutcome::NeedHelp(ref s) if s.contains("Unclear")));
     }
@@ -834,10 +1294,20 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let outcome =
-            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
-                .await
-                .unwrap();
+        let outcome = run_coordinator_iteration(
+            &IterationContext {
+                llm: &llm,
+                session: &session,
+                stores: &stores,
+                bridge: &bridge,
+                config: &CoordinatorConfig::default(),
+                iteration: 1,
+                previous_summary: None,
+            },
+            &mut CoordinatorState::new("test-goal".to_string()),
+        )
+        .await
+        .unwrap();
 
         // CreatePlan is now wired — creates a real plan via bridge, returns Continue
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
@@ -856,10 +1326,20 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let outcome =
-            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
-                .await
-                .unwrap();
+        let outcome = run_coordinator_iteration(
+            &IterationContext {
+                llm: &llm,
+                session: &session,
+                stores: &stores,
+                bridge: &bridge,
+                config: &CoordinatorConfig::default(),
+                iteration: 1,
+                previous_summary: None,
+            },
+            &mut CoordinatorState::new("test-goal".to_string()),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(outcome, IterationOutcome::Done(_)));
     }
@@ -1234,10 +1714,20 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let outcome =
-            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
-                .await
-                .unwrap();
+        let outcome = run_coordinator_iteration(
+            &IterationContext {
+                llm: &llm,
+                session: &session,
+                stores: &stores,
+                bridge: &bridge,
+                config: &CoordinatorConfig::default(),
+                iteration: 1,
+                previous_summary: None,
+            },
+            &mut CoordinatorState::new("test-goal".to_string()),
+        )
+        .await
+        .unwrap();
 
         // Should still produce a Continue (plan created), but spec should have been filtered
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
@@ -1264,10 +1754,20 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let outcome =
-            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
-                .await
-                .unwrap();
+        let outcome = run_coordinator_iteration(
+            &IterationContext {
+                llm: &llm,
+                session: &session,
+                stores: &stores,
+                bridge: &bridge,
+                config: &CoordinatorConfig::default(),
+                iteration: 1,
+                previous_summary: None,
+            },
+            &mut CoordinatorState::new("test-goal".to_string()),
+        )
+        .await
+        .unwrap();
 
         assert!(
             matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Finished planning")),
@@ -1293,5 +1793,178 @@ mod tests {
             !summary.contains("issues"),
             "should not mention issues count when issues is empty"
         );
+    }
+
+    // --- FSM state management tests ---
+
+    #[test]
+    fn test_load_or_create_coordinator_state_no_goal() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-nogoal-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let result = load_or_create_coordinator_state(&stores);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_or_create_coordinator_state_with_goal() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-goal-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("Build app".to_string());
+        let goal_id = goal.id.clone();
+        stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
+
+        let state = load_or_create_coordinator_state(&stores).unwrap();
+        assert_eq!(state.goal_id, goal_id);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
+    }
+
+    #[test]
+    fn test_load_or_create_coordinator_state_resumes_existing() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-resume-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("Build app".to_string());
+        let goal_id = goal.id.clone();
+        stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
+
+        // Create an existing state in Executing
+        let mut existing = CoordinatorState::new(goal_id.clone());
+        existing.transition_to(CoordinatorFsmState::Executing);
+        existing.current_phase_id = Some("phase-1".to_string());
+        let existing_id = existing.id.clone();
+        stores
+            .coordinator_states
+            .write()
+            .unwrap()
+            .insert(existing_id.clone(), existing);
+
+        let state = load_or_create_coordinator_state(&stores).unwrap();
+        assert_eq!(state.id, existing_id);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Executing);
+        assert_eq!(state.current_phase_id.as_deref(), Some("phase-1"));
+    }
+
+    #[test]
+    fn test_check_fsm_transition_planning_to_activate() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-plan2act-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create Plan → Spec → Phase hierarchy (all Active)
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id.clone(), "Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+        phase.status = HierarchyStatus::Active;
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let config = CoordinatorConfig::default();
+
+        let transition = check_fsm_transition(&stores, &coord_state, &config);
+        assert_eq!(transition, Some(CoordinatorFsmState::ActivatePhase));
+    }
+
+    #[test]
+    fn test_check_fsm_transition_executing_to_phase_gate() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-exec2gate-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // Create a Done work item in the phase
+        let mut wi = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi.status = WorkItemStatus::Done;
+        stores.work_items.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+        let config = CoordinatorConfig::default();
+
+        let transition = check_fsm_transition(&stores, &coord_state, &config);
+        assert_eq!(transition, Some(CoordinatorFsmState::PhaseGate));
+    }
+
+    #[test]
+    fn test_check_fsm_transition_phase_gate_to_goal_complete() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-gate2done-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // No more phases to activate
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+        let config = CoordinatorConfig::default();
+
+        let transition = check_fsm_transition(&stores, &coord_state, &config);
+        assert_eq!(transition, Some(CoordinatorFsmState::GoalComplete));
+    }
+
+    #[test]
+    fn test_persist_coordinator_state() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-persist-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut state = CoordinatorState::new("goal-1".to_string());
+        state.transition_to(CoordinatorFsmState::Executing);
+        let state_id = state.id.clone();
+
+        persist_coordinator_state(&stores, &state);
+
+        let stored = stores.coordinator_states.read().unwrap();
+        let retrieved = stored.get(&state_id).unwrap();
+        assert_eq!(retrieved.fsm_state, CoordinatorFsmState::Executing);
+    }
+
+    #[test]
+    fn test_build_phase_status_no_phase() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-nophase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let status = build_phase_status(&stores, &coord_state);
+        assert!(status.contains("No active phase"));
+    }
+
+    #[test]
+    fn test_build_phase_status_with_work_items() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-phstatus-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Build Phase".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let wi1 = WorkItem::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        let mut wi2 = WorkItem::new(phase_id.clone(), "WI 2".into(), "desc".into());
+        wi2.status = WorkItemStatus::Done;
+        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.current_phase_id = Some(phase_id);
+
+        let status = build_phase_status(&stores, &coord_state);
+        assert!(status.contains("Build Phase"));
+        assert!(status.contains("2 total"));
     }
 }

@@ -185,6 +185,8 @@ pub fn dispatch(
         "coordinator.set_goal" => handle_coordinator_set_goal(stores, event_tx, req),
         "coordinator.clear_goal" => handle_coordinator_clear_goal(stores, event_tx, req),
         "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
+        "coordinator.get_state" => handle_coordinator_get_state(stores, req),
+        "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
@@ -3045,6 +3047,49 @@ fn handle_coordinator_get_goal(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         }
         None => DaemonResponse::ok(req.id, json!({ "active": false })),
     }
+}
+
+fn handle_coordinator_get_state(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let states = stores.coordinator_states.read().unwrap();
+    // Find the state for the active goal (or any non-terminal state)
+    let active = states.values().find(|s| !s.fsm_state.is_terminal());
+    match active {
+        Some(state) => {
+            let json = match serde_json::to_value(state) {
+                Ok(v) => v,
+                Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+            };
+            DaemonResponse::ok(req.id, json)
+        }
+        None => DaemonResponse::ok(req.id, json!({ "active": false })),
+    }
+}
+
+fn handle_coordinator_reset_state(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    let mut states = stores.coordinator_states.write().unwrap();
+    let removed: Vec<String> = states.keys().cloned().collect();
+    for id in &removed {
+        states.remove(id);
+    }
+    drop(states);
+
+    // Also remove from TaskStore
+    if let Some(store_arc) = &stores.store {
+        let mut store = store_arc.lock().unwrap();
+        for id in &removed {
+            let _ = store.delete::<crate::domain::coordinator_state::CoordinatorState>(id);
+        }
+    }
+
+    let _ = event_tx.send(DaemonEvent::new(
+        "coordinator.state_reset",
+        json!({ "message": "Coordinator state cleared" }),
+    ));
+    DaemonResponse::ok(req.id, json!({ "reset": true, "removed": removed.len() }))
 }
 
 // --- Agent handlers ---
