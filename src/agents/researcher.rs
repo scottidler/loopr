@@ -126,17 +126,26 @@ pub async fn execute_search_code(
         None => repo_root.to_path_buf(),
     };
 
-    let mut cmd = tokio::process::Command::new("grep");
-    // -r: recursive, -n: line numbers, -E: extended regex
-    // grep -r does NOT follow symlinks by default (unlike -R which does)
-    cmd.args(["-rn", "-E", pattern]);
+    // Gap #32: Use rg (ripgrep) with --no-follow; fall back to grep
+    let rg_available = std::process::Command::new("rg").arg("--version").output().is_ok();
 
-    // Add glob filter as --include
-    if let Some(g) = glob_filter {
-        cmd.arg(format!("--include={}", g));
-    }
-
-    cmd.arg(search_dir.to_string_lossy().as_ref());
+    let mut cmd = if rg_available {
+        let mut c = tokio::process::Command::new("rg");
+        c.args(["--no-follow", "-n", pattern]);
+        if let Some(g) = glob_filter {
+            c.args(["--glob", g]);
+        }
+        c.arg(search_dir.to_string_lossy().as_ref());
+        c
+    } else {
+        let mut c = tokio::process::Command::new("grep");
+        c.args(["-rn", "-E", pattern]);
+        if let Some(g) = glob_filter {
+            c.arg(format!("--include={}", g));
+        }
+        c.arg(search_dir.to_string_lossy().as_ref());
+        c
+    };
 
     // Limit output to prevent overwhelming the context
     let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())

@@ -385,6 +385,43 @@ pub fn run_integrator_cycle(
         warn!("Failed to persist tick bundle_ids: {}", e);
     }
 
+    // Gap #14: Merge bundle branches into integration branch
+    let branches: Vec<String> = {
+        let bundles = stores.bundles.read().unwrap();
+        valid_bundle_ids
+            .iter()
+            .filter_map(|id| bundles.get(id.as_str()))
+            .filter(|b| !b.branch_name.is_empty())
+            .map(|b| b.branch_name.clone())
+            .collect()
+    };
+    // Only attempt merge if the repo_path is a git repo
+    let repo_path = &stores.config.project.repo_path;
+    let is_git_repo = repo_path.join(".git").exists();
+    if !branches.is_empty() && is_git_repo {
+        match merge_bundle_branches(repo_path, &branches) {
+            Ok(sha) => {
+                let mut ticks = stores.ticks.write().unwrap();
+                if let Some(tick) = ticks.get_mut(&tick_id) {
+                    tick.integration_sha = Some(sha);
+                }
+            }
+            Err(e) => {
+                warn!("Integrator: merge failed: {}", e);
+                // Fail the tick
+                let mut ticks = stores.ticks.write().unwrap();
+                if let Some(tick) = ticks.get_mut(&tick_id) {
+                    tick.status = TickStatus::Failed;
+                    tick.validation_log = format!("Merge failed: {}", e);
+                }
+                return Ok(IntegratorCycleResult::ValidationFailed {
+                    tick_id,
+                    log: format!("Merge failed: {}", e),
+                });
+            }
+        }
+    }
+
     // 9. Transition Tick: Sealing → Validating
     let validate_resp = bridge.request(
         "tick.transition",
@@ -607,6 +644,38 @@ pub async fn run_integrator(
         // Sleep before next cycle
         tokio::time::sleep(interval).await;
     }
+}
+
+/// Gap #14: Merge bundle branches into the integration branch.
+/// Returns the HEAD SHA after all merges succeed.
+fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]) -> Result<String> {
+    for branch in bundle_branches {
+        let output = std::process::Command::new("git")
+            .args([
+                "merge",
+                "--no-ff",
+                branch,
+                "-m",
+                &format!("Merge bundle branch {}", branch),
+            ])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| eyre!("git merge {} failed to execute: {}", branch, e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(eyre!("git merge {} failed: {}", branch, stderr));
+        }
+    }
+
+    // Get HEAD SHA after merges
+    let sha_output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| eyre!("git rev-parse HEAD failed: {}", e))?;
+
+    Ok(String::from_utf8_lossy(&sha_output.stdout).trim().to_string())
 }
 
 /// Run validation commands synchronously (same pattern as handlers.rs).
