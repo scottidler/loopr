@@ -12,9 +12,13 @@ use crate::id;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HierarchyStatus {
+    #[serde(alias = "Draft")]
     Draft,
+    #[serde(alias = "Active")]
     Active,
+    #[serde(alias = "Complete")]
     Complete,
+    #[serde(alias = "Abandoned")]
     Abandoned,
 }
 

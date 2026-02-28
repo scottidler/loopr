@@ -603,10 +603,21 @@ pub async fn execute_action(
             applicable_roles,
             resource_tags,
         } => {
+            // M9: Defense-in-depth — if source_id doesn't look like a record ID,
+            // use work_item_id if available (fixes Reviewer sending title as source_id)
+            let effective_source_id = if !source_id.starts_with("wi-")
+                && !source_id.starts_with("phase-")
+                && !source_id.starts_with("plan-")
+                && !source_id.starts_with("spec-")
+            {
+                work_item_id.unwrap_or(source_id).to_string()
+            } else {
+                source_id.clone()
+            };
             let mut params = serde_json::json!({
                 "content": content,
                 "scope": scope,
-                "source_id": source_id,
+                "source_id": effective_source_id,
             });
             if let Some(roles) = applicable_roles {
                 params["applicable_roles"] = serde_json::json!(roles);
@@ -1156,21 +1167,7 @@ pub enum ActionResult {
         work_item_id: String,
         message: String,
     },
-    /// Work item already exists with same title in same phase.
-    DuplicateDetected {
-        existing_id: String,
-        title: String,
-    },
-    /// Phase completed — all work items are terminal.
-    PhaseCompleted {
-        phase_id: String,
-        next_phase_id: Option<String>,
-    },
-    /// Goal completed — all phases done.
-    GoalCompleted {
-        goal_id: String,
-        phases_completed: usize,
-    },
+    // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — never produced by any code path.
 }
 
 fn persist_session(stores: &Stores, session: &AgentSession) {

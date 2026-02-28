@@ -1336,21 +1336,7 @@ fn format_action_summary(result: &ActionResult) -> String {
         ActionResult::AgentSpawned { session_id, agent_type } => format!("spawned {} ({})", agent_type, session_id),
         ActionResult::DependencyNotMet { work_item_id, message } => {
             format!("dep not met for {}: {}", work_item_id, message)
-        }
-        ActionResult::DuplicateDetected { existing_id, title } => {
-            format!("duplicate '{}' (existing: {})", title, existing_id)
-        }
-        ActionResult::PhaseCompleted {
-            phase_id,
-            next_phase_id,
-        } => {
-            let next = next_phase_id.as_deref().unwrap_or("none");
-            format!("phase {} complete, next: {}", phase_id, next)
-        }
-        ActionResult::GoalCompleted {
-            goal_id,
-            phases_completed,
-        } => format!("goal {} complete ({} phases)", goal_id, phases_completed),
+        } // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — dead variants
     }
 }
 

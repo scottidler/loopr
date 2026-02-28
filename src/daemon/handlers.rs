@@ -1450,8 +1450,12 @@ fn handle_bundle_create(
     let mut bundle = Bundle::new(work_item_id, base_tick_id, branch_name, claims);
     bundle.description = description;
 
-    // Parse optional files_changed into touched_paths
-    if let Some(files) = req.params.get("files_changed").and_then(|v| v.as_array()) {
+    // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
+    let touched_paths_val = req
+        .params
+        .get("touched_paths")
+        .or_else(|| req.params.get("files_changed"));
+    if let Some(files) = touched_paths_val.and_then(|v| v.as_array()) {
         bundle.touched_paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
     }
 
@@ -3705,7 +3709,12 @@ fn handle_bundle_update(
     if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
         bundle.description = Some(desc.to_string());
     }
-    if let Some(paths) = req.params.get("touched_paths").and_then(|v| v.as_array()) {
+    // M8: Accept both "touched_paths" and "files_changed" in update
+    let paths_val = req
+        .params
+        .get("touched_paths")
+        .or_else(|| req.params.get("files_changed"));
+    if let Some(paths) = paths_val.and_then(|v| v.as_array()) {
         // Gap #22: BundleSizePolicy enforcement on update
         let policy = &stores.config.strategy.bundle_size;
         if paths.len() as u32 > policy.max_files_touched {
