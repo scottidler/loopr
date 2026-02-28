@@ -58,6 +58,17 @@ pub fn resolve_worktree_base(stores: &Stores) -> String {
         .unwrap_or_else(|| "HEAD".to_string())
 }
 
+/// Resolve the ID of the latest Published Tick from stores.
+/// Returns None if no Published Tick exists (bootstrap case).
+fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String> {
+    let ticks = stores.ticks.read().unwrap();
+    ticks
+        .values()
+        .filter(|t| t.status == TickStatus::Published)
+        .max_by_key(|t| t.number)
+        .map(|t| t.id.clone())
+}
+
 /// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
 ///
 /// Currently implements a minimal lifecycle: Starting → Running → Completed/Failed.
@@ -528,16 +539,37 @@ pub async fn execute_action(
             let branch_name = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
 
             let wi_id = work_item_id.ok_or_else(|| eyre!("propose_bundle requires work_item_id"))?;
-            let resp = bridge.request(
-                "bundle.create",
-                serde_json::json!({
-                    "work_item_id": wi_id,
-                    "branch_name": branch_name,
-                    "claims": claims,
-                    "description": description,
-                }),
-            );
+
+            // Fix #1: Resolve base_tick_id from latest Published Tick
+            let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
+
+            let mut params = serde_json::json!({
+                "work_item_id": wi_id,
+                "branch_name": branch_name,
+                "claims": claims,
+                "description": description,
+            });
+            if let Some(tick_id) = &base_tick_id {
+                params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
+            }
+
+            let resp = bridge.request("bundle.create", params.clone());
             if resp.is_error() {
+                // Fix #7: On stale bundle rejection (-32002), retry once
+                if let Some(ref err) = resp.error
+                    && err.code == -32002
+                {
+                    warn!("Bundle stale ({}), retrying with fresh base_tick_id", err.message);
+                    let new_base_tick_id = resolve_latest_published_tick_id(bridge.stores());
+                    if let Some(tick_id) = &new_base_tick_id {
+                        params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
+                    }
+                    let retry_resp = bridge.request("bundle.create", params);
+                    if retry_resp.is_error() {
+                        return Err(eyre!("propose bundle failed after retry: {:?}", retry_resp.error));
+                    }
+                    return Ok(ActionResult::BundleProposed(description.clone()));
+                }
                 return Err(eyre!("propose bundle failed: {:?}", resp.error));
             }
             Ok(ActionResult::BundleProposed(description.clone()))
@@ -3326,6 +3358,126 @@ mod tests {
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
             "expected case-insensitive duplicate error, got: {:?}",
             result2
+        );
+    }
+
+    // --- Fix #1: resolve_latest_published_tick_id tests ---
+
+    #[test]
+    fn test_resolve_latest_published_tick_id_none_at_bootstrap() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-tickid-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // No ticks exist — should return None
+        let result = resolve_latest_published_tick_id(bridge.stores());
+        assert!(result.is_none(), "expected None at bootstrap, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_resolve_latest_published_tick_id_returns_published() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-tickid-pub-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Insert a Published tick directly into stores
+        let tick = crate::domain::tick::Tick {
+            id: "tick-1".to_string(),
+            number: 1,
+            status: TickStatus::Published,
+            bundle_ids: vec![],
+            attempted_bundle_ids: vec![],
+            integration_sha: Some("abc123".to_string()),
+            validation_log: String::new(),
+            created_at: crate::id::now_millis(),
+            updated_at: crate::id::now_millis(),
+        };
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        let result = resolve_latest_published_tick_id(bridge.stores());
+        assert_eq!(result, Some("tick-1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_propose_bundle_includes_base_tick_id() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-propbase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Insert a Published tick
+        let tick = crate::domain::tick::Tick {
+            id: "tick-pub-1".to_string(),
+            number: 1,
+            status: TickStatus::Published,
+            bundle_ids: vec![],
+            attempted_bundle_ids: vec![],
+            integration_sha: Some("abc123".to_string()),
+            validation_log: String::new(),
+            created_at: crate::id::now_millis(),
+            updated_at: crate::id::now_millis(),
+        };
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Bundle with base tick".to_string(),
+            claims: vec!["claim".to_string()],
+        };
+        // The call succeeds — bundle.create receives base_tick_id and accepts it
+        let result = execute_action(&action, &runner, &bridge, &dir, Some(&wi_id), AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref d) if d == "Bundle with base tick"),
+            "expected BundleProposed, got: {:?}",
+            result
         );
     }
 }

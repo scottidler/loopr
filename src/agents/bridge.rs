@@ -36,6 +36,11 @@ impl AgentIpcBridge {
         }
     }
 
+    /// Access the underlying stores.
+    pub fn stores(&self) -> &Arc<Stores> {
+        &self.stores
+    }
+
     /// Access the configuration.
     pub fn config(&self) -> &Config {
         &self.config

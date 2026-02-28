@@ -664,7 +664,12 @@ fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(eyre!("git merge {} failed: {}", branch, stderr));
+            // Fix #3: Clean up half-merged state before returning error
+            let _ = std::process::Command::new("git")
+                .args(["merge", "--abort"])
+                .current_dir(repo_path)
+                .output();
+            return Err(eyre!("git merge {} failed (aborted): {}", branch, stderr));
         }
     }
 
@@ -1619,5 +1624,163 @@ mod tests {
         let (passed, log) = run_validation_commands(&["false".to_string(), "true".to_string()]);
         assert!(!passed);
         assert!(log.contains("FAILED"));
+    }
+
+    // --- Fix #3: merge_bundle_branches cleanup tests ---
+
+    #[test]
+    fn test_merge_bundle_branches_success() {
+        let dir = std::env::temp_dir().join(format!("loopr-intg-merge-ok-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo with initial commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("main.txt"), "main").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        // Create a feature branch with a commit
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feature-1"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("feature.txt"), "feature").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "feature"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "master"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        // Try main if master doesn't exist
+        let out = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if branch != "master" {
+            std::process::Command::new("git")
+                .args(["checkout", "main"])
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+        }
+
+        let result = merge_bundle_branches(&dir, &["feature-1".to_string()]);
+        assert!(result.is_ok(), "merge should succeed: {:?}", result);
+    }
+
+    #[test]
+    fn test_merge_bundle_branches_failure_cleans_up() {
+        let dir = std::env::temp_dir().join(format!("loopr-intg-merge-abort-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("conflict.txt"), "main-content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        // Create a feature branch with conflicting content
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "conflict-branch"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("conflict.txt"), "branch-content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "branch change"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        // Go back and make a conflicting change on main
+        std::process::Command::new("git")
+            .args(["checkout", "-"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("conflict.txt"), "main-different-content").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "main diverge"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        // Merge should fail due to conflict
+        let result = merge_bundle_branches(&dir, &["conflict-branch".to_string()]);
+        assert!(result.is_err(), "merge should fail with conflict");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("aborted"), "error should mention aborted: {}", err);
+
+        // Verify repo is NOT in a half-merged state (no .git/MERGE_HEAD)
+        assert!(
+            !dir.join(".git/MERGE_HEAD").exists(),
+            "MERGE_HEAD should not exist after cleanup"
+        );
     }
 }
