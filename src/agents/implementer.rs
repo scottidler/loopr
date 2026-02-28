@@ -25,9 +25,19 @@ pub trait LlmClient: Send + Sync {
     async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String>;
 }
 
+/// Normalize common LLM key deviations: "type" → "action".
+/// LLMs sometimes use "type" instead of "action" as the discriminant key.
+fn normalize_action_keys(response: &str) -> String {
+    response.replace("\"type\":", "\"action\":")
+}
+
 /// Parse the LLM response into a list of agent actions.
 /// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
 pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
+    // Normalize "type" → "action" before any parsing attempts
+    let normalized = normalize_action_keys(response);
+    let response = &normalized;
+
     // Try direct parse first
     if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(response) {
         return Ok(actions);
@@ -1038,6 +1048,27 @@ mod tests {
         let actions = parse_actions(json).unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], AgentAction::Done { .. }));
+    }
+
+    #[test]
+    fn test_parse_actions_normalizes_type_to_action() {
+        // LLMs sometimes use "type" instead of "action" as the discriminant key
+        let json = r#"[{"type": "read_file", "path": "src/main.rs"}]"#;
+        let actions = parse_actions(json).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
+    }
+
+    #[test]
+    fn test_parse_actions_normalizes_type_in_prose() {
+        let response = r#"I'll read the file first.
+
+```json
+[{"type": "read_file", "path": "Cargo.toml"}]
+```"#;
+        let actions = parse_actions(response).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
     }
 
     #[test]

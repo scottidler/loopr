@@ -215,6 +215,7 @@ impl Record for AgentSession {
 pub enum AgentAction {
     // === Shared actions (all agent types) ===
     RunTool {
+        #[serde(alias = "tool")]
         tool_name: String,
         #[serde(default)]
         args: Vec<String>,
