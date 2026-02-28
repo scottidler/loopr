@@ -861,6 +861,7 @@ mod tests {
             let valid_pairs = [
                 (TickStatus::Open, TickStatus::Sealing),
                 (TickStatus::Sealing, TickStatus::Validating),
+                (TickStatus::Sealing, TickStatus::Failed),
                 (TickStatus::Validating, TickStatus::Published),
                 (TickStatus::Validating, TickStatus::Failed),
             ];

@@ -598,15 +598,17 @@ fn handle_plan_transition(
 
     plan.status = target_status;
     plan.updated_at = crate::id::now_millis();
+    let plan_clone = plan.clone();
+    drop(plans);
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(plan.clone())
+        && let Err(e) = store.lock().unwrap().update(plan_clone.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let plan_json = match serde_json::to_value(&*plan) {
+    let plan_json = match serde_json::to_value(&plan_clone) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
@@ -817,15 +819,17 @@ fn handle_spec_transition(
 
     spec.status = target_status;
     spec.updated_at = crate::id::now_millis();
+    let spec_clone = spec.clone();
+    drop(specs);
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(spec.clone())
+        && let Err(e) = store.lock().unwrap().update(spec_clone.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let spec_json = match serde_json::to_value(&*spec) {
+    let spec_json = match serde_json::to_value(&spec_clone) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
@@ -1037,15 +1041,17 @@ fn handle_phase_transition(
 
     phase.status = target_status;
     phase.updated_at = crate::id::now_millis();
+    let phase_clone = phase.clone();
+    drop(phases);
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(phase.clone())
+        && let Err(e) = store.lock().unwrap().update(phase_clone.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let phase_json = match serde_json::to_value(&*phase) {
+    let phase_json = match serde_json::to_value(&phase_clone) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
@@ -1352,15 +1358,17 @@ fn handle_work_item_transition(
 
     wi.status = target_status;
     wi.updated_at = crate::id::now_millis();
+    let wi_clone = wi.clone();
+    drop(work_items);
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(wi.clone())
+        && let Err(e) = store.lock().unwrap().update(wi_clone.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let wi_json = match serde_json::to_value(&*wi) {
+    let wi_json = match serde_json::to_value(&wi_clone) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
@@ -1676,15 +1684,17 @@ fn handle_bundle_transition(
     if !verification.is_empty() && bundle.verification.is_empty() {
         bundle.verification = verification;
     }
+    let bundle_clone = bundle.clone();
+    drop(bundles);
 
     // Persist transition to TaskStore if available
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(bundle.clone())
+        && let Err(e) = store.lock().unwrap().update(bundle_clone.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let bundle_json = match serde_json::to_value(&*bundle) {
+    let bundle_json = match serde_json::to_value(&bundle_clone) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
@@ -1889,15 +1899,17 @@ fn handle_tick_transition(
     let tick = ticks.get_mut(&id).unwrap();
     tick.status = target_status;
     tick.updated_at = crate::id::now_millis();
+    let tick_clone = tick.clone();
+    drop(ticks);
 
     // Persist transition to TaskStore if available (matches work_item_transition pattern)
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(tick.clone())
+        && let Err(e) = store.lock().unwrap().update(tick_clone.clone())
     {
         return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
     }
 
-    let tick_json = match serde_json::to_value(&*tick) {
+    let tick_json = match serde_json::to_value(&tick_clone) {
         Ok(v) => v,
         Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     };
