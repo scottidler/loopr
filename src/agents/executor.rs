@@ -15,6 +15,7 @@ use crate::agents::researcher;
 use crate::agents::reviewer;
 use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
+use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::{ToolResult, ToolRunner};
 use crate::worktree::manager::WorktreeManager;
@@ -43,6 +44,18 @@ fn create_llm_client(
     let client = AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone())?;
     info!("Agent {} using LLM client (model: {})", session_id, config.model);
     Ok(Box::new(client))
+}
+
+/// Returns the integration SHA of the latest Published Tick,
+/// or "HEAD" if no Ticks have been published yet.
+pub fn resolve_worktree_base(stores: &Stores) -> String {
+    let ticks = stores.ticks.read().unwrap();
+    ticks
+        .values()
+        .filter(|t| t.status == TickStatus::Published)
+        .max_by_key(|t| t.number)
+        .and_then(|t| t.integration_sha.clone())
+        .unwrap_or_else(|| "HEAD".to_string())
 }
 
 /// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
@@ -81,7 +94,9 @@ pub async fn run_agent_task(
     };
 
     if let Some(ref key) = worktree_key {
-        let worktree_path = match worktree_mgr.create(key, "HEAD") {
+        let base_ref = resolve_worktree_base(&stores);
+        info!("Agent {} using worktree base: {}", session_id, base_ref);
+        let worktree_path = match worktree_mgr.create(key, &base_ref) {
             Ok(path) => Some(path),
             Err(crate::worktree::manager::WorktreeError::AlreadyExists(_)) => {
                 info!("Agent {} worktree already exists for {}", session_id, key);
@@ -2889,5 +2904,73 @@ mod tests {
             "expected lock-blocked error, got: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_no_ticks() {
+        let dir = std::env::temp_dir().join(format!("loopr-wt-base-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "HEAD");
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_no_published_ticks() {
+        let dir = std::env::temp_dir().join(format!("loopr-wt-base-nopub-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        {
+            let mut ticks = stores.ticks.write().unwrap();
+            let mut t = crate::domain::tick::Tick::new(1);
+            t.integration_sha = Some("abc123".to_string());
+            // Status is Open, not Published
+            ticks.insert(t.id.clone(), t);
+        }
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "HEAD");
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_picks_latest_published() {
+        let dir = std::env::temp_dir().join(format!("loopr-wt-base-latest-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        {
+            let mut ticks = stores.ticks.write().unwrap();
+
+            let mut t1 = crate::domain::tick::Tick::new(1);
+            t1.status = crate::domain::tick::TickStatus::Published;
+            t1.integration_sha = Some("sha_tick_1".to_string());
+            ticks.insert(t1.id.clone(), t1);
+
+            let mut t2 = crate::domain::tick::Tick::new(3);
+            t2.status = crate::domain::tick::TickStatus::Published;
+            t2.integration_sha = Some("sha_tick_3".to_string());
+            ticks.insert(t2.id.clone(), t2);
+
+            let mut t3 = crate::domain::tick::Tick::new(2);
+            t3.status = crate::domain::tick::TickStatus::Published;
+            t3.integration_sha = Some("sha_tick_2".to_string());
+            ticks.insert(t3.id.clone(), t3);
+        }
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "sha_tick_3");
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_published_without_sha_falls_back() {
+        let dir = std::env::temp_dir().join(format!("loopr-wt-base-nosha-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        {
+            let mut ticks = stores.ticks.write().unwrap();
+            let mut t = crate::domain::tick::Tick::new(1);
+            t.status = crate::domain::tick::TickStatus::Published;
+            t.integration_sha = None; // Published but no SHA
+            ticks.insert(t.id.clone(), t);
+        }
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "HEAD");
     }
 }
