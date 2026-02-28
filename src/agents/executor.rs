@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::coordinator;
 use crate::agents::implementer::{self, LlmClient};
-use crate::agents::integrator_task;
+use crate::agents::integrator;
 use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::researcher;
 use crate::agents::reviewer;
@@ -356,7 +356,7 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = integrator_task::run_integrator(&mut session, stores, bridge, &config, event_tx).await;
+            let result = integrator::run_integrator(&mut session, stores, bridge, &config, event_tx).await;
 
             // Write back updated session iteration count
             {

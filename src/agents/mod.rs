@@ -4,7 +4,7 @@ pub mod coordinator;
 pub mod executor;
 pub mod generation;
 pub mod implementer;
-pub mod integrator_task;
+pub mod integrator;
 pub mod llm_client;
 pub mod researcher;
 pub mod reviewer;
