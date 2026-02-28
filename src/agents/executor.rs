@@ -2259,4 +2259,635 @@ mod tests {
             result
         );
     }
+
+    // --- Task #6: Additional coverage tests ---
+
+    #[tokio::test]
+    async fn test_run_agent_task_coordinator_restart_loop() {
+        crate::prompts::init_defaults();
+        // Coordinator restart loop: will fail due to no API key. Cancel the session during restart
+        // to exercise the cancellation-during-restart path.
+        let dir = std::env::temp_dir().join(format!("loopr-exec-coordrestart-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            agents: crate::config::AgentConfig {
+                coordinator: crate::config::CoordinatorConfig {
+                    idle_interval_secs: 0,
+                    active_interval_secs: 0,
+                    ..crate::config::CoordinatorConfig::default()
+                },
+                ..crate::config::AgentConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(&dir).unwrap();
+        let mut custom_stores = Stores::new();
+        custom_stores.store = Some(Arc::new(StdMutex::new(store)));
+        custom_stores.config = config;
+        let stores = Arc::new(custom_stores);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        // Cancel the session after a short delay so the restart loop exits early
+        let stores_clone = stores.clone();
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let mut sessions = stores_clone.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&sid_clone) {
+                // Force to Running first (needed for transition to Cancelled)
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        });
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Coordinator,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        // Should reach a terminal state (either Failed from restarts or terminal from cancel)
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal(), "coordinator should be in terminal state");
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_researcher_flow() {
+        crate::prompts::init_defaults();
+        // Researcher flow — pre-cancel the session so it exits quickly from the loop
+        let dir = std::env::temp_dir().join(format!("loopr-exec-resflow-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+
+        let mut session = AgentSession::new(AgentType::Researcher, "test-model".to_string());
+        session.target_id = Some("plan-1".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        // Cancel after short delay so the researcher exits quickly
+        let stores_clone = stores.clone();
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut sessions = stores_clone.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&sid_clone) {
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        });
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Researcher,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal(), "researcher should reach terminal state");
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_integrator_flow() {
+        crate::prompts::init_defaults();
+        // Integrator flow — pre-cancel the session so it exits quickly from the loop
+        let dir = std::env::temp_dir().join(format!("loopr-exec-integflow-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Use custom config with interval_secs=0 so the integrator loop doesn't block
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            integrator: crate::config::IntegratorConfig {
+                interval_secs: 0,
+                enabled: true,
+                ..crate::config::IntegratorConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(&dir).unwrap();
+        let mut custom_stores = Stores::new();
+        custom_stores.store = Some(Arc::new(StdMutex::new(store)));
+        custom_stores.config = config;
+        let stores = Arc::new(custom_stores);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+
+        let session = AgentSession::new(AgentType::Integrator, "test-model".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        // Cancel after short delay so the integrator exits quickly
+        let stores_clone = stores.clone();
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut sessions = stores_clone.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&sid_clone) {
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        });
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Integrator,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal(), "integrator should reach terminal state");
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_worktree_cleanup() {
+        // Implementer with work_item_id should attempt worktree creation and cleanup
+        let dir = std::env::temp_dir().join(format!("loopr-exec-wtcleanup-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo (needed for worktree operations)
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
+        session.work_item_id = Some("wi-test-123".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Implementer,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        // Should reach terminal state (will fail due to no API key, but worktree path is exercised)
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal());
+    }
+
+    #[tokio::test]
+    async fn test_transition_role_inference_all_collections() {
+        // Test normalize_collection with all collection variants
+        let dir = std::env::temp_dir().join(format!("loopr-exec-transall-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (plan_id, spec_id, phase_id, _) = create_test_hierarchy(&bridge);
+
+        // Test "plans" (plural) → normalizes to "plan"
+        let action = AgentAction::Transition {
+            collection: "plans".to_string(),
+            id: plan_id.clone(),
+            target_status: "abandoned".to_string(),
+            role: None,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("plans")),
+            "expected Transitioned for plans, got: {:?}",
+            result
+        );
+
+        // Test "specs" (plural) → normalizes to "spec"
+        let action = AgentAction::Transition {
+            collection: "specs".to_string(),
+            id: spec_id.clone(),
+            target_status: "abandoned".to_string(),
+            role: None,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::Transitioned(_)));
+
+        // Test "phases" (plural) → normalizes to "phase"
+        let action = AgentAction::Transition {
+            collection: "phases".to_string(),
+            id: phase_id.clone(),
+            target_status: "abandoned".to_string(),
+            role: None,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::Transitioned(_)));
+    }
+
+    #[tokio::test]
+    async fn test_transition_assignee_validation_for_inprogress() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-assignee-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Attempt InProgress transition without assignee using Transition action (role = coordinator)
+        // This should fail because InProgress requires an assignee
+        let action = AgentAction::Transition {
+            collection: "work_item".to_string(),
+            id: wi_id.clone(),
+            target_status: "InProgress".to_string(),
+            role: Some("coordinator".to_string()),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator).await;
+        // Should fail (transition error) since InProgress requires assignee
+        assert!(result.is_err(), "InProgress without assignee should fail: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_plan_error_path() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-plnerr-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Create a first plan (Draft)
+        let action1 = AgentAction::CreatePlan {
+            title: "First Plan".to_string(),
+            description: "desc".to_string(),
+            acceptance_criteria: "pass".to_string(),
+        };
+        let result1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
+
+        // Try to create another plan — should get ActionError due to draft-awareness guard
+        let action2 = AgentAction::CreatePlan {
+            title: "Second Plan".to_string(),
+            description: "desc".to_string(),
+            acceptance_criteria: "pass".to_string(),
+        };
+        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Plan already exists")),
+            "expected draft-awareness error, got: {:?}",
+            result2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_spec_error_path() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-specerr-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (plan_id, _, _, _) = create_test_hierarchy(&bridge);
+
+        // The hierarchy already created a Draft spec under this plan (but it was transitioned to Active).
+        // Create a new spec (Draft) under same plan
+        let action1 = AgentAction::CreateSpec {
+            plan_id: plan_id.clone(),
+            title: "New Spec".to_string(),
+            description: "desc".to_string(),
+        };
+        let result1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
+
+        // Try to create another spec under same plan — should get draft-awareness error
+        let action2 = AgentAction::CreateSpec {
+            plan_id: plan_id.clone(),
+            title: "Another Spec".to_string(),
+            description: "desc".to_string(),
+        };
+        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Spec already exists")),
+            "expected draft-awareness error for spec, got: {:?}",
+            result2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_phase_error_path() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-phaseerr-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Use a nonexistent spec_id — should get error from bridge
+        let action = AgentAction::CreatePhase {
+            spec_id: "nonexistent-spec".to_string(),
+            title: "New Phase".to_string(),
+            description: "desc".to_string(),
+            order: 1,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_phase failed")),
+            "expected error for nonexistent spec, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_work_item_error_path() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-wierr-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Use a nonexistent phase_id — should get error from bridge
+        let action = AgentAction::CreateWorkItem {
+            phase_id: "nonexistent-phase".to_string(),
+            title: "New WI".to_string(),
+            description: "desc".to_string(),
+            resource_tags: vec![],
+            acceptance_criteria: vec![],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_work_item failed")),
+            "expected error for nonexistent phase, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_triage_bundle_full() {
+        // Test triage on a bundle that's not in the right state (error path)
+        let dir = std::env::temp_dir().join(format!("loopr-exec-triagefull-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Triage a nonexistent bundle
+        let action = AgentAction::TriageBundle {
+            bundle_id: "nonexistent-bundle".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("triage_bundle failed")),
+            "expected triage error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_accept_bundle_full() {
+        // Test accept on a bundle that's not in the right state (error path)
+        let dir = std::env::temp_dir().join(format!("loopr-exec-acceptfull-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Create a bundle but don't triage it — accept should fail
+        let bundle_resp = bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/accepterr",
+                "description": "Accept err test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("accept_bundle failed")),
+            "expected accept error for un-triaged bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_spawn_researcher_via_action() {
+        // Test SpawnResearcher action (exercises the spawn path)
+        let dir = std::env::temp_dir().join(format!("loopr-exec-spawnres2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::SpawnResearcher {
+            query: "What patterns are used in the codebase?".to_string(),
+            scope_id: "spec-1".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        // agent.start will either succeed or fail (no LLM key) — both are acceptable
+        assert!(
+            matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
+                || matches!(result, ActionResult::ActionError(_)),
+            "expected AgentSpawned or ActionError, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lock_conflict_policy_ignore() {
+        // Under LockAdvisory (default), writes to locked paths should succeed
+        let dir = std::env::temp_dir().join(format!("loopr-exec-lockign-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        // Default config: LockAdvisory
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Create a lock on the exact file we want to write to
+        bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "locked.txt", "holder_id": "agent-other", "granted_by": "agent-other" }),
+        );
+
+        // Write to the locked file — should succeed under advisory policy
+        let action = AgentAction::WriteFile {
+            path: "locked.txt".to_string(),
+            content: "advisory allows this".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::FileWritten(_)),
+            "expected write to succeed under advisory policy, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lock_conflict_policy_warn() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        // Under LockStrict, writes to locked paths should return ActionError
+        let dir = std::env::temp_dir().join(format!("loopr-exec-lockwarn-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, config);
+
+        // Create a lock on the path
+        bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "strict.txt", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+
+        // Write to locked path — should be blocked
+        let action = AgentAction::WriteFile {
+            path: "strict.txt".to_string(),
+            content: "should be blocked".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked") && msg.contains("LockStrict")),
+            "expected lock-blocked error, got: {:?}",
+            result
+        );
+    }
 }

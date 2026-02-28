@@ -1079,4 +1079,219 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(stored_iteration, 3, "iteration should be persisted in stores");
     }
+
+    // --- infer_action_level tests ---
+
+    #[test]
+    fn test_infer_action_level_returns_none_for_done() {
+        let action = AgentAction::Done {
+            summary: "all done".into(),
+        };
+        assert!(infer_action_level(&action).is_none());
+    }
+
+    #[test]
+    fn test_infer_action_level_returns_none_for_create_learning() {
+        let action = AgentAction::CreateLearning {
+            content: "learned something".into(),
+            scope: "global".into(),
+            source_id: "test".into(),
+            applicable_roles: None,
+            resource_tags: None,
+        };
+        assert!(infer_action_level(&action).is_none());
+    }
+
+    // --- build_generation_footer tests ---
+
+    #[test]
+    fn test_build_generation_footer_generation_needed() {
+        // No plans exist → generation is needed at Plan level
+        let dir = std::env::temp_dir().join(format!("loopr-coord-genftr-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let footer = build_generation_footer(&stores, "Build an auth system", 3);
+        assert!(footer.is_some(), "should return generation footer when no plan exists");
+        let text = footer.unwrap();
+        // The Plan-level generation prompt should mention creating a plan
+        assert!(
+            text.contains("plan") || text.contains("Plan"),
+            "footer should mention plan generation"
+        );
+    }
+
+    #[test]
+    fn test_build_generation_footer_validation_cap_reached() {
+        use crate::domain::validation::{ValidationReport, ValidationVerdict};
+
+        let dir = std::env::temp_dir().join(format!("loopr-coord-valcap-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create a Draft plan so determine_generation_level returns None
+        // (Draft exists, so no generation needed)
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create 3 failed validation reports for this plan (cap = 3)
+        let store_lock = stores.store.as_ref().unwrap();
+        {
+            let mut store = store_lock.lock().unwrap();
+            for _ in 0..3 {
+                let report = ValidationReport::new(
+                    "plans".into(),
+                    plan_id.clone(),
+                    ValidationVerdict::Fail,
+                    vec![],
+                    "Failed criteria".into(),
+                    "test-model".into(),
+                );
+                store.create(report).unwrap();
+            }
+        }
+
+        let footer = build_generation_footer(&stores, "Build auth", 3);
+        assert!(footer.is_some(), "should return footer when validation cap is reached");
+        let text = footer.unwrap();
+        assert!(text.contains("need_help"), "should signal need_help when cap reached");
+    }
+
+    #[test]
+    fn test_build_generation_footer_draft_needs_regen() {
+        use crate::domain::validation::{ValidationReport, ValidationVerdict};
+
+        let dir = std::env::temp_dir().join(format!("loopr-coord-regen-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create a Draft plan
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create 1 failed validation report (below cap of 3)
+        let store_lock = stores.store.as_ref().unwrap();
+        {
+            let mut store = store_lock.lock().unwrap();
+            let report = ValidationReport::new(
+                "plans".into(),
+                plan_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                "Missing acceptance criteria".into(),
+                "test-model".into(),
+            );
+            store.create(report).unwrap();
+        }
+
+        let footer = build_generation_footer(&stores, "Build auth", 3);
+        assert!(
+            footer.is_some(),
+            "should return regen footer when draft has failures below cap"
+        );
+        let text = footer.unwrap();
+        assert!(
+            text.contains("Re-generation Required"),
+            "should contain re-generation header"
+        );
+    }
+
+    // --- check_phase_completion tests ---
+
+    #[test]
+    fn test_check_phase_completion_no_active_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-noplan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // No plans at all → should return empty
+        let completed = check_phase_completion(&stores);
+        assert!(completed.is_empty());
+    }
+
+    // --- multi-level action filter tests ---
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_filters_multi_level_actions() {
+        crate::prompts::init_defaults();
+        let dir = std::env::temp_dir().join(format!("loopr-coord-multilevel-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        // LLM returns mixed-level actions: a plan + a spec (different levels)
+        let llm = MockLlm::new(vec![
+            r#"[
+                {"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"},
+                {"action": "create_spec", "plan_id": "plan-1", "title": "Spec1", "description": "desc"}
+            ]"#
+            .to_string(),
+        ]);
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+
+        let outcome =
+            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
+                .await
+                .unwrap();
+
+        // Should still produce a Continue (plan created), but spec should have been filtered
+        assert!(matches!(outcome, IterationOutcome::Continue(_)));
+
+        // Only one plan should exist (the spec with nonexistent plan_id would have been filtered)
+        let plans = stores.plans.read().unwrap();
+        assert_eq!(plans.len(), 1, "only the plan-level action should have executed");
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_empty_after_filter() {
+        crate::prompts::init_defaults();
+        let dir = std::env::temp_dir().join(format!("loopr-coord-emptyfilter-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        // LLM returns only a "done" action with no hierarchy level
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "done", "summary": "Finished planning"}]"#.to_string(),
+        ]);
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+
+        let outcome =
+            run_coordinator_iteration(&llm, &session, &stores, &bridge, &CoordinatorConfig::default(), 1, None)
+                .await
+                .unwrap();
+
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Finished planning")),
+            "done action should yield Done outcome"
+        );
+    }
+
+    // --- format_action_summary additional coverage ---
+
+    #[test]
+    fn test_format_action_summary_document_validated_empty_issues() {
+        // Exercises the empty-issues branch with a different verdict
+        let result = ActionResult::DocumentValidated {
+            verdict: "fail".into(),
+            summary: "Criteria not met".into(),
+            issues: vec![],
+        };
+        let summary = format_action_summary(&result);
+        assert!(summary.contains("validated: fail"), "should contain the fail verdict");
+        assert!(summary.contains("Criteria not met"), "should contain the summary");
+        // Empty issues → no "(N issues)" suffix
+        assert!(
+            !summary.contains("issues"),
+            "should not mention issues count when issues is empty"
+        );
+    }
 }

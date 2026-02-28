@@ -439,6 +439,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_ensure_one_daemon_stale_pid_cleanup() {
+        let config = test_config();
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+
+        // Write a PID file with a PID that does not exist (stale)
+        std::fs::create_dir_all(config.daemon.pid_path.parent().unwrap()).unwrap();
+        std::fs::write(&config.daemon.pid_path, "999999999").unwrap();
+        assert!(config.daemon.pid_path.exists());
+
+        // ensure_one_daemon should clean up the stale PID file and succeed
+        let result = ensure_one_daemon(&ctx);
+        assert!(result.is_ok());
+        // Stale PID file should be removed
+        assert!(!config.daemon.pid_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_one_daemon_live_daemon_errors() {
+        let config = test_config();
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+
+        // Write the current process PID — /proc/<our_pid> exists, so it looks alive
+        let our_pid = std::process::id();
+        std::fs::create_dir_all(config.daemon.pid_path.parent().unwrap()).unwrap();
+        std::fs::write(&config.daemon.pid_path, our_pid.to_string()).unwrap();
+
+        let result = ensure_one_daemon(&ctx);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("daemon already running"));
+        assert!(err_msg.contains(&our_pid.to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_ensure_one_daemon_stale_socket_cleanup() {
+        let config = test_config();
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+
+        // No PID file, but a stale socket exists
+        std::fs::create_dir_all(config.daemon.socket_path.parent().unwrap()).unwrap();
+        std::fs::write(&config.daemon.socket_path, "stale").unwrap();
+        assert!(config.daemon.socket_path.exists());
+
+        let result = ensure_one_daemon(&ctx);
+        assert!(result.is_ok());
+        // Stale socket should be removed
+        assert!(!config.daemon.socket_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_write_version_file() {
+        let config = test_config();
+        let (tx, _rx) = tokio::sync::broadcast::channel(16);
+        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+
+        write_version_file(&ctx).unwrap();
+
+        let runtime_dir = config.daemon.pid_path.parent().unwrap();
+        let version_path = runtime_dir.join("daemon.version");
+        assert!(version_path.exists());
+        let contents = std::fs::read_to_string(&version_path).unwrap();
+        assert_eq!(contents, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_no_handles() {
+        let stores = Arc::new(context::Stores::new());
+        let (event_tx, _rx) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+
+        // No agent handles — should return immediately without hanging
+        graceful_shutdown(&stores, &event_tx).await;
+
+        // Verify that the shutting_down event was sent (subscriber would have received it)
+        // The function returned without error — that's the main assertion
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_with_handles() {
+        let stores = Arc::new(context::Stores::new());
+        let (event_tx, _rx) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+
+        // Insert a Running agent session that should be cancelled
+        {
+            let mut sessions = stores.agent_sessions.write().unwrap();
+            let mut session =
+                crate::agents::AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
+            session.status = AgentStatus::Running;
+            sessions.insert(session.id.clone(), session);
+        }
+
+        // Insert a mock agent handle (a quick task that completes)
+        {
+            let handle = tokio::spawn(async {
+                // Simulate agent work that finishes quickly
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            });
+            let mut handles = stores.agent_handles.lock().unwrap();
+            handles.insert("test-session".to_string(), handle);
+        }
+
+        graceful_shutdown(&stores, &event_tx).await;
+
+        // Agent sessions should have been cancelled
+        let sessions = stores.agent_sessions.read().unwrap();
+        for session in sessions.values() {
+            assert!(
+                session.status.is_terminal(),
+                "expected terminal status, got {:?}",
+                session.status
+            );
+        }
+
+        // Agent handles should have been drained
+        let handles = stores.agent_handles.lock().unwrap();
+        assert!(handles.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_daemon_ipc_shutdown() {
         let config = test_config();
         let socket_path = config.daemon.socket_path.clone();

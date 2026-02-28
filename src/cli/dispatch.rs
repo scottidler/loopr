@@ -840,4 +840,386 @@ mod tests {
         let (method, _) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "coordinator.get_goal");
     }
+
+    #[test]
+    fn test_crud_spec_with_parent_and_order() {
+        // Spec create with both parent (plan_id) and order set
+        let cmd = Command::Spec {
+            cmd: CrudCmd::Create {
+                title: "Auth Spec".to_string(),
+                description: "JWT tokens".to_string(),
+                parent: Some("plan-42".to_string()),
+                order: Some(3),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "spec.create");
+        assert_eq!(params["title"], "Auth Spec");
+        assert_eq!(params["description"], "JWT tokens");
+        assert_eq!(params["plan_id"], "plan-42");
+        assert_eq!(params["order"], 3);
+    }
+
+    #[test]
+    fn test_tick_list_with_status_filter() {
+        let cmd = Command::Tick {
+            cmd: TickCmd::List {
+                status: Some("Published".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Integrator);
+        assert_eq!(method, "tick.list");
+        assert_eq!(params["status"], "Published");
+    }
+
+    #[test]
+    fn test_lock_list_multiple_filters() {
+        // All three filters set: resource, holder_id, and active_only
+        let cmd = Command::Lock {
+            cmd: LockCmd::List {
+                resource: Some("src/lib.rs".to_string()),
+                holder_id: Some("wi-7".to_string()),
+                active_only: true,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "lock.list");
+        assert_eq!(params["resource"], "src/lib.rs");
+        assert_eq!(params["holder_id"], "wi-7");
+        assert_eq!(params["active_only"], true);
+    }
+
+    #[test]
+    fn test_bundle_create_with_base_tick_id() {
+        // Bundle create without base_tick_id — key should be absent
+        let cmd = Command::Bundle {
+            cmd: BundleCmd::Create {
+                work_item_id: "wi-5".to_string(),
+                branch: "feat/bar".to_string(),
+                description: "No tick".to_string(),
+                base_tick_id: None,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "bundle.create");
+        assert_eq!(params["work_item_id"], "wi-5");
+        assert_eq!(params["branch_name"], "feat/bar");
+        assert_eq!(params["description"], "No tick");
+        assert!(params.get("base_tick_id").is_none() || params["base_tick_id"].is_null());
+    }
+
+    #[test]
+    fn test_worktree_cleanup_mapping() {
+        let cmd = Command::Worktree {
+            cmd: WorktreeCmd::Cleanup {
+                work_item_id: "wi-cleanup".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "worktree.cleanup");
+        assert_eq!(params["work_item_id"], "wi-cleanup");
+    }
+
+    #[test]
+    fn test_worktree_refresh_mapping() {
+        let cmd = Command::Worktree {
+            cmd: WorktreeCmd::Refresh {
+                work_item_id: "wi-refresh".to_string(),
+                git_ref: "main".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "worktree.refresh");
+        assert_eq!(params["work_item_id"], "wi-refresh");
+        assert_eq!(params["ref"], "main");
+    }
+
+    #[test]
+    fn test_agent_start_with_all_optional_params() {
+        // StartResearcher with target_id set — all optional params populated
+        let cmd = Command::Agent {
+            cmd: AgentCmd::StartResearcher {
+                query: "What API patterns exist?".to_string(),
+                target_id: Some("spec-9".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.start");
+        assert_eq!(params["agent_type"], "researcher");
+        assert_eq!(params["query"], "What API patterns exist?");
+        assert_eq!(params["target_id"], "spec-9");
+
+        // Also test integrator start (no optional params — different path)
+        let cmd2 = Command::Agent {
+            cmd: AgentCmd::StartIntegrator,
+        };
+        let (method2, params2) = command_to_ipc(&cmd2, Role::Integrator);
+        assert_eq!(method2, "agent.start");
+        assert_eq!(params2["agent_type"], "integrator");
+    }
+
+    #[test]
+    fn test_coordinator_goal_clear_mapping() {
+        let cmd = Command::Coordinator {
+            cmd: CoordinatorCmd::Clear,
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "coordinator.clear_goal");
+        assert_eq!(params, json!({}));
+        // Verify no extra fields are present
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    // --- Coverage gap tests for uncovered branches ---
+
+    #[test]
+    fn test_work_item_create_with_parent_uses_phase_id() {
+        let cmd = Command::WorkItem {
+            cmd: CrudCmd::Create {
+                title: "Implement auth".to_string(),
+                description: "JWT".to_string(),
+                parent: Some("phase-1".to_string()),
+                order: None,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "work_item.create");
+        assert_eq!(params["phase_id"], "phase-1");
+    }
+
+    #[test]
+    fn test_spec_list_with_parent_uses_plan_id() {
+        let cmd = Command::Spec {
+            cmd: CrudCmd::List {
+                parent: Some("plan-1".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "spec.list");
+        assert_eq!(params["plan_id"], "plan-1");
+    }
+
+    #[test]
+    fn test_phase_list_with_parent_uses_spec_id() {
+        let cmd = Command::Phase {
+            cmd: CrudCmd::List {
+                parent: Some("spec-1".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "phase.list");
+        assert_eq!(params["spec_id"], "spec-1");
+    }
+
+    #[test]
+    fn test_work_item_list_with_parent_uses_phase_id() {
+        let cmd = Command::WorkItem {
+            cmd: CrudCmd::List {
+                parent: Some("phase-1".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "work_item.list");
+        assert_eq!(params["phase_id"], "phase-1");
+    }
+
+    #[test]
+    fn test_transition_skip_validation_flag() {
+        let cmd = Command::Plan {
+            cmd: CrudCmd::Transition {
+                id: "p-1".to_string(),
+                status: "active".to_string(),
+                skip_validation: true,
+            },
+        };
+        let (_, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(params["skip_validation"], true);
+    }
+
+    #[test]
+    fn test_bundle_get_mapping() {
+        let cmd = Command::Bundle {
+            cmd: BundleCmd::Get { id: "b-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "bundle.get");
+        assert_eq!(params["id"], "b-1");
+    }
+
+    #[test]
+    fn test_bundle_list_with_work_item_filter() {
+        let cmd = Command::Bundle {
+            cmd: BundleCmd::List {
+                work_item_id: Some("wi-1".to_string()),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "bundle.list");
+        assert_eq!(params["work_item_id"], "wi-1");
+    }
+
+    #[test]
+    fn test_bundle_list_no_filter() {
+        let cmd = Command::Bundle {
+            cmd: BundleCmd::List { work_item_id: None },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "bundle.list");
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_tick_create_mapping() {
+        let cmd = Command::Tick {
+            cmd: TickCmd::Create { number: 42 },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Integrator);
+        assert_eq!(method, "tick.create");
+        assert_eq!(params["number"], 42);
+    }
+
+    #[test]
+    fn test_tick_get_mapping() {
+        let cmd = Command::Tick {
+            cmd: TickCmd::Get { id: "t-5".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Integrator);
+        assert_eq!(method, "tick.get");
+        assert_eq!(params["id"], "t-5");
+    }
+
+    #[test]
+    fn test_learning_create_mapping() {
+        let cmd = Command::Learning {
+            cmd: LearningCmd::Create {
+                source_id: "wi-1".to_string(),
+                scope: "global".to_string(),
+                content: "Always use snake_case".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "learning.create");
+        assert_eq!(params["source_id"], "wi-1");
+        assert_eq!(params["scope"], "global");
+        assert_eq!(params["content"], "Always use snake_case");
+    }
+
+    #[test]
+    fn test_learning_get_mapping() {
+        let cmd = Command::Learning {
+            cmd: LearningCmd::Get { id: "l-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "learning.get");
+        assert_eq!(params["id"], "l-1");
+    }
+
+    #[test]
+    fn test_learning_list_mapping() {
+        let cmd = Command::Learning { cmd: LearningCmd::List };
+        let (method, _) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "learning.list");
+    }
+
+    #[test]
+    fn test_learning_contradict_mapping() {
+        let cmd = Command::Learning {
+            cmd: LearningCmd::Contradict { id: "l-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "learning.contradict");
+        assert_eq!(params["id"], "l-1");
+    }
+
+    #[test]
+    fn test_learning_promote_mapping() {
+        let cmd = Command::Learning {
+            cmd: LearningCmd::Promote { id: "l-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "learning.promote");
+        assert_eq!(params["id"], "l-1");
+    }
+
+    #[test]
+    fn test_learning_demote_mapping() {
+        let cmd = Command::Learning {
+            cmd: LearningCmd::Demote { id: "l-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "learning.demote");
+        assert_eq!(params["id"], "l-1");
+    }
+
+    #[test]
+    fn test_lock_create_mapping() {
+        let cmd = Command::Lock {
+            cmd: LockCmd::Create {
+                resource: "src/main.rs".to_string(),
+                holder_id: "wi-1".to_string(),
+                granted_by: "coordinator".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "lock.create");
+        assert_eq!(params["resource"], "src/main.rs");
+        assert_eq!(params["holder_id"], "wi-1");
+        assert_eq!(params["granted_by"], "coordinator");
+    }
+
+    #[test]
+    fn test_lock_get_mapping() {
+        let cmd = Command::Lock {
+            cmd: LockCmd::Get { id: "lk-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "lock.get");
+        assert_eq!(params["id"], "lk-1");
+    }
+
+    #[test]
+    fn test_lock_release_mapping() {
+        let cmd = Command::Lock {
+            cmd: LockCmd::Release { id: "lk-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "lock.release");
+        assert_eq!(params["id"], "lk-1");
+    }
+
+    #[test]
+    fn test_lock_expire_mapping() {
+        let cmd = Command::Lock {
+            cmd: LockCmd::Expire { id: "lk-1".to_string() },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "lock.expire");
+        assert_eq!(params["id"], "lk-1");
+    }
+
+    #[test]
+    fn test_tick_list_no_filter() {
+        let cmd = Command::Tick {
+            cmd: TickCmd::List { status: None },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Integrator);
+        assert_eq!(method, "tick.list");
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_lock_list_holder_id_only() {
+        let cmd = Command::Lock {
+            cmd: LockCmd::List {
+                resource: None,
+                holder_id: Some("wi-3".to_string()),
+                active_only: false,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "lock.list");
+        assert_eq!(params["holder_id"], "wi-3");
+        assert!(params.get("resource").is_none() || params["resource"].is_null());
+        assert!(params.get("active_only").is_none() || params["active_only"].is_null());
+    }
 }

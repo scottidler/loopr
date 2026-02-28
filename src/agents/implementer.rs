@@ -1020,6 +1020,168 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_parse_actions_skips_malformed_in_fallback() {
+        // Array with one valid and one malformed action — fallback should skip the bad one
+        let json = r#"[
+            {"action": "done", "summary": "All good"},
+            {"action": "totally_bogus", "invalid_field": 42}
+        ]"#;
+        let actions = parse_actions(json).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AgentAction::Done { .. }));
+    }
+
+    #[test]
+    fn test_build_implementer_summary_empty_locks_and_siblings() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-emptysummary-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+
+        // No active locks, no sibling agents — summary should be empty
+        let summary = build_implementer_summary(&stores, &wi_id);
+        assert!(summary.is_empty(), "expected empty summary, got: {}", summary);
+    }
+
+    #[tokio::test]
+    async fn test_run_iteration_done_stops_remaining_actions() {
+        // When a Done action appears mid-list, subsequent actions should not execute
+        let dir = std::env::temp_dir().join(format!("loopr-impl-donestop-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+
+        // Done comes first, then a write_file that should NOT execute
+        let llm = MockLlm::new(
+            r#"[
+            {"action": "done", "summary": "Early exit"},
+            {"action": "write_file", "path": "should_not_exist.txt", "content": "nope"}
+        ]"#,
+        );
+        let params = IterationParams {
+            llm: &llm,
+            stores: &stores,
+            tool_runner: &tool_runner,
+            bridge: &bridge,
+            work_item_id: &wi_id,
+            worktree_path: &dir,
+            session_id: "test-donestop",
+            event_tx: &event_tx,
+        };
+
+        let outcome = run_iteration(&params, 1, None, None).await.unwrap();
+        assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "Early exit"));
+        // The file after Done should NOT have been written
+        assert!(!dir.join("should_not_exist.txt").exists());
+    }
+
+    #[test]
+    fn test_drain_tick_published_closed_channel() {
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
+        // Send a tick, then close
+        let _ = tx.send(DaemonEvent::tick_published("tick-closed", "sha"));
+        drop(tx);
+        // Should still find the tick before hitting Closed
+        let result = drain_tick_published(&mut rx);
+        assert_eq!(result, Some("tick-closed".to_string()));
+    }
+
+    #[test]
+    fn test_drain_tick_published_lagged_channel() {
+        // Create a very small buffer so sending more messages than capacity causes lag
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(2);
+        // Send 4 messages to overflow the buffer of 2 — receiver will lag
+        let _ = tx.send(DaemonEvent::record_created("x", "1"));
+        let _ = tx.send(DaemonEvent::record_created("x", "2"));
+        let _ = tx.send(DaemonEvent::record_created("x", "3"));
+        let _ = tx.send(DaemonEvent::tick_published("tick-lagged", "sha"));
+        // drain should recover from lag and find the tick
+        let result = drain_tick_published(&mut rx);
+        assert_eq!(result, Some("tick-lagged".to_string()));
+    }
+
+    #[test]
+    fn test_format_action_summary_truncated_tool_output() {
+        use crate::tools::ToolResult;
+
+        // Create stdout that exceeds MAX_SUMMARY_CONTENT (4000 chars)
+        let long_output = "x".repeat(5000);
+        let tr = ToolResult {
+            tool_name: "big_tool".to_string(),
+            exit_code: 0,
+            stdout: long_output.clone(),
+            stderr: String::new(),
+            duration_ms: 100,
+            truncated: false,
+        };
+        let action = AgentAction::RunTool {
+            tool_name: "big_tool".to_string(),
+            args: vec![],
+        };
+        let summary = format_action_summary(&action, &ActionResult::ToolRun(tr));
+        assert!(summary.contains("ran big_tool (exit 0)"));
+        assert!(summary.contains("[truncated, 5000 total bytes]"));
+        // Should NOT contain the full 5000-char output
+        assert!(summary.len() < long_output.len());
+    }
+
+    #[tokio::test]
+    async fn test_run_implementer_session_iteration_persisted() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-persist-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+        let tool_runner = ToolRunner::new(&[]);
+        let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let mut config = AgentRoleConfig::default_implementer();
+        config.max_iterations = 2;
+
+        // LLM returns a write on first call, done on second
+        struct TwoShotLlm {
+            call_count: std::sync::atomic::AtomicU32,
+        }
+
+        #[async_trait]
+        impl LlmClient for TwoShotLlm {
+            async fn call(&self, _system: &str, _user: &str) -> Result<String> {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    Ok(r#"[{"action": "write_file", "path": "iter.txt", "content": "1"}]"#.to_string())
+                } else {
+                    Ok(r#"[{"action": "done", "summary": "Persisted iteration"}]"#.to_string())
+                }
+            }
+        }
+
+        let llm = TwoShotLlm {
+            call_count: std::sync::atomic::AtomicU32::new(0),
+        };
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test".into());
+        let session_id = session.id.clone();
+        session.work_item_id = Some(wi_id);
+        session.worktree_path = Some(dir.to_string_lossy().into());
+
+        // Insert session into stores so the loop can update it
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session.clone());
+
+        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        assert_eq!(session.iteration, 2);
+
+        // Verify the iteration was persisted in stores
+        let sessions = stores.agent_sessions.read().unwrap();
+        let stored = sessions.get(&session_id).unwrap();
+        assert_eq!(stored.iteration, 2, "Stored iteration should be 2");
+    }
+
     #[tokio::test]
     async fn test_implementer_context_includes_goal() {
         use crate::domain::coordinator_goal::CoordinatorGoal;
@@ -1077,5 +1239,38 @@ mod tests {
             user_msg.contains("REST API for user management"),
             "expected goal text in context"
         );
+    }
+
+    #[test]
+    fn test_build_implementer_summary_with_locks_and_siblings() {
+        use crate::domain::lock::{Lock, LockStatus};
+        let dir = std::env::temp_dir().join(format!("loopr-impl-fullsummary-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = setup_stores(&dir);
+        let wi_id = get_work_item_id(&stores);
+
+        // Add an active lock
+        let mut lock = Lock::new("src/main.rs".into(), "wi-other".into(), "coordinator".into());
+        lock.status = LockStatus::Active;
+        stores.locks.write().unwrap().insert(lock.id.clone(), lock);
+
+        // Add a sibling agent session (different work_item_id, not terminal)
+        let mut session =
+            crate::agents::AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
+        session.work_item_id = Some("wi-sibling".to_string());
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let summary = build_implementer_summary(&stores, &wi_id);
+        assert!(summary.contains("### Active Locks"), "should contain locks section");
+        assert!(summary.contains("src/main.rs"), "should contain lock resource");
+        assert!(
+            summary.contains("### Sibling Agents"),
+            "should contain siblings section"
+        );
+        assert!(summary.contains("wi-sibling"), "should contain sibling work_item_id");
     }
 }

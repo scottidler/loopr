@@ -1422,4 +1422,442 @@ mod tests {
 
         assert!(is_validation_cap_reached(&stores, 3)); // 3 >= 3
     }
+
+    // --- New coverage tests ---
+
+    #[test]
+    fn test_determine_level_multiple_active_plans() {
+        // When multiple active plans exist, determine_generation_level should still find one
+        // and proceed to check specs (returns Spec since no specs exist).
+        let dir = std::env::temp_dir().join(format!("loopr-gen-multi-plan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan1 = Plan::new("Plan A".into(), "desc".into(), "crit".into());
+        plan1.status = HierarchyStatus::Active;
+        stores.plans.write().unwrap().insert(plan1.id.clone(), plan1);
+
+        let mut plan2 = Plan::new("Plan B".into(), "desc".into(), "crit".into());
+        plan2.status = HierarchyStatus::Active;
+        stores.plans.write().unwrap().insert(plan2.id.clone(), plan2);
+
+        // With active plans but no specs, should want Spec
+        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Spec));
+    }
+
+    #[test]
+    fn test_determine_level_multiple_active_specs() {
+        // Multiple active specs under one active plan; no phases → should want Phase.
+        let dir = std::env::temp_dir().join(format!("loopr-gen-multi-spec-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec1 = Spec::new(plan_id.clone(), "Spec A".into(), "desc".into());
+        spec1.status = HierarchyStatus::Active;
+        stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
+
+        let mut spec2 = Spec::new(plan_id, "Spec B".into(), "desc".into());
+        spec2.status = HierarchyStatus::Active;
+        stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
+
+        assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Phase));
+    }
+
+    #[test]
+    fn test_determine_level_draft_spec_with_active_plan() {
+        // Active plan + draft spec (no active spec) → None (wait for validation).
+        let dir = std::env::temp_dir().join(format!("loopr-gen-draft-spec-ap-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Draft spec (default status is Draft)
+        let spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        assert_eq!(determine_generation_level(&stores), None);
+    }
+
+    #[test]
+    fn test_find_draft_regen_spec_with_failures() {
+        // Draft spec under active plan with failed validation → should return Spec regen info.
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-spec-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let draft_spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
+        let spec_id = draft_spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), draft_spec);
+
+        let report = ValidationReport::new(
+            "specs".into(),
+            spec_id.clone(),
+            ValidationVerdict::Fail,
+            vec![],
+            "spec is incomplete".into(),
+            "m".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        let regen = find_draft_needing_regeneration(&stores, 3).unwrap();
+        assert_eq!(regen.level, GenerationLevel::Spec);
+        assert_eq!(regen.target_id, spec_id);
+        assert_eq!(regen.collection, "specs");
+        assert_eq!(regen.attempt_count, 1);
+    }
+
+    #[test]
+    fn test_find_draft_regen_phase_with_failures() {
+        // Draft phase under active spec/plan with failed validation → Phase regen info.
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-phase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let draft_phase = Phase::new(spec_id, "Draft Phase".into(), "desc".into(), 1);
+        let phase_id = draft_phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), draft_phase);
+
+        let report = ValidationReport::new(
+            "phases".into(),
+            phase_id.clone(),
+            ValidationVerdict::Fail,
+            vec![],
+            "phase ordering is wrong".into(),
+            "m".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        let regen = find_draft_needing_regeneration(&stores, 3).unwrap();
+        assert_eq!(regen.level, GenerationLevel::Phase);
+        assert_eq!(regen.target_id, phase_id);
+        assert_eq!(regen.collection, "phases");
+        assert_eq!(regen.attempt_count, 1);
+    }
+
+    #[test]
+    fn test_find_draft_regen_multiple_drafts_returns_first() {
+        // When a draft plan exists, it is checked first even if there are draft specs deeper.
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-multi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Draft plan with failures
+        let draft_plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = draft_plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), draft_plan);
+
+        let report = ValidationReport::new(
+            "plans".into(),
+            plan_id.clone(),
+            ValidationVerdict::Fail,
+            vec![],
+            "plan fail".into(),
+            "m".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Draft plan takes priority — returns Plan level
+        let regen = find_draft_needing_regeneration(&stores, 3).unwrap();
+        assert_eq!(regen.level, GenerationLevel::Plan);
+        assert_eq!(regen.target_id, plan_id);
+    }
+
+    #[test]
+    fn test_is_validation_cap_over_cap() {
+        // When failures exceed cap, is_validation_cap_reached should still return true.
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-over-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Add 5 failures, cap is 3
+        for i in 0..5 {
+            let report = ValidationReport::new(
+                "plans".into(),
+                plan_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("failure {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        assert!(is_validation_cap_reached(&stores, 3)); // 5 >= 3
+    }
+
+    #[test]
+    fn test_find_failed_validations_multiple_for_same_target() {
+        // Multiple fail reports for the same target should all be returned, sorted by created_at.
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-multi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        for i in 0..4 {
+            let report = ValidationReport::new(
+                "plans".into(),
+                "target-1".into(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("failure {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        let reports = find_failed_validations(&stores, "plans", "target-1");
+        assert_eq!(reports.len(), 4);
+        // Verify sorted by created_at (ascending)
+        for window in reports.windows(2) {
+            assert!(window[0].created_at <= window[1].created_at);
+        }
+    }
+
+    #[test]
+    fn test_find_failed_validations_wrong_collection_excluded() {
+        // Fail reports for a different collection should not be returned.
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-coll-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let report = ValidationReport::new(
+            "specs".into(),
+            "target-1".into(),
+            ValidationVerdict::Fail,
+            vec![],
+            "wrong collection".into(),
+            "m".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Query for "plans" collection — should find nothing
+        let reports = find_failed_validations(&stores, "plans", "target-1");
+        assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn test_find_work_items_for_phase_ordering() {
+        // find_work_items_for_phase returns all WIs for the phase regardless of status.
+        let dir = std::env::temp_dir().join(format!("loopr-gen-fwip-ord-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut wi1 = WorkItem::new("phase-x".into(), "WI A".into(), "desc a".into());
+        wi1.status = WorkItemStatus::Done;
+        let mut wi2 = WorkItem::new("phase-x".into(), "WI B".into(), "desc b".into());
+        wi2.status = WorkItemStatus::InProgress;
+        let wi3 = WorkItem::new("phase-x".into(), "WI C".into(), "desc c".into());
+        // wi3 stays Draft (default)
+        let wi_other = WorkItem::new("phase-y".into(), "WI Other".into(), "not this phase".into());
+
+        stores.work_items.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.work_items.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.work_items.write().unwrap().insert(wi3.id.clone(), wi3);
+        stores.work_items.write().unwrap().insert(wi_other.id.clone(), wi_other);
+
+        let wis = find_work_items_for_phase(&stores, "phase-x");
+        assert_eq!(wis.len(), 3);
+        // All should belong to phase-x
+        assert!(wis.iter().all(|w| w.phase_id == "phase-x"));
+    }
+
+    // --- Prompt building with learnings/findings (covering branches at lines 119-180, 237-254) ---
+
+    #[test]
+    fn test_build_spec_prompt_with_learnings_and_findings() {
+        crate::prompts::init_defaults();
+        let mut plan = Plan::new("Auth".into(), "JWT auth".into(), "Must secure".into());
+        plan.status = HierarchyStatus::Active;
+
+        let learnings = vec!["Use bcrypt".to_string(), "Rate limit".to_string()];
+        let findings = vec!["Found auth.rs".to_string()];
+        let failures = vec!["Missing edge case".to_string()];
+
+        let prompt = build_spec_prompt(&plan, &learnings, &findings, &failures);
+        assert_eq!(prompt.level, GenerationLevel::Spec);
+        assert!(prompt.user_message.contains("### Relevant Learnings"));
+        assert!(prompt.user_message.contains("Use bcrypt"));
+        assert!(prompt.user_message.contains("Rate limit"));
+        assert!(prompt.user_message.contains("### Codebase Findings"));
+        assert!(prompt.user_message.contains("Found auth.rs"));
+        assert!(prompt.user_message.contains("### Previous Validation Failures"));
+        assert!(prompt.user_message.contains("Missing edge case"));
+    }
+
+    #[test]
+    fn test_build_phase_prompt_with_learnings() {
+        crate::prompts::init_defaults();
+        let mut spec = Spec::new("plan-1".into(), "Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+
+        let learnings = vec!["Always test edge cases".to_string()];
+        let failures: Vec<String> = vec![];
+
+        let prompt = build_phase_prompt(&spec, &learnings, &failures);
+        assert_eq!(prompt.level, GenerationLevel::Phase);
+        assert!(prompt.user_message.contains("### Relevant Learnings"));
+        assert!(prompt.user_message.contains("Always test edge cases"));
+        assert!(!prompt.user_message.contains("### Previous Validation Failures"));
+    }
+
+    #[test]
+    fn test_build_work_item_prompt_with_learnings_and_findings() {
+        crate::prompts::init_defaults();
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let learnings = vec!["Use generics".to_string()];
+        let findings = vec!["Module at src/lib.rs".to_string()];
+
+        let prompt = build_work_item_prompt(&phase, &[], &learnings, &findings);
+        assert_eq!(prompt.level, GenerationLevel::WorkItem);
+        assert!(prompt.user_message.contains("### Relevant Learnings"));
+        assert!(prompt.user_message.contains("Use generics"));
+        assert!(prompt.user_message.contains("### Codebase Context"));
+        assert!(prompt.user_message.contains("Module at src/lib.rs"));
+    }
+
+    // --- Spec/Phase validation cap checks (covering lines 617-658) ---
+
+    #[test]
+    fn test_is_validation_cap_reached_at_spec_level() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-vcap-spec-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Active plan
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Draft spec
+        let spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // 3 failed reports on spec (cap = 3)
+        for i in 0..3 {
+            let report = ValidationReport::new(
+                "specs".into(),
+                spec_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("fail {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        assert!(is_validation_cap_reached(&stores, 3));
+    }
+
+    #[test]
+    fn test_is_validation_cap_reached_at_phase_level() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-vcap-phase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Active plan
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Active spec
+        let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Draft phase
+        let phase = Phase::new(spec_id, "Draft Phase".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // 3 failed reports on phase (cap = 3)
+        for i in 0..3 {
+            let report = ValidationReport::new(
+                "phases".into(),
+                phase_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("phase fail {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        assert!(is_validation_cap_reached(&stores, 3));
+    }
+
+    #[test]
+    fn test_find_draft_regen_returns_none_for_phase_at_cap() {
+        use crate::domain::validation::ValidationVerdict;
+        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-phase-cap-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let phase = Phase::new(spec_id, "Draft Phase".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // 3 failures = at cap → return None
+        for i in 0..3 {
+            let report = ValidationReport::new(
+                "phases".into(),
+                phase_id.clone(),
+                ValidationVerdict::Fail,
+                vec![],
+                format!("fail {}", i),
+                "m".into(),
+            );
+            stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+        }
+
+        assert!(find_draft_needing_regeneration(&stores, 3).is_none());
+    }
 }

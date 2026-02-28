@@ -9410,4 +9410,874 @@ mod tests {
         // We just check it wasn't rejected by max_pool.
         assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
     }
+
+    // === Coverage tests: learning CRUD ===
+
+    #[test]
+    fn test_handle_learning_update() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let learning_id = create_learning(&stores, &tx, &wm, 1);
+
+        // Update content, applicable_roles, and resource_tags
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "learning.update",
+                json!({
+                    "id": learning_id,
+                    "content": "Updated content",
+                    "applicable_roles": ["Implementer", "Reviewer"],
+                    "resource_tags": ["src/main.rs", "src/lib.rs"]
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "learning.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["content"], "Updated content");
+        assert_eq!(result["resource_tags"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_handle_learning_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "learning.update", json!({"id": "nonexistent", "content": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_learning_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "learning.update", json!({"content": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_learning_reinforce() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create learning via dispatch (persists to TaskStore)
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Reinforce it — exercises the TaskStore persist path
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.reinforce", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["reinforcements"], 1);
+    }
+
+    #[test]
+    fn test_handle_learning_contradict() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.contradict", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["contradictions"], 1);
+    }
+
+    #[test]
+    fn test_handle_learning_promote() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["promoted"], true);
+    }
+
+    #[test]
+    fn test_handle_learning_demote() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "learning.create",
+                json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Promote first
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+
+        // Then demote
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "learning.demote", json!({"id": learning_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["promoted"], false);
+    }
+
+    // === Coverage tests: lock creation ===
+
+    #[test]
+    fn test_lock_create_with_ttl_param() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "lock.create",
+                json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1", "ttl_secs": 300}),
+            ),
+        );
+        assert!(!resp.is_error(), "lock.create with ttl failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert!(result["expires_at"].is_number(), "should have expires_at from ttl_secs");
+    }
+
+    #[test]
+    fn test_lock_create_auto_expire() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Default max_lock_ttl_minutes is 60, so auto-expire should set expires_at
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "lock.create",
+                json!({"resource": "src/lib.rs", "holder_id": "wi-2", "granted_by": "coord-1"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        // Without explicit ttl_secs, auto-expire from max_lock_ttl_minutes should set expires_at
+        assert!(result["expires_at"].is_number(), "should have auto-expire expires_at");
+    }
+
+    #[test]
+    fn test_lock_create_renewable_flag() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "lock.create",
+                json!({"resource": "src/mod.rs", "holder_id": "wi-3", "granted_by": "coord-1", "renewable": true}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["renewable"], true);
+    }
+
+    // === Coverage tests: agent lifecycle ===
+
+    #[test]
+    fn test_handle_agent_pause() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a running agent session
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let _ = session.transition_to(crate::agents::AgentStatus::Running);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
+        );
+        assert!(!resp.is_error(), "agent.pause failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], "paused");
+    }
+
+    #[test]
+    fn test_handle_agent_pause_missing_session() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.pause", json!({"session_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_agent_pause_terminal_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let _ = session.transition_to(crate::agents::AgentStatus::Running);
+        let _ = session.transition_to(crate::agents::AgentStatus::Completed);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
+        );
+        assert!(resp.is_error(), "should reject pause on terminal agent");
+    }
+
+    #[test]
+    fn test_handle_agent_resume() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a paused agent session
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let _ = session.transition_to(crate::agents::AgentStatus::Running);
+        let _ = session.transition_to(crate::agents::AgentStatus::Paused);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.resume", json!({"session_id": sid})),
+        );
+        assert!(!resp.is_error(), "agent.resume failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], "running");
+    }
+
+    #[test]
+    fn test_handle_agent_resume_missing_session() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.resume", json!({"session_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_agent_output() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // No events for session — should return empty array
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.output", json!({"session_id": "sess-1"})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+
+        // Add some events and query with since=0
+        {
+            let event = crate::agents::AgentEvent::LlmOutput {
+                session_id: "sess-1".to_string(),
+                chunk: "hello world".to_string(),
+                is_final: false,
+            };
+            let mut events = stores.agent_events.write().unwrap();
+            events.entry("sess-1".to_string()).or_default().push_back(event);
+        }
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "agent.output", json!({"session_id": "sess-1", "since": 0})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_handle_agent_output_missing_session_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.output", json!({})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // === Coverage tests: validator handlers ===
+
+    #[test]
+    fn test_handle_validator_validate() {
+        // validator.validate requires prompts::init() and an LLM API key.
+        // We test the parameter validation paths instead.
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Missing collection — exercises param validation
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"id": "plan-1"})),
+        );
+        assert!(resp.is_error());
+
+        // Missing id
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "validator.validate", json!({"collection": "plans"})),
+        );
+        assert!(resp.is_error());
+
+        // Plan not found — exercises the plan lookup path
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "validator.validate",
+                json!({"collection": "plans", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+
+        // Unsupported collection
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(4, "validator.validate", json!({"collection": "widgets", "id": "x"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("unsupported"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate_no_validator() {
+        let stores = test_stores(); // no validator
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"collection": "plans", "id": "x"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("not enabled"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate_missing_params() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Missing collection
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"id": "x"})),
+        );
+        assert!(resp.is_error());
+
+        // Missing id
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "validator.validate", json!({"collection": "plans"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_validator_validate_unknown_collection() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"collection": "unknown", "id": "x"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("unsupported collection"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate_not_found() {
+        let stores = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Plan not found
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "validator.validate",
+                json!({"collection": "plans", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+
+        // Spec not found
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "validator.validate",
+                json!({"collection": "specs", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+
+        // Phase not found
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "validator.validate",
+                json!({"collection": "phases", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_validator_report() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a validation report directly in TaskStore
+        let report = ValidationReport::new(
+            "plans".into(),
+            "plan-1".into(),
+            ValidationVerdict::Pass,
+            vec![],
+            "All good".into(),
+            "test-model".into(),
+        );
+        let report_id = report.id.clone();
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.report", json!({"id": report_id})),
+        );
+        assert!(!resp.is_error(), "validator.report failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["verdict"], "pass");
+    }
+
+    #[test]
+    fn test_handle_validator_report_not_found() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.report", json!({"id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_validator_report_no_taskstore() {
+        let stores = test_stores(); // no TaskStore
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.report", json!({"id": "any"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("TaskStore"));
+    }
+
+    #[test]
+    fn test_handle_validator_reports() {
+        let stores = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create two reports for different targets
+        let report1 = ValidationReport::new(
+            "plans".into(),
+            "plan-1".into(),
+            ValidationVerdict::Pass,
+            vec![],
+            "ok".into(),
+            "test-model".into(),
+        );
+        let report2 = ValidationReport::new(
+            "plans".into(),
+            "plan-2".into(),
+            ValidationVerdict::Fail,
+            vec![],
+            "bad".into(),
+            "test-model".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report1).unwrap();
+        stores.store.as_ref().unwrap().lock().unwrap().create(report2).unwrap();
+
+        // List all reports
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.reports", json!({})),
+        );
+        assert!(!resp.is_error());
+        assert!(resp.result.unwrap().as_array().unwrap().len() >= 2);
+
+        // Filter by target_id
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "validator.reports", json!({"target_id": "plan-1"})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+
+        // Filter by collection
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "validator.reports", json!({"target_collection": "plans"})),
+        );
+        assert!(!resp.is_error());
+        assert!(resp.result.unwrap().as_array().unwrap().len() >= 2);
+    }
+
+    #[test]
+    fn test_handle_validator_reports_no_taskstore() {
+        let stores = test_stores(); // no TaskStore
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.reports", json!({})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    // === Coverage tests: tool.list ===
+
+    #[test]
+    fn test_handle_tool_list() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tool.list", json!({})),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert!(result["tools"].is_array());
+    }
+
+    // === Coverage tests: validation gate strictness ===
+
+    #[test]
+    fn test_validation_gate_hard_fail_on_warn() {
+        use crate::config::ValidatorStrictness;
+
+        let stores = test_stores_with_validator_strictness(ValidatorStrictness::HardFailOnAnyAmbiguity);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan
+        let plan = Plan::new("Gate Test".into(), "desc".into(), "criteria".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create a Warn report
+        let report = ValidationReport::new(
+            "plans".into(),
+            plan_id.clone(),
+            ValidationVerdict::Warn,
+            vec![],
+            "Ambiguous criteria".into(),
+            "test-model".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Try to transition Draft → Active — should be blocked
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "plan.transition",
+                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+        assert!(
+            resp.is_error(),
+            "HardFailOnAnyAmbiguity should block Draft→Active on Warn report"
+        );
+    }
+
+    #[test]
+    fn test_validation_gate_suggest_only_on_fail() {
+        use crate::config::ValidatorStrictness;
+
+        let stores = test_stores_with_validator_strictness(ValidatorStrictness::SuggestOnly);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan
+        let plan = Plan::new("Gate Test".into(), "desc".into(), "criteria".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create a Fail report — SuggestOnly should NOT block
+        let report = ValidationReport::new(
+            "plans".into(),
+            plan_id.clone(),
+            ValidationVerdict::Fail,
+            vec![],
+            "Failed criteria".into(),
+            "test-model".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        // Try to transition Draft → Active — should succeed under SuggestOnly
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "plan.transition",
+                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+        assert!(
+            !resp.is_error(),
+            "SuggestOnly should NOT block Draft→Active even on Fail report: {:?}",
+            resp.error
+        );
+    }
+
+    #[test]
+    fn test_validation_gate_no_report_enabled() {
+        use crate::config::ValidatorStrictness;
+
+        let stores = test_stores_with_validator_strictness(ValidatorStrictness::HardFailOnAnyAmbiguity);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan with NO validation reports
+        let plan = Plan::new("No Reports".into(), "desc".into(), "criteria".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Try to transition Draft → Active — should be blocked (no report exists)
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "plan.transition",
+                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+        assert!(
+            resp.is_error(),
+            "should block Draft→Active when no validation report exists"
+        );
+    }
 }

@@ -901,4 +901,164 @@ mod tests {
         let result = ActionResult::Done("Complete".into());
         assert_eq!(format_action_summary(&action, &result), "done: Complete");
     }
+
+    // --- New coverage tests ---
+
+    #[test]
+    fn test_validate_path_rejects_parent_dir() {
+        let dir = std::env::temp_dir().join(format!("loopr-res-parent-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = validate_path(&dir, "../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn test_validate_path_nonexistent_file_in_repo() {
+        // A nonexistent file that is within the repo root should be accepted
+        let dir = std::env::temp_dir().join(format!("loopr-res-nonexist-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let result = validate_path(&dir, "src/does_not_exist.rs");
+        assert!(result.is_ok());
+        // The path should be within the repo root
+        let full = result.unwrap();
+        assert!(full.starts_with(&dir));
+    }
+
+    #[tokio::test]
+    async fn test_execute_search_code_truncation_over_100_lines() {
+        let dir = std::env::temp_dir().join(format!("loopr-res-sc-trunc-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create a file with 150 lines that all match
+        let content: String = (0..150).map(|i| format!("fn match_line_{i}() {{}}\n")).collect();
+        std::fs::write(dir.join("big.rs"), &content).unwrap();
+
+        let result = execute_search_code(&dir, "match_line", None, None).await.unwrap();
+        // Should be truncated — 100 lines + truncation message
+        assert!(result.contains("truncated"));
+        let line_count = result.lines().count();
+        assert_eq!(line_count, 101); // 100 result lines + 1 truncation line
+    }
+
+    #[tokio::test]
+    async fn test_execute_search_files_truncation_at_200() {
+        let dir = std::env::temp_dir().join(format!("loopr-res-sf-trunc-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create 210 files
+        for i in 0..210 {
+            std::fs::write(dir.join(format!("file_{i:03}.txt")), "").unwrap();
+        }
+
+        let result = execute_search_files(&dir, "*.txt", None).await.unwrap();
+        // Should have truncation
+        assert!(result.contains("truncated"));
+        // Should have at most 201 lines (200 files + truncation message)
+        let line_count = result.lines().count();
+        assert!(line_count <= 201);
+    }
+
+    #[tokio::test]
+    async fn test_execute_list_directory_empty_dir() {
+        let dir = std::env::temp_dir().join(format!("loopr-res-ld-empty-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(dir.join("emptydir")).unwrap();
+
+        let result = execute_list_directory(&dir, "emptydir").await.unwrap();
+        assert_eq!(result, "(empty directory)");
+    }
+
+    #[tokio::test]
+    async fn test_execute_list_directory_entry_truncation_at_500() {
+        let dir = std::env::temp_dir().join(format!("loopr-res-ld-trunc-{}", crate::id::generate_id()));
+        let sub = dir.join("bigdir");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        // Create 510 files
+        for i in 0..510 {
+            std::fs::write(sub.join(format!("entry_{i:04}.txt")), "").unwrap();
+        }
+
+        let result = execute_list_directory(&dir, "bigdir").await.unwrap();
+        assert!(result.contains("truncated"));
+        // Sort happens after truncation; entries are capped at 501 (500 + truncation marker)
+        let line_count = result.lines().count();
+        assert!(line_count <= 501);
+    }
+
+    #[tokio::test]
+    async fn test_run_researcher_iteration_empty_actions_returns_done() {
+        // When the LLM returns an empty action array, the researcher should finish (Done).
+        let dir = std::env::temp_dir().join(format!("loopr-res-empty-act-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        // Return empty actions array
+        let llm = MockLlm::new(vec![r#"[]"#.to_string()]);
+
+        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
+        session.query = Some("Find something".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+
+        let config = AgentRoleConfig::default_researcher();
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        // Empty actions → Done("No actions returned") → Ok(())
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_run_researcher_iteration_mixed_allowed_disallowed() {
+        // Mix of disallowed (write_file) and allowed (done) actions — should skip write, process done.
+        let dir = std::env::temp_dir().join(format!("loopr-res-mixed-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+
+        let llm = MockLlm::new(vec![
+            r#"[{"action": "write_file", "path": "bad.txt", "content": "nope"}, {"action": "done", "summary": "mixed test done"}]"#.to_string(),
+        ]);
+
+        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
+        session.query = Some("Mixed test".into());
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+
+        let config = AgentRoleConfig::default_researcher();
+        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        assert!(result.is_ok());
+        // Write file should NOT have been created
+        assert!(!dir.join("bad.txt").exists());
+    }
+
+    #[test]
+    fn test_format_action_summary_other_catch_all() {
+        // Test the `other => format!("{:?}", other)` branch in format_action_summary.
+        let action = AgentAction::SearchCode {
+            pattern: "test".into(),
+            glob: None,
+            path: None,
+        };
+        // Use a variant that hits the catch-all: e.g., Committed
+        let result = ActionResult::Committed("abc123".into());
+        let summary = format_action_summary(&action, &result);
+        assert!(summary.contains("Committed"));
+    }
 }

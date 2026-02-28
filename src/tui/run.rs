@@ -392,6 +392,7 @@ mod tests {
     use crate::domain::tick::Tick;
     use crate::domain::work_item::WorkItem;
     use ratatui::backend::TestBackend;
+    use std::sync::Arc;
 
     fn test_terminal() -> Terminal<TestBackend> {
         let backend = TestBackend::new(80, 24);
@@ -1033,6 +1034,584 @@ mod tests {
         assert!(state.ticks.is_empty());
         refresh_collection(&mut state, &mut client, "tick").await;
         assert_eq!(state.ticks.len(), 1);
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    /// Helper: start a mock daemon server that records the method+params of each request.
+    /// Returns the socket path, server handle, and a channel to read captured requests.
+    async fn mock_ipc_server() -> (
+        std::path::PathBuf,
+        tokio::task::JoinHandle<()>,
+        Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
+    ) {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+        use std::sync::Mutex;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("dispatch-{}.sock", crate::id::generate_id()));
+
+        let captured: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = captured.clone();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method != "system.handshake" {
+                            captured_clone
+                                .lock()
+                                .unwrap()
+                                .push((req.method.clone(), req.params.clone()));
+                        }
+                        DaemonResponse::ok(req.id, json!({"ok": true}))
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        (path, handle, captured)
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ipc_action_set_goal() {
+        let (path, server_handle, captured) = mock_ipc_server().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        dispatch_ipc_action(&mut client, IpcAction::SetGoal("Build auth system".to_string())).await;
+
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "coordinator.set_goal");
+            assert_eq!(reqs[0].1["goal"], "Build auth system");
+        }
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ipc_action_pause_agent() {
+        let (path, server_handle, captured) = mock_ipc_server().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        dispatch_ipc_action(&mut client, IpcAction::PauseAgent("sess-1".to_string())).await;
+
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "agent.pause");
+            assert_eq!(reqs[0].1["session_id"], "sess-1");
+        }
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ipc_action_resume_agent() {
+        let (path, server_handle, captured) = mock_ipc_server().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        dispatch_ipc_action(&mut client, IpcAction::ResumeAgent("sess-2".to_string())).await;
+
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "agent.resume");
+            assert_eq!(reqs[0].1["session_id"], "sess-2");
+        }
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ipc_action_stop_agent() {
+        let (path, server_handle, captured) = mock_ipc_server().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        dispatch_ipc_action(&mut client, IpcAction::StopAgent("sess-3".to_string())).await;
+
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "agent.stop");
+            assert_eq!(reqs[0].1["session_id"], "sess-3");
+        }
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ipc_action_new_record() {
+        let (path, server_handle, captured) = mock_ipc_server().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        dispatch_ipc_action(
+            &mut client,
+            IpcAction::NewRecord {
+                collection: "work_item".to_string(),
+            },
+        )
+        .await;
+
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "work_item.create");
+            assert_eq!(reqs[0].1["title"], "New Record");
+        }
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_ipc_action_transition_record() {
+        let (path, server_handle, captured) = mock_ipc_server().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        dispatch_ipc_action(
+            &mut client,
+            IpcAction::TransitionRecord {
+                collection: "bundle".to_string(),
+                id: "b-123".to_string(),
+            },
+        )
+        .await;
+
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].0, "bundle.transition");
+            assert_eq!(reqs[0].1["id"], "b-123");
+            assert_eq!(reqs[0].1["target_status"], "Active");
+        }
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_json_parse_error() {
+        // Test that refresh_collection handles JSON that is valid but doesn't
+        // match the expected type — the state should remain unchanged.
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-parse-err-{}.sock", crate::id::generate_id()));
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            // Return a string instead of an array — will fail deserialization
+                            DaemonResponse::ok(req.id, json!("not an array"))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+
+        // Each collection should fail silently and leave state empty
+        for collection in [
+            "plan",
+            "spec",
+            "phase",
+            "work_item",
+            "bundle",
+            "tick",
+            "learning",
+            "lock",
+            "agent",
+        ] {
+            refresh_collection(&mut state, &mut client, collection).await;
+        }
+        assert!(state.plans.is_empty());
+        assert!(state.specs.is_empty());
+        assert!(state.phases.is_empty());
+        assert!(state.work_items.is_empty());
+        assert!(state.bundles.is_empty());
+        assert!(state.ticks.is_empty());
+        assert!(state.learnings.is_empty());
+        assert!(state.locks.is_empty());
+        assert!(state.agent_sessions.is_empty());
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[test]
+    fn test_draw_tab_bar_highlighting() {
+        // Verify the tab bar renders correctly with different selected views
+        let mut app = App::new();
+        let mut terminal = test_terminal();
+
+        for view in View::ALL {
+            app.current_view = view;
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    draw_tab_bar(&app, frame, area);
+                })
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_draw_content_all_tabs() {
+        // Verify draw_content renders without panic for every view, including with data
+        let mut app = App::new();
+        app.state
+            .work_items
+            .push(WorkItem::new("ph1".into(), "WI 1".into(), "desc".into()));
+        app.state
+            .bundles
+            .push(Bundle::new("wi1".into(), None, "feature/test".into(), "claims".into()));
+        app.state.ticks.push(Tick::new(1));
+        app.state.learnings.push(crate::domain::learning::Learning::new(
+            "wi-1".into(),
+            crate::domain::learning::LearningScope::Global,
+            "insight".into(),
+        ));
+        app.state.locks.push(crate::domain::lock::Lock::new(
+            "src/main.rs".into(),
+            "wi-1".into(),
+            "coord".into(),
+        ));
+        app.state.agent_sessions.push(crate::agents::AgentSession::new(
+            crate::agents::AgentType::Coordinator,
+            "model".to_string(),
+        ));
+
+        let mut terminal = test_terminal();
+        for view in View::ALL {
+            app.current_view = view;
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    draw_content(&app, frame, area);
+                })
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_specs() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id()));
+
+        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into(), "Desc".into());
+        let specs_json = serde_json::to_value(vec![mock_spec]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let specs = specs_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            DaemonResponse::ok(req.id, specs.clone())
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        refresh_collection(&mut state, &mut client, "spec").await;
+        assert_eq!(state.specs.len(), 1);
+        assert_eq!(state.specs[0].title, "Test Spec");
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_phases() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-phase-{}.sock", crate::id::generate_id()));
+
+        let mock_phase = Phase::new("spec-1".into(), "Phase 1".into(), "Desc".into(), 1);
+        let phases_json = serde_json::to_value(vec![mock_phase]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let phases = phases_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            DaemonResponse::ok(req.id, phases.clone())
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        refresh_collection(&mut state, &mut client, "phase").await;
+        assert_eq!(state.phases.len(), 1);
+        assert_eq!(state.phases[0].title, "Phase 1");
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_learnings() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-learning-{}.sock", crate::id::generate_id()));
+
+        let mock_learning = Learning::new(
+            "wi-1".into(),
+            crate::domain::learning::LearningScope::Global,
+            "insight".into(),
+        );
+        let learnings_json = serde_json::to_value(vec![mock_learning]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let learnings = learnings_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            DaemonResponse::ok(req.id, learnings.clone())
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        refresh_collection(&mut state, &mut client, "learning").await;
+        assert_eq!(state.learnings.len(), 1);
+        assert_eq!(state.learnings[0].content, "insight");
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_locks() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-lock-{}.sock", crate::id::generate_id()));
+
+        let mock_lock = Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into());
+        let locks_json = serde_json::to_value(vec![mock_lock]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let locks = locks_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            DaemonResponse::ok(req.id, locks.clone())
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        refresh_collection(&mut state, &mut client, "lock").await;
+        assert_eq!(state.locks.len(), 1);
+        assert_eq!(state.locks[0].resource, "src/main.rs");
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_agent_sessions() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-agent-{}.sock", crate::id::generate_id()));
+
+        let mock_session = AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
+        let sessions_json = serde_json::to_value(vec![mock_session]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let sessions = sessions_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            DaemonResponse::ok(req.id, sessions.clone())
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        refresh_collection(&mut state, &mut client, "agent").await;
+        assert_eq!(state.agent_sessions.len(), 1);
 
         drop(client);
         let _ = server_handle.await;
