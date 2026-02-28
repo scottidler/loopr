@@ -405,39 +405,78 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
 /// This ensures the Phase record status and CoordinatorState are updated together.
 fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState) {
     if let Some(ref phase_id) = coord_state.current_phase_id {
-        let mut phases = stores.phases.write().unwrap();
-        if let Some(phase) = phases.get_mut(phase_id) {
-            phase.status = HierarchyStatus::Complete;
-            phase.updated_at = crate::id::now_millis();
-            info!("Phase {} marked Complete (record status updated)", phase_id);
+        // L1: Clone-then-drop-then-persist to avoid deadlock and ensure TaskStore persistence
+        let phase_to_persist = {
+            let mut phases = stores.phases.write().unwrap();
+            if let Some(phase) = phases.get_mut(phase_id) {
+                phase.status = HierarchyStatus::Complete;
+                phase.updated_at = crate::id::now_millis();
+                info!("Phase {} marked Complete (record status updated)", phase_id);
+                Some(phase.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(phase) = phase_to_persist
+            && let Some(ref store) = stores.store
+            && let Err(e) = store.lock().unwrap().update(phase)
+        {
+            warn!("Failed to persist Phase complete status: {}", e);
         }
     }
 }
 
-/// Find a pending Draft document (Plan, Spec, or Phase) that has no failed validations yet.
+/// L2: Find a pending Draft document scoped to the current active hierarchy chain.
 /// Returns (level_name, id, title) if found.
 fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, String, String)> {
-    // Check for Draft Plan
-    {
+    // Find active Plan (if any)
+    let active_plan_id = {
+        let plans = stores.plans.read().unwrap();
+        plans
+            .values()
+            .find(|p| p.status == HierarchyStatus::Active)
+            .map(|p| p.id.clone())
+    };
+
+    // Check for Draft Plan (only if no Active Plan exists)
+    if active_plan_id.is_none() {
         let plans = stores.plans.read().unwrap();
         if let Some(draft) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
             return Some(("Plan", draft.id.clone(), draft.title.clone()));
         }
+        return None;
     }
-    // Check for Draft Spec
-    {
+
+    // Find active Spec for the active Plan
+    let active_spec_id = {
         let specs = stores.specs.read().unwrap();
-        if let Some(draft) = specs.values().find(|s| s.status == HierarchyStatus::Draft) {
+        specs
+            .values()
+            .find(|s| s.status == HierarchyStatus::Active && Some(&s.plan_id) == active_plan_id.as_ref())
+            .map(|s| s.id.clone())
+    };
+
+    // Check for Draft Spec (only children of the active Plan)
+    if active_spec_id.is_none() {
+        let specs = stores.specs.read().unwrap();
+        if let Some(draft) = specs
+            .values()
+            .find(|s| s.status == HierarchyStatus::Draft && Some(&s.plan_id) == active_plan_id.as_ref())
+        {
             return Some(("Spec", draft.id.clone(), draft.title.clone()));
         }
+        return None;
     }
-    // Check for Draft Phase
+
+    // Check for Draft Phase (only children of the active Spec)
+    let phases = stores.phases.read().unwrap();
+    if let Some(draft) = phases
+        .values()
+        .find(|p| p.status == HierarchyStatus::Draft && Some(&p.spec_id) == active_spec_id.as_ref())
     {
-        let phases = stores.phases.read().unwrap();
-        if let Some(draft) = phases.values().find(|p| p.status == HierarchyStatus::Draft) {
-            return Some(("Phase", draft.id.clone(), draft.title.clone()));
-        }
+        return Some(("Phase", draft.id.clone(), draft.title.clone()));
     }
+
     None
 }
 
@@ -3159,5 +3198,74 @@ mod tests {
             "should NOT include merged bundles when WI is Done: {}",
             summary
         );
+    }
+
+    // --- L2: find_pending_draft_for_validation scoping tests ---
+
+    #[test]
+    fn test_find_draft_scoped_to_active_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-l2-scope-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create an active plan
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create a Draft Spec for the active plan
+        let mut spec = Spec::new(plan_id.clone(), "Draft Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Draft;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let result = find_pending_draft_for_validation(&stores);
+        assert!(result.is_some(), "should find Draft Spec under active Plan");
+        let (level, id, _) = result.unwrap();
+        assert_eq!(level, "Spec");
+        assert_eq!(id, spec_id);
+    }
+
+    #[test]
+    fn test_find_draft_ignores_orphan_from_other_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-l2-orphan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create an active plan
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "crit".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create an active spec for the active plan
+        let mut spec = Spec::new(plan_id, "Active Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Create a Draft Spec from a DIFFERENT plan (orphan)
+        let mut orphan_spec = Spec::new("old-plan-id".into(), "Orphan Spec".into(), "desc".into());
+        orphan_spec.status = HierarchyStatus::Draft;
+        stores
+            .specs
+            .write()
+            .unwrap()
+            .insert(orphan_spec.id.clone(), orphan_spec);
+
+        // Should NOT find the orphan spec, and no Draft Phase exists for active spec
+        let result = find_pending_draft_for_validation(&stores);
+        assert!(result.is_none(), "should NOT find orphan Draft from different Plan");
+    }
+
+    #[test]
+    fn test_find_draft_returns_none_when_no_drafts() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-l2-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        let result = find_pending_draft_for_validation(&stores);
+        assert!(result.is_none());
     }
 }
