@@ -802,4 +802,296 @@ mod tests {
         drop(client);
         let _ = server_handle.await;
     }
+
+    // --- Phase 4: Additional coverage tests ---
+
+    #[test]
+    fn test_draw_zero_size_terminal() {
+        // Zero-size terminal should not panic
+        let app = App::new();
+        let backend = TestBackend::new(0, 0);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // draw may not render anything but should not panic
+        let _ = terminal.draw(|frame| draw(&app, frame));
+    }
+
+    #[test]
+    fn test_draw_goal_input_mode() {
+        let mut app = App::new();
+        app.input_mode = InputMode::GoalInput;
+        app.goal_input = "Build auth".to_string();
+        let mut terminal = test_terminal();
+        terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn test_draw_goal_input_empty() {
+        let mut app = App::new();
+        app.input_mode = InputMode::GoalInput;
+        app.goal_input.clear();
+        let mut terminal = test_terminal();
+        terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn test_draw_goal_input_small_terminal() {
+        let mut app = App::new();
+        app.input_mode = InputMode::GoalInput;
+        app.goal_input = "Goal".to_string();
+        let backend = TestBackend::new(10, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn test_role_actions_reviewer() {
+        let actions = role_actions(Role::Reviewer);
+        assert_eq!(actions.len(), 2);
+        assert!(actions[0].contains("Transition"));
+    }
+
+    #[test]
+    fn test_role_actions_researcher() {
+        let actions = role_actions(Role::Researcher);
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].contains("Role"));
+    }
+
+    #[test]
+    fn test_event_collection_agent_status_changed() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::agent_status_changed("s1", crate::agents::AgentStatus::Running);
+        assert_eq!(event_collection(&event), Some("agent"));
+    }
+
+    #[test]
+    fn test_event_collection_agent_llm_output() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::new(
+            "agent.llm_output",
+            serde_json::json!({"session_id": "s1", "chunk": "hello", "is_final": false}),
+        );
+        assert_eq!(event_collection(&event), Some("agent"));
+    }
+
+    #[test]
+    fn test_event_collection_tick_validation_failed() {
+        use crate::ipc::protocol::DaemonEvent;
+        let event = DaemonEvent::new(
+            "tick.validation_failed",
+            serde_json::json!({"tick_id": "t1", "reason": "test failed"}),
+        );
+        assert_eq!(event_collection(&event), Some("tick"));
+    }
+
+    #[test]
+    fn test_draw_with_agent_sessions() {
+        use crate::agents::{AgentSession, AgentType};
+        let mut app = App::new();
+        app.current_view = View::Agents;
+        app.state
+            .agent_sessions
+            .push(AgentSession::new(AgentType::Implementer, "test-model".to_string()));
+        let mut terminal = test_terminal();
+        terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn test_draw_with_learnings() {
+        use crate::domain::learning::{Learning, LearningScope};
+        let mut app = App::new();
+        app.current_view = View::Learnings;
+        app.state.learnings.push(Learning::new(
+            "wi-1".into(),
+            LearningScope::Global,
+            "Test insight".into(),
+        ));
+        let mut terminal = test_terminal();
+        terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[test]
+    fn test_draw_with_locks() {
+        use crate::domain::lock::Lock;
+        let mut app = App::new();
+        app.current_view = View::Locks;
+        app.state
+            .locks
+            .push(Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into()));
+        let mut terminal = test_terminal();
+        terminal.draw(|frame| draw(&app, frame)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_bundles() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-bundle-{}.sock", crate::id::generate_id()));
+
+        let mock_bundle = Bundle::new("wi-1".into(), None, "feature/test".into(), "Test bundle".into());
+        let bundles_json = serde_json::to_value(vec![mock_bundle]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let bundles = bundles_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else if req.method == "bundle.list" {
+                            DaemonResponse::ok(req.id, bundles.clone())
+                        } else {
+                            DaemonResponse::ok(req.id, json!(null))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        assert!(state.bundles.is_empty());
+        refresh_collection(&mut state, &mut client, "bundle").await;
+        assert_eq!(state.bundles.len(), 1);
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_updates_ticks() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-tick-{}.sock", crate::id::generate_id()));
+
+        let mock_tick = Tick::new(1);
+        let ticks_json = serde_json::to_value(vec![mock_tick]).unwrap();
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                let ticks = ticks_json.clone();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else if req.method == "tick.list" {
+                            DaemonResponse::ok(req.id, ticks.clone())
+                        } else {
+                            DaemonResponse::ok(req.id, json!(null))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        assert!(state.ticks.is_empty());
+        refresh_collection(&mut state, &mut client, "tick").await;
+        assert_eq!(state.ticks.len(), 1);
+
+        drop(client);
+        let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_refresh_collection_invalid_json_no_panic() {
+        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::server::{IpcServer, handle_client};
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join("loopr-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("refresh-badjson-{}.sock", crate::id::generate_id()));
+
+        let server = IpcServer::new(&path);
+        let listener = server.bind().await.unwrap();
+        let (tx, _) = tokio::sync::broadcast::channel::<DaemonEvent>(16);
+        let event_tx = tx.clone();
+
+        let server_handle = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let event_rx = event_tx.subscribe();
+                handle_client(
+                    stream,
+                    move |req| {
+                        if req.method == "system.handshake" {
+                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                        } else {
+                            // Return a non-array value that won't deserialize as Vec<T>
+                            DaemonResponse::ok(req.id, json!({"not": "an array"}))
+                        }
+                    },
+                    event_rx,
+                )
+                .await;
+            }
+            server.cleanup();
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = IpcClient::connect(&path).await.unwrap();
+        client.handshake("0.1.0").await.unwrap();
+
+        let mut state = AppState::default();
+        // Should not panic — deserialization failure is silently ignored
+        refresh_collection(&mut state, &mut client, "plan").await;
+        assert!(state.plans.is_empty());
+        refresh_collection(&mut state, &mut client, "spec").await;
+        assert!(state.specs.is_empty());
+        refresh_collection(&mut state, &mut client, "phase").await;
+        assert!(state.phases.is_empty());
+        refresh_collection(&mut state, &mut client, "work_item").await;
+        assert!(state.work_items.is_empty());
+        refresh_collection(&mut state, &mut client, "bundle").await;
+        assert!(state.bundles.is_empty());
+        refresh_collection(&mut state, &mut client, "tick").await;
+        assert!(state.ticks.is_empty());
+        refresh_collection(&mut state, &mut client, "learning").await;
+        assert!(state.learnings.is_empty());
+        refresh_collection(&mut state, &mut client, "lock").await;
+        assert!(state.locks.is_empty());
+        refresh_collection(&mut state, &mut client, "agent").await;
+        assert!(state.agent_sessions.is_empty());
+
+        drop(client);
+        let _ = server_handle.await;
+    }
 }
