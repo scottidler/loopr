@@ -106,7 +106,9 @@ pub fn dispatch(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    match req.method.as_str() {
+    let method = req.method.clone();
+    let params = req.params.clone();
+    let resp = match req.method.as_str() {
         "system.handshake" => handle_handshake(req),
         "system.init" => handle_system_init(stores, req),
         "system.status" => handle_status(stores, req),
@@ -173,7 +175,56 @@ pub fn dispatch(
         "agent.resume" => handle_agent_resume(stores, event_tx, req),
         "agent.status" => handle_agent_status(stores, req),
         "agent.list" => handle_agent_list(stores, req),
+        "agent.output" => handle_agent_output(stores, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
+    };
+
+    // Gap #29: Post-dispatch auto-start hook (only on successful transitions)
+    if !resp.is_error() {
+        auto_start_agents(stores, event_tx, worktree_mgr, integrator_config, &method, &params);
+    }
+
+    resp
+}
+
+/// Auto-start agents based on transition outcomes (Gap #29).
+fn auto_start_agents(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    worktree_mgr: &WorktreeManager,
+    integrator_config: &IntegratorConfig,
+    method: &str,
+    params: &serde_json::Value,
+) {
+    if method == "work_item.transition"
+        && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
+        && target == "InProgress"
+        && stores.config.agents.auto_start_implementer
+        && let Some(wi_id) = params.get("id").and_then(|v| v.as_str())
+    {
+        let start_req = DaemonRequest::new(
+            0,
+            "agent.start",
+            json!({
+                "agent_type": "implementer", "work_item_id": wi_id,
+            }),
+        );
+        let _ = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+    }
+    if method == "bundle.transition"
+        && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
+        && target == "Triaged"
+        && stores.config.agents.auto_start_reviewer
+        && let Some(bid) = params.get("id").and_then(|v| v.as_str())
+    {
+        let start_req = DaemonRequest::new(
+            0,
+            "agent.start",
+            json!({
+                "agent_type": "reviewer", "bundle_id": bid,
+            }),
+        );
+        let _ = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
     }
 }
 
@@ -3302,6 +3353,23 @@ fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
         Ok(v) => DaemonResponse::ok(req.id, v),
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
     }
+}
+
+// --- Agent output handler (Gap #9) ---
+
+fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
+    };
+    let since = req.params.get("since").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    let events = stores.agent_events.read().unwrap();
+    let output: Vec<_> = match events.get(&session_id) {
+        Some(ring) => ring.iter().skip(since as usize).collect(),
+        None => Vec::new(),
+    };
+    DaemonResponse::ok(req.id, serde_json::to_value(&output).unwrap())
 }
 
 // --- Update handlers (Gap #1) ---

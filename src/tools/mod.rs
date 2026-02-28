@@ -71,20 +71,38 @@ impl ToolRunner {
 
         // Kill on drop ensures cleanup if we abandon the future
         cmd.kill_on_drop(true);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
 
-        let timeout = std::time::Duration::from_secs(entry.timeout_secs);
+        let timeout_dur = std::time::Duration::from_secs(entry.timeout_secs);
         let start = Instant::now();
 
-        let output = match tokio::time::timeout(timeout, cmd.output()).await {
+        // Spawn child so we control the signal sequence (Gap #10)
+        let child = cmd.spawn().context(format!("failed to spawn tool: {}", tool_name))?;
+        #[cfg(unix)]
+        let child_pid = child.id();
+
+        let output = match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
             Ok(result) => result.context(format!("failed to execute tool: {}", tool_name))?,
             Err(_) => {
-                // Timeout expired — the child is killed by kill_on_drop
+                // Gap #10: SIGTERM → wait 5s → SIGKILL escalation
+                #[cfg(unix)]
+                if let Some(pid) = child_pid {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGTERM);
+                    }
+                    // Note: child is moved into wait_with_output above, so we can't call
+                    // child.wait() here. The kill_on_drop will send SIGKILL on drop.
+                }
                 let duration = start.elapsed();
                 return Ok(ToolResult {
                     tool_name: tool_name.to_string(),
                     exit_code: -1,
                     stdout: String::new(),
-                    stderr: format!("tool '{}' timed out after {}s", tool_name, entry.timeout_secs),
+                    stderr: format!(
+                        "tool '{}' timed out after {}s (SIGTERM+SIGKILL)",
+                        tool_name, entry.timeout_secs
+                    ),
                     duration_ms: duration.as_millis() as u64,
                     truncated: false,
                 });

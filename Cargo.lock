@@ -1482,6 +1482,7 @@ dependencies = [
  "eyre",
  "futures",
  "glob",
+ "libc",
  "log",
  "ratatui",
  "reqwest",

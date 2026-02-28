@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
 use log::{info, warn};
@@ -7,7 +7,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use tokio::task::JoinHandle;
 
-use crate::agents::AgentSession;
+use crate::agents::{AgentEvent, AgentSession};
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_goal::CoordinatorGoal;
@@ -52,6 +52,8 @@ pub struct Stores {
     /// JoinHandles for spawned agent tasks, keyed by session ID.
     /// Used for graceful shutdown: cancel agents, wait, then abort.
     pub agent_handles: StdMutex<HashMap<String, JoinHandle<()>>>,
+    /// Per-session ring buffer of agent events for agent.output IPC method.
+    pub agent_events: StdRwLock<HashMap<String, VecDeque<AgentEvent>>>,
 }
 
 impl Stores {
@@ -74,8 +76,21 @@ impl Stores {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             config: Config::default(),
             agent_handles: StdMutex::new(HashMap::new()),
+            agent_events: StdRwLock::new(HashMap::new()),
         }
     }
+}
+
+/// Record an agent event in the per-session ring buffer.
+pub fn record_agent_event(stores: &Stores, session_id: &str, event: &AgentEvent) {
+    let mut events = stores.agent_events.write().unwrap();
+    let ring = events
+        .entry(session_id.to_string())
+        .or_insert_with(|| VecDeque::with_capacity(1000));
+    if ring.len() >= 1000 {
+        ring.pop_front();
+    }
+    ring.push_back(event.clone());
 }
 
 impl Default for Stores {

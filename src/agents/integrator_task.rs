@@ -620,6 +620,7 @@ mod tests {
             validation_commands: vec!["true".to_string()], // always passes
             interval_secs: 1,
             enabled: true,
+            session_timeout_secs: None,
         }
     }
 
@@ -628,6 +629,7 @@ mod tests {
             validation_commands: vec!["false".to_string()], // always fails
             interval_secs: 1,
             enabled: true,
+            session_timeout_secs: None,
         }
     }
 

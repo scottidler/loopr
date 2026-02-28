@@ -137,6 +137,7 @@ impl Default for CoordinatorConfig {
                 max_iterations: u32::MAX,
                 pool_size: 1,
                 temperature: 0.2,
+                session_timeout_secs: None, // Coordinator is long-lived
             },
             active_interval_secs: 5,
             idle_interval_secs: 30,
@@ -181,6 +182,7 @@ pub struct IntegratorConfig {
     pub validation_commands: Vec<String>,
     pub interval_secs: u64,
     pub enabled: bool,
+    pub session_timeout_secs: Option<u64>,
 }
 
 /// Agent system configuration — LLM agents running as Tokio tasks.
@@ -255,6 +257,7 @@ pub struct AgentRoleConfig {
     pub max_iterations: u32,
     pub pool_size: u32,
     pub temperature: f32,
+    pub session_timeout_secs: Option<u64>,
 }
 
 impl Default for AgentRoleConfig {
@@ -272,6 +275,7 @@ impl AgentRoleConfig {
             max_iterations: 20,
             pool_size: 2,
             temperature: 0.3,
+            session_timeout_secs: Some(1800), // 30 min
         }
     }
 
@@ -283,6 +287,7 @@ impl AgentRoleConfig {
             max_iterations: 5,
             pool_size: 2,
             temperature: 0.1,
+            session_timeout_secs: Some(600), // 10 min
         }
     }
 
@@ -294,6 +299,7 @@ impl AgentRoleConfig {
             max_iterations: 10,
             pool_size: 4,
             temperature: 0.1,
+            session_timeout_secs: Some(600), // 10 min
         }
     }
 }
@@ -342,6 +348,7 @@ impl Default for IntegratorConfig {
             ],
             interval_secs: 15,
             enabled: false,
+            session_timeout_secs: Some(1200), // 20 min
         }
     }
 }
