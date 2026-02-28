@@ -104,6 +104,20 @@ fn write_pid_file(ctx: &DaemonContext) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Write daemon version file alongside the PID file.
+fn write_version_file(ctx: &DaemonContext) -> std::io::Result<()> {
+    let runtime_dir = ctx
+        .config
+        .daemon
+        .pid_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let version_path = runtime_dir.join("daemon.version");
+    std::fs::write(&version_path, env!("CARGO_PKG_VERSION"))?;
+    info!("Wrote version file: {}", version_path.display());
+    Ok(())
+}
+
 /// Remove the daemon PID file.
 fn remove_pid_file(ctx: &DaemonContext) {
     let _ = std::fs::remove_file(&ctx.config.daemon.pid_path);
@@ -118,6 +132,7 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         let c = ctx.read().await;
         ensure_one_daemon(&c)?;
         write_pid_file(&c)?;
+        write_version_file(&c)?;
         // Crash recovery: reset any orphaned InProgress/Integrating records
         c.recover_orphaned_records();
         c.config.daemon.socket_path.clone()

@@ -207,6 +207,9 @@ pub enum AgentCmd {
     /// Start the coordinator agent
     #[command(name = "start-coordinator")]
     StartCoordinator,
+    /// Start the integrator agent
+    #[command(name = "start-integrator")]
+    StartIntegrator,
     /// Start a researcher agent for a query
     #[command(name = "start-researcher")]
     StartResearcher {
@@ -408,6 +411,12 @@ pub enum Command {
         collection: String,
         /// Record ID
         target_id: String,
+    },
+    /// Set the active role (persisted to config)
+    #[command(name = "role")]
+    SetRole {
+        /// The role to set (coordinator, integrator, implementer, reviewer, researcher)
+        role: String,
     },
     /// Graceful daemon shutdown
     Shutdown,

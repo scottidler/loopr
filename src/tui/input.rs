@@ -28,6 +28,10 @@ pub enum Action {
     ResumeCoordinator,
     /// Stop the Coordinator.
     StopCoordinator,
+    /// Create a new record (context-dependent on current view).
+    NewRecord,
+    /// Transition selected record's status.
+    TransitionRecord,
     None,
 }
 
@@ -49,6 +53,8 @@ pub fn handle_key(key: KeyEvent, mode: InputMode) -> Action {
             KeyCode::Char('p') => Action::PauseCoordinator,
             KeyCode::Char('r') => Action::ResumeCoordinator,
             KeyCode::Char('x') => Action::StopCoordinator,
+            KeyCode::Char('n') => Action::NewRecord,
+            KeyCode::Char('t') => Action::TransitionRecord,
             KeyCode::Char('j') | KeyCode::Down => Action::SelectNext,
             KeyCode::Char('k') | KeyCode::Up => Action::SelectPrev,
             KeyCode::Tab => {
@@ -112,6 +118,18 @@ pub fn apply_action(app: &mut App, action: Action) {
                 .or_else(|| app.find_coordinator_session(false))
             {
                 app.pending_ipc = Some(IpcAction::StopAgent(session_id));
+            }
+        }
+        Action::NewRecord => {
+            if let Some(collection) = app.view_collection() {
+                app.pending_ipc = Some(IpcAction::NewRecord { collection });
+            }
+        }
+        Action::TransitionRecord => {
+            if let Some(collection) = app.view_collection()
+                && let Some(id) = app.selected_record_id()
+            {
+                app.pending_ipc = Some(IpcAction::TransitionRecord { collection, id });
             }
         }
         Action::None => {}
@@ -203,6 +221,22 @@ mod tests {
         assert_eq!(
             handle_key(key(KeyCode::Char('x')), InputMode::Normal),
             Action::StopCoordinator
+        );
+    }
+
+    #[test]
+    fn test_new_record_key() {
+        assert_eq!(
+            handle_key(key(KeyCode::Char('n')), InputMode::Normal),
+            Action::NewRecord
+        );
+    }
+
+    #[test]
+    fn test_transition_record_key() {
+        assert_eq!(
+            handle_key(key(KeyCode::Char('t')), InputMode::Normal),
+            Action::TransitionRecord
         );
     }
 

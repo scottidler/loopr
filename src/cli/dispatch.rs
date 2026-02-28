@@ -11,6 +11,17 @@ use super::{AgentCmd, BundleCmd, Command, CoordinatorCmd, CrudCmd, LearningCmd, 
 /// Connect to the daemon, send the IPC request for the given CLI command,
 /// print the result, and exit.
 pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()> {
+    // Gap #6: `loopr role` writes to local config, doesn't need daemon
+    if let Command::SetRole { role: role_str } = command {
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("loopr");
+        std::fs::create_dir_all(&config_dir)?;
+        std::fs::write(config_dir.join("role"), role_str)?;
+        println!("Role set to: {role_str}");
+        return Ok(());
+    }
+
     let mut client = IpcClient::connect(socket_path)
         .await
         .context("failed to connect to daemon — is it running?")?;
@@ -77,6 +88,9 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
             "validator.reports".to_string(),
             json!({ "collection": collection, "target_id": target_id }),
         ),
+
+        // SetRole writes to local config, not IPC — handled in dispatch_command
+        Command::SetRole { .. } => unreachable!("role handled before IPC dispatch"),
 
         // Tui and Daemon are handled by main before dispatch
         Command::Tui | Command::Daemon => unreachable!("tui/daemon handled before dispatch"),
@@ -256,6 +270,7 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
             json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
         ),
         AgentCmd::StartCoordinator => ("agent.start".to_string(), json!({ "agent_type": "coordinator" })),
+        AgentCmd::StartIntegrator => ("agent.start".to_string(), json!({ "agent_type": "integrator" })),
         AgentCmd::StartResearcher { query, target_id } => {
             let mut params = json!({ "agent_type": "researcher", "query": query });
             if let Some(tid) = target_id {

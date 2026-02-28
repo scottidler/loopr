@@ -156,6 +156,14 @@ async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
             "agent.stop".to_string(),
             serde_json::json!({ "session_id": session_id }),
         ),
+        IpcAction::NewRecord { collection } => (
+            format!("{collection}.create"),
+            serde_json::json!({ "title": "New Record", "description": "" }),
+        ),
+        IpcAction::TransitionRecord { collection, id } => (
+            format!("{collection}.transition"),
+            serde_json::json!({ "id": id, "target_status": "Active" }),
+        ),
     };
     if let Err(e) = client.request(&method, params).await {
         warn!("Failed to dispatch IPC action {method}: {e}");

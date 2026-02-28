@@ -29,6 +29,8 @@ pub enum IpcAction {
     PauseAgent(String),
     ResumeAgent(String),
     StopAgent(String),
+    NewRecord { collection: String },
+    TransitionRecord { collection: String, id: String },
 }
 
 /// The six TUI views, cycled with Tab.
@@ -198,6 +200,30 @@ impl App {
     /// Toggle help overlay (?).
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    /// Map current view to an IPC collection name, if applicable.
+    pub fn view_collection(&self) -> Option<String> {
+        match self.current_view {
+            View::WorkItems => Some("work_item".to_string()),
+            View::Bundles => Some("bundle".to_string()),
+            View::Ticks => Some("tick".to_string()),
+            View::Learnings => Some("learning".to_string()),
+            View::Locks => Some("lock".to_string()),
+            _ => None, // Dashboard and Agents have no single collection
+        }
+    }
+
+    /// Get the ID of the currently selected record, if any.
+    pub fn selected_record_id(&self) -> Option<String> {
+        match self.current_view {
+            View::WorkItems => self.state.work_items.get(self.selected_index).map(|w| w.id.clone()),
+            View::Bundles => self.state.bundles.get(self.selected_index).map(|b| b.id.clone()),
+            View::Ticks => self.state.ticks.get(self.selected_index).map(|t| t.id.clone()),
+            View::Learnings => self.state.learnings.get(self.selected_index).map(|l| l.id.clone()),
+            View::Locks => self.state.locks.get(self.selected_index).map(|l| l.id.clone()),
+            _ => None,
+        }
     }
 
     /// Number of items in the current view's list.
