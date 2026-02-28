@@ -142,6 +142,37 @@ pub fn build_state_summary(stores: &Stores) -> String {
         }
     }
 
+    // C2: Recently Merged Bundles whose parent WI still needs advancing
+    {
+        let bundles = stores.bundles.read().unwrap();
+        let work_items = stores.work_items.read().unwrap();
+        let mut actionable_merged: Vec<_> = bundles
+            .values()
+            .filter(|b| b.status == BundleStatus::Merged)
+            .filter(|b| {
+                work_items
+                    .get(&b.work_item_id)
+                    .map(|w| !matches!(w.status, WorkItemStatus::Done | WorkItemStatus::Abandoned))
+                    .unwrap_or(true)
+            })
+            .collect();
+        actionable_merged.sort_by_key(|b| b.created_at);
+        if !actionable_merged.is_empty() {
+            summary.push_str("### Recently Merged Bundles (WI needs advancing)\n");
+            for b in &actionable_merged {
+                let wi_status = work_items
+                    .get(&b.work_item_id)
+                    .map(|w| w.status.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                summary.push_str(&format!(
+                    "- [{}] Merged (wi: {} [{}], branch: {})\n",
+                    b.id, b.work_item_id, wi_status, b.branch_name
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
     // --- Ticks (non-terminal) ---
     {
         let ticks = stores.ticks.read().unwrap();
@@ -3054,6 +3085,60 @@ mod tests {
             status.contains("missing dependency"),
             "should include learning content: {}",
             status
+        );
+    }
+
+    // --- C2: Recently Merged Bundles in state summary ---
+
+    #[test]
+    fn test_build_state_summary_includes_recently_merged_bundles() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-c2-merged-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create a WI in Integrated status (not Done)
+        let mut wi = WorkItem::new("phase-1".into(), "Test WI".into(), "desc".into());
+        wi.status = WorkItemStatus::Integrated;
+        let wi_id = wi.id.clone();
+        stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
+
+        // Create a merged bundle for that WI
+        let mut bundle = Bundle::new(wi_id.clone(), None, "feature/test".into(), "claim".into());
+        bundle.status = BundleStatus::Merged;
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+        let summary = build_state_summary(&stores);
+        assert!(
+            summary.contains("Recently Merged Bundles"),
+            "should include recently merged bundles section: {}",
+            summary
+        );
+        assert!(summary.contains(&wi_id), "should link to parent WI: {}", summary);
+    }
+
+    #[test]
+    fn test_build_state_summary_excludes_merged_when_wi_done() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-c2-done-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Create a WI in Done status
+        let mut wi = WorkItem::new("phase-1".into(), "Done WI".into(), "desc".into());
+        wi.status = WorkItemStatus::Done;
+        let wi_id = wi.id.clone();
+        stores.work_items.write().unwrap().insert(wi_id.clone(), wi);
+
+        // Create a merged bundle for that WI
+        let mut bundle = Bundle::new(wi_id.clone(), None, "feature/done".into(), "claim".into());
+        bundle.status = BundleStatus::Merged;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let summary = build_state_summary(&stores);
+        assert!(
+            !summary.contains("Recently Merged Bundles"),
+            "should NOT include merged bundles when WI is Done: {}",
+            summary
         );
     }
 }

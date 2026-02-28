@@ -520,6 +520,45 @@ pub fn run_integrator_cycle(
             }
         }
 
+        // C1: Transition parent WorkItems InReview → Integrated
+        let merged_wi_ids: Vec<String> = {
+            let bundles = stores.bundles.read().unwrap();
+            valid_bundle_ids
+                .iter()
+                .filter_map(|id| bundles.get(id.as_str()))
+                .map(|b| b.work_item_id.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect()
+        };
+
+        for wi_id in &merged_wi_ids {
+            let should_transition = {
+                let wis = stores.work_items.read().unwrap();
+                wis.get(wi_id)
+                    .map(|w| w.status == crate::domain::work_item::WorkItemStatus::InReview)
+                    .unwrap_or(false)
+            };
+            if should_transition {
+                let resp = bridge.request(
+                    "work_item.transition",
+                    serde_json::json!({
+                        "id": wi_id,
+                        "target_status": "Integrated",
+                        "role": "integrator",
+                    }),
+                );
+                if resp.is_error() {
+                    warn!(
+                        "Integrator: failed to transition WI {} to Integrated: {:?}",
+                        wi_id, resp.error
+                    );
+                } else {
+                    info!("Integrator: WorkItem {} transitioned to Integrated", wi_id);
+                }
+            }
+        }
+
         info!("Integrator: Tick {} published successfully", tick_id);
         Ok(IntegratorCycleResult::Published {
             tick_id: tick_id.clone(),
