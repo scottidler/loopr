@@ -393,6 +393,11 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::DependencyNotMet { work_item_id, message } => {
             format!("dep not met for {}: {}", work_item_id, message)
         }
+        ActionResult::DuplicateDetected { existing_id, title } => {
+            format!("duplicate '{}' (existing: {})", title, existing_id)
+        }
+        ActionResult::PhaseCompleted { phase_id, .. } => format!("phase {} complete", phase_id),
+        ActionResult::GoalCompleted { goal_id, .. } => format!("goal {} complete", goal_id),
     }
 }
 

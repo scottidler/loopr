@@ -1077,6 +1077,21 @@ pub enum ActionResult {
         work_item_id: String,
         message: String,
     },
+    /// Work item already exists with same title in same phase.
+    DuplicateDetected {
+        existing_id: String,
+        title: String,
+    },
+    /// Phase completed — all work items are terminal.
+    PhaseCompleted {
+        phase_id: String,
+        next_phase_id: Option<String>,
+    },
+    /// Goal completed — all phases done.
+    GoalCompleted {
+        goal_id: String,
+        phases_completed: usize,
+    },
 }
 
 fn persist_session(stores: &Stores, session: &AgentSession) {
@@ -3176,5 +3191,94 @@ mod tests {
             let wi = stores.work_items.read().unwrap().get(&id).cloned().unwrap();
             assert_eq!(wi.dependencies, vec![wi_id]);
         }
+    }
+
+    #[tokio::test]
+    async fn test_create_work_item_duplicate_rejected() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-widup-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+
+        // Create first WI
+        let action1 = AgentAction::CreateWorkItem {
+            phase_id: phase_id.clone(),
+            title: "Unique WI".to_string(),
+            description: "desc".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["pass".to_string()],
+            dependencies: vec![],
+        };
+        let result1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
+
+        // Create duplicate WI with same title — should fail
+        let action2 = AgentAction::CreateWorkItem {
+            phase_id: phase_id.clone(),
+            title: "Unique WI".to_string(),
+            description: "different desc".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["pass".to_string()],
+            dependencies: vec![],
+        };
+        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
+            "expected duplicate error, got: {:?}",
+            result2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_work_item_duplicate_case_insensitive() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-widupcase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+
+        // Create first WI
+        let action1 = AgentAction::CreateWorkItem {
+            phase_id: phase_id.clone(),
+            title: "Add Login".to_string(),
+            description: "desc".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["pass".to_string()],
+            dependencies: vec![],
+        };
+        let _ = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator).await;
+
+        // Create duplicate with different case — should also fail
+        let action2 = AgentAction::CreateWorkItem {
+            phase_id: phase_id.clone(),
+            title: "add login".to_string(),
+            description: "desc".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["pass".to_string()],
+            dependencies: vec![],
+        };
+        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
+            "expected case-insensitive duplicate error, got: {:?}",
+            result2
+        );
     }
 }

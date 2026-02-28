@@ -1095,6 +1095,25 @@ fn handle_work_item_create(
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
     }
 
+    // Duplicate detection: reject work items with same title in same phase (unless Abandoned)
+    {
+        let work_items = stores.work_items.read().unwrap();
+        let duplicate = work_items.values().find(|wi| {
+            wi.phase_id == phase_id
+                && wi.title.to_lowercase() == title.to_lowercase()
+                && !matches!(wi.status, WorkItemStatus::Abandoned)
+        });
+        if let Some(dup) = duplicate {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(&format!(
+                    "Duplicate work item '{}' already exists in phase {} with status {} (ID: {})",
+                    title, phase_id, dup.status, dup.id
+                )),
+            );
+        }
+    }
+
     let resource_tags: Vec<String> = req
         .params
         .get("resource_tags")
