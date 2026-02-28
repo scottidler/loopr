@@ -25,14 +25,13 @@ use taskstore::{Filter, FilterOp, IndexValue, Record};
 
 use super::context::Stores;
 
-/// Returns the configured pool_size for a given agent type.
-fn pool_size_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
+/// Returns the configured max_pool for a given agent type.
+fn max_pool_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
     match agent_type {
-        AgentType::Implementer => config.agents.implementer.pool_size,
-        AgentType::Reviewer => config.agents.reviewer.pool_size,
-        AgentType::Coordinator => config.agents.coordinator.role.pool_size,
-        AgentType::Researcher => config.agents.researcher.pool_size,
-        // Integrator uses pool_size = 1 (singleton, same as Coordinator)
+        AgentType::Implementer => config.agents.implementer.max_pool,
+        AgentType::Reviewer => config.agents.reviewer.max_pool,
+        AgentType::Coordinator => config.agents.coordinator.role.max_pool,
+        AgentType::Researcher => config.agents.researcher.max_pool,
         AgentType::Integrator => 1,
     }
 }
@@ -3108,19 +3107,19 @@ fn handle_agent_start(
         .map(|s| s.to_string());
     let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-    // Pool_size enforcement: reject if active sessions of this type >= pool_size
+    // max_pool enforcement: reject if active sessions of this type >= max_pool
     {
         let sessions = stores.agent_sessions.read().unwrap();
         let active_count = sessions
             .values()
             .filter(|s| s.agent_type == agent_type && !s.status.is_terminal())
             .count();
-        let pool_size = pool_size_for(agent_type, &stores.config) as usize;
-        if active_count >= pool_size {
+        let max_pool = max_pool_for(agent_type, &stores.config) as usize;
+        if active_count >= max_pool {
             return DaemonResponse::err(
                 req.id,
                 RpcError::pool_exhausted(&format!(
-                    "pool_size exceeded for {}: {active_count}/{pool_size} active",
+                    "max_pool exceeded for {}: {active_count}/{max_pool} active",
                     agent_type
                 )),
             );
@@ -9345,17 +9344,17 @@ mod tests {
     // --- Pool size enforcement tests ---
 
     #[test]
-    fn test_pool_size_for_helper() {
+    fn test_max_pool_for_helper() {
         let config = crate::config::Config::default();
-        assert_eq!(pool_size_for(AgentType::Implementer, &config), 2);
-        assert_eq!(pool_size_for(AgentType::Reviewer, &config), 2);
-        assert_eq!(pool_size_for(AgentType::Coordinator, &config), 1);
-        assert_eq!(pool_size_for(AgentType::Researcher, &config), 4);
-        assert_eq!(pool_size_for(AgentType::Integrator, &config), 1);
+        assert_eq!(max_pool_for(AgentType::Implementer, &config), 6);
+        assert_eq!(max_pool_for(AgentType::Reviewer, &config), 2);
+        assert_eq!(max_pool_for(AgentType::Coordinator, &config), 1);
+        assert_eq!(max_pool_for(AgentType::Researcher, &config), 4);
+        assert_eq!(max_pool_for(AgentType::Integrator, &config), 1);
     }
 
     #[test]
-    fn test_agent_start_pool_size_enforcement() {
+    fn test_agent_start_max_pool_enforcement() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -9368,13 +9367,13 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        // Attempt to start another Coordinator — should be rejected (pool_size = 1)
+        // Attempt to start another Coordinator — should be rejected (max_pool = 1)
         let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
-        assert!(resp.is_error(), "expected pool_size rejection");
+        assert!(resp.is_error(), "expected max_pool rejection");
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32004);
-        assert!(err.message.contains("pool_size exceeded"));
+        assert!(err.message.contains("max_pool exceeded"));
     }
 
     #[tokio::test]
@@ -9396,7 +9395,7 @@ mod tests {
         let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         // This will succeed at session creation but the spawned task may fail (no runtime).
-        // We just check it wasn't rejected by pool_size.
+        // We just check it wasn't rejected by max_pool.
         assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
     }
 }

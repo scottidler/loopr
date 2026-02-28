@@ -135,7 +135,8 @@ impl Default for CoordinatorConfig {
                 api_key_env: "ANTHROPIC_API_KEY".to_string(),
                 max_tokens: 8192,
                 max_iterations: u32::MAX,
-                pool_size: 1,
+                min_pool: 1,
+                max_pool: 1,
                 temperature: 0.2,
                 session_timeout_secs: None, // Coordinator is long-lived
             },
@@ -255,7 +256,8 @@ pub struct AgentRoleConfig {
     pub api_key_env: String,
     pub max_tokens: u32,
     pub max_iterations: u32,
-    pub pool_size: u32,
+    pub min_pool: u32,
+    pub max_pool: u32,
     pub temperature: f32,
     pub session_timeout_secs: Option<u64>,
 }
@@ -273,7 +275,8 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 8192,
             max_iterations: 20,
-            pool_size: 2,
+            min_pool: 2,
+            max_pool: 6,
             temperature: 0.3,
             session_timeout_secs: Some(1800), // 30 min
         }
@@ -285,7 +288,8 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 4096,
             max_iterations: 5,
-            pool_size: 2,
+            min_pool: 1,
+            max_pool: 2,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
         }
@@ -297,7 +301,8 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 4096,
             max_iterations: 10,
-            pool_size: 4,
+            min_pool: 1,
+            max_pool: 4,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
         }
@@ -521,7 +526,7 @@ mod tests {
     fn test_agent_role_config_implementer_defaults() {
         let rc = AgentRoleConfig::default_implementer();
         assert_eq!(rc.max_iterations, 20);
-        assert_eq!(rc.pool_size, 2);
+        assert_eq!(rc.max_pool, 6);
         assert_eq!(rc.max_tokens, 8192);
         assert!((rc.temperature - 0.3).abs() < f32::EPSILON);
     }
@@ -530,7 +535,7 @@ mod tests {
     fn test_agent_role_config_reviewer_defaults() {
         let rc = AgentRoleConfig::default_reviewer();
         assert_eq!(rc.max_iterations, 5);
-        assert_eq!(rc.pool_size, 2);
+        assert_eq!(rc.max_pool, 2);
         assert_eq!(rc.max_tokens, 4096);
         assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
     }
@@ -567,14 +572,16 @@ implementer:
   api_key_env: "MY_KEY"
   max_tokens: 4096
   max_iterations: 10
-  pool_size: 3
+  min_pool: 2
+  max_pool: 3
   temperature: 0.5
 reviewer:
   model: "claude-sonnet-4-6"
   api_key_env: "MY_KEY"
   max_tokens: 2048
   max_iterations: 3
-  pool_size: 1
+  min_pool: 1
+  max_pool: 1
   temperature: 0.0
 tools:
   - name: "test"
@@ -586,7 +593,7 @@ tools:
         assert!(ac.enabled);
         assert!(ac.auto_start_implementer);
         assert!(!ac.auto_start_reviewer);
-        assert_eq!(ac.implementer.pool_size, 3);
+        assert_eq!(ac.implementer.max_pool, 3);
         assert_eq!(ac.reviewer.max_iterations, 3);
         assert_eq!(ac.tools.len(), 1);
         assert_eq!(ac.tools[0].name, "test");
@@ -712,14 +719,14 @@ tools:
         assert_eq!(cc.active_interval_secs, 5);
         assert_eq!(cc.idle_interval_secs, 30);
         assert_eq!(cc.max_validation_attempts, 3);
-        assert_eq!(cc.role.pool_size, 1);
+        assert_eq!(cc.role.max_pool, 1);
         assert!((cc.role.temperature - 0.2).abs() < f32::EPSILON);
     }
 
     #[test]
     fn test_agent_config_has_coordinator() {
         let ac = AgentConfig::default();
-        assert_eq!(ac.coordinator.role.pool_size, 1);
+        assert_eq!(ac.coordinator.role.max_pool, 1);
         assert!(!ac.auto_start_coordinator);
     }
 
@@ -727,7 +734,7 @@ tools:
     fn test_agent_role_config_researcher_defaults() {
         let rc = AgentRoleConfig::default_researcher();
         assert_eq!(rc.max_iterations, 10);
-        assert_eq!(rc.pool_size, 4);
+        assert_eq!(rc.max_pool, 4);
         assert_eq!(rc.max_tokens, 4096);
         assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
     }
@@ -735,7 +742,7 @@ tools:
     #[test]
     fn test_agent_config_has_researcher() {
         let ac = AgentConfig::default();
-        assert_eq!(ac.researcher.pool_size, 4);
+        assert_eq!(ac.researcher.max_pool, 4);
     }
 
     // --- IntegratorConfig extension tests ---

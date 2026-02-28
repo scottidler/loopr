@@ -39,6 +39,3 @@ cargo check      # Quick compile check
 - **ureq** — sync HTTP client for Doc Validator (MVP2, unchanged). Used in sync handler context.
 - **glob** — glob pattern matching for Researcher SearchFiles action.
 
-## Ralph Wiggum Loop
-
-When running in the loop (`bin/loop.sh`), Claude reads `PROMPT.md` each iteration with fresh context. State persists in `progress.txt` and git history only. The loop runs `otto ci` externally after each iteration.

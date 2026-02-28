@@ -44,8 +44,3 @@ examples/_test_broken/
 # Log files
 *.log
 
-# Ralph Wiggum loop control files
-progress.txt
-.loopr-progress
-.loopr-complete
-logs/

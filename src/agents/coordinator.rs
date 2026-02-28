@@ -82,7 +82,7 @@ Respond with a JSON array of actions:
 - If validation fails with "validator is not enabled", skip validation and transition directly.
 - WorkItems MUST include acceptance_criteria and resource_tags when created.
 - Create WorkItems small enough to fit in half a context window.
-- Don't assign more agents than pool_size allows (check active sessions).
+- Keep at least 2 implementers active whenever there are Ready or Draft work items. You can spawn up to 6 implementers concurrently.
 - Acquire locks on resources BEFORE assigning Implementers.
 - When acceptance criteria are met, mark the Plan Complete.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking."#;
