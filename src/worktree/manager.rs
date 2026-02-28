@@ -55,6 +55,13 @@ impl WorktreeManager {
         }
 
         let branch = format!("agent/{}", work_item_id);
+
+        // Delete stale branch from a previous failed run if it exists
+        let _ = Command::new("git")
+            .args(["branch", "-D", &branch])
+            .current_dir(&self.repo_path)
+            .output();
+
         let output = Command::new("git")
             .args(["worktree", "add", &path.to_string_lossy(), "-b", &branch, base_ref])
             .current_dir(&self.repo_path)
@@ -98,8 +105,9 @@ impl WorktreeManager {
             return Err(WorktreeError::NotFound(work_item_id.to_string()));
         }
 
+        // Use --force to handle worktrees with uncommitted changes
         let output = Command::new("git")
-            .args(["worktree", "remove", &path.to_string_lossy()])
+            .args(["worktree", "remove", "--force", &path.to_string_lossy()])
             .current_dir(&self.repo_path)
             .output()?;
 
@@ -107,6 +115,13 @@ impl WorktreeManager {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(WorktreeError::GitCommand(stderr.to_string()));
         }
+
+        // Clean up the branch too
+        let branch = format!("agent/{}", work_item_id);
+        let _ = Command::new("git")
+            .args(["branch", "-D", &branch])
+            .current_dir(&self.repo_path)
+            .output();
 
         Ok(())
     }

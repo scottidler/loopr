@@ -26,49 +26,39 @@ pub trait LlmClient: Send + Sync {
 }
 
 /// Parse the LLM response into a list of agent actions.
-/// Extracts the first JSON array found in the response text.
-/// Falls back to element-by-element parsing, skipping malformed actions.
+/// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
 pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
     // Try direct parse first
     if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(response) {
         return Ok(actions);
     }
 
-    // Try to find a JSON array in the response (may be wrapped in markdown code blocks)
+    // Find the first `[` and try increasingly larger `]` matches until one parses.
+    // This handles: prose before JSON, code fences, multiple arrays (takes first valid one).
     let trimmed = response.trim();
-    let json_slice = if let Some(start) = trimmed.find('[')
-        && let Some(end) = trimmed.rfind(']')
-    {
-        Some(&trimmed[start..=end])
-    } else {
-        None
-    };
-
-    if let Some(slice) = json_slice {
-        // Try strict parse of the whole array first
-        if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(slice) {
-            return Ok(actions);
-        }
-
-        // Fall back to element-by-element parsing: parse as Vec<Value>, then try each
-        if let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(slice) {
-            let mut actions = Vec::new();
-            for (i, val) in values.iter().enumerate() {
-                match serde_json::from_value::<AgentAction>(val.clone()) {
-                    Ok(action) => actions.push(action),
-                    Err(e) => {
-                        let val_str: String = val.to_string().chars().take(200).collect();
-                        warn!("Skipping malformed action at index {}: {} (value: {})", i, e, val_str);
-                    }
-                }
-            }
-            if !actions.is_empty() {
+    if let Some(start) = trimmed.find('[') {
+        let rest = &trimmed[start..];
+        // Try every `]` from nearest to farthest
+        for (offset, _) in rest.match_indices(']') {
+            let candidate = &rest[..=offset];
+            if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(candidate)
+                && !actions.is_empty()
+            {
                 return Ok(actions);
+            }
+            // Also try element-by-element
+            if let Ok(values) = serde_json::from_str::<Vec<serde_json::Value>>(candidate) {
+                let actions: Vec<AgentAction> = values
+                    .into_iter()
+                    .filter_map(|v| serde_json::from_value(v).ok())
+                    .collect();
+                if !actions.is_empty() {
+                    return Ok(actions);
+                }
             }
         }
     }
 
-    // Log the response snippet for debugging
     let snippet: String = response.chars().take(500).collect();
     Err(eyre!(
         "failed to parse agent actions from LLM response (response snippet: {})",
