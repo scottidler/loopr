@@ -1515,4 +1515,673 @@ mod tests {
             "expected agent status change events"
         );
     }
+
+    // --- Group A: Record creation actions ---
+
+    #[tokio::test]
+    async fn test_execute_create_plan() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-createplan-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::CreatePlan {
+            title: "New Plan".to_string(),
+            description: "Plan desc".to_string(),
+            acceptance_criteria: "Tests pass".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "plans");
+            assert!(!id.is_empty());
+            assert_ne!(id, "unknown");
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_spec() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-createspec-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (plan_id, _, _, _) = create_test_hierarchy(&bridge);
+
+        let action = AgentAction::CreateSpec {
+            plan_id,
+            title: "New Spec".to_string(),
+            description: "Spec desc".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "specs");
+            assert!(!id.is_empty());
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_phase() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-createphase-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, spec_id, _, _) = create_test_hierarchy(&bridge);
+
+        let action = AgentAction::CreatePhase {
+            spec_id,
+            title: "New Phase".to_string(),
+            description: "Phase desc".to_string(),
+            order: 2,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "phases");
+            assert!(!id.is_empty());
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_work_item() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-createwi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+
+        let action = AgentAction::CreateWorkItem {
+            phase_id,
+            title: "New WI".to_string(),
+            description: "WI desc".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["tests pass".to_string()],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "work_items");
+            assert!(!id.is_empty());
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    // --- Group B: Git operations ---
+
+    #[tokio::test]
+    async fn test_execute_commit_success() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-commit-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize a git repo
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        // Create a file to commit
+        std::fs::write(dir.join("test.txt"), "hello").unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::Commit {
+            message: "test commit".to_string(),
+            paths: vec![],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::Committed(ref msg) if msg == "test commit"),
+            "expected Committed, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_commit_specific_paths() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-commitpaths-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join("a.txt"), "aaa").unwrap();
+        std::fs::write(dir.join("b.txt"), "bbb").unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::Commit {
+            message: "add a.txt only".to_string(),
+            paths: vec!["a.txt".to_string()],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::Committed(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_propose_bundle() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-propbundle-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        // Need an initial commit for branch name
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "My bundle".to_string(),
+            claims: vec!["Implemented feature X".to_string()],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, Some(&wi_id), AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref desc) if desc == "My bundle"),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_propose_bundle_no_work_item() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-propnowi-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Initialize git repo
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::ProposeBundle {
+            description: "My bundle".to_string(),
+            claims: vec![],
+        };
+        // work_item_id = None should fail
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("work_item_id"));
+    }
+
+    // --- Group C: Agent management + domain actions ---
+
+    #[tokio::test]
+    async fn test_execute_create_learning_with_all_fields() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-learning-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::CreateLearning {
+            content: "Always add tests".to_string(),
+            scope: "global".to_string(),
+            source_id: "wi-1".to_string(),
+            applicable_roles: Some(vec!["implementer".to_string()]),
+            resource_tags: Some(vec!["src/".to_string()]),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::LearningCreated(ref c) if c == "Always add tests"),
+            "expected LearningCreated, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_learning_minimal() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-learnmin-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::CreateLearning {
+            content: "Minimal learning".to_string(),
+            scope: "workitem".to_string(),
+            source_id: "wi-1".to_string(),
+            applicable_roles: None,
+            resource_tags: None,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::LearningCreated(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_spawn_researcher() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-spawnres-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::SpawnResearcher {
+            query: "How does auth work?".to_string(),
+            scope_id: "plan-1".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        // agent.start may fail (no LLM key), which returns ActionError
+        assert!(
+            matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
+                || matches!(result, ActionResult::ActionError(_)),
+            "expected AgentSpawned or ActionError, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_validate_document() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-valdoc-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (plan_id, _, _, _) = create_test_hierarchy(&bridge);
+
+        let action = AgentAction::ValidateDocument {
+            collection: "plan".to_string(),
+            id: plan_id,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        // Validation may fail (no LLM key) returning ActionError, or succeed with DocumentValidated
+        assert!(
+            matches!(
+                result,
+                ActionResult::DocumentValidated { .. } | ActionResult::ActionError(_)
+            ),
+            "expected DocumentValidated or ActionError, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_triage_bundle() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-triage-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Create a bundle for the work item
+        let bundle_resp = bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/test",
+                "description": "Test bundle",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // Bundle starts as Proposed — TriageBundle transitions Proposed → Triaged
+        let action = AgentAction::TriageBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Triaged")),
+            "expected Transitioned to Triaged, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_accept_bundle() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-accept-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Create and transition bundle through Proposed → Triaged → Reviewed
+        let bundle_resp = bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_item_id": wi_id,
+                "branch_name": "feature/accept",
+                "description": "Accept test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer"}),
+        );
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Accepted")),
+            "expected Transitioned to Accepted, got: {:?}",
+            result
+        );
+    }
+
+    // --- Group D: Lifecycle paths ---
+
+    #[tokio::test]
+    async fn test_write_file_path_escape() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-escape-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::WriteFile {
+            path: "../../../etc/passwd".to_string(),
+            content: "pwned".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("escapes worktree"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_not_found() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-readnf-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::ReadFile {
+            path: "nonexistent.txt".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_transition_role_inference() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-roleinfer-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+
+        // Transition without explicit role — should infer from agent type
+        let action = AgentAction::Transition {
+            collection: "work_item".to_string(),
+            id: wi_id,
+            target_status: "Ready".to_string(),
+            role: None, // Should infer "coordinator" from AgentType::Coordinator
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::Transitioned(_)),
+            "expected Transitioned with inferred role, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_file_creates_parent_dirs() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-writedirs-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::WriteFile {
+            path: "deep/nested/dir/file.txt".to_string(),
+            content: "nested content".to_string(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
+            .await
+            .unwrap();
+        assert!(matches!(result, ActionResult::FileWritten(_)));
+        let content = std::fs::read_to_string(dir.join("deep/nested/dir/file.txt")).unwrap();
+        assert_eq!(content, "nested content");
+    }
+
+    #[tokio::test]
+    async fn test_search_code_action() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-searchcode-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("example.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::SearchCode {
+            pattern: "fn main".to_string(),
+            glob: None,
+            path: None,
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::FileRead(ref content) if content.contains("fn main"))
+                || matches!(result, ActionResult::ActionError(_)),
+            "got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_action() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-listdir-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("file1.txt"), "a").unwrap();
+        std::fs::write(dir.join("file2.txt"), "b").unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let action = AgentAction::ListDirectory { path: ".".to_string() };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ActionResult::FileRead(ref content) if content.contains("file1.txt")),
+            "got: {:?}",
+            result
+        );
+    }
 }
