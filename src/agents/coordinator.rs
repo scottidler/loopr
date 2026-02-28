@@ -1487,6 +1487,14 @@ mod tests {
         assert!(prompt.contains("assign_agent"));
         assert!(prompt.contains("need_help"));
         assert!(prompt.contains("JSON array"));
+        // Phase-gated FSM sections from MVP5
+        assert!(prompt.contains("Phase-Gated Control Loop"));
+        assert!(prompt.contains("Planning"));
+        assert!(prompt.contains("ActivatePhase"));
+        assert!(prompt.contains("Executing"));
+        assert!(prompt.contains("PhaseGate"));
+        assert!(prompt.contains("GoalComplete"));
+        assert!(prompt.contains("dependencies"));
     }
 
     // --- comprehensive state summary ---

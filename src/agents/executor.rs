@@ -226,6 +226,53 @@ pub async fn run_agent_task(
             persist_session(&stores, session);
         }
     }
+    // Create a Learning from implementer failures so the Coordinator can adapt
+    if terminal_status == AgentStatus::Failed && agent_type == AgentType::Implementer {
+        let (wi_title, wi_id, iteration_count) = {
+            let sessions = stores.agent_sessions.read().unwrap();
+            let session = sessions.get(&session_id);
+            let wi_id = session.and_then(|s| s.work_item_id.clone()).unwrap_or_default();
+            let iteration = session.map(|s| s.iteration).unwrap_or(0);
+            let title = if !wi_id.is_empty() {
+                stores
+                    .work_items
+                    .read()
+                    .unwrap()
+                    .get(&wi_id)
+                    .map(|w| w.title.clone())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            (title, wi_id, iteration)
+        };
+
+        let error_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        let learning = crate::domain::learning::Learning::new(
+            wi_id.clone(),
+            crate::domain::learning::LearningScope::Phase,
+            format!(
+                "Implementer failed on '{}' after {} iterations. Error: {}. \
+                 Consider: splitting into smaller tasks, providing more context, \
+                 or checking dependency ordering.",
+                wi_title, iteration_count, error_msg
+            ),
+        );
+        let learning_id = learning.id.clone();
+        stores
+            .learnings
+            .write()
+            .unwrap()
+            .insert(learning_id.clone(), learning.clone());
+        if let Some(store_arc) = &stores.store {
+            let _ = store_arc.lock().unwrap().create(learning);
+        }
+        info!(
+            "Created failure learning {} for implementer {} on '{}'",
+            learning_id, session_id, wi_title
+        );
+    }
+
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
 
     info!(

@@ -866,6 +866,33 @@ mod tests {
     }
 
     #[test]
+    fn test_work_item_prompt_includes_dependency_instructions() {
+        init();
+        let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
+        let prompt = build_work_item_prompt(&phase, &[], &[], &[]);
+        // Prompt should include batch dependency instructions
+        assert!(
+            prompt.user_message.contains("batch:0"),
+            "prompt should explain batch dependency syntax"
+        );
+        assert!(
+            prompt.user_message.contains("dependencies"),
+            "prompt should mention dependencies"
+        );
+    }
+
+    #[test]
+    fn test_work_item_prompt_shows_dep_info_for_existing() {
+        init();
+        let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
+        let mut wi = WorkItem::new(phase.id.clone(), "WI 1".into(), "desc".into());
+        wi.dependencies = vec!["dep-1".to_string()];
+        let prompt = build_work_item_prompt(&phase, &[wi], &[], &[]);
+        assert!(prompt.user_message.contains("deps: dep-1"));
+        assert!(prompt.user_message.contains("use the exact IDs above"));
+    }
+
+    #[test]
     fn test_work_item_prompt_includes_findings() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
