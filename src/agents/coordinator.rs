@@ -5,6 +5,7 @@ use eyre::{Result, eyre};
 use log::{info, warn};
 use tokio::sync::broadcast;
 
+use crate::agents::AgentAction;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
@@ -22,6 +23,17 @@ use crate::domain::role::Role;
 use crate::domain::tick::TickStatus;
 use crate::domain::work_item::WorkItemStatus;
 use crate::ipc::protocol::DaemonEvent;
+
+/// Infer the hierarchy level of a coordinator action for one-level-per-iteration guard (Gap #28).
+fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
+    match action {
+        AgentAction::CreatePlan { .. } => Some("plan"),
+        AgentAction::CreateSpec { .. } => Some("spec"),
+        AgentAction::CreatePhase { .. } => Some("phase"),
+        AgentAction::CreateWorkItem { .. } | AgentAction::AssignAgent { .. } => Some("work_item"),
+        _ => None,
+    }
+}
 
 const SYSTEM_PROMPT: &str = r#"You are the Coordinator agent in the Loopr development orchestrator. You are the project manager and engineering manager. You own the full pipeline: Plan → Spec → Phase → WorkItem → Bundle → Tick.
 
@@ -437,12 +449,23 @@ async fn run_coordinator_iteration(
         response.len(),
         &response[..response.len().min(800)]
     );
-    let actions = implementer::parse_actions(&response)?;
+    let mut actions = implementer::parse_actions(&response)?;
 
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session.id, AgentStatus::Running));
 
     if actions.is_empty() {
         return Ok(IterationOutcome::Done("No actions needed".to_string()));
+    }
+
+    // Gap #28: One-level-per-iteration guard — filter mixed-level actions
+    let levels: std::collections::HashSet<_> = actions.iter().filter_map(infer_action_level).collect();
+    if levels.len() > 1 {
+        let first_level = infer_action_level(&actions[0]);
+        warn!(
+            "Coordinator attempted multi-level actions: {:?}. Executing only first level.",
+            levels
+        );
+        actions.retain(|a| infer_action_level(a) == first_level || infer_action_level(a).is_none());
     }
 
     // Use repo root as the "worktree" path for Coordinator (thinking plane — no actual worktree)

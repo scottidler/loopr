@@ -43,13 +43,16 @@ fn pool_size_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
 /// 1. Validator is enabled (stores.validator is Some)
 /// 2. Transition is Draft → Active
 /// 3. skip_validation param is not true
+#[allow(clippy::too_many_arguments)]
 fn check_validation_gate(
     stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
     from: HierarchyStatus,
     target: HierarchyStatus,
     collection: &str,
     id: &str,
     skip_validation: bool,
+    skip_reason: Option<&str>,
 ) -> Option<RpcError> {
     // Gate only applies to Draft → Active
     if from != HierarchyStatus::Draft || target != HierarchyStatus::Active {
@@ -61,6 +64,12 @@ fn check_validation_gate(
 
     // Coordinator can skip validation with explicit flag
     if skip_validation {
+        // Gap #8: Audit trail for skip-validation
+        let reason = skip_reason.unwrap_or("no reason given");
+        let _ = event_tx.send(DaemonEvent::new(
+            "validation.skipped",
+            json!({"collection": collection, "id": id, "reason": reason}),
+        ));
         return None;
     }
 
@@ -572,7 +581,17 @@ fn handle_plan_transition(
     }
 
     // Validation gate: Draft → Active requires passing validation report
-    if let Some(err) = check_validation_gate(stores, from, target_status, "plan", &id, skip_validation) {
+    let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+    if let Some(err) = check_validation_gate(
+        stores,
+        event_tx,
+        from,
+        target_status,
+        "plan",
+        &id,
+        skip_validation,
+        skip_reason,
+    ) {
         return DaemonResponse::err(req.id, err);
     }
 
@@ -781,7 +800,17 @@ fn handle_spec_transition(
     }
 
     // Validation gate: Draft → Active requires passing validation report
-    if let Some(err) = check_validation_gate(stores, from, target_status, "spec", &id, skip_validation) {
+    let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+    if let Some(err) = check_validation_gate(
+        stores,
+        event_tx,
+        from,
+        target_status,
+        "spec",
+        &id,
+        skip_validation,
+        skip_reason,
+    ) {
         return DaemonResponse::err(req.id, err);
     }
 
@@ -991,7 +1020,17 @@ fn handle_phase_transition(
     }
 
     // Validation gate: Draft → Active requires passing validation report
-    if let Some(err) = check_validation_gate(stores, from, target_status, "phase", &id, skip_validation) {
+    let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+    if let Some(err) = check_validation_gate(
+        stores,
+        event_tx,
+        from,
+        target_status,
+        "phase",
+        &id,
+        skip_validation,
+        skip_reason,
+    ) {
         return DaemonResponse::err(req.id, err);
     }
 

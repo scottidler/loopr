@@ -304,6 +304,24 @@ impl DaemonContext {
             }
         }
 
+        // Gap #30: Expire stale locks
+        {
+            let mut locks = self.stores.locks.write().unwrap();
+            let store_lock = self.stores.store.as_ref();
+            for (id, lock) in locks.iter_mut() {
+                if lock.is_active() && lock.is_expired() {
+                    warn!("Recovering expired Lock: {} (resource={})", id, lock.resource);
+                    lock.expire();
+                    if let Some(store_arc) = store_lock
+                        && let Err(e) = store_arc.lock().unwrap().update(lock.clone())
+                    {
+                        warn!("Failed to persist Lock recovery to TaskStore: {}", e);
+                    }
+                    recovered += 1;
+                }
+            }
+        }
+
         if recovered > 0 {
             info!("Crash recovery: reset {} orphaned record(s)", recovered);
         } else {

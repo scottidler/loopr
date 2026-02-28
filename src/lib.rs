@@ -12,6 +12,8 @@ pub mod validator;
 pub mod worktree;
 
 #[cfg(test)]
+mod fsm_correctness_tests;
+#[cfg(test)]
 mod integration_tests;
 
 use std::fs;

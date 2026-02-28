@@ -497,6 +497,19 @@ pub async fn execute_action(
             description,
             acceptance_criteria,
         } => {
+            // Gap #27: Draft-awareness guard
+            let list_resp = bridge.request("plan.list", serde_json::json!({}));
+            if let Some(plans) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
+                let has_draft = plans.iter().any(|p| {
+                    p.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase()) == Some("draft".to_string())
+                });
+                if has_draft {
+                    return Ok(ActionResult::ActionError(
+                        "A Draft Plan already exists. Iterate on the existing Draft instead of creating a new one."
+                            .into(),
+                    ));
+                }
+            }
             let resp = bridge.request(
                 "plan.create",
                 serde_json::json!({
@@ -527,6 +540,20 @@ pub async fn execute_action(
             title,
             description,
         } => {
+            // Gap #27: Draft-awareness guard for specs under same plan
+            let list_resp = bridge.request("spec.list", serde_json::json!({}));
+            if let Some(specs) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
+                let has_draft = specs.iter().any(|s| {
+                    s.get("plan_id").and_then(|v| v.as_str()) == Some(plan_id)
+                        && s.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase())
+                            == Some("draft".to_string())
+                });
+                if has_draft {
+                    return Ok(ActionResult::ActionError(
+                        "A Draft Spec already exists under this Plan. Iterate on the existing Draft.".into(),
+                    ));
+                }
+            }
             let resp = bridge.request(
                 "spec.create",
                 serde_json::json!({
@@ -558,6 +585,20 @@ pub async fn execute_action(
             description,
             order,
         } => {
+            // Gap #27: Draft-awareness guard for phases under same spec
+            let list_resp = bridge.request("phase.list", serde_json::json!({}));
+            if let Some(phases) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
+                let has_draft = phases.iter().any(|p| {
+                    p.get("spec_id").and_then(|v| v.as_str()) == Some(spec_id)
+                        && p.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase())
+                            == Some("draft".to_string())
+                });
+                if has_draft {
+                    return Ok(ActionResult::ActionError(
+                        "A Draft Phase already exists under this Spec. Iterate on the existing Draft.".into(),
+                    ));
+                }
+            }
             let resp = bridge.request(
                 "phase.create",
                 serde_json::json!({
@@ -591,6 +632,20 @@ pub async fn execute_action(
             resource_tags,
             acceptance_criteria,
         } => {
+            // Gap #27: Draft-awareness guard for work items under same phase
+            let list_resp = bridge.request("work_item.list", serde_json::json!({}));
+            if let Some(items) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
+                let has_draft = items.iter().any(|w| {
+                    w.get("phase_id").and_then(|v| v.as_str()) == Some(phase_id)
+                        && w.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase())
+                            == Some("draft".to_string())
+                });
+                if has_draft {
+                    return Ok(ActionResult::ActionError(
+                        "A Draft WorkItem already exists under this Phase. Iterate on the existing Draft.".into(),
+                    ));
+                }
+            }
             let resp = bridge.request(
                 "work_item.create",
                 serde_json::json!({
@@ -996,7 +1051,7 @@ mod tests {
         let plan_id = plan_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
         bridge.request(
             "plan.transition",
-            serde_json::json!({"id": plan_id, "target_status": "Active", "role": "coordinator"}),
+            serde_json::json!({"id": plan_id, "target_status": "active", "role": "coordinator", "skip_validation": true}),
         );
         let spec_resp = bridge.request(
             "spec.create",
@@ -1005,7 +1060,7 @@ mod tests {
         let spec_id = spec_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
         bridge.request(
             "spec.transition",
-            serde_json::json!({"id": spec_id, "target_status": "Active", "role": "coordinator"}),
+            serde_json::json!({"id": spec_id, "target_status": "active", "role": "coordinator", "skip_validation": true}),
         );
         let phase_resp = bridge.request(
             "phase.create",
@@ -1014,7 +1069,7 @@ mod tests {
         let phase_id = phase_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
         bridge.request(
             "phase.transition",
-            serde_json::json!({"id": phase_id, "target_status": "Active", "role": "coordinator"}),
+            serde_json::json!({"id": phase_id, "target_status": "active", "role": "coordinator", "skip_validation": true}),
         );
         let wi_resp = bridge.request(
             "work_item.create",
@@ -1616,7 +1671,14 @@ mod tests {
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
-        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, wi_id) = create_test_hierarchy(&bridge);
+        // Transition existing WI out of Draft so draft guard doesn't block new creation
+        bridge.request(
+            "work_item.transition",
+            serde_json::json!({
+                "id": wi_id, "target_status": "Ready", "role": "coordinator"
+            }),
+        );
 
         let action = AgentAction::CreateWorkItem {
             phase_id,

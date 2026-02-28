@@ -149,6 +149,10 @@ impl Record for Learning {
         m.insert("scope".into(), IndexValue::String(self.scope.to_string()));
         m.insert("source_id".into(), IndexValue::String(self.source_id.clone()));
         m.insert("promoted".into(), IndexValue::String(self.promoted.to_string()));
+        m.insert(
+            "confidence".into(),
+            IndexValue::String(format!("{:.2}", self.confidence)),
+        );
         m
     }
 }
@@ -338,7 +342,8 @@ mod tests {
             Some(&IndexValue::String("phase-42".to_string()))
         );
         assert_eq!(fields.get("promoted"), Some(&IndexValue::String("false".to_string())));
-        assert_eq!(fields.len(), 3);
+        assert_eq!(fields.get("confidence"), Some(&IndexValue::String("0.50".to_string())));
+        assert_eq!(fields.len(), 4);
     }
 
     #[test]
