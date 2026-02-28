@@ -288,6 +288,8 @@ pub enum AgentAction {
         resource_tags: Vec<String>,
         #[serde(default)]
         acceptance_criteria: Vec<String>,
+        #[serde(default)]
+        dependencies: Vec<String>,
     },
     AssignAgent {
         agent_type: String,
@@ -892,6 +894,7 @@ mod tests {
             description: "Add login endpoint".to_string(),
             resource_tags: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
+            dependencies: vec!["wi-0".to_string()],
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();

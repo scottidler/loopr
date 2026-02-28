@@ -390,6 +390,9 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::AgentSpawned { session_id, agent_type } => {
             format!("spawned {} ({})", agent_type, session_id)
         }
+        ActionResult::DependencyNotMet { work_item_id, message } => {
+            format!("dep not met for {}: {}", work_item_id, message)
+        }
     }
 }
 

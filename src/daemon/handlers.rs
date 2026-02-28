@@ -1121,18 +1121,27 @@ fn handle_work_item_create(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // #16: Cycle detection for depends_on
-    if !dependencies.is_empty() {
+    // #16: Validate dependencies — skip unknown IDs with warning instead of rejecting
+    let dependencies = if !dependencies.is_empty() {
         let work_items = stores.work_items.read().unwrap();
-        // We can't have a cycle since this is a new item, but we validate that
-        // referenced dependencies exist and that they don't form a chain back
-        // (defensive — mainly matters when update is added later)
+        let mut valid_deps = Vec::new();
         for dep_id in &dependencies {
-            if !work_items.contains_key(dep_id) {
-                return DaemonResponse::err(req.id, RpcError::not_found("work_item (dependency)", dep_id));
+            if dep_id.starts_with("batch:") {
+                // Batch references (e.g., "batch:0") can't be resolved here — skip with warning
+                log::warn!(
+                    "WorkItem creation: batch dependency '{}' cannot be resolved at handler level, skipping",
+                    dep_id
+                );
+            } else if work_items.contains_key(dep_id) {
+                valid_deps.push(dep_id.clone());
+            } else {
+                log::warn!("WorkItem creation: dependency '{}' not found, skipping", dep_id);
             }
         }
-    }
+        valid_deps
+    } else {
+        dependencies
+    };
 
     let mut work_item = WorkItem::new(phase_id, title, description);
     work_item.resource_tags = resource_tags;

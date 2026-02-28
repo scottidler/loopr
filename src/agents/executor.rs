@@ -670,6 +670,7 @@ pub async fn execute_action(
             description,
             resource_tags,
             acceptance_criteria,
+            dependencies,
         } => {
             let resp = bridge.request(
                 "work_item.create",
@@ -679,6 +680,7 @@ pub async fn execute_action(
                     "description": description,
                     "resource_tags": resource_tags,
                     "acceptance_criteria": acceptance_criteria,
+                    "dependencies": dependencies,
                 }),
             );
             if resp.is_error() {
@@ -692,7 +694,7 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("CreateWorkItem: {} (id: {})", title, id);
+            info!("CreateWorkItem: {} (id: {}, deps: {:?})", title, id, dependencies);
             Ok(ActionResult::RecordCreated {
                 collection: "work_items".to_string(),
                 id,
@@ -701,9 +703,44 @@ pub async fn execute_action(
 
         // --- Coordinator agent management actions ---
         AgentAction::AssignAgent { agent_type, target_id } => {
-            // For implementer assignments, auto-transition work item to InProgress if needed
+            // For implementer assignments, check dependencies and auto-transition work item
             if agent_type == "implementer" {
                 let get_resp = bridge.request("work_item.get", serde_json::json!({ "id": target_id }));
+
+                // Check dependencies: all must be Done before assignment
+                if let Some(result) = &get_resp.result {
+                    let deps: Vec<String> = result
+                        .get("dependencies")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_default();
+
+                    for dep_id in &deps {
+                        let dep_resp = bridge.request("work_item.get", serde_json::json!({ "id": dep_id }));
+                        let dep_status = dep_resp
+                            .result
+                            .as_ref()
+                            .and_then(|v| v.get("status"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+
+                        if dep_status != "Done" {
+                            let dep_title = dep_resp
+                                .result
+                                .as_ref()
+                                .and_then(|v| v.get("title"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            return Ok(ActionResult::DependencyNotMet {
+                                work_item_id: target_id.clone(),
+                                message: format!(
+                                    "dependency '{}' ({}) is {} (must be Done)",
+                                    dep_title, dep_id, dep_status
+                                ),
+                            });
+                        }
+                    }
+                }
+
                 let wi_status = get_resp
                     .result
                     .as_ref()
@@ -1034,6 +1071,11 @@ pub enum ActionResult {
     AgentSpawned {
         session_id: String,
         agent_type: String,
+    },
+    /// Work item dependency not met — cannot assign agent until deps are Done.
+    DependencyNotMet {
+        work_item_id: String,
+        message: String,
     },
 }
 
@@ -1712,6 +1754,7 @@ mod tests {
             description: "WI desc".to_string(),
             resource_tags: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
+            dependencies: vec![],
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
             .await
@@ -2727,6 +2770,7 @@ mod tests {
             description: "desc".to_string(),
             resource_tags: vec![],
             acceptance_criteria: vec![],
+            dependencies: vec![],
         };
         let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
             .await
@@ -2972,5 +3016,165 @@ mod tests {
         }
         let base = resolve_worktree_base(&stores);
         assert_eq!(base, "HEAD");
+    }
+
+    #[tokio::test]
+    async fn test_assign_agent_dependency_not_met() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-depnotmet-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+
+        // Create dep_wi (the dependency) — stays in Ready status
+        let dep_resp = bridge.request(
+            "work_item.create",
+            serde_json::json!({
+                "phase_id": phase_id,
+                "title": "Dep WI",
+                "description": "dep desc",
+                "resource_tags": ["src/"],
+                "acceptance_criteria": ["pass"],
+            }),
+        );
+        let dep_id = dep_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create work_wi that depends on dep_wi
+        let wi_resp = bridge.request(
+            "work_item.create",
+            serde_json::json!({
+                "phase_id": phase_id,
+                "title": "Work WI",
+                "description": "work desc",
+                "resource_tags": ["src/"],
+                "acceptance_criteria": ["pass"],
+                "dependencies": [dep_id],
+            }),
+        );
+        let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // Try to assign implementer — should fail because dep is not Done
+        let action = AgentAction::AssignAgent {
+            agent_type: "implementer".to_string(),
+            target_id: wi_id.clone(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result, ActionResult::DependencyNotMet { .. }),
+            "expected DependencyNotMet, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_assign_agent_dependency_met() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-depmet-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+
+        // Create dep_wi and manually set to Done by modifying store directly
+        let dep_resp = bridge.request(
+            "work_item.create",
+            serde_json::json!({
+                "phase_id": phase_id,
+                "title": "Dep WI Done",
+                "description": "dep desc",
+                "resource_tags": ["src/"],
+                "acceptance_criteria": ["pass"],
+            }),
+        );
+        let dep_id = dep_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // Transition dep to Done: Ready→InProgress→Abandoned (shorter path)
+        // Then directly set to Done in both stores and TaskStore
+        {
+            let mut wis = stores.work_items.write().unwrap();
+            if let Some(wi) = wis.get_mut(&dep_id) {
+                wi.status = crate::domain::work_item::WorkItemStatus::Done;
+                wi.updated_at = crate::id::now_millis();
+                if let Some(store_arc) = &stores.store {
+                    let _ = store_arc.lock().unwrap().update(wi.clone());
+                }
+            }
+        }
+
+        // Create work_wi that depends on dep_wi (now Done)
+        let wi_resp = bridge.request(
+            "work_item.create",
+            serde_json::json!({
+                "phase_id": phase_id,
+                "title": "Work WI With Met Dep",
+                "description": "work desc",
+                "resource_tags": ["src/"],
+                "acceptance_criteria": ["pass"],
+                "dependencies": [dep_id],
+            }),
+        );
+        let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // Try to assign implementer — should succeed because dep is Done
+        let action = AgentAction::AssignAgent {
+            agent_type: "implementer".to_string(),
+            target_id: wi_id.clone(),
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result, ActionResult::AgentSpawned { .. }),
+            "expected AgentSpawned, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_work_item_with_dependencies() {
+        let dir = std::env::temp_dir().join(format!("loopr-exec-wideps-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        let (_, _, phase_id, wi_id) = create_test_hierarchy(&bridge);
+
+        // Create a second WI that depends on the first
+        let action = AgentAction::CreateWorkItem {
+            phase_id: phase_id.clone(),
+            title: "Dependent WI".to_string(),
+            description: "depends on first".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["tests pass".to_string()],
+            dependencies: vec![wi_id.clone()],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
+            .await
+            .unwrap();
+
+        assert!(matches!(result, ActionResult::RecordCreated { .. }));
+
+        // Verify the dependency was stored
+        if let ActionResult::RecordCreated { id, .. } = result {
+            let wi = stores.work_items.read().unwrap().get(&id).cloned().unwrap();
+            assert_eq!(wi.dependencies, vec![wi_id]);
+        }
     }
 }

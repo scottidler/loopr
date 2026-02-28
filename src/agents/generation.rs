@@ -226,12 +226,17 @@ pub fn build_work_item_prompt(
         msg.push_str("None yet.\n\n");
     } else {
         for wi in existing_work_items {
+            let deps = if wi.dependencies.is_empty() {
+                "no deps".to_string()
+            } else {
+                format!("deps: {}", wi.dependencies.join(", "))
+            };
             msg.push_str(&format!(
-                "- [{}] {} ({}) — {}\n",
-                wi.id, wi.title, wi.status, wi.description
+                "- ID: {} | Title: \"{}\" | Status: {} | {} — {}\n",
+                wi.id, wi.title, wi.status, deps, wi.description
             ));
         }
-        msg.push('\n');
+        msg.push_str("\nWhen declaring `dependencies`, use the exact IDs above.\n\n");
     }
 
     if !learnings.is_empty() {

@@ -1492,6 +1492,7 @@ mod tests {
                     description: "Add login endpoint".into(),
                     resource_tags: vec!["src/".into()],
                     acceptance_criteria: vec!["tests pass".into()],
+                    dependencies: vec![],
                 },
                 &runner,
                 &bridge,
