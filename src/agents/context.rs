@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use eyre::{Result, eyre};
-use log::warn;
+use log::{debug, warn};
 
 use crate::daemon::context::Stores;
 use crate::domain::learning::{Learning, LearningScope};
@@ -234,6 +234,7 @@ impl std::fmt::Debug for ContextBuilder<'_> {
 
 impl<'a> ContextBuilder<'a> {
     pub fn new(stores: &'a Stores, role: Role) -> Self {
+        debug!("ContextBuilder::new(role={:?})", role);
         let budget = TokenBudget::for_role(role);
         Self {
             stores,
@@ -260,6 +261,7 @@ impl<'a> ContextBuilder<'a> {
 
     /// Load the full hierarchy from a work ID: Work -> Phase -> Spec -> Plan.
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
+        debug!("ContextBuilder::load_work_hierarchy(work_id={})", work_id);
         let (wi_title, wi_desc, phase_id) = {
             let guard = self.stores.works.read().unwrap();
             let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
@@ -318,6 +320,7 @@ impl<'a> ContextBuilder<'a> {
 
     /// Load hierarchy from a bundle ID: Bundle -> Work -> Phase -> Spec -> Plan.
     pub fn load_bundle_hierarchy(mut self, bundle_id: &str) -> Result<Self> {
+        debug!("ContextBuilder::load_bundle_hierarchy(bundle_id={})", bundle_id);
         let (bid, claims, touched_paths, work_id) = {
             let guard = self.stores.bundles.read().unwrap();
             let bundle = guard
@@ -355,37 +358,47 @@ impl<'a> ContextBuilder<'a> {
     }
 
     pub fn with_tools(mut self, tool_runner: &ToolRunner) -> Self {
+        debug!("ContextBuilder::with_tools()");
         self.tools = tool_runner.available_tools().into_iter().map(String::from).collect();
         self
     }
 
     pub fn with_previous_summary(mut self, summary: Option<String>) -> Self {
+        debug!(
+            "ContextBuilder::with_previous_summary(has_summary={})",
+            summary.is_some()
+        );
         self.previous_summary = summary;
         self
     }
 
     pub fn with_staleness_note(mut self, note: Option<String>) -> Self {
+        debug!("ContextBuilder::with_staleness_note(has_note={})", note.is_some());
         self.staleness_note = note;
         self
     }
 
     pub fn with_iteration(mut self, iteration: u32) -> Self {
+        debug!("ContextBuilder::with_iteration(iteration={})", iteration);
         self.iteration = Some(iteration);
         self
     }
 
     pub fn with_state_summary(mut self, summary: String) -> Self {
+        debug!("ContextBuilder::with_state_summary()");
         self.state_summary = Some(summary);
         self
     }
 
     pub fn with_footer(mut self, footer: String) -> Self {
+        debug!("ContextBuilder::with_footer()");
         self.footer = Some(footer);
         self
     }
 
     /// Set the coordinator goal from stores (reads the active goal).
     pub fn with_coordinator_goal(mut self) -> Self {
+        debug!("ContextBuilder::with_coordinator_goal()");
         let goal = {
             let goals = self.stores.coordinator_goals.read().unwrap();
             goals.values().find(|g| g.active).map(|g| g.goal.clone())
@@ -396,11 +409,13 @@ impl<'a> ContextBuilder<'a> {
 
     /// Access the loaded work title (available after load_*_hierarchy).
     pub fn work_title(&self) -> Option<&str> {
+        debug!("ContextBuilder::work_title()");
         self.work.as_ref().map(|(t, _)| t.as_str())
     }
 
     /// Build the assembled context with per-section token budgeting.
     pub fn build(&self, system_prompt: &str) -> AssembledContext {
+        debug!("ContextBuilder::build(system_prompt_len={})", system_prompt.len());
         let mut msg = String::with_capacity(4096);
 
         // --- Project Goal section (before hierarchy) ---

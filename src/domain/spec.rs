@@ -22,6 +22,7 @@ pub struct Spec {
 
 impl Spec {
     pub fn new(plan_id: String, title: String, description: String) -> Self {
+        log::debug!("Spec::new(plan_id={}, title={})", plan_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),

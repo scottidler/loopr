@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use eyre::{Result, eyre};
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use tokio::sync::broadcast;
 
+use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
@@ -34,6 +35,7 @@ fn normalize_action_keys(response: &str) -> String {
 /// Parse the LLM response into a list of agent actions.
 /// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
 pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
+    debug!("parse_actions(response_len={})", response.len());
     // Normalize "type" → "action" before any parsing attempts
     let normalized = normalize_action_keys(response);
     let response = &normalized;
@@ -78,6 +80,7 @@ pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
 
 /// Build a focused state summary for the implementer: active locks and sibling agents.
 pub fn build_implementer_summary(stores: &Stores, work_id: &str) -> String {
+    debug!("build_implementer_summary(work_id={})", work_id);
     use crate::domain::lock::LockStatus;
 
     let mut summary = String::with_capacity(512);
@@ -137,6 +140,7 @@ pub struct IterationParams<'a> {
     pub worktree_path: &'a Path,
     pub session_id: &'a str,
     pub event_tx: &'a broadcast::Sender<DaemonEvent>,
+    pub agent_log: &'a AgentLogger,
 }
 
 /// Run a single implementer iteration: load context → prompt → call LLM → parse → execute.
@@ -146,6 +150,11 @@ pub async fn run_iteration(
     previous_summary: Option<String>,
     staleness_note: Option<String>,
 ) -> Result<IterationOutcome> {
+    params.agent_log.debug(&format!(
+        "run_iteration(iteration={}, has_previous_summary={})",
+        iteration,
+        previous_summary.is_some()
+    ));
     let state_summary = build_implementer_summary(params.stores, params.work_id);
     let assembled = ContextBuilder::new(params.stores, Role::Implementer)
         .load_work_hierarchy(params.work_id)?
@@ -232,6 +241,7 @@ pub async fn run_iteration(
 
 /// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
 fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>) -> Option<String> {
+    debug!("drain_tick_published()");
     let mut latest_tick_id: Option<String> = None;
     loop {
         match event_rx.try_recv() {
@@ -252,6 +262,7 @@ fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>) -> Opti
 }
 
 /// Run the full implementer loop with iteration cap.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_implementer(
     llm: &dyn LlmClient,
     session: &mut AgentSession,
@@ -260,7 +271,12 @@ pub async fn run_implementer(
     bridge: &AgentIpcBridge,
     config: &AgentRoleConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
+    agent_log.debug(&format!(
+        "run_implementer(session_id={}, work_id={:?})",
+        session.id, session.work_id
+    ));
     let work_id = session
         .work_id
         .as_ref()
@@ -287,6 +303,7 @@ pub async fn run_implementer(
         worktree_path: &worktree_path,
         session_id: &session.id,
         event_tx,
+        agent_log,
     };
 
     for i in 1..=max_iterations {
@@ -556,6 +573,17 @@ mod tests {
         stores.works.read().unwrap().keys().next().unwrap().clone()
     }
 
+    fn test_agent_logger(dir: &Path) -> AgentLogger {
+        use crate::agents::AgentType;
+        let file_path = dir.join("test-agent.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Implementer, "test-session", file, file_path)
+    }
+
     fn test_bridge_with_tx(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
@@ -657,6 +685,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#);
         let params = IterationParams {
@@ -668,6 +697,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let outcome = run_iteration(&params, 1, None, None).await.unwrap();
@@ -682,6 +712,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#);
         let params = IterationParams {
@@ -693,6 +724,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let outcome = run_iteration(&params, 1, None, None).await.unwrap();
@@ -707,6 +739,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = MockLlm::new(
             r#"[
@@ -723,6 +756,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let outcome = run_iteration(&params, 1, None, None).await.unwrap();
@@ -739,6 +773,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = FailingLlm;
         let params = IterationParams {
@@ -750,6 +785,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let result = run_iteration(&params, 1, None, None).await;
@@ -764,6 +800,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = MockLlm::new("This is not valid JSON");
         let params = IterationParams {
@@ -775,6 +812,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let result = run_iteration(&params, 1, None, None).await;
@@ -789,6 +827,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = MockLlm::new("[]");
         let params = IterationParams {
@@ -800,6 +839,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let result = run_iteration(&params, 1, None, None).await;
@@ -817,6 +857,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let config = AgentRoleConfig::default_implementer();
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "Complete"}]"#);
@@ -825,7 +866,17 @@ mod tests {
         session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_ok());
         assert_eq!(session.iteration, 1);
     }
@@ -838,6 +889,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
 
@@ -848,7 +900,17 @@ mod tests {
         session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max iterations"));
         assert_eq!(session.iteration, 3);
@@ -861,13 +923,24 @@ mod tests {
         let stores = setup_stores(&dir);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = MockLlm::new("[]");
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
         // No work_id set
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing work_id"));
     }
@@ -880,6 +953,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let config = AgentRoleConfig::default_implementer();
 
         let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Stuck"}]"#);
@@ -888,7 +962,17 @@ mod tests {
         session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("needs help"));
     }
@@ -985,6 +1069,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let llm = MockLlm::new(r#"[{"action": "done", "summary": "Rebased and done"}]"#);
         let params = IterationParams {
@@ -996,6 +1081,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-session",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let staleness = Some("New tick published, please review.".to_string());
@@ -1011,6 +1097,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
 
@@ -1050,7 +1137,17 @@ mod tests {
         session.work_id = Some(wi_id);
         session.worktree_path = Some(dir.to_string_lossy().into());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
     }
 
@@ -1062,6 +1159,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         // LLM returns multiple actions — all summaries should be joined
         let llm = MockLlm::new(
@@ -1080,6 +1178,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-accum",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let outcome = run_iteration(&params, 1, None, None).await.unwrap();
@@ -1147,6 +1246,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         // Done comes first, then a write_file that should NOT execute
         let llm = MockLlm::new(
@@ -1164,6 +1264,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-donestop",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let outcome = run_iteration(&params, 1, None, None).await.unwrap();
@@ -1230,6 +1331,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 2;
 
@@ -1266,7 +1368,17 @@ mod tests {
             .unwrap()
             .insert(session_id.clone(), session.clone());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
         assert_eq!(session.iteration, 2);
 
@@ -1308,6 +1420,7 @@ mod tests {
         };
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
 
         let params = IterationParams {
             llm: &llm,
@@ -1318,6 +1431,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-goal",
             event_tx: &event_tx,
+            agent_log: &agent_log,
         };
 
         let _ = run_iteration(&params, 1, None, None).await.unwrap();
@@ -1368,6 +1482,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
 
@@ -1386,7 +1501,17 @@ mod tests {
             .unwrap()
             .insert(session_id.clone(), session.clone());
 
-        let result = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_ok(), "Expected success after retry, got: {:?}", result);
         // Should have used 2 iterations: parse failure + successful recovery
         assert_eq!(session.iteration, 2, "Should have completed on second iteration");
@@ -1467,6 +1592,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3; // Budget warning should appear at iterations 2 and 3
 
@@ -1481,7 +1607,17 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session.clone());
 
-        let _ = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let _ = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
 
         let messages = llm.user_messages();
         // With max_iterations=3, budget warning triggers at i >= 3-1 = 2, so iterations 2 and 3
@@ -1503,6 +1639,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 1; // Immediately exhaust budget
 
@@ -1525,7 +1662,17 @@ mod tests {
         );
         // May fail if not in Ready state, that's OK — the force-propose attempt is what we test
 
-        let _ = run_implementer(&llm, &mut session, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let _ = run_implementer(
+            &llm,
+            &mut session,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
 
         // The force-propose should have attempted to create a bundle.
         // Even if it failed (no git repo), the attempt itself is what we verify.
@@ -1554,6 +1701,7 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let tool_runner = ToolRunner::new(&[]);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
+        let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 2;
 
@@ -1575,7 +1723,17 @@ mod tests {
             .unwrap()
             .insert(session1.id.clone(), session1.clone());
 
-        let _ = run_implementer(&llm1, &mut session1, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let _ = run_implementer(
+            &llm1,
+            &mut session1,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         // Force-propose should have been attempted (may or may not succeed)
 
         // Second: done action → returns Ok immediately, no force-propose
@@ -1589,7 +1747,17 @@ mod tests {
             .unwrap()
             .insert(session2.id.clone(), session2.clone());
 
-        let result2 = run_implementer(&llm2, &mut session2, &stores, &tool_runner, &bridge, &config, &event_tx).await;
+        let result2 = run_implementer(
+            &llm2,
+            &mut session2,
+            &stores,
+            &tool_runner,
+            &bridge,
+            &config,
+            &event_tx,
+            &agent_log,
+        )
+        .await;
         assert!(result2.is_ok(), "done action should return Ok without force-propose");
     }
 }

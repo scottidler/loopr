@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use taskstore::Store;
 use tokio::sync::{RwLock, broadcast};
 
@@ -370,6 +370,7 @@ impl DaemonContext {
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
     pub fn shared(config: Config) -> eyre::Result<(Arc<RwLock<Self>>, broadcast::Sender<DaemonEvent>)> {
+        debug!("DaemonContext::shared()");
         let (event_tx, _) = broadcast::channel::<DaemonEvent>(256);
         let tx = event_tx.clone();
         let ctx = Self::new(config, event_tx)?;

@@ -346,6 +346,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub r#as: Option<Role>,
 
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(long, global = true)]
+    pub log_level: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -968,5 +972,17 @@ mod tests {
                 cmd: CoordinatorCmd::Status
             })
         ));
+    }
+
+    #[test]
+    fn test_cli_parses_log_level() {
+        let cli = Cli::parse_from(["loopr", "--log-level", "debug", "status"]);
+        assert_eq!(cli.log_level.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn test_cli_log_level_default_none() {
+        let cli = Cli::parse_from(["loopr", "status"]);
+        assert!(cli.log_level.is_none());
     }
 }

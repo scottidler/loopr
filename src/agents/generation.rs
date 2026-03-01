@@ -55,6 +55,12 @@ pub struct GenerationPrompt {
 /// - Relevant learnings (global scope)
 /// - Accumulated validation failures from previous attempts
 pub fn build_plan_prompt(goal: &str, learnings: &[String], validation_failures: &[String]) -> GenerationPrompt {
+    log::debug!(
+        "build_plan_prompt(goal_len={}, learnings={}, failures={})",
+        goal.len(),
+        learnings.len(),
+        validation_failures.len()
+    );
     let mut msg = String::with_capacity(2048);
 
     msg.push_str("## Task: Generate a Plan\n\n");
@@ -106,6 +112,13 @@ pub fn build_spec_prompt(
     findings: &[String],
     validation_failures: &[String],
 ) -> GenerationPrompt {
+    log::debug!(
+        "build_spec_prompt(plan_id={}, learnings={}, findings={}, failures={})",
+        plan.id,
+        learnings.len(),
+        findings.len(),
+        validation_failures.len()
+    );
     let mut msg = String::with_capacity(4096);
 
     msg.push_str("## Task: Generate a Spec\n\n");
@@ -160,6 +173,12 @@ pub fn build_spec_prompt(
 /// - Relevant learnings (scoped to Spec + Plan + Global)
 /// - Accumulated validation failures
 pub fn build_phase_prompt(spec: &Spec, learnings: &[String], validation_failures: &[String]) -> GenerationPrompt {
+    log::debug!(
+        "build_phase_prompt(spec_id={}, learnings={}, failures={})",
+        spec.id,
+        learnings.len(),
+        validation_failures.len()
+    );
     let mut msg = String::with_capacity(4096);
 
     msg.push_str("## Task: Generate Implementation Phases\n\n");
@@ -210,6 +229,13 @@ pub fn build_work_prompt(
     learnings: &[String],
     findings: &[String],
 ) -> GenerationPrompt {
+    log::debug!(
+        "build_work_prompt(phase_id={}, existing_works={}, learnings={}, findings={})",
+        phase.id,
+        existing_works.len(),
+        learnings.len(),
+        findings.len()
+    );
     let mut msg = String::with_capacity(4096);
 
     msg.push_str("## Task: Generate Works\n\n");

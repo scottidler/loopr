@@ -2,10 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::AgentAction;
+use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
@@ -41,6 +42,7 @@ fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
 /// Uses lock-snapshot pattern: acquires each lock briefly, clones/summarizes, releases.
 /// The summary is designed to fit within the Coordinator's state_summary token budget (3000 tokens).
 pub fn build_state_summary(stores: &Stores) -> String {
+    debug!("build_state_summary()");
     let mut summary = String::with_capacity(4096);
 
     // --- Plans ---
@@ -1105,21 +1107,23 @@ pub async fn run_coordinator(
     bridge: &AgentIpcBridge,
     config: &CoordinatorConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
+    agent_log.debug(&format!("run_coordinator(session_id={})", session.id));
     let mut iteration: u32 = 0;
     let mut previous_summary: Option<String> = None;
 
     // Load or create FSM state
     let mut coord_state = match load_or_create_coordinator_state(stores) {
         Some(state) => {
-            info!(
-                "Coordinator {} resuming FSM state: {} (phase: {:?})",
-                session.id, state.fsm_state, state.current_phase_id
-            );
+            agent_log.info(&format!(
+                "Resuming FSM state: {} (phase: {:?})",
+                state.fsm_state, state.current_phase_id
+            ));
             state
         }
         None => {
-            info!("Coordinator {} no active goal, waiting", session.id);
+            agent_log.info("No active goal, waiting");
             // No active goal — run in legacy mode (idle until goal is set)
             // Fall through to loop, which will sleep idle_interval
             return run_coordinator_legacy(llm, session, stores, bridge, config, event_tx).await;
@@ -1389,6 +1393,17 @@ mod tests {
         stores.store = Some(Arc::new(StdMutex::new(store)));
         stores.config = config;
         Arc::new(stores)
+    }
+
+    fn test_agent_logger(dir: &std::path::Path) -> AgentLogger {
+        use crate::agents::AgentType;
+        let file_path = dir.join("test-coordinator.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
     }
 
     // --- build_state_summary tests ---
@@ -1707,8 +1722,9 @@ mod tests {
         let config = CoordinatorConfig::default();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
 
-        let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("needs help"));
     }
@@ -1734,8 +1750,9 @@ mod tests {
         let config = CoordinatorConfig::default();
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
 
-        let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let result = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok()); // Cancelled = graceful exit
     }
 
@@ -1892,8 +1909,9 @@ mod tests {
 
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
 
-        let _ = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let _ = run_coordinator(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
 
         // Session iteration should be 3 (need_help on iteration 3)
         assert_eq!(session.iteration, 3);

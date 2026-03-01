@@ -186,6 +186,11 @@ impl AgentLlmClient {
 #[async_trait]
 impl LlmClient for AgentLlmClient {
     async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String> {
+        debug!(
+            "AgentLlmClient::call(system_prompt_len={}, user_msg_len={})",
+            system_prompt.len(),
+            user_message.len()
+        );
         self.call_streaming(system_prompt, user_message).await
     }
 }

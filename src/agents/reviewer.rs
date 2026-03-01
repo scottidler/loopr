@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use eyre::{Result, eyre};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::agents::AgentSession;
+use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::implementer::LlmClient;
@@ -66,6 +67,7 @@ pub struct ReviewResult {
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
 pub fn parse_review_result(response: &str) -> Result<ReviewResult> {
+    debug!("parse_review_result(response_len={})", response.len());
     // Try direct parse first
     if let Ok(result) = serde_json::from_str::<ReviewResult>(response) {
         return Ok(result);
@@ -93,7 +95,12 @@ pub async fn run_reviewer(
     bridge: &AgentIpcBridge,
     config: &AgentRoleConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
+    agent_log.debug(&format!(
+        "run_reviewer(session_id={}, bundle_id={:?})",
+        session.id, session.bundle_id
+    ));
     let bundle_id = session
         .bundle_id
         .as_ref()
@@ -102,10 +109,10 @@ pub async fn run_reviewer(
 
     // Reviewer is single-iteration: load context, call LLM, execute verdict.
     session.iteration = 1;
-    info!(
-        "Reviewer {} iteration 1 (max_iterations={})",
-        session.id, config.max_iterations
-    );
+    agent_log.info(&format!(
+        "Reviewer iteration 1 (max_iterations={})",
+        config.max_iterations
+    ));
 
     let ctx = ContextBuilder::new(stores, Role::Reviewer)
         .load_bundle_hierarchy(&bundle_id)?
@@ -325,6 +332,17 @@ mod tests {
         (Arc::new(stores), bundle_id)
     }
 
+    fn test_agent_logger(dir: &Path) -> AgentLogger {
+        use crate::agents::AgentType;
+        let file_path = dir.join("test-reviewer.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Reviewer, "test-session", file, file_path)
+    }
+
     fn test_bridge(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
@@ -489,7 +507,8 @@ mod tests {
         let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id.clone());
 
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok(), "run_reviewer failed: {:?}", result.err());
         assert_eq!(session.iteration, 1);
 
@@ -514,7 +533,8 @@ mod tests {
         let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id.clone());
 
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok());
 
         // Bundle should have been transitioned to Rejected
@@ -538,7 +558,8 @@ mod tests {
         let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id.clone());
 
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok());
 
         // #21: request_changes now transitions to Rejected (not Reviewed)
@@ -559,7 +580,8 @@ mod tests {
         let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
         // No bundle_id set
 
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("missing bundle_id"));
     }
@@ -576,7 +598,8 @@ mod tests {
         let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id);
 
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_err());
     }
 
@@ -592,7 +615,8 @@ mod tests {
         let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id);
 
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_err());
     }
 

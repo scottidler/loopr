@@ -1,3 +1,4 @@
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,6 +40,11 @@ pub enum WorktreeError {
 impl WorktreeManager {
     /// Create a new WorktreeManager.
     pub fn new(repo_path: PathBuf, worktree_dir: PathBuf) -> Self {
+        debug!(
+            "WorktreeManager::new(repo_root={}, worktree_dir={})",
+            repo_path.display(),
+            worktree_dir.display()
+        );
         Self {
             repo_path,
             worktree_dir,
@@ -49,6 +55,7 @@ impl WorktreeManager {
     ///
     /// Runs: `git worktree add <path> -b agent/<work_id> <base_ref>`
     pub fn create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
+        debug!("WorktreeManager::create(key={}, base_ref={})", work_id, base_ref);
         let path = self.worktree_dir.join(work_id);
         if path.exists() {
             return Err(WorktreeError::AlreadyExists(work_id.to_string()));
@@ -91,6 +98,7 @@ impl WorktreeManager {
     /// Idempotent worktree creation — returns the existing worktree path if one
     /// exists, or creates a new one. Handles TOCTOU races between concurrent agents.
     pub fn get_or_create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
+        debug!("WorktreeManager::get_or_create(key={}, base_ref={})", work_id, base_ref);
         let path = self.worktree_dir.join(work_id);
         if path.exists() {
             // Verify it's a valid git worktree by checking for .git file
@@ -118,6 +126,7 @@ impl WorktreeManager {
     ///
     /// Runs: `git -C <worktree> rebase <new_base_ref>`
     pub fn refresh(&self, work_id: &str, new_base_ref: &str) -> Result<(), WorktreeError> {
+        debug!("WorktreeManager::refresh(key={}, new_ref={})", work_id, new_base_ref);
         let path = self.worktree_dir.join(work_id);
         if !path.exists() {
             return Err(WorktreeError::NotFound(work_id.to_string()));
@@ -139,6 +148,7 @@ impl WorktreeManager {
     ///
     /// Runs: `git worktree remove <path>`
     pub fn cleanup(&self, work_id: &str) -> Result<(), WorktreeError> {
+        debug!("WorktreeManager::cleanup(key={})", work_id);
         let path = self.worktree_dir.join(work_id);
         if !path.exists() {
             return Err(WorktreeError::NotFound(work_id.to_string()));

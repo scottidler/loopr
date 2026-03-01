@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Context, eyre};
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
@@ -19,6 +19,11 @@ use self::context::{DaemonContext, Stores};
 /// for the socket to appear. This lets `loopr` (TUI) and CLI commands work
 /// without requiring a separate `loopr daemon` step.
 pub fn ensure_daemon(pid_path: &std::path::Path, socket_path: &std::path::Path) -> eyre::Result<()> {
+    debug!(
+        "ensure_daemon(pid_path={}, socket_path={})",
+        pid_path.display(),
+        socket_path.display()
+    );
     // Check PID file — is a daemon already alive?
     if let Ok(contents) = std::fs::read_to_string(pid_path)
         && let Ok(pid) = contents.trim().parse::<u32>()
@@ -128,6 +133,7 @@ fn remove_pid_file(ctx: &DaemonContext) {
 /// Binds the Unix socket, accepts client connections, and runs the select! loop
 /// until SIGINT (ctrl_c) is received.
 pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
+    debug!("daemon_main()");
     let socket_path = {
         let c = ctx.read().await;
         ensure_one_daemon(&c)?;

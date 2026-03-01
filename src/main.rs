@@ -11,10 +11,9 @@ use loopr::tui;
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-    loopr::setup_logging().context("Failed to setup logging")?;
-
     let cli_args = Cli::parse();
     let config = Config::load(cli_args.config.as_ref()).context("Failed to load configuration")?;
+    loopr::setup_logging(&config, cli_args.log_level.as_deref()).context("Failed to setup logging")?;
     loopr::prompts::init();
     let role = cli_args.r#as.unwrap_or(domain::role::Role::Coordinator);
 

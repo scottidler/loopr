@@ -19,6 +19,7 @@ pub struct CoordinatorGoal {
 
 impl CoordinatorGoal {
     pub fn new(goal: String) -> Self {
+        log::debug!("CoordinatorGoal::new(goal={})", goal);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),

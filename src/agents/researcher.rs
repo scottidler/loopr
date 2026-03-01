@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eyre::{Result, eyre};
-use log::{info, warn};
+use log::{debug, info, warn};
 use tokio::sync::broadcast;
 
+use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
@@ -26,6 +27,11 @@ const EXT_DENYLIST: &[&str] = &["key", "pem"];
 /// 2. Must resolve within repo_root after canonicalization
 /// 3. Must not match denylist patterns
 pub fn validate_path(repo_root: &Path, relative: &str) -> Result<PathBuf> {
+    debug!(
+        "validate_path(repo_root={}, relative={})",
+        repo_root.display(),
+        relative
+    );
     // Reject absolute paths
     if relative.starts_with('/') || relative.starts_with('\\') {
         return Err(eyre!("absolute paths not allowed: {}", relative));
@@ -79,6 +85,7 @@ pub fn validate_path(repo_root: &Path, relative: &str) -> Result<PathBuf> {
 
 /// Build the Researcher system prompt with the query injected.
 fn build_system_prompt(query: &str) -> String {
+    debug!("build_system_prompt(query_len={})", query.len());
     crate::prompts::store().researcher.replace("{query}", query)
 }
 
@@ -89,6 +96,10 @@ pub async fn execute_search_code(
     glob_filter: Option<&str>,
     search_path: Option<&str>,
 ) -> Result<String> {
+    debug!(
+        "execute_search_code(pattern={}, glob={:?}, path={:?})",
+        pattern, glob_filter, search_path
+    );
     let search_dir = match search_path {
         Some(p) => validate_path(repo_root, p)?,
         None => repo_root.to_path_buf(),
@@ -354,13 +365,14 @@ pub async fn run_researcher(
     bridge: &AgentIpcBridge,
     config: &AgentRoleConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
-    info!(
-        "Researcher {} starting (query: {:?}, target: {:?})",
-        session.id,
+    agent_log.debug(&format!("run_researcher(session_id={})", session.id));
+    agent_log.info(&format!(
+        "Researcher starting (query: {:?}, target: {:?})",
         session.query.as_deref().unwrap_or("none"),
         session.target_id.as_deref().unwrap_or("none"),
-    );
+    ));
 
     let mut previous_summary: Option<String> = None;
 
@@ -486,6 +498,17 @@ mod tests {
         stores.store = Some(Arc::new(StdMutex::new(store)));
         stores.config = config;
         Arc::new(stores)
+    }
+
+    fn test_agent_logger(dir: &Path) -> AgentLogger {
+        use crate::agents::AgentType;
+        let file_path = dir.join("test-researcher.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Researcher, "test-session", file, file_path)
     }
 
     // --- Path sandboxing tests ---
@@ -739,7 +762,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok());
         assert_eq!(session.iteration, 1);
     }
@@ -768,7 +792,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("needs help"));
     }
@@ -805,7 +830,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max iterations"));
         assert_eq!(session.iteration, 3);
@@ -833,7 +859,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok()); // Cancelled = graceful exit
     }
 
@@ -862,7 +889,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok()); // Completes with Done
 
         // Verify file was NOT written
@@ -1012,7 +1040,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         // Empty actions → Done("No actions returned") → Ok(())
         assert!(result.is_ok());
     }
@@ -1042,7 +1071,8 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok());
         // Write file should NOT have been created
         assert!(!dir.join("bad.txt").exists());

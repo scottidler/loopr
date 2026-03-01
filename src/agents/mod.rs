@@ -1,3 +1,4 @@
+pub mod agent_logger;
 pub mod bridge;
 pub mod context;
 pub mod coordinator;

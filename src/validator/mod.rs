@@ -2,7 +2,7 @@ pub mod client;
 pub mod prompts;
 
 use eyre::{Context, Result};
-use log::info;
+use log::{debug, info};
 
 use crate::config::ValidatorConfig;
 use crate::domain::validation::{IssueSeverity, ValidationIssue, ValidationReport, ValidationVerdict};
@@ -37,6 +37,7 @@ pub struct DocValidator {
 impl DocValidator {
     /// Create a DocValidator with a real ureq HTTP client.
     pub fn new(config: ValidatorConfig) -> Self {
+        debug!("DocValidator::new(model={})", config.model);
         let model = config.model.clone();
         Self {
             llm_client: LlmClient::with_ureq(config),
@@ -52,6 +53,7 @@ impl DocValidator {
         description: &str,
         acceptance_criteria: &str,
     ) -> Result<ValidationReport> {
+        debug!("DocValidator::validate_plan(target_id={})", target_id);
         let prompt = prompts::plan_prompt(title, description, acceptance_criteria);
         self.run_validation("plans", target_id, &prompt)
     }
@@ -64,6 +66,7 @@ impl DocValidator {
         description: &str,
         plan_title: &str,
     ) -> Result<ValidationReport> {
+        debug!("DocValidator::validate_spec(target_id={})", target_id);
         let prompt = prompts::spec_prompt(title, description, plan_title);
         self.run_validation("specs", target_id, &prompt)
     }
@@ -77,12 +80,17 @@ impl DocValidator {
         order: u32,
         spec_title: &str,
     ) -> Result<ValidationReport> {
+        debug!("DocValidator::validate_phase(target_id={})", target_id);
         let prompt = prompts::phase_prompt(title, description, order, spec_title);
         self.run_validation("phases", target_id, &prompt)
     }
 
     /// Internal: send prompt to LLM, parse response, build ValidationReport.
     fn run_validation(&self, collection: &str, target_id: &str, prompt: &str) -> Result<ValidationReport> {
+        debug!(
+            "DocValidator::run_validation(collection={}, target_id={})",
+            collection, target_id
+        );
         info!("Running validation for {}/{}", collection, target_id);
 
         let raw = self

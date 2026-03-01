@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use eyre::{Context, Result, eyre};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -30,6 +31,7 @@ pub struct ToolRunner {
 impl ToolRunner {
     /// Create a ToolRunner from a list of configured tool entries.
     pub fn new(entries: &[ToolEntry]) -> Self {
+        debug!("ToolRunner::new(tools_count={})", entries.len());
         let tools = entries.iter().map(|e| (e.name.clone(), e.clone())).collect();
         Self { tools }
     }
@@ -51,6 +53,11 @@ impl ToolRunner {
     /// Timeout is enforced: SIGTERM first, then SIGKILL after a grace period.
     /// Output is truncated to MAX_OUTPUT bytes per stream.
     pub async fn run(&self, tool: &str, args: &[String], working_dir: &Path) -> Result<ToolResult> {
+        debug!(
+            "ToolRunner::run(tool={}, worktree_path={})",
+            tool,
+            working_dir.display()
+        );
         let entry = self.tools.get(tool).ok_or_else(|| eyre!("unknown tool: {}", tool))?;
 
         let full_command = if args.is_empty() {

@@ -23,6 +23,7 @@ pub struct Phase {
 
 impl Phase {
     pub fn new(spec_id: String, title: String, description: String, order: u32) -> Self {
+        log::debug!("Phase::new(spec_id={}, title={}, order={})", spec_id, title, order);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),

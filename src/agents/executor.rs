@@ -3,9 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use tokio::sync::broadcast;
 
+use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::coordinator;
 use crate::agents::implementer::{self, LlmClient};
@@ -24,6 +25,7 @@ use crate::worktree::manager::WorktreeManager;
 /// The LLM may emit "plans", "specs", "phases", "works", "bundles", "ticks"
 /// but IPC methods use singular: "plan", "spec", "phase", "work", "bundle", "tick".
 fn normalize_collection(collection: &str) -> &str {
+    debug!("normalize_collection(collection={})", collection);
     match collection {
         "plans" => "plan",
         "specs" => "spec",
@@ -41,6 +43,7 @@ fn create_llm_client(
     session_id: &str,
     event_tx: &broadcast::Sender<DaemonEvent>,
 ) -> Result<Box<dyn LlmClient>> {
+    debug!("create_llm_client(session_id={}, model={})", session_id, config.model);
     let client = AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone())?;
     info!("Agent {} using LLM client (model: {})", session_id, config.model);
     Ok(Box::new(client))
@@ -49,6 +52,7 @@ fn create_llm_client(
 /// Returns the integration SHA of the latest Published Tick,
 /// or "HEAD" if no Ticks have been published yet.
 pub fn resolve_worktree_base(stores: &Stores) -> String {
+    debug!("resolve_worktree_base()");
     let ticks = stores.ticks.read().unwrap();
     ticks
         .values()
@@ -61,6 +65,7 @@ pub fn resolve_worktree_base(stores: &Stores) -> String {
 /// Resolve the ID of the latest Published Tick from stores.
 /// Returns None if no Published Tick exists (bootstrap case).
 fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String> {
+    debug!("resolve_latest_published_tick_id()");
     let ticks = stores.ticks.read().unwrap();
     ticks
         .values()
@@ -80,6 +85,7 @@ pub async fn run_agent_task(
     event_tx: broadcast::Sender<DaemonEvent>,
     worktree_mgr: WorktreeManager,
 ) {
+    debug!("run_agent_task(session_id={}, agent_type={})", session_id, agent_type);
     info!("Agent task started: {} ({})", session_id, agent_type);
 
     // Create a worktree for the agent before starting the loop.
@@ -138,6 +144,16 @@ pub async fn run_agent_task(
     let cleanup_mgr = worktree_mgr.clone();
     let cleanup_key = worktree_key.clone();
 
+    // Create per-agent logger
+    let agent_log = match AgentLogger::new(agent_type, &session_id) {
+        Ok(al) => al,
+        Err(e) => {
+            error!("Agent {} failed to create logger: {}", session_id, e);
+            return;
+        }
+    };
+    agent_log.info(&format!("Agent task started: {} ({})", session_id, agent_type));
+
     // Create the in-process IPC bridge for this agent
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
@@ -158,14 +174,14 @@ pub async fn run_agent_task(
         let max_restarts = 3u32;
         let restart_delay = stores.config.agents.coordinator.idle_interval_secs * 2;
         let mut attempt = 0u32;
-        let mut result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
+        let mut result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
 
         while result.is_err() && attempt < max_restarts {
             attempt += 1;
-            warn!(
-                "Coordinator {} failed (attempt {}/{}), restarting in {}s",
-                session_id, attempt, max_restarts, restart_delay
-            );
+            agent_log.warn(&format!(
+                "Coordinator failed (attempt {}/{}), restarting in {}s",
+                attempt, max_restarts, restart_delay
+            ));
             tokio::time::sleep(Duration::from_secs(restart_delay)).await;
             // Check cancellation during sleep
             let cancelled = stores
@@ -177,11 +193,11 @@ pub async fn run_agent_task(
             if cancelled {
                 break;
             }
-            result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await;
+            result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
         }
         result
     } else {
-        run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await
+        run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await
     };
 
     // Transition work based on agent result (implementer only)
@@ -303,13 +319,18 @@ async fn run_agent_loop(
     stores: &Arc<Stores>,
     bridge: &AgentIpcBridge,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
+    agent_log.debug(&format!(
+        "run_agent_loop(session_id={}, agent_type={})",
+        session_id, agent_type
+    ));
     // Verify the bridge works by checking system status
     let status_resp = bridge.request("system.status", serde_json::json!(null));
     if status_resp.is_error() {
         return Err(eyre!("bridge health check failed: {:?}", status_resp.error));
     }
-    info!("Agent {} bridge health check passed", session_id);
+    agent_log.info("Bridge health check passed");
 
     match agent_type {
         AgentType::Implementer => {
@@ -334,6 +355,7 @@ async fn run_agent_loop(
                 bridge,
                 &config,
                 event_tx,
+                agent_log,
             )
             .await;
 
@@ -360,7 +382,8 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = reviewer::run_reviewer(llm.as_ref(), &mut session, stores, bridge, &config, event_tx).await;
+            let result =
+                reviewer::run_reviewer(llm.as_ref(), &mut session, stores, bridge, &config, event_tx, agent_log).await;
 
             // Write back updated session iteration count
             {
@@ -385,7 +408,8 @@ async fn run_agent_loop(
             };
 
             let result =
-                coordinator::run_coordinator(llm.as_ref(), &mut session, stores, bridge, &config, event_tx).await;
+                coordinator::run_coordinator(llm.as_ref(), &mut session, stores, bridge, &config, event_tx, agent_log)
+                    .await;
 
             // Write back updated session iteration count
             {
@@ -410,7 +434,8 @@ async fn run_agent_loop(
             };
 
             let result =
-                researcher::run_researcher(llm.as_ref(), &mut session, stores, bridge, &config, event_tx).await;
+                researcher::run_researcher(llm.as_ref(), &mut session, stores, bridge, &config, event_tx, agent_log)
+                    .await;
 
             // Write back updated session iteration count
             {
@@ -433,7 +458,7 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = integrator::run_integrator(&mut session, stores, bridge, &config, event_tx).await;
+            let result = integrator::run_integrator(&mut session, stores, bridge, &config, event_tx, agent_log).await;
 
             // Write back updated session iteration count
             {
@@ -459,6 +484,7 @@ pub async fn execute_action(
     work_id: Option<&str>,
     agent_type: AgentType,
 ) -> Result<ActionResult> {
+    debug!("execute_action(action={:?}, agent_type={})", action, agent_type);
     match action {
         AgentAction::RunTool { tool, args } => {
             let tool_result = tool_runner
@@ -1169,6 +1195,7 @@ pub enum ActionResult {
 }
 
 fn persist_session(stores: &Stores, session: &AgentSession) {
+    debug!("persist_session(session_id={})", session.id);
     if let Some(store) = &stores.store
         && let Err(e) = store.lock().unwrap().update(session.clone())
     {

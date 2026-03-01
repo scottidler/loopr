@@ -8,9 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use tokio::sync::broadcast;
 
+use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentSession, AgentStatus};
 use crate::config::IntegratorConfig;
@@ -21,6 +22,7 @@ use crate::ipc::protocol::DaemonEvent;
 
 /// Check if the integrator session has been cancelled.
 fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
+    debug!("is_session_cancelled(session_id={})", session_id);
     let sessions = stores.agent_sessions.read().unwrap();
     sessions
         .get(session_id)
@@ -30,6 +32,7 @@ fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
 
 /// Find the latest published Tick number from the stores.
 fn latest_published_tick_id(stores: &Stores) -> Option<String> {
+    debug!("latest_published_tick_id()");
     let ticks = stores.ticks.read().unwrap();
     ticks
         .values()
@@ -40,12 +43,14 @@ fn latest_published_tick_id(stores: &Stores) -> Option<String> {
 
 /// Get the next tick number (max existing + 1, or 1 if none).
 fn next_tick_number(stores: &Stores) -> u32 {
+    debug!("next_tick_number()");
     let ticks = stores.ticks.read().unwrap();
     ticks.values().map(|t| t.number).max().unwrap_or(0) + 1
 }
 
 /// Check if there's already a Tick in a non-terminal state (Open, Sealing, Validating).
 fn has_tick_in_progress(stores: &Stores) -> bool {
+    debug!("has_tick_in_progress()");
     let ticks = stores.ticks.read().unwrap();
     ticks.values().any(|t| {
         matches!(
@@ -58,6 +63,7 @@ fn has_tick_in_progress(stores: &Stores) -> bool {
 /// Recover stuck Ticks (Open/Sealing/Validating) from a previous crash.
 /// Returns the number of ticks recovered.
 fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
+    debug!("recover_stuck_ticks()");
     let stuck_tick_ids: Vec<String> = {
         let ticks = stores.ticks.read().unwrap();
         ticks
@@ -187,6 +193,7 @@ pub fn run_integrator_cycle(
     bridge: &AgentIpcBridge,
     config: &IntegratorConfig,
 ) -> Result<IntegratorCycleResult> {
+    debug!("run_integrator_cycle()");
     // 1. Recover stuck ticks from crash
     let recovered = recover_stuck_ticks(stores, bridge);
     if recovered > 0 {
@@ -694,11 +701,10 @@ pub async fn run_integrator(
     bridge: &AgentIpcBridge,
     config: &IntegratorConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
-    info!(
-        "Integrator {} started (interval: {}s)",
-        session.id, config.interval_secs
-    );
+    agent_log.debug(&format!("run_integrator(session_id={})", session.id));
+    agent_log.info(&format!("Integrator started (interval: {}s)", config.interval_secs));
 
     let interval = Duration::from_secs(config.interval_secs);
 
@@ -896,6 +902,17 @@ mod tests {
             enabled: true,
             session_timeout_secs: None,
         }
+    }
+
+    fn test_agent_logger(dir: &std::path::Path) -> AgentLogger {
+        use crate::agents::AgentType;
+        let file_path = dir.join("test-integrator.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Integrator, "test-session", file, file_path)
     }
 
     // --- is_session_cancelled tests ---
@@ -1661,7 +1678,8 @@ mod tests {
             .unwrap()
             .insert(sid.clone(), session.clone());
 
-        let result = run_integrator(&mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator(&mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(result.is_ok(), "cancelled integrator should return Ok: {:?}", result);
     }
 
@@ -1698,7 +1716,8 @@ mod tests {
             }
         });
 
-        let result = run_integrator(&mut session, &stores, &bridge, &config, &event_tx).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator(&mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
         assert!(
             result.is_ok(),
             "integrator should exit cleanly on cancellation: {:?}",

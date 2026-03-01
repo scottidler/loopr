@@ -1,6 +1,7 @@
 use std::process::Command;
 use std::sync::Arc;
 
+use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -122,6 +123,7 @@ pub fn dispatch(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("dispatch(method={})", req.method);
     let method = req.method.clone();
     let params = req.params.clone();
     let resp = match req.method.as_str() {
@@ -247,6 +249,7 @@ fn auto_start_agents(
 }
 
 fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_handshake()");
     let server_version = env!("CARGO_PKG_VERSION");
     let client_version = req
         .params
@@ -274,6 +277,7 @@ fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_system_init()");
     let store_arc = match &stores.store {
         Some(s) => s,
         None => {
@@ -314,6 +318,7 @@ fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespons
 }
 
 fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_status()");
     let plans = stores.plans.read().unwrap().len();
     let specs = stores.specs.read().unwrap().len();
     let phases = stores.phases.read().unwrap().len();
@@ -419,6 +424,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_shutdown(event_tx: &broadcast::Sender<DaemonEvent>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_shutdown()");
     // Broadcast a shutdown event so the accept loop can pick it up
     let _ = event_tx.send(DaemonEvent::new("system.shutdown", json!({})));
     DaemonResponse::ok(req.id, json!({ "status": "shutting_down" }))
@@ -429,6 +435,7 @@ fn handle_plan_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_plan_create()");
     let title = req
         .params
         .get("title")
@@ -485,6 +492,7 @@ fn handle_plan_create(
 }
 
 fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_plan_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -517,6 +525,7 @@ fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_plan_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_plan_list()");
     // Try TaskStore first, fall back to HashMap
     if let Some(store) = &stores.store {
         match store.lock().unwrap().list::<Plan>(&[]) {
@@ -545,6 +554,7 @@ fn handle_plan_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_plan_transition()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -642,6 +652,7 @@ fn handle_spec_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_spec_create()");
     let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("plan_id is required")),
@@ -720,6 +731,7 @@ fn handle_spec_create(
 }
 
 fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_spec_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -752,6 +764,7 @@ fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_spec_list()");
     let plan_id_filter = req.params.get("plan_id").and_then(|v| v.as_str());
 
     // Try TaskStore first, fall back to HashMap
@@ -795,6 +808,7 @@ fn handle_spec_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_spec_transition()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -892,6 +906,7 @@ fn handle_phase_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_phase_create()");
     let spec_id = match req.params.get("spec_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("spec_id is required")),
@@ -971,6 +986,7 @@ fn handle_phase_create(
 }
 
 fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_phase_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1003,6 +1019,7 @@ fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse 
 }
 
 fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_phase_list()");
     let spec_id_filter = req.params.get("spec_id").and_then(|v| v.as_str());
 
     // Try TaskStore first, fall back to HashMap
@@ -1046,6 +1063,7 @@ fn handle_phase_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_phase_transition()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1143,6 +1161,7 @@ fn handle_work_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_work_create()");
     let phase_id = match req.params.get("phase_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("phase_id is required")),
@@ -1283,6 +1302,7 @@ fn handle_work_create(
 }
 
 fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_work_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1315,6 +1335,7 @@ fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_work_list()");
     let phase_id_filter = req.params.get("phase_id").and_then(|v| v.as_str());
 
     // Try TaskStore first, fall back to HashMap
@@ -1358,6 +1379,7 @@ fn handle_work_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_work_transition()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1473,6 +1495,7 @@ fn handle_bundle_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_bundle_create()");
     let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
@@ -1598,6 +1621,7 @@ fn handle_bundle_create(
 }
 
 fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_bundle_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1630,6 +1654,7 @@ fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
 }
 
 fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_bundle_list()");
     let wi_filter = req.params.get("work_id").and_then(|v| v.as_str());
 
     // Try TaskStore first, fall back to HashMap
@@ -1673,6 +1698,7 @@ fn handle_bundle_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_bundle_transition()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1812,6 +1838,7 @@ fn handle_tick_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_tick_create()");
     // Singleton guard: at most one non-terminal Tick at a time
     {
         let ticks = stores.ticks.read().unwrap();
@@ -1856,6 +1883,7 @@ fn handle_tick_create(
 }
 
 fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_tick_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -1888,6 +1916,7 @@ fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_tick_list()");
     // Optionally filter by status
     let status_filter: Option<TickStatus> = req
         .params
@@ -1935,6 +1964,7 @@ fn handle_tick_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_tick_transition()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2027,6 +2057,7 @@ fn handle_learning_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_learning_create()");
     let source_id = req
         .params
         .get("source_id")
@@ -2098,6 +2129,7 @@ fn handle_learning_create(
 }
 
 fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_learning_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2130,6 +2162,7 @@ fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespon
 }
 
 fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_learning_list()");
     // Optionally filter by scope
     let scope_filter: Option<LearningScope> = req
         .params
@@ -2191,6 +2224,7 @@ fn handle_learning_reinforce(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_learning_reinforce()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2227,6 +2261,7 @@ fn handle_learning_contradict(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_learning_contradict()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2266,6 +2301,7 @@ fn handle_learning_promote(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_learning_promote()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2302,6 +2338,7 @@ fn handle_learning_demote(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_learning_demote()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2340,6 +2377,7 @@ fn handle_lock_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_lock_create()");
     let resource = req
         .params
         .get("resource")
@@ -2418,6 +2456,7 @@ fn handle_lock_create(
 }
 
 fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_lock_get()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2450,6 +2489,7 @@ fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
 }
 
 fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_lock_list()");
     // Optionally filter by resource
     let resource_filter = req
         .params
@@ -2523,6 +2563,7 @@ fn handle_lock_release(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_lock_release()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2563,6 +2604,7 @@ fn handle_lock_expire(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_lock_expire()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -2606,6 +2648,7 @@ fn handle_worktree_create(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_worktree_create()");
     let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
@@ -2654,6 +2697,7 @@ fn handle_worktree_create(
 }
 
 fn handle_worktree_list(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_worktree_list()");
     match worktree_mgr.list() {
         Ok(worktrees) => match serde_json::to_value(&worktrees) {
             Ok(v) => DaemonResponse::ok(req.id, v),
@@ -2669,6 +2713,7 @@ fn handle_worktree_cleanup(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_worktree_cleanup()");
     let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
@@ -2706,6 +2751,7 @@ fn handle_worktree_cleanup(
 }
 
 fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_worktree_refresh()");
     let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
@@ -2779,6 +2825,7 @@ fn handle_integrator_validate(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_integrator_validate()");
     let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("tick_id is required")),
@@ -2882,6 +2929,7 @@ fn handle_integrator_publish(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_integrator_publish()");
     let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("tick_id is required")),
@@ -2945,6 +2993,7 @@ fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
 // --- Validator handlers ---
 
 fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_validator_validate()");
     let validator = match &stores.validator {
         Some(v) => v.clone(),
         None => {
@@ -3039,6 +3088,7 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
 }
 
 fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_validator_report()");
     let report_id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => {
@@ -3065,6 +3115,7 @@ fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRe
 }
 
 fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_validator_reports()");
     if let Some(store) = &stores.store {
         let mut filters = vec![];
 
@@ -3096,6 +3147,7 @@ fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
 // --- Tool handlers ---
 
 fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_tool_list()");
     let tool_runner = &stores.tool_runner;
     let names = tool_runner.available_tools();
     let tools: Vec<serde_json::Value> = names
@@ -3121,6 +3173,7 @@ fn handle_coordinator_set_goal(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_coordinator_set_goal()");
     let goal_text = match req.params.get("goal").and_then(|v| v.as_str()) {
         Some(g) if !g.trim().is_empty() => g.trim().to_string(),
         _ => {
@@ -3172,6 +3225,7 @@ fn handle_coordinator_clear_goal(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_coordinator_clear_goal()");
     let mut cleared_count = 0;
     {
         let mut goals = stores.coordinator_goals.write().unwrap();
@@ -3192,6 +3246,7 @@ fn handle_coordinator_clear_goal(
 }
 
 fn handle_coordinator_get_goal(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_coordinator_get_goal()");
     let goals = stores.coordinator_goals.read().unwrap();
     let active = goals.values().find(|g| g.active);
     match active {
@@ -3207,6 +3262,7 @@ fn handle_coordinator_get_goal(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
 }
 
 fn handle_coordinator_get_state(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_coordinator_get_state()");
     let states = stores.coordinator_states.read().unwrap();
     // Find the state for the active goal (or any non-terminal state)
     let active = states.values().find(|s| !s.fsm_state.is_terminal());
@@ -3227,6 +3283,7 @@ fn handle_coordinator_reset_state(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_coordinator_reset_state()");
     let mut states = stores.coordinator_states.write().unwrap();
     let removed: Vec<String> = states.keys().cloned().collect();
     for id in &removed {
@@ -3257,6 +3314,7 @@ fn handle_agent_start(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_agent_start()");
     let agent_type: AgentType = match req.params.get("agent_type") {
         Some(v) => match serde_json::from_value(v.clone()) {
             Ok(t) => t,
@@ -3415,6 +3473,7 @@ fn handle_agent_stop(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_agent_stop()");
     let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
@@ -3459,6 +3518,7 @@ fn handle_agent_pause(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_agent_pause()");
     let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
@@ -3502,6 +3562,7 @@ fn handle_agent_resume(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_agent_resume()");
     let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
@@ -3534,6 +3595,7 @@ fn handle_agent_resume(
 }
 
 fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_agent_status()");
     let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
@@ -3566,6 +3628,7 @@ fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespon
 }
 
 fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_agent_list()");
     let status_filter: Option<AgentStatus> = req
         .params
         .get("status")
@@ -3620,6 +3683,7 @@ fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse
 // --- Agent output handler (Gap #9) ---
 
 fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_agent_output()");
     let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
@@ -3641,6 +3705,7 @@ fn handle_plan_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_plan_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -3679,6 +3744,7 @@ fn handle_spec_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_spec_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -3714,6 +3780,7 @@ fn handle_phase_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_phase_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -3752,6 +3819,7 @@ fn handle_work_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_work_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -3799,6 +3867,7 @@ fn handle_bundle_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_bundle_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -3874,6 +3943,7 @@ fn handle_tick_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_tick_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
@@ -3912,6 +3982,7 @@ fn handle_learning_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
+    debug!("handle_learning_update()");
     let id = match req.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),

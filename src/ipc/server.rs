@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use futures::SinkExt;
+use log::debug;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
@@ -21,9 +22,9 @@ impl IpcServer {
     /// Create a new IPC server bound to the given socket path.
     /// The event broadcast channel is owned externally (by DaemonContext).
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
-        Self {
-            socket_path: socket_path.into(),
-        }
+        let socket_path = socket_path.into();
+        debug!("IpcServer::new(socket_path={})", socket_path.display());
+        Self { socket_path }
     }
 
     /// Get the socket path.
@@ -34,6 +35,7 @@ impl IpcServer {
     /// Bind the Unix socket listener.
     /// Removes any stale socket file before binding.
     pub async fn bind(&self) -> std::io::Result<UnixListener> {
+        debug!("IpcServer::bind(socket_path={})", self.socket_path.display());
         // Remove stale socket if it exists
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path)?;
@@ -49,6 +51,7 @@ impl IpcServer {
 
     /// Cleanup the socket file on shutdown.
     pub fn cleanup(&self) {
+        debug!("IpcServer::cleanup()");
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
@@ -61,6 +64,7 @@ pub async fn handle_client(
     handler: impl Fn(DaemonRequest) -> DaemonResponse + Send + 'static,
     mut event_rx: broadcast::Receiver<DaemonEvent>,
 ) {
+    debug!("handle_client()");
     let mut framed = Framed::new(stream, ndjson_codec());
 
     loop {

@@ -77,6 +77,7 @@ pub struct Plan {
 
 impl Plan {
     pub fn new(title: String, description: String, acceptance_criteria: String) -> Self {
+        log::debug!("Plan::new(title={})", title);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),

@@ -136,6 +136,7 @@ pub struct Work {
 
 impl Work {
     pub fn new(phase_id: String, title: String, description: String) -> Self {
+        log::debug!("Work::new(phase_id={}, title={})", phase_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),

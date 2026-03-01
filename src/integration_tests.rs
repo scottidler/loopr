@@ -2354,6 +2354,18 @@ mod tests {
         }
 
         let llm = PipelineLlm;
+        let log_file_path = dir.join("test-pipeline.log");
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_file_path)
+            .unwrap();
+        let agent_log = crate::agents::agent_logger::AgentLogger::_new_for_test(
+            AgentType::Implementer,
+            "test-pipeline",
+            log_file,
+            log_file_path,
+        );
         let params = implementer::IterationParams {
             llm: &llm,
             stores: &stores,
@@ -2363,6 +2375,7 @@ mod tests {
             worktree_path: &dir,
             session_id: "test-pipeline",
             event_tx: &tx,
+            agent_log: &agent_log,
         };
 
         let outcome = implementer::run_iteration(&params, 1, None, None).await.unwrap();

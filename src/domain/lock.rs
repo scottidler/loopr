@@ -43,6 +43,7 @@ pub struct Lock {
 
 impl Lock {
     pub fn new(resource: String, holder_id: String, granted_by: String) -> Self {
+        log::debug!("Lock::new(resource={}, holder_id={})", resource, holder_id);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),

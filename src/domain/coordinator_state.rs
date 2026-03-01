@@ -45,6 +45,7 @@ pub struct CoordinatorState {
 
 impl CoordinatorState {
     pub fn new(goal_id: String) -> Self {
+        log::debug!("CoordinatorState::new(goal_id={})", goal_id);
         let now = id::now_millis();
         Self {
             id: id::generate_id(),
@@ -62,6 +63,7 @@ impl CoordinatorState {
 
     /// Transition to a new FSM state.
     pub fn transition_to(&mut self, new_state: CoordinatorFsmState) {
+        log::debug!("CoordinatorState::transition_to(id={}, target={})", self.id, new_state);
         self.fsm_state = new_state;
         self.updated_at = id::now_millis();
     }

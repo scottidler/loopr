@@ -53,6 +53,7 @@ impl AgentIpcBridge {
 
     /// Send a request through the handler pipeline, same as socket-based IPC.
     pub fn request(&self, method: &str, params: serde_json::Value) -> DaemonResponse {
+        log::debug!("AgentIpcBridge::request(method={})", method);
         let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let req = DaemonRequest::new(id, method, params);
         handlers::dispatch(
