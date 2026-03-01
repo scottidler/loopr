@@ -3006,4 +3006,178 @@ mod tests {
         coord_state.transition_to(CoordinatorFsmState::GoalComplete);
         assert!(coord_state.fsm_state.is_terminal());
     }
+
+    // ========================================================================
+    // Self-correction loop + Advisory review integration tests
+    // ========================================================================
+
+    fn test_stores_with_persistence(dir: &std::path::Path) -> Arc<Stores> {
+        let config = Config {
+            project: crate::config::ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..crate::config::ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = taskstore::Store::open(dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
+        stores.config = config;
+        Arc::new(stores)
+    }
+
+    #[test]
+    fn test_advisory_review_bundle_accepted_directly() {
+        // Verify that the Coordinator can accept a Bundle directly (Triaged→Accepted)
+        // without waiting for Reviewer verdict (the Integrator is the hard gate).
+        let dir = TestDir::new("loopr-int-advisory");
+        let stores = test_stores_with_persistence(&dir);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = IntegratorConfig::default();
+
+        // Create hierarchy: plan → spec → phase → work
+        let plan_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.create",
+            json!({"title": "Advisory Test", "description": "Test advisory review", "acceptance_criteria": "tests pass"}),
+        );
+        let plan_id = plan_resp["id"].as_str().unwrap();
+        let spec_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "Spec", "description": "spec"}),
+        );
+        let spec_id = spec_resp["id"].as_str().unwrap();
+        let phase_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
+        );
+        let phase_id = phase_resp["id"].as_str().unwrap();
+        let work_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work.create",
+            json!({"phase_id": phase_id, "title": "Work", "description": "work", "resource_tags": ["src/main.rs"]}),
+        );
+        let work_id = work_resp["id"].as_str().unwrap();
+
+        // Create a bundle
+        {
+            use crate::domain::bundle::{Bundle, BundleStatus};
+            let mut bundle = Bundle::new(
+                work_id.to_string(),
+                None,
+                "feature/test".to_string(),
+                vec!["test claim".to_string()],
+            );
+            bundle.status = BundleStatus::Proposed;
+            stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+        }
+
+        let bundle_id = stores.bundles.read().unwrap().keys().next().unwrap().clone();
+
+        // Coordinator triages: Proposed → Triaged
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        assert_eq!(
+            stores.bundles.read().unwrap()[&bundle_id].status,
+            crate::domain::bundle::BundleStatus::Triaged
+        );
+
+        // Coordinator accepts directly: Triaged → Accepted (bypassing review)
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct accept"}),
+        );
+        assert_eq!(
+            stores.bundles.read().unwrap()[&bundle_id].status,
+            crate::domain::bundle::BundleStatus::Accepted
+        );
+    }
+
+    #[test]
+    fn test_reviewer_feedback_learning_available_after_advisory_accept() {
+        // When the Coordinator accepts directly and the Reviewer creates feedback,
+        // the feedback Learning should be available in stores for future iterations.
+        let stores = test_stores();
+
+        // Create a review feedback Learning (simulating what the Reviewer would create)
+        let learning = Learning::new(
+            "work-1".to_string(),
+            LearningScope::Work,
+            "Review feedback (approve): Clean code, well tested".to_string(),
+        );
+        let learning_id = learning.id.clone();
+        stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
+
+        // Verify the Learning is accessible
+        let learnings = stores.learnings.read().unwrap();
+        let feedback = learnings.get(&learning_id).unwrap();
+        assert!(feedback.content.contains("Review feedback"));
+        assert!(feedback.content.contains("approve"));
+    }
+
+    #[test]
+    fn test_is_correctable_error_classification() {
+        use crate::agents::implementer::is_correctable_error;
+
+        // Correctable errors (schema/path issues the LLM can fix)
+        assert!(is_correctable_error("missing field `summary` in Done action"));
+        assert!(is_correctable_error("unknown field `files`"));
+        assert!(is_correctable_error("path escapes sandbox: ../../etc"));
+        assert!(is_correctable_error("unknown tool: cargo_test"));
+
+        // Non-correctable errors (require full-iteration reasoning)
+        assert!(!is_correctable_error("cargo test failed with exit code 101"));
+        assert!(!is_correctable_error("error[E0308]: mismatched types"));
+        assert!(!is_correctable_error("network timeout"));
+    }
+
+    #[test]
+    fn test_lifeguard_escalates_after_max_requeries_exceeded() {
+        use crate::agents::lifeguard::{Lifeguard, Verdict};
+
+        let mut lg = Lifeguard::new();
+
+        // max_parse_retries = 3 in Lifeguard::new()
+        // After 3 parse failures, it should continue (threshold is >3)
+        assert_eq!(lg.record_parse_failure(), Verdict::Continue);
+        assert_eq!(lg.record_parse_failure(), Verdict::Continue);
+        assert_eq!(lg.record_parse_failure(), Verdict::Continue);
+        // 4th failure exceeds threshold → escalate
+        assert!(matches!(lg.record_parse_failure(), Verdict::Escalate(_)));
+    }
+
+    #[test]
+    fn test_max_requeries_config_defaults() {
+        use crate::config::AgentRoleConfig;
+
+        // All roles default to max_requeries=3
+        assert_eq!(AgentRoleConfig::default_implementer().max_requeries, 3);
+        assert_eq!(AgentRoleConfig::default_reviewer().max_requeries, 3);
+        assert_eq!(AgentRoleConfig::default_researcher().max_requeries, 3);
+    }
 }
