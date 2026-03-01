@@ -438,6 +438,64 @@ mod tests {
     }
 
     #[test]
+    fn test_context_hydrates_all_record_types() {
+        let (_dir, config) = test_config();
+        let repo_path = config.project.repo_path.clone();
+
+        // Insert one record of each type directly into TaskStore
+        {
+            let mut store = Store::open(&repo_path).unwrap();
+            store.create(Plan::new("P".into(), "d".into(), "c".into())).unwrap();
+            store.create(Spec::new("p1".into(), "S".into(), "d".into())).unwrap();
+            store
+                .create(Phase::new("s1".into(), "Ph".into(), "d".into(), 1))
+                .unwrap();
+            store.create(Work::new("ph1".into(), "W".into(), "d".into())).unwrap();
+            store
+                .create(Bundle::new("w1".into(), None, "branch".into(), vec!["claim".into()]))
+                .unwrap();
+            store.create(Tick::new(1)).unwrap();
+            store
+                .create(Learning::new(
+                    "src1".into(),
+                    crate::domain::learning::LearningScope::Work,
+                    "content".into(),
+                ))
+                .unwrap();
+            store
+                .create(Lock::new("file.rs".into(), "owner".into(), "coordinator".into()))
+                .unwrap();
+            store.create(CoordinatorGoal::new("goal".into())).unwrap();
+            store.create(CoordinatorState::new("goal1".into())).unwrap();
+            store
+                .create(Proposal::new("title".into(), "desc".into(), "author".into()))
+                .unwrap();
+            store
+                .create(Decision::new("title".into(), "rationale".into(), "decider".into()))
+                .unwrap();
+            store
+                .create(AgentSession::new(AgentType::Implementer, "model".into()))
+                .unwrap();
+        }
+
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+        assert_eq!(ctx.stores.plans.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.specs.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.phases.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.works.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.bundles.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.ticks.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.learnings.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.locks.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.coordinator_goals.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.coordinator_states.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.proposals.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.decisions.read().unwrap().len(), 1);
+        assert_eq!(ctx.stores.agent_sessions.read().unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_context_new_creates_taskstore() {
         let (_dir, config) = test_config();
         let repo_path = config.project.repo_path.clone();

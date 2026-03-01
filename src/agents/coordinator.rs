@@ -1446,7 +1446,7 @@ mod tests {
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
     use crate::domain::tick::Tick;
-    use crate::domain::work::Work;
+    use crate::domain::work::{Work, WorkStatus};
     use crate::test_util::TestDir;
     use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
@@ -2163,6 +2163,165 @@ mod tests {
         // No plans at all → should return empty
         let completed = check_phase_completion(&stores);
         assert!(completed.is_empty());
+    }
+
+    #[test]
+    fn test_check_phase_completion_all_done() {
+        let dir = TestDir::new("loopr-coord-phase-done");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&*dir)
+            .output()
+            .unwrap();
+        let stores = test_stores(&dir);
+
+        // Create an Active plan
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create an Active spec
+        let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Create an Active phase
+        let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+        phase.status = HierarchyStatus::Active;
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // Create works that are all Done
+        let mut w1 = Work::new(phase_id.clone(), "Work 1".into(), "desc".into());
+        w1.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(w1.id.clone(), w1);
+
+        let mut w2 = Work::new(phase_id.clone(), "Work 2".into(), "desc".into());
+        w2.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(w2.id.clone(), w2);
+
+        let completed = check_phase_completion(&stores);
+        assert_eq!(completed.len(), 1);
+        assert!(completed[0].contains("Phase 1"));
+    }
+
+    #[test]
+    fn test_check_phase_completion_partial() {
+        let dir = TestDir::new("loopr-coord-phase-partial");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&*dir)
+            .output()
+            .unwrap();
+        let stores = test_stores(&dir);
+
+        // Active plan → Active spec → Active phase
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+        phase.status = HierarchyStatus::Active;
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // One work Done, one still InProgress
+        let mut w1 = Work::new(phase_id.clone(), "Work 1".into(), "desc".into());
+        w1.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(w1.id.clone(), w1);
+
+        let mut w2 = Work::new(phase_id.clone(), "Work 2".into(), "desc".into());
+        w2.status = WorkStatus::InProgress;
+        stores.works.write().unwrap().insert(w2.id.clone(), w2);
+
+        let completed = check_phase_completion(&stores);
+        assert!(completed.is_empty());
+    }
+
+    #[test]
+    fn test_check_phase_completion_no_works() {
+        let dir = TestDir::new("loopr-coord-phase-noworks");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&*dir)
+            .output()
+            .unwrap();
+        let stores = test_stores(&dir);
+
+        // Active plan → Active spec → Active phase, but NO works
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+        phase.status = HierarchyStatus::Active;
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // is_phase_complete returns false when there are no works
+        let completed = check_phase_completion(&stores);
+        assert!(completed.is_empty());
+    }
+
+    #[test]
+    fn test_check_phase_completion_multiple_phases() {
+        let dir = TestDir::new("loopr-coord-phase-multi");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&*dir)
+            .output()
+            .unwrap();
+        let stores = test_stores(&dir);
+
+        // Active plan → Active spec → 2 Active phases
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Phase 1: all works Done
+        let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+        phase1.status = HierarchyStatus::Active;
+        let phase1_id = phase1.id.clone();
+        stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
+
+        let mut w1 = Work::new(phase1_id.clone(), "Work 1".into(), "desc".into());
+        w1.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(w1.id.clone(), w1);
+
+        // Phase 2: one work still InProgress
+        let mut phase2 = Phase::new(spec_id.clone(), "Phase 2".into(), "desc".into(), 2);
+        phase2.status = HierarchyStatus::Active;
+        let phase2_id = phase2.id.clone();
+        stores.phases.write().unwrap().insert(phase2_id.clone(), phase2);
+
+        let mut w2 = Work::new(phase2_id.clone(), "Work 2".into(), "desc".into());
+        w2.status = WorkStatus::InProgress;
+        stores.works.write().unwrap().insert(w2.id.clone(), w2);
+
+        let completed = check_phase_completion(&stores);
+        assert_eq!(completed.len(), 1);
+        assert!(completed[0].contains("Phase 1"));
+        assert!(!completed.iter().any(|c| c.contains("Phase 2")));
     }
 
     // --- multi-level action filter tests ---

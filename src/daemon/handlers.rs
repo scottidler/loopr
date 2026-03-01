@@ -6628,6 +6628,42 @@ mod tests {
         (phase_id, wi_id)
     }
 
+    /// Helper: create plan + spec + phase + work + bundle and return (work_id, bundle_id)
+    fn create_test_bundle(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String) {
+        let (_phase_id, wi_id) = create_test_work(stores, tx, wm);
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                40,
+                "bundle.create",
+                json!({"work_id": wi_id, "branch_name": "feature/test", "base_tick_id": null, "claims": "Initial claims"}),
+            ),
+        );
+        assert!(!resp.is_error(), "bundle.create failed: {:?}", resp.error);
+        let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (wi_id, bundle_id)
+    }
+
+    /// Helper: create a tick and return its id
+    fn create_test_tick(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(50, "tick.create", json!({"number": 1})),
+        );
+        assert!(!resp.is_error(), "tick.create failed: {:?}", resp.error);
+        resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
     #[test]
     fn test_bundle_create_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
@@ -11153,5 +11189,517 @@ mod tests {
                 err_msg
             );
         }
+    }
+
+    // === Coverage tests: plan.update ===
+
+    #[test]
+    fn test_handle_plan_update_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "plan.update",
+                json!({
+                    "id": plan_id,
+                    "title": "Updated Plan",
+                    "description": "New desc",
+                    "acceptance_criteria": "New criteria"
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "plan.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Updated Plan");
+        assert_eq!(result["description"], "New desc");
+        assert_eq!(result["acceptance_criteria"], "New criteria");
+    }
+
+    #[test]
+    fn test_handle_plan_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.update", json!({"id": "nonexistent", "title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_plan_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.update", json!({"title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // === Coverage tests: spec.update ===
+
+    #[test]
+    fn test_handle_spec_update_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "spec.update",
+                json!({
+                    "id": spec_id,
+                    "title": "Updated Spec",
+                    "description": "New desc"
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "spec.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Updated Spec");
+    }
+
+    #[test]
+    fn test_handle_spec_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "spec.update", json!({"id": "nonexistent", "title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_spec_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "spec.update", json!({"title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // === Coverage tests: phase.update ===
+
+    #[test]
+    fn test_handle_phase_update_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "phase.update",
+                json!({
+                    "id": phase_id,
+                    "title": "Updated Phase",
+                    "description": "New desc",
+                    "order": 5
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "phase.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Updated Phase");
+        assert_eq!(result["order"], 5);
+    }
+
+    #[test]
+    fn test_handle_phase_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "phase.update", json!({"id": "nonexistent", "title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_phase_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "phase.update", json!({"title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // === Coverage tests: work.update ===
+
+    #[test]
+    fn test_handle_work_update_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "work.update",
+                json!({
+                    "id": wi_id,
+                    "title": "Updated Work",
+                    "description": "New desc",
+                    "assignee": "agent-1",
+                    "resource_tags": ["src/lib.rs"],
+                    "acceptance_criteria": ["tests pass"],
+                    "dependencies": ["dep-1"]
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "work.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["title"], "Updated Work");
+        assert_eq!(result["description"], "New desc");
+        assert_eq!(result["assignee"], "agent-1");
+        assert_eq!(result["resource_tags"].as_array().unwrap().len(), 1);
+        assert_eq!(result["acceptance_criteria"].as_array().unwrap().len(), 1);
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_handle_work_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "work.update", json!({"id": "nonexistent", "title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_work_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "work.update", json!({"title": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // === Coverage tests: bundle.update ===
+
+    #[test]
+    fn test_handle_bundle_update_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_wi_id, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "bundle.update",
+                json!({
+                    "id": bundle_id,
+                    "description": "Updated desc",
+                    "verification": "tests pass",
+                    "locks_used": ["lock-1"],
+                    "base_tick_id": "tick-002"
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "bundle.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["description"], "Updated desc");
+        assert_eq!(result["verification"], "tests pass");
+        assert_eq!(result["locks_used"].as_array().unwrap().len(), 1);
+        assert_eq!(result["base_tick_id"], "tick-002");
+    }
+
+    #[test]
+    fn test_handle_bundle_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "bundle.update", json!({"id": "nonexistent", "description": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_bundle_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "bundle.update", json!({"description": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_wi_id, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+
+        // Default max_files_touched is 8, so 9 paths should be rejected
+        let too_many_paths: Vec<String> = (0..9).map(|i| format!("file_{}.rs", i)).collect();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "bundle.update",
+                json!({
+                    "id": bundle_id,
+                    "touched_paths": too_many_paths
+                }),
+            ),
+        );
+        assert!(resp.is_error(), "expected size policy rejection but got success");
+    }
+
+    #[test]
+    fn test_handle_bundle_update_claims_string_backward_compat() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_wi_id, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "bundle.update",
+                json!({"id": bundle_id, "claims": "single claim string"}),
+            ),
+        );
+        assert!(!resp.is_error(), "bundle.update claims string failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        let claims = result["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0], "single claim string");
+    }
+
+    #[test]
+    fn test_handle_bundle_update_claims_array() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_wi_id, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "bundle.update",
+                json!({"id": bundle_id, "claims": ["claim 1", "claim 2"]}),
+            ),
+        );
+        assert!(!resp.is_error(), "bundle.update claims array failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        let claims = result["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), 2);
+        assert_eq!(claims[0], "claim 1");
+        assert_eq!(claims[1], "claim 2");
+    }
+
+    // === Coverage tests: tick.update ===
+
+    #[test]
+    fn test_handle_tick_update_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let tick_id = create_test_tick(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "tick.update",
+                json!({
+                    "id": tick_id,
+                    "validation_log": "All tests passed",
+                    "bundle_ids": ["b-1", "b-2"],
+                    "attempted_bundle_ids": ["b-1", "b-2", "b-3"]
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "tick.update failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["validation_log"], "All tests passed");
+        assert_eq!(result["bundle_ids"].as_array().unwrap().len(), 2);
+        assert_eq!(result["attempted_bundle_ids"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_handle_tick_update_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tick.update", json!({"id": "nonexistent", "validation_log": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_tick_update_missing_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tick.update", json!({"validation_log": "x"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    // === Coverage tests: agent.status paths ===
+
+    #[test]
+    fn test_agent_status_from_taskstore() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        // Rebuild AgentSession indexes for TaskStore
+        stores
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .rebuild_indexes::<AgentSession>()
+            .unwrap();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create an agent session and insert it directly into TaskStore (NOT the HashMap)
+        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session_id = session.id.clone();
+        stores.store.as_ref().unwrap().lock().unwrap().create(session).unwrap();
+
+        // Query via agent.status — should find it in TaskStore
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
+        );
+        assert!(!resp.is_error(), "agent.status failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["id"], session_id);
+    }
+
+    #[test]
+    fn test_agent_status_fallback_to_hashmap() {
+        let stores = test_stores(); // No TaskStore
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
+        );
+        assert!(!resp.is_error(), "agent.status fallback failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["id"], session_id);
     }
 }
