@@ -339,7 +339,22 @@ async fn run_agent_loop(
     }
     agent_log.info("Bridge health check passed");
 
-    let ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
+    let mut ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
+
+    // Per-session tool detection: if the agent has a worktree, detect project type
+    // from marker files and use appropriate tool presets instead of global defaults.
+    if let Some(ref wt_path) = ctx.session.worktree_path {
+        let worktree = std::path::Path::new(wt_path);
+        ctx.tool_runner = Arc::new(crate::tools::ToolRunner::detect_or_default(
+            worktree,
+            &stores.config.agents.tools,
+        ));
+        agent_log.info(&format!(
+            "Session tool runner: {} tools (detected from {})",
+            ctx.tool_runner.available_tools().len(),
+            wt_path
+        ));
+    }
 
     let (result, iteration) = match agent_type {
         AgentType::Implementer => {

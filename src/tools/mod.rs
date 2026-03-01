@@ -9,6 +9,57 @@ use tokio::process::Command;
 
 use crate::config::ToolEntry;
 
+/// Built-in tool presets for JavaScript projects.
+fn js_preset() -> Vec<ToolEntry> {
+    vec![
+        ToolEntry {
+            name: "test".into(),
+            command: "npm test".into(),
+            timeout_secs: 300,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "lint".into(),
+            command: "npm run lint".into(),
+            timeout_secs: 120,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "build".into(),
+            command: "npm run build".into(),
+            timeout_secs: 300,
+            worktree: true,
+        },
+    ]
+}
+
+/// Built-in tool presets for Python projects.
+fn python_preset() -> Vec<ToolEntry> {
+    vec![
+        ToolEntry {
+            name: "test".into(),
+            command: "pytest".into(),
+            timeout_secs: 300,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "lint".into(),
+            command: "ruff check .".into(),
+            timeout_secs: 120,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "fmt-check".into(),
+            command: "ruff format --check .".into(),
+            timeout_secs: 30,
+            worktree: true,
+        },
+    ]
+}
+
+/// Marker files checked in priority order. First match wins.
+const MARKER_ORDER: &[&str] = &["package.json", "pyproject.toml", "Cargo.toml"];
+
 /// Result of executing a tool subprocess.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -34,6 +85,25 @@ impl ToolRunner {
         debug!("ToolRunner::new(tools_count={})", entries.len());
         let tools = entries.iter().map(|e| (e.name.clone(), e.clone())).collect();
         Self { tools }
+    }
+
+    /// Detect project type from marker files and return appropriate tools.
+    /// Falls back to `configured` if no markers found.
+    pub fn detect_or_default(worktree: &Path, configured: &[ToolEntry]) -> Self {
+        for marker in MARKER_ORDER {
+            if worktree.join(marker).exists() {
+                let tools = match *marker {
+                    "package.json" => js_preset(),
+                    "pyproject.toml" => python_preset(),
+                    // Cargo.toml → use config defaults (already Rust)
+                    "Cargo.toml" => return Self::new(configured),
+                    _ => continue,
+                };
+                debug!("Detected project marker '{}', using {} tools", marker, tools.len());
+                return Self::new(&tools);
+            }
+        }
+        Self::new(configured)
     }
 
     /// List available tool names.
@@ -351,5 +421,104 @@ mod tests {
     #[test]
     fn test_max_output_constant() {
         assert_eq!(MAX_OUTPUT, 32_000);
+    }
+
+    // --- detect_or_default tests ---
+
+    #[test]
+    fn test_detect_js_project() {
+        let dir = std::env::temp_dir().join(format!("loopr-tool-js-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+
+        let runner = ToolRunner::detect_or_default(&dir, &[]);
+        let tools = runner.available_tools();
+        assert!(tools.contains(&"test"), "JS preset should have 'test' tool");
+        assert!(tools.contains(&"lint"), "JS preset should have 'lint' tool");
+        assert!(tools.contains(&"build"), "JS preset should have 'build' tool");
+        // Verify it's npm, not cargo
+        let test_tool = runner.get_tool("test").unwrap();
+        assert!(
+            test_tool.command.contains("npm"),
+            "JS test tool should use npm: {}",
+            test_tool.command
+        );
+    }
+
+    #[test]
+    fn test_detect_python_project() {
+        let dir = std::env::temp_dir().join(format!("loopr-tool-py-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
+
+        let runner = ToolRunner::detect_or_default(&dir, &[]);
+        let tools = runner.available_tools();
+        assert!(tools.contains(&"test"), "Python preset should have 'test' tool");
+        let test_tool = runner.get_tool("test").unwrap();
+        assert!(
+            test_tool.command.contains("pytest"),
+            "Python test tool should use pytest: {}",
+            test_tool.command
+        );
+    }
+
+    #[test]
+    fn test_detect_rust_project_uses_config() {
+        let dir = std::env::temp_dir().join(format!("loopr-tool-rs-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
+
+        let configured = vec![ToolEntry {
+            name: "custom-test".into(),
+            command: "cargo test".into(),
+            timeout_secs: 300,
+            worktree: true,
+        }];
+
+        let runner = ToolRunner::detect_or_default(&dir, &configured);
+        let tools = runner.available_tools();
+        assert!(
+            tools.contains(&"custom-test"),
+            "Cargo.toml should use config defaults: {:?}",
+            tools
+        );
+    }
+
+    #[test]
+    fn test_detect_no_markers_uses_config() {
+        let dir = std::env::temp_dir().join(format!("loopr-tool-none-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let configured = vec![ToolEntry {
+            name: "make-test".into(),
+            command: "make test".into(),
+            timeout_secs: 300,
+            worktree: true,
+        }];
+
+        let runner = ToolRunner::detect_or_default(&dir, &configured);
+        let tools = runner.available_tools();
+        assert!(
+            tools.contains(&"make-test"),
+            "No markers should fall back to config: {:?}",
+            tools
+        );
+    }
+
+    #[test]
+    fn test_detect_priority_order_js_over_python() {
+        let dir = std::env::temp_dir().join(format!("loopr-tool-priority-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Both markers exist — package.json has higher priority
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
+
+        let runner = ToolRunner::detect_or_default(&dir, &[]);
+        let test_tool = runner.get_tool("test").unwrap();
+        assert!(
+            test_tool.command.contains("npm"),
+            "package.json should win over pyproject.toml: {}",
+            test_tool.command
+        );
     }
 }
