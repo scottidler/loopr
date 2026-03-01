@@ -7,76 +7,22 @@ use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
+use crate::agents::lifeguard::{self, Lifeguard, Verdict};
+use crate::agents::sandbox;
 use crate::agents::{Agent, AgentAction, AgentContext, AgentStatus, AgentType};
 use crate::config::AgentRoleConfig;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
-/// Denylist patterns for path sandboxing. Matched against the file name component.
-const PATH_DENYLIST: &[&str] = &[".env", "credentials.", "secret"];
-const EXT_DENYLIST: &[&str] = &["key", "pem"];
-
 /// Validate that a path is safe for the Researcher to access.
-///
-/// Rules:
-/// 1. Must be relative (no absolute paths)
-/// 2. Must resolve within repo_root after canonicalization
-/// 3. Must not match denylist patterns
+/// Delegates to the shared sandbox module with denylist enabled.
 pub fn validate_path(repo_root: &Path, relative: &str, agent_log: &AgentLogger) -> Result<PathBuf> {
     agent_log.debug(&format!(
         "validate_path(repo_root={}, relative={})",
         repo_root.display(),
         relative
     ));
-    // Reject absolute paths
-    if relative.starts_with('/') || relative.starts_with('\\') {
-        return Err(eyre!("absolute paths not allowed: {}", relative));
-    }
-
-    // Reject path traversal components (..)
-    for component in Path::new(relative).components() {
-        if component == std::path::Component::ParentDir {
-            return Err(eyre!("path traversal not allowed: {}", relative));
-        }
-    }
-
-    let full = repo_root.join(relative);
-
-    // Canonicalize — for files that don't yet exist, we validate the parent
-    let canonical = if full.exists() {
-        full.canonicalize().unwrap_or_else(|_| full.clone())
-    } else {
-        // File doesn't exist — still check the parent for escapes
-        full.clone()
-    };
-
-    let root_canonical = repo_root.canonicalize().unwrap_or_else(|_| repo_root.to_path_buf());
-    if !canonical.starts_with(&root_canonical) {
-        return Err(eyre!("path escapes repo root: {}", relative));
-    }
-
-    // Check denylist against file name
-    let file_name = full
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-
-    for pattern in PATH_DENYLIST {
-        if file_name.contains(pattern) {
-            return Err(eyre!("path denied by security policy: {}", relative));
-        }
-    }
-
-    if let Some(ext) = full.extension() {
-        let ext_lower = ext.to_string_lossy().to_lowercase();
-        for denied_ext in EXT_DENYLIST {
-            if ext_lower == *denied_ext {
-                return Err(eyre!("file extension denied by security policy: {}", relative));
-            }
-        }
-    }
-
-    Ok(full)
+    sandbox::validate_sandboxed_path(repo_root, relative, true)
 }
 
 /// Build the Researcher system prompt with the query injected.
@@ -255,7 +201,7 @@ impl ResearcherAgent {
         }
     }
 
-    async fn run_iteration(&self, iteration: u32) -> Result<IterationOutcome> {
+    async fn run_iteration(&self, iteration: u32, guard: &mut Lifeguard) -> Result<IterationOutcome> {
         let query = self.ctx.session.query.as_deref().unwrap_or("(no query specified)");
         let system_prompt = build_system_prompt(query, &self.ctx.log);
 
@@ -295,10 +241,19 @@ impl ResearcherAgent {
             return Ok(IterationOutcome::Done("No actions returned".to_string()));
         }
 
+        guard.reset_parse_failures();
+
         let repo_root = &self.ctx.stores.config.project.repo_path;
 
         let mut last_summary = String::new();
         for action in &actions {
+            // Lifeguard: check for repeated identical actions
+            let action_hash = lifeguard::hash_action(action);
+            if let Verdict::Escalate(reason) = guard.check_action(action_hash) {
+                self.ctx.warn(&format!("lifeguard: {}", reason));
+                return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
+            }
+
             if !is_allowed_researcher_action(action) {
                 self.ctx.warn(&format!("attempted disallowed action: {:?}", action));
                 last_summary = format!("ERROR: action not allowed for Researcher: {:?}", action);
@@ -376,6 +331,8 @@ impl Agent for ResearcherAgent {
             self.ctx.session.target_id.as_deref().unwrap_or("none"),
         ));
 
+        let mut guard = Lifeguard::new();
+
         for iteration in 1..=self.config.max_iterations {
             if self.ctx.is_cancelled() {
                 self.ctx.info("cancelled, exiting loop");
@@ -386,7 +343,7 @@ impl Agent for ResearcherAgent {
             self.ctx
                 .info(&format!("iteration {}/{}", iteration, self.config.max_iterations));
 
-            let outcome = self.run_iteration(iteration).await;
+            let outcome = self.run_iteration(iteration, &mut guard).await;
 
             match outcome {
                 Ok(IterationOutcome::Done(summary)) => {

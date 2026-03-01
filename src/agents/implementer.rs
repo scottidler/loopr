@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
+use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::{Agent, AgentAction, AgentContext, AgentType};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
@@ -157,7 +158,12 @@ impl ImplementerAgent {
     }
 
     /// Run a single implementer iteration: load context -> prompt -> call LLM -> parse -> execute.
-    pub async fn run_iteration(&self, iteration: u32, staleness_note: Option<String>) -> Result<IterationOutcome> {
+    pub async fn run_iteration(
+        &self,
+        iteration: u32,
+        staleness_note: Option<String>,
+        guard: &mut Lifeguard,
+    ) -> Result<IterationOutcome> {
         self.ctx.debug(&format!(
             "run_iteration(iteration={}, has_previous_summary={})",
             iteration,
@@ -185,6 +191,8 @@ impl ImplementerAgent {
         ));
         let actions = parse_actions(&response, &self.ctx.log)?;
 
+        guard.reset_parse_failures();
+
         if actions.is_empty() {
             return Err(eyre!("LLM returned empty action list"));
         }
@@ -192,6 +200,13 @@ impl ImplementerAgent {
         let session_id = &self.ctx.session.id;
         let mut summaries = Vec::new();
         for action in &actions {
+            // Lifeguard: check for repeated identical actions
+            let action_hash = lifeguard::hash_action(action);
+            if let Verdict::Escalate(reason) = guard.check_action(action_hash) {
+                self.ctx.warn(&format!("lifeguard: {}", reason));
+                return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
+            }
+
             // Broadcast tool_started event for RunTool actions
             if let AgentAction::RunTool { tool, .. } = action {
                 let _ = self
@@ -203,8 +218,14 @@ impl ImplementerAgent {
             let result = match execute_action(action, &self.ctx, &self.worktree_path, Some(&self.work_id)).await {
                 Ok(r) => r,
                 Err(e) => {
-                    self.ctx.warn(&format!("action failed (non-fatal): {e}"));
-                    ActionResult::ActionError(e.to_string())
+                    let err_msg = e.to_string();
+                    self.ctx.warn(&format!("action failed (non-fatal): {err_msg}"));
+                    // Lifeguard: check for repeated errors
+                    if let Verdict::Escalate(reason) = guard.record_error(&err_msg) {
+                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
+                    }
+                    ActionResult::ActionError(err_msg)
                 }
             };
 
@@ -268,6 +289,7 @@ impl Agent for ImplementerAgent {
 
         let max_iterations = self.config.max_iterations;
         let mut event_rx = self.ctx.event_tx.subscribe();
+        let mut guard = Lifeguard::new();
 
         for i in 1..=max_iterations {
             if self.ctx.is_cancelled() {
@@ -315,7 +337,7 @@ impl Agent for ImplementerAgent {
                 None
             };
 
-            match self.run_iteration(i, staleness_note).await {
+            match self.run_iteration(i, staleness_note, &mut guard).await {
                 Ok(IterationOutcome::Done(summary)) => {
                     self.ctx.emit_iteration_completed(i, &summary);
                     self.ctx.info(&format!("completed: {}", summary));
@@ -335,6 +357,11 @@ impl Agent for ImplementerAgent {
                     self.previous_summary = Some(summary);
                 }
                 Err(e) => {
+                    // Lifeguard: track parse failures
+                    if let Verdict::Escalate(reason) = guard.record_parse_failure() {
+                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        return Err(eyre!("lifeguard: {}", reason));
+                    }
                     self.ctx.warn(&format!("iteration {} failed (will retry): {}", i, e));
                     self.previous_summary = Some(format!(
                         "ERROR: Your previous response could not be parsed. \
@@ -706,7 +733,7 @@ mod tests {
         let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let outcome = agent.run_iteration(1, None).await.unwrap();
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "All done"));
     }
 
@@ -719,7 +746,7 @@ mod tests {
         let llm = Box::new(MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let outcome = agent.run_iteration(1, None).await.unwrap();
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::NeedHelp(ref r) if r == "Ambiguous spec"));
     }
 
@@ -737,7 +764,7 @@ mod tests {
         ));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let outcome = agent.run_iteration(1, None).await.unwrap();
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
         // File should have been written
         assert!(dir.join("test.txt").exists());
@@ -752,7 +779,7 @@ mod tests {
         let llm: Box<dyn LlmClient> = Box::new(FailingLlm);
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let result = agent.run_iteration(1, None).await;
+        let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
         assert!(result.is_err());
     }
 
@@ -765,7 +792,7 @@ mod tests {
         let llm = Box::new(MockLlm::new("This is not valid JSON"));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let result = agent.run_iteration(1, None).await;
+        let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
         assert!(result.is_err());
     }
 
@@ -778,7 +805,7 @@ mod tests {
         let llm = Box::new(MockLlm::new("[]"));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let result = agent.run_iteration(1, None).await;
+        let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty action list"));
     }
@@ -942,7 +969,7 @@ mod tests {
         let agent = test_implementer(llm, stores, &dir, config);
 
         let staleness = Some("New tick published, please review.".to_string());
-        let outcome = agent.run_iteration(2, staleness).await.unwrap();
+        let outcome = agent.run_iteration(2, staleness, &mut Lifeguard::new()).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Done(_)));
     }
 
@@ -1024,7 +1051,7 @@ mod tests {
         ));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let outcome = agent.run_iteration(1, None).await.unwrap();
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
         if let IterationOutcome::Continue(summary) = outcome {
             // All action summaries should be present, joined by newline
             assert!(summary.contains("wrote a.txt"), "missing a.txt summary: {}", summary);
@@ -1107,7 +1134,7 @@ mod tests {
         ));
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let outcome = agent.run_iteration(1, None).await.unwrap();
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "Early exit"));
         // The file after Done should NOT have been written
         assert!(!dir.join("should_not_exist.txt").exists());
@@ -1251,7 +1278,7 @@ mod tests {
         });
         let agent = test_implementer(llm, stores, &dir, config);
 
-        let _ = agent.run_iteration(1, None).await.unwrap();
+        let _ = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
 
         let captured = captured_msg.lock().unwrap();
         let user_msg = captured.as_ref().expect("LLM should have been called");

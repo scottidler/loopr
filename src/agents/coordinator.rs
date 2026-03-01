@@ -11,6 +11,7 @@ use crate::agents::generation::{
     self, GenerationLevel, build_phase_prompt, build_plan_prompt, build_spec_prompt, build_work_prompt,
 };
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
+use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::{Agent, AgentContext, AgentStatus, AgentType};
 use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
@@ -853,6 +854,7 @@ impl CoordinatorAgent {
 
     /// Run the main FSM-driven coordinator loop.
     async fn run_fsm_loop(&mut self, mut coord_state: CoordinatorState) -> Result<()> {
+        let mut guard = Lifeguard::new();
         loop {
             // Check cancellation
             if self.ctx.is_cancelled() {
@@ -874,7 +876,7 @@ impl CoordinatorAgent {
                 self.iteration, coord_state.fsm_state
             ));
 
-            let outcome = self.run_iteration(&mut coord_state).await;
+            let outcome = self.run_iteration(&mut coord_state, &mut guard).await;
 
             let interval = match &outcome {
                 Ok(IterationOutcome::Done(summary)) => {
@@ -903,6 +905,11 @@ impl CoordinatorAgent {
                     return Err(eyre!("coordinator needs help: {}", reason));
                 }
                 Err(e) => {
+                    // Lifeguard: track parse failures
+                    if let Verdict::Escalate(reason) = guard.record_parse_failure() {
+                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        return Err(eyre!("lifeguard: {}", reason));
+                    }
                     self.ctx
                         .warn(&format!("iteration {} failed (will retry): {}", self.iteration, e));
                     self.previous_summary = Some(format!(
@@ -925,6 +932,7 @@ impl CoordinatorAgent {
     async fn run_legacy_loop(&mut self) -> Result<()> {
         // Create a dummy coord_state for the legacy path
         let mut coord_state = CoordinatorState::new("legacy".to_string());
+        let mut guard = Lifeguard::new();
 
         loop {
             if self.ctx.is_cancelled() {
@@ -946,7 +954,7 @@ impl CoordinatorAgent {
             self.ctx.persist_iteration();
             self.ctx.info(&format!("iteration {}", self.iteration));
 
-            let outcome = self.run_iteration(&mut coord_state).await;
+            let outcome = self.run_iteration(&mut coord_state, &mut guard).await;
 
             let interval = match &outcome {
                 Ok(IterationOutcome::Done(summary)) => {
@@ -965,6 +973,11 @@ impl CoordinatorAgent {
                     return Err(eyre!("coordinator needs help: {}", reason));
                 }
                 Err(e) => {
+                    // Lifeguard: track parse failures
+                    if let Verdict::Escalate(reason) = guard.record_parse_failure() {
+                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        return Err(eyre!("lifeguard: {}", reason));
+                    }
                     self.ctx
                         .warn(&format!("iteration {} failed (will retry): {}", self.iteration, e));
                     self.previous_summary = Some(format!(
@@ -984,7 +997,11 @@ impl CoordinatorAgent {
 
     /// Run a single coordinator iteration: load context -> call LLM -> parse -> execute actions.
     /// Now dispatches based on FSM state.
-    async fn run_iteration(&self, coord_state: &mut CoordinatorState) -> Result<IterationOutcome> {
+    async fn run_iteration(
+        &self,
+        coord_state: &mut CoordinatorState,
+        guard: &mut Lifeguard,
+    ) -> Result<IterationOutcome> {
         let stores = &self.ctx.stores;
         let config = &self.config;
         let bridge = &self.ctx.bridge;
@@ -1097,6 +1114,7 @@ impl CoordinatorAgent {
             &response[..response.len().min(800)]
         ));
         let mut actions = implementer::parse_actions(&response, &self.ctx.log)?;
+        guard.reset_parse_failures();
 
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
@@ -1125,6 +1143,13 @@ impl CoordinatorAgent {
         let mut batch_created_ids: Vec<String> = Vec::new();
         let mut last_summary = String::new();
         for action in &actions {
+            // Lifeguard: check for repeated identical actions
+            let action_hash = lifeguard::hash_action(action);
+            if let Verdict::Escalate(reason) = guard.check_action(action_hash) {
+                self.ctx.warn(&format!("lifeguard: {}", reason));
+                return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
+            }
+
             // Fix #2: Resolve batch:N dependencies before executing CreateWork
             let resolved_action = resolve_batch_dependencies(action, &batch_created_ids, &self.ctx.log);
             let action_ref = resolved_action.as_ref().unwrap_or(action);
@@ -1172,8 +1197,14 @@ impl CoordinatorAgent {
             let result = match execute_action(action_ref, &self.ctx, repo_root, None).await {
                 Ok(r) => r,
                 Err(e) => {
-                    self.ctx.warn(&format!("action failed (non-fatal): {e}"));
-                    ActionResult::ActionError(e.to_string())
+                    let err_msg = e.to_string();
+                    self.ctx.warn(&format!("action failed (non-fatal): {err_msg}"));
+                    // Lifeguard: check for repeated errors
+                    if let Verdict::Escalate(reason) = guard.record_error(&err_msg) {
+                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
+                    }
+                    ActionResult::ActionError(err_msg)
                 }
             };
 
@@ -1617,7 +1648,10 @@ mod tests {
         );
 
         let outcome = agent
-            .run_iteration(&mut CoordinatorState::new("test-goal".to_string()))
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
             .await
             .unwrap();
 
@@ -1639,7 +1673,10 @@ mod tests {
         );
 
         let outcome = agent
-            .run_iteration(&mut CoordinatorState::new("test-goal".to_string()))
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
             .await
             .unwrap();
 
@@ -1661,7 +1698,10 @@ mod tests {
         );
 
         let outcome = agent
-            .run_iteration(&mut CoordinatorState::new("test-goal".to_string()))
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
             .await
             .unwrap();
 
@@ -1678,7 +1718,10 @@ mod tests {
         let agent = test_coordinator(&dir, &stores, vec!["[]".to_string()], CoordinatorConfig::default());
 
         let outcome = agent
-            .run_iteration(&mut CoordinatorState::new("test-goal".to_string()))
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
             .await
             .unwrap();
 
@@ -2064,7 +2107,10 @@ mod tests {
         );
 
         let outcome = agent
-            .run_iteration(&mut CoordinatorState::new("test-goal".to_string()))
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
             .await
             .unwrap();
 
@@ -2091,7 +2137,10 @@ mod tests {
         );
 
         let outcome = agent
-            .run_iteration(&mut CoordinatorState::new("test-goal".to_string()))
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
             .await
             .unwrap();
 

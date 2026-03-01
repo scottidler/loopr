@@ -6,9 +6,11 @@ pub mod executor;
 pub mod generation;
 pub mod implementer;
 pub mod integrator;
+pub mod lifeguard;
 pub mod llm_client;
 pub mod researcher;
 pub mod reviewer;
+pub mod sandbox;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -27,6 +29,39 @@ use crate::id;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
 use crate::worktree::manager::WorktreeManager;
+
+/// Deserialize a JSON value that is either a single string or an array of strings
+/// into a Vec<String>. Handles LLM deviations where a string is sent instead of an array.
+fn string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrVecVisitor;
+
+    impl<'de> de::Visitor<'de> for StringOrVecVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string or array of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+            Ok(vec![v.to_owned()])
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, seq: A) -> std::result::Result<Self::Value, A::Error> {
+            serde::Deserialize::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        }
+
+        fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVecVisitor)
+}
 
 /// Common trait for all agent implementations.
 #[async_trait]
@@ -325,7 +360,7 @@ pub enum AgentAction {
     // === Shared actions (all agent types) ===
     RunTool {
         tool: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "string_or_vec")]
         args: Vec<String>,
     },
     WriteFile {
@@ -337,13 +372,13 @@ pub enum AgentAction {
     },
     Commit {
         message: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "string_or_vec")]
         paths: Vec<String>,
     },
     ProposeBundle {
         #[serde(default)]
         description: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "string_or_vec")]
         claims: Vec<String>,
     },
     Transition {
@@ -393,11 +428,11 @@ pub enum AgentAction {
         phase_id: String,
         title: String,
         description: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "string_or_vec")]
         resource_tags: Vec<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "string_or_vec")]
         acceptance_criteria: Vec<String>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "string_or_vec")]
         dependencies: Vec<String>,
     },
     AssignAgent {
@@ -554,7 +589,11 @@ mod tests {
         // Insert a session into stores
         let session = AgentSession::new(AgentType::Implementer, "test-model".into());
         let session_id = session.id.clone();
-        stores.agent_sessions.write().unwrap().insert(session_id.clone(), session);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
 
         let (event_tx, _event_rx) = broadcast::channel(16);
         let ctx = AgentContext::from_session_id(&session_id, AgentType::Implementer, stores.clone(), event_tx);
@@ -572,7 +611,10 @@ mod tests {
         let (event_tx, _event_rx) = broadcast::channel(16);
         let result = AgentContext::from_session_id("nonexistent", AgentType::Coordinator, stores, event_tx);
         let err_msg = result.err().expect("expected Err").to_string();
-        assert!(err_msg.contains("session not found"), "expected 'session not found', got: {err_msg}");
+        assert!(
+            err_msg.contains("session not found"),
+            "expected 'session not found', got: {err_msg}"
+        );
     }
 
     #[test]
@@ -1423,6 +1465,101 @@ mod tests {
             assert_eq!(new_tick_id, "tick-42");
         } else {
             panic!("expected StalenessDetected");
+        }
+    }
+
+    // --- string_or_vec deserialization tests ---
+
+    #[test]
+    fn test_string_or_vec_string_input() {
+        let json = r#"{"action": "run_tool", "tool": "pytest", "args": "--collect-only"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::RunTool { args, .. } = action {
+            assert_eq!(args, vec!["--collect-only"]);
+        } else {
+            panic!("expected RunTool");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_array_input() {
+        let json = r#"{"action": "run_tool", "tool": "pytest", "args": ["--collect-only", "-v"]}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::RunTool { args, .. } = action {
+            assert_eq!(args, vec!["--collect-only", "-v"]);
+        } else {
+            panic!("expected RunTool");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_missing_field() {
+        let json = r#"{"action": "run_tool", "tool": "pytest"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::RunTool { args, .. } = action {
+            assert!(args.is_empty());
+        } else {
+            panic!("expected RunTool");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_empty_array() {
+        let json = r#"{"action": "run_tool", "tool": "pytest", "args": []}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::RunTool { args, .. } = action {
+            assert!(args.is_empty());
+        } else {
+            panic!("expected RunTool");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_null_input() {
+        let json = r#"{"action": "run_tool", "tool": "pytest", "args": null}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::RunTool { args, .. } = action {
+            assert!(args.is_empty());
+        } else {
+            panic!("expected RunTool");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_on_commit_paths() {
+        let json = r#"{"action": "commit", "message": "fix bug", "paths": "src/main.rs"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::Commit { paths, .. } = action {
+            assert_eq!(paths, vec!["src/main.rs"]);
+        } else {
+            panic!("expected Commit");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_on_create_work() {
+        let json = r#"{
+            "action": "create_work",
+            "phase_id": "p1",
+            "title": "Test",
+            "description": "desc",
+            "resource_tags": "src/lib.rs",
+            "acceptance_criteria": "it works",
+            "dependencies": "wi-001"
+        }"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::CreateWork {
+            resource_tags,
+            acceptance_criteria,
+            dependencies,
+            ..
+        } = action
+        {
+            assert_eq!(resource_tags, vec!["src/lib.rs"]);
+            assert_eq!(acceptance_criteria, vec!["it works"]);
+            assert_eq!(dependencies, vec!["wi-001"]);
+        } else {
+            panic!("expected CreateWork");
         }
     }
 }

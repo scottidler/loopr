@@ -382,14 +382,7 @@ pub async fn execute_action(
         }
         AgentAction::WriteFile { path, content } => {
             // Validate path stays within worktree (sandbox)
-            let full_path = worktree_path.join(path);
-            let canonical = full_path.canonicalize().unwrap_or_else(|_| full_path.clone());
-            let worktree_canonical = worktree_path
-                .canonicalize()
-                .unwrap_or_else(|_| worktree_path.to_path_buf());
-            if !canonical.starts_with(&worktree_canonical) {
-                return Err(eyre!("path escapes worktree: {}", path));
-            }
+            let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
 
             // Advisory lock check: under LockStrict, reject writes to locked resources
             if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
@@ -419,7 +412,7 @@ pub async fn execute_action(
             Ok(ActionResult::FileWritten(path.clone()))
         }
         AgentAction::ReadFile { path } => {
-            let full_path = worktree_path.join(path);
+            let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
             let content = tokio::fs::read_to_string(&full_path)
                 .await
                 .map_err(|e| eyre!("read_file '{}': {}", path, e))?;
@@ -2123,7 +2116,7 @@ mod tests {
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("escapes worktree"));
+        assert!(result.unwrap_err().to_string().contains("path traversal"));
     }
 
     #[tokio::test]

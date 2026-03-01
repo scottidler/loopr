@@ -2390,7 +2390,10 @@ mod tests {
         };
         let agent = implementer::ImplementerAgent::new(ctx, llm, config, wi_id.clone(), dir.clone());
 
-        let outcome = agent.run_iteration(1, None).await.unwrap();
+        let outcome = agent
+            .run_iteration(1, None, &mut crate::agents::lifeguard::Lifeguard::new())
+            .await
+            .unwrap();
         assert!(
             matches!(outcome, IterationOutcome::Done(ref s) if s.contains("hello.txt")),
             "expected Done with hello.txt, got: {:?}",
