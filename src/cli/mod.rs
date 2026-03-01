@@ -263,6 +263,14 @@ pub enum AgentCmd {
         #[arg(short = 't', long)]
         agent_type: Option<String>,
     },
+    /// Show iteration-level output for an agent session
+    Output {
+        /// Agent session ID
+        session_id: String,
+        /// Only show events after this index
+        #[arg(short, long, default_value = "0")]
+        since: u64,
+    },
 }
 
 /// Coordinator subcommands.
@@ -857,6 +865,34 @@ mod tests {
                 assert_eq!(agent_type, Some("implementer".to_string()));
             }
             _ => panic!("expected Agent List with filters"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_output() {
+        let cli = Cli::parse_from(["loopr", "agent", "output", "sess-1"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::Output { session_id, since },
+            }) => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(since, 0);
+            }
+            _ => panic!("expected Agent Output"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_agent_output_with_since() {
+        let cli = Cli::parse_from(["loopr", "agent", "output", "sess-1", "--since", "5"]);
+        match cli.command {
+            Some(Command::Agent {
+                cmd: AgentCmd::Output { session_id, since },
+            }) => {
+                assert_eq!(session_id, "sess-1");
+                assert_eq!(since, 5);
+            }
+            _ => panic!("expected Agent Output with since"),
         }
     }
 

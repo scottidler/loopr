@@ -313,6 +313,10 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
             }
             ("agent.list".to_string(), params)
         }
+        AgentCmd::Output { session_id, since } => (
+            "agent.output".to_string(),
+            json!({ "session_id": session_id, "since": since }),
+        ),
     }
 }
 
@@ -1300,5 +1304,33 @@ mod tests {
         assert_eq!(params["holder_id"], "wi-3");
         assert!(params.get("resource").is_none() || params["resource"].is_null());
         assert!(params.get("active_only").is_none() || params["active_only"].is_null());
+    }
+
+    #[test]
+    fn test_agent_output_mapping() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::Output {
+                session_id: "sess-42".to_string(),
+                since: 5,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.output");
+        assert_eq!(params["session_id"], "sess-42");
+        assert_eq!(params["since"], 5);
+    }
+
+    #[test]
+    fn test_agent_output_default_since() {
+        let cmd = Command::Agent {
+            cmd: AgentCmd::Output {
+                session_id: "sess-1".to_string(),
+                since: 0,
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "agent.output");
+        assert_eq!(params["session_id"], "sess-1");
+        assert_eq!(params["since"], 0);
     }
 }
