@@ -200,17 +200,7 @@ impl ImplementerAgent {
                     .send(DaemonEvent::agent_tool_started(session_id, tool));
             }
 
-            let result = match execute_action(
-                action,
-                &self.ctx.tool_runner,
-                &self.ctx.bridge,
-                &self.worktree_path,
-                Some(&self.work_id),
-                AgentType::Implementer,
-                &self.ctx.log,
-            )
-            .await
-            {
+            let result = match execute_action(action, &self.ctx, &self.worktree_path, Some(&self.work_id)).await {
                 Ok(r) => r,
                 Err(e) => {
                     self.ctx.warn(&format!("action failed (non-fatal): {e}"));
@@ -368,12 +358,9 @@ impl Agent for ImplementerAgent {
                     message: format!("WIP: auto-commit at iteration cap ({})", max_iterations),
                     paths: vec![".".to_string()],
                 },
-                &self.ctx.tool_runner,
-                &self.ctx.bridge,
+                &self.ctx,
                 &self.worktree_path,
                 Some(&self.work_id),
-                AgentType::Implementer,
-                &self.ctx.log,
             )
             .await;
             // Propose the bundle
@@ -385,12 +372,9 @@ impl Agent for ImplementerAgent {
                     ),
                     claims: vec!["partial implementation — needs review".to_string()],
                 },
-                &self.ctx.tool_runner,
-                &self.ctx.bridge,
+                &self.ctx,
                 &self.worktree_path,
                 Some(&self.work_id),
-                AgentType::Implementer,
-                &self.ctx.log,
             )
             .await;
         }

@@ -48,6 +48,24 @@ mod tests {
         )
     }
 
+    /// Build a minimal AgentContext for integration tests calling execute_action.
+    fn test_agent_context(
+        stores: &Arc<Stores>,
+        bridge: crate::agents::bridge::AgentIpcBridge,
+        tx: broadcast::Sender<DaemonEvent>,
+        agent_log: crate::agents::agent_logger::AgentLogger,
+    ) -> crate::agents::AgentContext {
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        crate::agents::AgentContext {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx: tx,
+            tool_runner: stores.tool_runner.clone(),
+            log: agent_log,
+        }
+    }
+
     fn test_integrator_config() -> IntegratorConfig {
         IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
@@ -1379,7 +1397,6 @@ mod tests {
         use crate::agents::AgentAction;
         use crate::agents::bridge::AgentIpcBridge;
         use crate::agents::executor::{ActionResult, execute_action};
-        use crate::tools::ToolRunner;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let dir = std::env::temp_dir().join(format!("loopr-e2e-createplan-{}", crate::id::generate_id()));
@@ -1388,8 +1405,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
 
         let action = AgentAction::CreatePlan {
             title: "E2E Test Plan".to_string(),
@@ -1398,17 +1414,8 @@ mod tests {
         };
 
         let agent_log = test_agent_logger(&dir);
-        let result = rt
-            .block_on(execute_action(
-                &action,
-                &runner,
-                &bridge,
-                &dir,
-                None,
-                AgentType::Coordinator,
-                &agent_log,
-            ))
-            .unwrap();
+        let ctx = test_agent_context(&stores, bridge, tx, agent_log);
+        let result = rt.block_on(execute_action(&action, &ctx, &dir, None)).unwrap();
 
         match result {
             ActionResult::RecordCreated { collection, id } => {
@@ -1428,7 +1435,6 @@ mod tests {
         use crate::agents::AgentAction;
         use crate::agents::bridge::AgentIpcBridge;
         use crate::agents::executor::{ActionResult, execute_action};
-        use crate::tools::ToolRunner;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let dir = std::env::temp_dir().join(format!("loopr-e2e-hierarchy-{}", crate::id::generate_id()));
@@ -1437,9 +1443,9 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
+        let ctx = test_agent_context(&stores, bridge, tx, agent_log);
 
         // Create Plan
         let plan_result = rt
@@ -1449,12 +1455,9 @@ mod tests {
                     description: "Auth system".into(),
                     acceptance_criteria: "Tests pass".into(),
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
         let plan_id = match plan_result {
@@ -1470,12 +1473,9 @@ mod tests {
                     title: "JWT Spec".into(),
                     description: "JWT tokens".into(),
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
         let spec_id = match spec_result {
@@ -1492,12 +1492,9 @@ mod tests {
                     description: "Foundation".into(),
                     order: 1,
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
         let phase_id = match phase_result {
@@ -1516,12 +1513,9 @@ mod tests {
                     acceptance_criteria: vec!["tests pass".into()],
                     dependencies: vec![],
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
         let wi_id = match wi_result {
@@ -1556,7 +1550,6 @@ mod tests {
         use crate::agents::bridge::AgentIpcBridge;
         use crate::agents::executor::{ActionResult, execute_action};
         use crate::domain::bundle::BundleStatus;
-        use crate::tools::ToolRunner;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let dir = std::env::temp_dir().join(format!("loopr-e2e-triage-{}", crate::id::generate_id()));
@@ -1566,7 +1559,6 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
-        let runner = ToolRunner::new(&[]);
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
 
         // Create hierarchy + work item (via dispatch for speed)
@@ -1610,17 +1602,15 @@ mod tests {
 
         // TriageBundle via executor
         let agent_log = test_agent_logger(&dir);
+        let ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
         let triage_result = rt
             .block_on(execute_action(
                 &AgentAction::TriageBundle {
                     bundle_id: bundle_id.clone(),
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
         assert!(
@@ -1651,12 +1641,9 @@ mod tests {
                 &AgentAction::AcceptBundle {
                     bundle_id: bundle_id.clone(),
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
         assert!(
@@ -2241,7 +2228,6 @@ mod tests {
         use crate::agents::AgentAction;
         use crate::agents::bridge::AgentIpcBridge;
         use crate::agents::executor::{ActionResult, execute_action};
-        use crate::tools::ToolRunner;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let dir = std::env::temp_dir().join(format!("loopr-e2e-badparent-{}", crate::id::generate_id()));
@@ -2250,9 +2236,9 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let runner = ToolRunner::new(&[]);
-        let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
+        let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
+        let ctx = test_agent_context(&stores, bridge, tx, agent_log);
 
         let result = rt
             .block_on(execute_action(
@@ -2261,12 +2247,9 @@ mod tests {
                     title: "Bad Spec".into(),
                     description: "Should fail".into(),
                 },
-                &runner,
-                &bridge,
+                &ctx,
                 &dir,
                 None,
-                AgentType::Coordinator,
-                &agent_log,
             ))
             .unwrap();
 
@@ -2339,22 +2322,13 @@ mod tests {
         let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, stores.config.clone());
 
-        let runner = crate::tools::ToolRunner::new(&[]);
         let assign_action = crate::agents::AgentAction::AssignAgent {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
         let agent_log = test_agent_logger(&dir);
-        let _ = crate::agents::executor::execute_action(
-            &assign_action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await;
+        let assign_ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
+        let _ = crate::agents::executor::execute_action(&assign_action, &assign_ctx, &dir, None).await;
 
         // Verify work item is now InProgress
         let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
@@ -2400,10 +2374,16 @@ mod tests {
         let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "test".into());
         session.work_id = Some(wi_id.clone());
         session.worktree_path = Some(dir.to_string_lossy().into());
+        let impl_bridge = crate::agents::bridge::AgentIpcBridge::new(
+            stores.clone(),
+            tx.clone(),
+            WorktreeManager::new(dir.clone(), dir.join(".worktrees")),
+            stores.config.clone(),
+        );
         let ctx = crate::agents::AgentContext {
             session,
             stores: stores.clone(),
-            bridge,
+            bridge: impl_bridge,
             event_tx: tx.clone(),
             tool_runner: stores.tool_runner.clone(),
             log: agent_log,

@@ -16,11 +16,11 @@ use crate::agents::integrator;
 use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::researcher;
 use crate::agents::reviewer;
-use crate::agents::{Agent, AgentAction, AgentSession, AgentStatus, AgentType};
+use crate::agents::{Agent, AgentAction, AgentContext, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
 use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
-use crate::tools::{ToolResult, ToolRunner};
+use crate::tools::ToolResult;
 use crate::worktree::manager::WorktreeManager;
 
 /// Normalize a collection name from plural to singular for IPC method dispatch.
@@ -526,16 +526,17 @@ async fn run_agent_loop(
 
 /// Execute a single agent action. Used by the agent loop to process parsed LLM responses.
 ///
-/// `agent_type` is used for role inference on Transition actions (when role is None).
+/// `ctx.session.agent_type` is used for role inference on Transition actions (when role is None).
 pub async fn execute_action(
     action: &AgentAction,
-    tool_runner: &ToolRunner,
-    bridge: &AgentIpcBridge,
+    ctx: &AgentContext,
     worktree_path: &Path,
     work_id: Option<&str>,
-    agent_type: AgentType,
-    agent_log: &AgentLogger,
 ) -> Result<ActionResult> {
+    let tool_runner = &*ctx.tool_runner;
+    let bridge = &ctx.bridge;
+    let agent_type = ctx.session.agent_type;
+    let agent_log = &ctx.log;
     agent_log.debug(&format!("execute_action(action={:?})", action));
     match action {
         AgentAction::RunTool { tool, args } => {
@@ -1272,6 +1273,7 @@ fn persist_session(stores: &Stores, session: &AgentSession) {
 mod tests {
     use super::*;
     use crate::config::{Config, ProjectConfig, ToolEntry};
+    use crate::tools::ToolRunner;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use taskstore::Store;
@@ -1300,6 +1302,72 @@ mod tests {
         stores.store = Some(Arc::new(StdMutex::new(store)));
         stores.config = config;
         Arc::new(stores)
+    }
+
+    /// Build a minimal AgentContext for executor tests.
+    fn test_agent_context(
+        dir: &Path,
+        stores: &Arc<Stores>,
+        agent_type: AgentType,
+    ) -> (AgentContext, broadcast::Receiver<DaemonEvent>) {
+        let (event_tx, event_rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(dir);
+        let session = AgentSession::new(agent_type, "test-model".into());
+        let ctx = AgentContext {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx,
+            tool_runner: stores.tool_runner.clone(),
+            log: agent_log,
+        };
+        (ctx, event_rx)
+    }
+
+    /// Build a minimal AgentContext with custom ToolRunner entries.
+    fn test_agent_context_with_tools(
+        dir: &Path,
+        stores: &Arc<Stores>,
+        agent_type: AgentType,
+        tool_entries: &[ToolEntry],
+    ) -> AgentContext {
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(dir);
+        let session = AgentSession::new(agent_type, "test-model".into());
+        AgentContext {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx,
+            tool_runner: Arc::new(ToolRunner::new(tool_entries)),
+            log: agent_log,
+        }
+    }
+
+    /// Build a minimal AgentContext with a custom Config (e.g., for LockStrict tests).
+    fn test_agent_context_with_config(
+        dir: &Path,
+        stores: &Arc<Stores>,
+        agent_type: AgentType,
+        config: Config,
+    ) -> AgentContext {
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, config);
+        let agent_log = test_agent_logger(dir);
+        let session = AgentSession::new(agent_type, "test-model".into());
+        AgentContext {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx,
+            tool_runner: stores.tool_runner.clone(),
+            log: agent_log,
+        }
     }
 
     /// Helper: create a full Plan→Spec→Phase→Work hierarchy in stores via bridge.
@@ -1344,13 +1412,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-transparam-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Transition Ready → Abandoned via execute_action (auto-promoted from Draft since acceptance_criteria present)
         // Using Abandoned since InProgress requires assignee which Transition action doesn't support
@@ -1360,18 +1425,7 @@ mod tests {
             target_status: "Abandoned".to_string(),
             role: Some("coordinator".to_string()),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
         // Should succeed (not "target_status required" error)
         assert!(
@@ -1386,35 +1440,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-autotrans-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Work item starts as Ready (auto-promoted from Draft) — AssignAgent should auto-transition to InProgress
         let action = AgentAction::AssignAgent {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
         // The agent.start may fail (no LLM key) but the auto-transition should have happened
         // Check work item status is InProgress
-        let wi_resp = bridge.request("work.get", serde_json::json!({"id": wi_id}));
+        let wi_resp = ctx.bridge.request("work.get", serde_json::json!({"id": wi_id}));
         let wi_status = wi_resp
             .result
             .as_ref()
@@ -1448,28 +1488,14 @@ mod tests {
             timeout_secs: 10,
             worktree: true,
         }];
-        let runner = ToolRunner::new(&entries);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let ctx = test_agent_context_with_tools(&dir, &stores, AgentType::Implementer, &entries);
 
         let action = AgentAction::RunTool {
             tool: "echo-test".to_string(),
             args: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::ToolRun(tool_result) = result {
             assert_eq!(tool_result.exit_code, 0);
             assert_eq!(tool_result.stdout.trim(), "hello");
@@ -1483,28 +1509,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-write-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
         let action = AgentAction::WriteFile {
             path: "test.txt".to_string(),
             content: "hello world".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
 
         let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
@@ -1518,10 +1530,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-lockstrict-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         let config = Config {
             strategy: StrategyConfig {
                 conflict_policy: ConflictPolicy::LockStrict,
@@ -1529,10 +1538,10 @@ mod tests {
             },
             ..Config::default()
         };
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
 
         // Create a lock on "src/main.rs"
-        let lock_resp = bridge.request(
+        let lock_resp = ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
@@ -1543,18 +1552,7 @@ mod tests {
             path: "src/main.rs".to_string(),
             content: "should be blocked".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
             "expected ActionError for locked file, got: {:?}",
@@ -1567,15 +1565,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-lockadvisory-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         // Default config has LockAdvisory
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
         // Create a lock on "src/main.rs"
-        let lock_resp = bridge.request(
+        let lock_resp = ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
@@ -1586,18 +1581,7 @@ mod tests {
             path: "test.txt".to_string(),
             content: "should work".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
     }
 
@@ -1607,27 +1591,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("read-me.txt"), "file content").unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = result {
             assert_eq!(content, "file content");
         } else {
@@ -1640,27 +1610,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-done-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
         let action = AgentAction::Done {
             summary: "All done".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::Done(summary) = result {
             assert_eq!(summary, "All done");
         } else {
@@ -1673,27 +1629,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-help-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::NeedHelp(reason) = result {
             assert_eq!(reason, "Ambiguous spec");
         } else {
@@ -1706,27 +1648,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-unk-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
         let action = AgentAction::RunTool {
             tool: "nonexistent".to_string(),
             args: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await;
+        let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
     }
 
@@ -1735,28 +1664,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-acqlock-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         let action = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-123".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::LockAcquired(lock_id) = &result {
             assert!(!lock_id.is_empty());
             assert_ne!(lock_id, "unknown");
@@ -1770,29 +1685,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-lockconf-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         // Acquire first lock
         let action = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-100".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::LockAcquired(_)));
 
         // Try to acquire again on same resource — should get ActionError
@@ -1800,17 +1701,7 @@ mod tests {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-200".to_string(),
         };
-        let result2 = execute_action(
-            &action2,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         if let ActionResult::ActionError(msg) = &result2 {
             assert!(
                 msg.contains("already locked"),
@@ -1827,29 +1718,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-rellock-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         // Acquire a lock first
         let acquire_action = AgentAction::AcquireLock {
             resource: "src/lib.rs".to_string(),
             holder_id: "wi-456".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let acquire_result = execute_action(
-            &acquire_action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let acquire_result = execute_action(&acquire_action, &ctx, &dir, None).await.unwrap();
         let lock_id = if let ActionResult::LockAcquired(id) = acquire_result {
             id
         } else {
@@ -1860,17 +1737,7 @@ mod tests {
         let release_action = AgentAction::ReleaseLock {
             lock_id: lock_id.clone(),
         };
-        let release_result = execute_action(
-            &release_action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let release_result = execute_action(&release_action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::LockReleased(id) = &release_result {
             assert_eq!(id, &lock_id);
         } else {
@@ -1883,29 +1750,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-reacq-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
 
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         // Acquire
         let action1 = AgentAction::AcquireLock {
             resource: "src/config.rs".to_string(),
             holder_id: "wi-1".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let r1 = execute_action(
-            &action1,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let r1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         let lock_id = if let ActionResult::LockAcquired(id) = r1 {
             id
         } else {
@@ -1916,34 +1769,14 @@ mod tests {
         let release = AgentAction::ReleaseLock {
             lock_id: lock_id.clone(),
         };
-        execute_action(
-            &release,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        execute_action(&release, &ctx, &dir, None).await.unwrap();
 
         // Re-acquire same resource by different holder — should succeed
         let action2 = AgentAction::AcquireLock {
             resource: "src/config.rs".to_string(),
             holder_id: "wi-2".to_string(),
         };
-        let r2 = execute_action(
-            &action2,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let r2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         assert!(matches!(r2, ActionResult::LockAcquired(_)));
     }
 
@@ -1997,30 +1830,15 @@ mod tests {
     async fn test_execute_create_plan() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-createplan-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::CreatePlan {
             title: "New Plan".to_string(),
             description: "Plan desc".to_string(),
             acceptance_criteria: "Tests pass".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "plans");
             assert!(!id.is_empty());
@@ -2034,32 +1852,17 @@ mod tests {
     async fn test_execute_create_spec() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-createspec-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (plan_id, _, _, _) = create_test_hierarchy(&bridge);
+        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::CreateSpec {
             plan_id,
             title: "New Spec".to_string(),
             description: "Spec desc".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "specs");
             assert!(!id.is_empty());
@@ -2072,14 +1875,10 @@ mod tests {
     async fn test_execute_create_phase() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-createphase-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, spec_id, _, _) = create_test_hierarchy(&bridge);
+        let (_, spec_id, _, _) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::CreatePhase {
             spec_id,
@@ -2087,18 +1886,7 @@ mod tests {
             description: "Phase desc".to_string(),
             order: 2,
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "phases");
             assert!(!id.is_empty());
@@ -2111,16 +1899,12 @@ mod tests {
     async fn test_execute_create_work() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-createwi-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, phase_id, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
         // Transition existing WI out of Draft so draft guard doesn't block new creation
-        bridge.request(
+        ctx.bridge.request(
             "work.transition",
             serde_json::json!({
                 "id": wi_id, "target_status": "Ready", "role": "coordinator"
@@ -2135,18 +1919,7 @@ mod tests {
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "works");
             assert!(!id.is_empty());
@@ -2184,29 +1957,14 @@ mod tests {
 
         // Create a file to commit
         std::fs::write(dir.join("test.txt"), "hello").unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::Commit {
             message: "test commit".to_string(),
             paths: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Committed(ref msg) if msg == "test commit"),
             "expected Committed, got: {:?}",
@@ -2241,29 +1999,14 @@ mod tests {
 
         std::fs::write(dir.join("a.txt"), "aaa").unwrap();
         std::fs::write(dir.join("b.txt"), "bbb").unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::Commit {
             message: "add a.txt only".to_string(),
             paths: vec!["a.txt".to_string()],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::Committed(_)));
     }
 
@@ -2305,31 +2048,16 @@ mod tests {
             .output()
             .await
             .unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::ProposeBundle {
             description: "My bundle".to_string(),
             claims: vec!["Implemented feature X".to_string()],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            Some(&wi_id),
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
             matches!(result, ActionResult::BundleProposed(ref desc) if desc == "My bundle"),
             "expected BundleProposed, got: {:?}",
@@ -2374,29 +2102,15 @@ mod tests {
             .output()
             .await
             .unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::ProposeBundle {
             description: "My bundle".to_string(),
             claims: vec![],
         };
         // work_id = None should fail
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await;
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work_id"));
     }
@@ -2407,12 +2121,7 @@ mod tests {
     async fn test_execute_create_learning_with_all_fields() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-learning-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::CreateLearning {
             content: "Always add tests".to_string(),
@@ -2421,18 +2130,8 @@ mod tests {
             applicable_roles: Some(vec!["implementer".to_string()]),
             resource_tags: Some(vec!["src/".to_string()]),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::LearningCreated(ref c) if c == "Always add tests"),
             "expected LearningCreated, got: {:?}",
@@ -2444,12 +2143,7 @@ mod tests {
     async fn test_execute_create_learning_minimal() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-learnmin-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::CreateLearning {
             content: "Minimal learning".to_string(),
@@ -2458,18 +2152,8 @@ mod tests {
             applicable_roles: None,
             resource_tags: None,
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::LearningCreated(_)));
     }
 
@@ -2477,29 +2161,14 @@ mod tests {
     async fn test_execute_spawn_researcher() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-spawnres-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::SpawnResearcher {
             query: "How does auth work?".to_string(),
             scope_id: "plan-1".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         // agent.start may fail (no LLM key), which returns ActionError
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
@@ -2513,31 +2182,16 @@ mod tests {
     async fn test_execute_validate_document() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-valdoc-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (plan_id, _, _, _) = create_test_hierarchy(&bridge);
+        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::ValidateDocument {
             collection: "plan".to_string(),
             id: plan_id,
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         // Validation may fail (no LLM key) returning ActionError, or succeed with DocumentValidated
         assert!(
             matches!(
@@ -2553,17 +2207,13 @@ mod tests {
     async fn test_execute_triage_bundle() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-triage-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Create a bundle for the work item
-        let bundle_resp = bridge.request(
+        let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
                 "work_id": wi_id,
@@ -2577,18 +2227,7 @@ mod tests {
         let action = AgentAction::TriageBundle {
             bundle_id: bundle_id.clone(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Triaged")),
             "expected Transitioned to Triaged, got: {:?}",
@@ -2600,17 +2239,13 @@ mod tests {
     async fn test_execute_accept_bundle() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-accept-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Create and transition bundle through Proposed → Triaged → Reviewed
-        let bundle_resp = bridge.request(
+        let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
                 "work_id": wi_id,
@@ -2619,11 +2254,11 @@ mod tests {
             }),
         );
         let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
-        bridge.request(
+        ctx.bridge.request(
             "bundle.transition",
             serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
         );
-        bridge.request(
+        ctx.bridge.request(
             "bundle.transition",
             serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
         );
@@ -2631,18 +2266,7 @@ mod tests {
         let action = AgentAction::AcceptBundle {
             bundle_id: bundle_id.clone(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Accepted")),
             "expected Transitioned to Accepted, got: {:?}",
@@ -2656,28 +2280,14 @@ mod tests {
     async fn test_write_file_path_escape() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-escape-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::WriteFile {
             path: "../../../etc/passwd".to_string(),
             content: "pwned".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await;
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("escapes worktree"));
     }
@@ -2686,27 +2296,13 @@ mod tests {
     async fn test_read_file_not_found() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-readnf-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::ReadFile {
             path: "nonexistent.txt".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await;
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
     }
 
@@ -2714,14 +2310,10 @@ mod tests {
     async fn test_transition_role_inference() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-roleinfer-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Transition without explicit role — should infer from agent type
         // WI is already Ready (auto-promoted from Draft since acceptance_criteria present)
@@ -2732,18 +2324,7 @@ mod tests {
             target_status: "Abandoned".to_string(),
             role: None, // Should infer "coordinator" from AgentType::Coordinator
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(_)),
             "expected Transitioned with inferred role, got: {:?}",
@@ -2755,29 +2336,14 @@ mod tests {
     async fn test_write_file_creates_parent_dirs() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-writedirs-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::WriteFile {
             path: "deep/nested/dir/file.txt".to_string(),
             content: "nested content".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
         let content = std::fs::read_to_string(dir.join("deep/nested/dir/file.txt")).unwrap();
         assert_eq!(content, "nested content");
@@ -2788,22 +2354,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-exec-searchcode-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("example.rs"), "fn main() { println!(\"hello\"); }").unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::SearchCode {
             pattern: "fn main".to_string(),
             glob: None,
             path: None,
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher, &agent_log)
-            .await
-            .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileRead(ref content) if content.contains("fn main"))
                 || matches!(result, ActionResult::ActionError(_)),
@@ -2818,18 +2377,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file1.txt"), "a").unwrap();
         std::fs::write(dir.join("file2.txt"), "b").unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::ListDirectory { path: ".".to_string() };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher, &agent_log)
-            .await
-            .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileRead(ref content) if content.contains("file1.txt")),
             "got: {:?}",
@@ -3088,14 +2640,10 @@ mod tests {
         // Test normalize_collection with all collection variants
         let dir = std::env::temp_dir().join(format!("loopr-exec-transall-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (plan_id, spec_id, phase_id, _) = create_test_hierarchy(&bridge);
+        let (plan_id, spec_id, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         // Test "plans" (plural) → normalizes to "plan"
         let action = AgentAction::Transition {
@@ -3104,18 +2652,7 @@ mod tests {
             target_status: "abandoned".to_string(),
             role: None,
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("plans")),
             "expected Transitioned for plans, got: {:?}",
@@ -3129,17 +2666,7 @@ mod tests {
             target_status: "abandoned".to_string(),
             role: None,
         };
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::Transitioned(_)));
 
         // Test "phases" (plural) → normalizes to "phase"
@@ -3149,17 +2676,7 @@ mod tests {
             target_status: "abandoned".to_string(),
             role: None,
         };
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::Transitioned(_)));
     }
 
@@ -3167,14 +2684,10 @@ mod tests {
     async fn test_transition_assignee_validation_for_inprogress() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-assignee-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Attempt InProgress transition without assignee using Transition action (role = coordinator)
         // This should fail because InProgress requires an assignee
@@ -3184,17 +2697,7 @@ mod tests {
             target_status: "InProgress".to_string(),
             role: Some("coordinator".to_string()),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await;
+        let result = execute_action(&action, &ctx, &dir, None).await;
         // Should fail (transition error) since InProgress requires assignee
         assert!(result.is_err(), "InProgress without assignee should fail: {:?}", result);
     }
@@ -3203,12 +2706,7 @@ mod tests {
     async fn test_execute_create_plan_error_path() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-plnerr-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Create a first plan (Draft)
         let action1 = AgentAction::CreatePlan {
@@ -3216,18 +2714,8 @@ mod tests {
             description: "desc".to_string(),
             acceptance_criteria: "pass".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result1 = execute_action(
-            &action1,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Try to create another plan — should get ActionError due to draft-awareness guard
@@ -3236,17 +2724,7 @@ mod tests {
             description: "desc".to_string(),
             acceptance_criteria: "pass".to_string(),
         };
-        let result2 = execute_action(
-            &action2,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Plan already exists")),
             "expected draft-awareness error, got: {:?}",
@@ -3258,14 +2736,10 @@ mod tests {
     async fn test_execute_create_spec_error_path() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-specerr-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (plan_id, _, _, _) = create_test_hierarchy(&bridge);
+        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
         // The hierarchy already created a Draft spec under this plan (but it was transitioned to Active).
         // Create a new spec (Draft) under same plan
@@ -3274,18 +2748,7 @@ mod tests {
             title: "New Spec".to_string(),
             description: "desc".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result1 = execute_action(
-            &action1,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Try to create another spec under same plan — should get draft-awareness error
@@ -3294,17 +2757,7 @@ mod tests {
             title: "Another Spec".to_string(),
             description: "desc".to_string(),
         };
-        let result2 = execute_action(
-            &action2,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Spec already exists")),
             "expected draft-awareness error for spec, got: {:?}",
@@ -3316,12 +2769,7 @@ mod tests {
     async fn test_execute_create_phase_error_path() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-phaseerr-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Use a nonexistent spec_id — should get error from bridge
         let action = AgentAction::CreatePhase {
@@ -3330,18 +2778,8 @@ mod tests {
             description: "desc".to_string(),
             order: 1,
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_phase failed")),
             "expected error for nonexistent spec, got: {:?}",
@@ -3353,12 +2791,7 @@ mod tests {
     async fn test_execute_create_work_error_path() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-wierr-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Use a nonexistent phase_id — should get error from bridge
         let action = AgentAction::CreateWork {
@@ -3369,18 +2802,8 @@ mod tests {
             acceptance_criteria: vec![],
             dependencies: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_work failed")),
             "expected error for nonexistent phase, got: {:?}",
@@ -3393,29 +2816,14 @@ mod tests {
         // Test triage on a bundle that's not in the right state (error path)
         let dir = std::env::temp_dir().join(format!("loopr-exec-triagefull-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Triage a nonexistent bundle
         let action = AgentAction::TriageBundle {
             bundle_id: "nonexistent-bundle".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("triage_bundle failed")),
             "expected triage error, got: {:?}",
@@ -3428,17 +2836,13 @@ mod tests {
         // Test accept on a bundle that's not in the right state (error path)
         let dir = std::env::temp_dir().join(format!("loopr-exec-acceptfull-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Create a bundle but don't triage it — accept should fail
-        let bundle_resp = bridge.request(
+        let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
                 "work_id": wi_id,
@@ -3451,18 +2855,7 @@ mod tests {
         let action = AgentAction::AcceptBundle {
             bundle_id: bundle_id.clone(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("accept_bundle failed")),
             "expected accept error for un-triaged bundle, got: {:?}",
@@ -3475,29 +2868,14 @@ mod tests {
         // Test SpawnResearcher action (exercises the spawn path)
         let dir = std::env::temp_dir().join(format!("loopr-exec-spawnres2-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::SpawnResearcher {
             query: "What patterns are used in the codebase?".to_string(),
             scope_id: "spec-1".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         // agent.start will either succeed or fail (no LLM key) — both are acceptable
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
@@ -3512,16 +2890,12 @@ mod tests {
         // Under LockAdvisory (default), writes to locked paths should succeed
         let dir = std::env::temp_dir().join(format!("loopr-exec-lockign-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         // Default config: LockAdvisory
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         // Create a lock on the exact file we want to write to
-        bridge.request(
+        ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "locked.txt", "holder_id": "agent-other", "granted_by": "agent-other" }),
         );
@@ -3531,18 +2905,7 @@ mod tests {
             path: "locked.txt".to_string(),
             content: "advisory allows this".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileWritten(_)),
             "expected write to succeed under advisory policy, got: {:?}",
@@ -3557,11 +2920,7 @@ mod tests {
         // Under LockStrict, writes to locked paths should return ActionError
         let dir = std::env::temp_dir().join(format!("loopr-exec-lockwarn-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
         let config = Config {
             strategy: StrategyConfig {
                 conflict_policy: ConflictPolicy::LockStrict,
@@ -3569,10 +2928,10 @@ mod tests {
             },
             ..Config::default()
         };
-        let bridge = AgentIpcBridge::new(stores, event_tx, worktree_mgr, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Coordinator, config);
 
         // Create a lock on the path
-        bridge.request(
+        ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "strict.txt", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
@@ -3582,18 +2941,7 @@ mod tests {
             path: "strict.txt".to_string(),
             content: "should be blocked".to_string(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked") && msg.contains("LockStrict")),
             "expected lock-blocked error, got: {:?}",
@@ -3673,17 +3021,13 @@ mod tests {
     async fn test_assign_agent_dependency_not_met() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-depnotmet-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         // Create dep_wi (the dependency) — stays in Ready status
-        let dep_resp = bridge.request(
+        let dep_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
@@ -3696,7 +3040,7 @@ mod tests {
         let dep_id = dep_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
         // Create work_wi that depends on dep_wi
-        let wi_resp = bridge.request(
+        let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
@@ -3714,18 +3058,7 @@ mod tests {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
         assert!(
             matches!(result, ActionResult::DependencyNotMet { .. }),
@@ -3738,17 +3071,13 @@ mod tests {
     async fn test_assign_agent_dependency_met() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-depmet-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         // Create dep_wi and manually set to Done by modifying store directly
-        let dep_resp = bridge.request(
+        let dep_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
@@ -3774,7 +3103,7 @@ mod tests {
         }
 
         // Create work_wi that depends on dep_wi (now Done)
-        let wi_resp = bridge.request(
+        let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
                 "phase_id": phase_id,
@@ -3792,18 +3121,7 @@ mod tests {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
         assert!(
             matches!(result, ActionResult::AgentSpawned { .. }),
@@ -3816,14 +3134,10 @@ mod tests {
     async fn test_create_work_with_dependencies() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-wideps-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, phase_id, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         // Create a second WI that depends on the first
         let action = AgentAction::CreateWork {
@@ -3834,18 +3148,7 @@ mod tests {
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![wi_id.clone()],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
         assert!(matches!(result, ActionResult::RecordCreated { .. }));
 
@@ -3860,14 +3163,10 @@ mod tests {
     async fn test_create_work_duplicate_rejected() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-widup-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         // Create first WI
         let action1 = AgentAction::CreateWork {
@@ -3878,18 +3177,7 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result1 = execute_action(
-            &action1,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Create duplicate WI with same title — should fail
@@ -3901,17 +3189,7 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let result2 = execute_action(
-            &action2,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
             "expected duplicate error, got: {:?}",
@@ -3923,14 +3201,10 @@ mod tests {
     async fn test_create_work_duplicate_case_insensitive() {
         let dir = std::env::temp_dir().join(format!("loopr-exec-widupcase-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        let (_, _, phase_id, _) = create_test_hierarchy(&bridge);
+        let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         // Create first WI
         let action1 = AgentAction::CreateWork {
@@ -3941,17 +3215,7 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let agent_log = test_agent_logger(&dir);
-        let _ = execute_action(
-            &action1,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await;
+        let _ = execute_action(&action1, &ctx, &dir, None).await;
 
         // Create duplicate with different case — should also fail
         let action2 = AgentAction::CreateWork {
@@ -3962,17 +3226,7 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let result2 = execute_action(
-            &action2,
-            &runner,
-            &bridge,
-            &dir,
-            None,
-            AgentType::Coordinator,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
             "expected case-insensitive duplicate error, got: {:?}",
@@ -3988,12 +3242,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // No ticks exist — should return None
-        let result = resolve_latest_published_tick_id(bridge.stores());
+        let result = resolve_latest_published_tick_id(&stores);
         assert!(result.is_none(), "expected None at bootstrap, got: {:?}", result);
     }
 
@@ -4003,9 +3254,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         // Insert a Published tick directly into stores
         let tick = crate::domain::tick::Tick {
@@ -4021,7 +3269,7 @@ mod tests {
         };
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        let result = resolve_latest_published_tick_id(bridge.stores());
+        let result = resolve_latest_published_tick_id(&stores);
         assert_eq!(result, Some("tick-1".to_string()));
     }
 
@@ -4062,12 +3310,8 @@ mod tests {
             .output()
             .await
             .unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         // Insert a Published tick
         let tick = crate::domain::tick::Tick {
@@ -4083,25 +3327,14 @@ mod tests {
         };
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::ProposeBundle {
             description: "Bundle with base tick".to_string(),
             claims: vec!["claim".to_string()],
         };
         // The call succeeds — bundle.create receives base_tick_id and accepts it
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            Some(&wi_id),
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
             matches!(result, ActionResult::BundleProposed(ref d) if d == "Bundle with base tick"),
             "expected BundleProposed, got: {:?}",
@@ -4114,17 +3347,13 @@ mod tests {
         // F2: ProposeBundle should use format!("agent/{}", work_id) not git rev-parse
         let dir = std::env::temp_dir().join(format!("loopr-exec-f2branch-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-
-        let runner = ToolRunner::new(&[]);
         let stores = test_stores(&dir);
-        let (event_tx, _) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         // Create hierarchy so bundle.create has a valid work_id
-        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
         // Transition work to InProgress
-        bridge.request(
+        ctx.bridge.request(
             "work.transition",
             serde_json::json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
         );
@@ -4161,18 +3390,7 @@ mod tests {
             description: "Test bundle".to_string(),
             claims: vec!["implemented feature".to_string()],
         };
-        let agent_log = test_agent_logger(&dir);
-        let result = execute_action(
-            &action,
-            &runner,
-            &bridge,
-            &dir,
-            Some(&wi_id),
-            AgentType::Implementer,
-            &agent_log,
-        )
-        .await
-        .unwrap();
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         // The bundle should be created with branch_name "agent/<wi_id>"
         assert!(
             matches!(result, ActionResult::BundleProposed(_)),

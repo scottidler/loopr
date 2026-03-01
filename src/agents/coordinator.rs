@@ -1120,7 +1120,6 @@ impl CoordinatorAgent {
 
         // Use repo root as the "worktree" path for Coordinator (thinking plane — no actual worktree)
         let repo_root = &stores.config.project.repo_path;
-        let tool_runner = &*stores.tool_runner;
 
         // Fix #2: Track batch-created Work IDs for batch:N dependency resolution
         let mut batch_created_ids: Vec<String> = Vec::new();
@@ -1170,17 +1169,7 @@ impl CoordinatorAgent {
                 }
             }
 
-            let result = match execute_action(
-                action_ref,
-                tool_runner,
-                bridge,
-                repo_root,
-                None,
-                AgentType::Coordinator,
-                &self.ctx.log,
-            )
-            .await
-            {
+            let result = match execute_action(action_ref, &self.ctx, repo_root, None).await {
                 Ok(r) => r,
                 Err(e) => {
                     self.ctx.warn(&format!("action failed (non-fatal): {e}"));

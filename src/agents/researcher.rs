@@ -296,7 +296,6 @@ impl ResearcherAgent {
         }
 
         let repo_root = &self.ctx.stores.config.project.repo_path;
-        let tool_runner = &*self.ctx.stores.tool_runner;
 
         let mut last_summary = String::new();
         for action in &actions {
@@ -340,17 +339,7 @@ impl ResearcherAgent {
                     },
                     Err(e) => ActionResult::ActionError(e.to_string()),
                 },
-                _ => match execute_action(
-                    action,
-                    tool_runner,
-                    &self.ctx.bridge,
-                    repo_root,
-                    None,
-                    AgentType::Researcher,
-                    &self.ctx.log,
-                )
-                .await
-                {
+                _ => match execute_action(action, &self.ctx, repo_root, None).await {
                     Ok(r) => r,
                     Err(e) => {
                         self.ctx.warn(&format!("action failed (non-fatal): {e}"));
