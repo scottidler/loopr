@@ -17,6 +17,8 @@ pub mod worktree;
 mod fsm_correctness_tests;
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+pub mod test_util;
 
 use std::fs;
 use std::path::PathBuf;

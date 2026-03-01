@@ -99,11 +99,11 @@ impl AgentLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::TestDir;
     use std::io::Read;
 
-    fn test_logger(agent_type: AgentType, suffix: &str) -> (AgentLogger, PathBuf) {
-        let tmp_dir = std::env::temp_dir().join(format!("loopr_agent_logger_test_{}", suffix));
-        let _ = fs::create_dir_all(&tmp_dir);
+    fn test_logger(agent_type: AgentType, suffix: &str) -> (AgentLogger, TestDir) {
+        let tmp_dir = TestDir::new(&format!("loopr_agent_logger_test_{suffix}"));
         let file_path = tmp_dir.join(format!("agent-{}-test123.log", agent_type));
         // Remove stale file from previous test run
         let _ = fs::remove_file(&file_path);
@@ -121,23 +121,21 @@ mod tests {
 
     #[test]
     fn test_agent_logger_creates_file() {
-        let (logger, tmp) = test_logger(AgentType::Implementer, "creates");
+        let (logger, _tmp) = test_logger(AgentType::Implementer, "creates");
         logger.info("hello");
         assert!(logger.file_path().exists());
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_agent_logger_file_naming() {
-        let (logger, tmp) = test_logger(AgentType::Implementer, "naming");
+        let (logger, _tmp) = test_logger(AgentType::Implementer, "naming");
         let name = logger.file_path().file_name().unwrap().to_string_lossy();
         assert_eq!(name, "agent-implementer-test123.log");
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_agent_logger_writes_formatted_line() {
-        let (logger, tmp) = test_logger(AgentType::Reviewer, "formatted");
+        let (logger, _tmp) = test_logger(AgentType::Reviewer, "formatted");
         logger.info("test message");
 
         let mut contents = String::new();
@@ -149,12 +147,11 @@ mod tests {
         assert!(contents.contains("INFO"));
         assert!(contents.contains("agent:reviewer:test123"));
         assert!(contents.contains("test message"));
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_agent_logger_all_levels() {
-        let (logger, tmp) = test_logger(AgentType::Coordinator, "levels");
+        let (logger, _tmp) = test_logger(AgentType::Coordinator, "levels");
         logger.debug("d");
         logger.info("i");
         logger.warn("w");
@@ -170,6 +167,5 @@ mod tests {
         assert!(contents.contains("INFO"));
         assert!(contents.contains("WARN"));
         assert!(contents.contains("ERROR"));
-        let _ = fs::remove_dir_all(&tmp);
     }
 }

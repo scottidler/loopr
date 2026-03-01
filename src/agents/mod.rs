@@ -528,16 +528,15 @@ pub enum AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::TestDir;
     use std::path::Path;
     use std::sync::Mutex as StdMutex;
     use taskstore::Store;
 
     // --- Test helpers ---
 
-    fn make_test_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("loopr-mod-{label}-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn make_test_dir(label: &str) -> TestDir {
+        TestDir::new(&format!("loopr-mod-{label}"))
     }
 
     fn test_agent_logger(dir: &Path) -> AgentLogger {

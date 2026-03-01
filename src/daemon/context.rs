@@ -390,25 +390,25 @@ mod tests {
     use super::*;
     use crate::agents::AgentType;
     use crate::config::ProjectConfig;
+    use crate::test_util::TestDir;
 
     /// Create a test Config with repo_path pointing to a unique temp directory
     /// so TaskStore doesn't pollute the project or collide between tests.
-    fn test_config() -> Config {
-        let id = crate::id::generate_id();
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-test-{id}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        Config {
+    fn test_config() -> (TestDir, Config) {
+        let dir = TestDir::new("loopr-ctx-test");
+        let config = Config {
             project: ProjectConfig {
-                repo_path: dir,
+                repo_path: dir.to_path_buf(),
                 ..ProjectConfig::default()
             },
             ..Config::default()
-        }
+        };
+        (dir, config)
     }
 
     #[test]
     fn test_context_new() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
         assert_eq!(ctx.config.name, "loopr");
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_context_hydrates_from_taskstore() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let repo_path = config.project.repo_path.clone();
 
         // First: create records directly via TaskStore
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_context_new_creates_taskstore() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let repo_path = config.project.repo_path.clone();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_context_taskstore_crud() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn test_context_shared() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (ctx, tx) = DaemonContext::shared(config).unwrap();
         // Can subscribe from the returned sender
         let _rx = tx.subscribe();
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_context_event_broadcast() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
         let mut rx = ctx.event_tx.subscribe();
@@ -511,7 +511,7 @@ mod tests {
 
     #[test]
     fn test_context_shared_event_broadcast() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (ctx, tx) = DaemonContext::shared(config).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_recover_orphaned_works() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -663,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_recover_orphaned_bundles() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_recover_both_orphaned_types() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_recover_no_orphans() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn test_recover_empty_stores() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
         let recovered = ctx.recover_orphaned_records();
@@ -748,7 +748,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_tick_sealing() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_tick_validating() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn test_recover_open_tick_recovered() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn test_recover_mixed_orphans() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -831,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_session_running() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_session_waiting_for_llm() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 
@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn test_recover_completed_session_not_touched() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
 

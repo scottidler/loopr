@@ -658,6 +658,7 @@ mod tests {
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
     use crate::domain::work::Work;
+    use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
@@ -1206,8 +1207,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_load_work_hierarchy() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-hier-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-hier");
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
@@ -1224,8 +1224,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_load_missing_work() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-miss-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-miss");
         let (stores, _) = setup_stores(&dir);
 
         let result = ContextBuilder::new(&stores, Role::Implementer).load_work_hierarchy("nonexistent");
@@ -1235,8 +1234,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_load_bundle_hierarchy() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-bundle-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-bundle");
         let (stores, _, bundle_id) = setup_stores_with_bundle(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Reviewer)
@@ -1252,8 +1250,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_load_missing_bundle() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-missbdl-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-missbdl");
         let (stores, _) = setup_stores(&dir);
 
         let result = ContextBuilder::new(&stores, Role::Reviewer).load_bundle_hierarchy("nonexistent");
@@ -1263,8 +1260,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_build_implementer() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-build-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-build");
         let (stores, wi_id) = setup_stores(&dir);
         let tool_runner = ToolRunner::new(&[ToolEntry {
             name: "test".into(),
@@ -1295,8 +1291,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_build_reviewer() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-rev-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-rev");
         let (stores, _, bundle_id) = setup_stores_with_bundle(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Reviewer)
@@ -1315,8 +1310,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_with_previous_summary() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-prev-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-prev");
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
@@ -1333,8 +1327,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_with_staleness() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-stale-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-stale");
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
@@ -1350,8 +1343,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_no_learnings_section_when_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-nolearn-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-nolearn");
         let (stores, wi_id) = setup_stores(&dir);
 
         // Clear all learnings
@@ -1367,8 +1359,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_no_tools_section_when_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-notool-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-notool");
         let (stores, wi_id) = setup_stores(&dir);
 
         let builder = ContextBuilder::new(&stores, Role::Implementer)
@@ -1382,8 +1373,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_reviewer_no_previous_summary() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-revnp-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-revnp");
         let (stores, _, bundle_id) = setup_stores_with_bundle(&dir);
 
         // Reviewer budget has previous_summary = 0, so even if set it shouldn't appear
@@ -1398,8 +1388,7 @@ mod tests {
 
     #[test]
     fn test_assembled_context_token_estimate() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-tokens-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-tokens");
         let (stores, wi_id) = setup_stores(&dir);
 
         let assembled = ContextBuilder::new(&stores, Role::Implementer)
@@ -1417,8 +1406,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_with_guidance_includes_schema_docs() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-guid");
         let (stores, wi_id) = setup_stores(&dir);
 
         let guidance = crate::guidance::AgentGuidance::schema_only();
@@ -1450,8 +1438,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_guidance_contains_role_specific_transitions() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-role-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-guid-role");
         let (stores, wi_id) = setup_stores(&dir);
 
         let guidance = crate::guidance::AgentGuidance::schema_only();
@@ -1486,8 +1473,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_guidance_with_loopr_md() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-md-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-guid-md");
         let (stores, wi_id) = setup_stores(&dir);
 
         let mut guidance = crate::guidance::AgentGuidance::schema_only();
@@ -1512,8 +1498,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_guidance_appears_before_hierarchy() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-order-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-guid-order");
         let (stores, wi_id) = setup_stores(&dir);
 
         let guidance = crate::guidance::AgentGuidance::schema_only();
@@ -1543,8 +1528,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_no_guidance_when_not_set() {
-        let dir = std::env::temp_dir().join(format!("loopr-ctx-noguid-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-ctx-noguid");
         let (stores, wi_id) = setup_stores(&dir);
 
         // No with_guidance() call

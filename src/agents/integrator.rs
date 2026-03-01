@@ -845,6 +845,7 @@ mod tests {
     use crate::daemon::context::Stores;
     use crate::domain::bundle::Bundle;
     use crate::domain::tick::Tick;
+    use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
     use std::sync::{Arc, Mutex as StdMutex};
@@ -948,8 +949,7 @@ mod tests {
 
     #[test]
     fn test_is_cancelled_false() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-canc1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-canc1");
         let stores = test_stores(&dir);
 
         let mut session = AgentSession::new(AgentType::Integrator, "model".into());
@@ -963,8 +963,7 @@ mod tests {
 
     #[test]
     fn test_is_cancelled_true() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-canc2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-canc2");
         let stores = test_stores(&dir);
 
         let mut session = AgentSession::new(AgentType::Integrator, "model".into());
@@ -990,8 +989,7 @@ mod tests {
 
     #[test]
     fn test_is_cancelled_missing() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-canc3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-canc3");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores.clone(), test_config());
         // Remove the session so it's "missing"
@@ -1003,8 +1001,7 @@ mod tests {
 
     #[test]
     fn test_latest_published_tick_id_none() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-latest1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-latest1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores, test_config());
         assert!(agent.latest_published_tick_id().is_none());
@@ -1012,8 +1009,7 @@ mod tests {
 
     #[test]
     fn test_latest_published_tick_id_some() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-latest2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-latest2");
         let stores = test_stores(&dir);
 
         let mut tick1 = Tick::new(1);
@@ -1034,8 +1030,7 @@ mod tests {
 
     #[test]
     fn test_next_tick_number_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-next1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-next1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores, test_config());
         assert_eq!(agent.next_tick_number(), 1);
@@ -1043,8 +1038,7 @@ mod tests {
 
     #[test]
     fn test_next_tick_number_with_existing() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-next2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-next2");
         let stores = test_stores(&dir);
 
         let tick = Tick::new(5);
@@ -1056,8 +1050,7 @@ mod tests {
 
     #[test]
     fn test_has_tick_in_progress_false() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-tip1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-tip1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores.clone(), test_config());
         assert!(!agent.has_tick_in_progress());
@@ -1070,8 +1063,7 @@ mod tests {
 
     #[test]
     fn test_has_tick_in_progress_true() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-tip2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-tip2");
         let stores = test_stores(&dir);
 
         let tick = Tick::new(1);
@@ -1085,8 +1077,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_ticks_none() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-recov1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-recov1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores, test_config());
         assert_eq!(agent.recover_stuck_ticks(), 0);
@@ -1094,8 +1085,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_ticks_sealing() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-recov2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-recov2");
         let stores = test_stores(&dir);
 
         let mut tick = Tick::new(1);
@@ -1112,8 +1102,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_ticks_validating() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-recov3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-recov3");
         let stores = test_stores(&dir);
 
         let mut tick = Tick::new(2);
@@ -1132,8 +1121,7 @@ mod tests {
 
     #[test]
     fn test_cycle_idle_no_bundles() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores, test_config());
         let result = agent.run_cycle().unwrap();
@@ -1142,8 +1130,7 @@ mod tests {
 
     #[test]
     fn test_cycle_recovers_open_tick() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle2");
         let stores = test_stores(&dir);
 
         let tick = Tick::new(1);
@@ -1164,8 +1151,7 @@ mod tests {
 
     #[test]
     fn test_cycle_recovers_stuck_tick() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle3");
         let stores = test_stores(&dir);
 
         let mut tick = Tick::new(1);
@@ -1179,8 +1165,7 @@ mod tests {
 
     #[test]
     fn test_cycle_publishes_tick() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle4-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle4");
         let stores = test_stores(&dir);
 
         let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
@@ -1202,8 +1187,7 @@ mod tests {
 
     #[test]
     fn test_cycle_validation_failure() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle5-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle5");
         let stores = test_stores(&dir);
 
         let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
@@ -1225,8 +1209,7 @@ mod tests {
 
     #[test]
     fn test_cycle_stale_bundle_rejected() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle6-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle6");
         let stores = test_stores(&dir);
 
         let mut tick = Tick::new(1);
@@ -1258,8 +1241,7 @@ mod tests {
 
     #[test]
     fn test_cycle_mixed_stale_and_valid() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cycle7-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cycle7");
         let stores = test_stores(&dir);
 
         let mut tick = Tick::new(1);
@@ -1320,8 +1302,7 @@ mod tests {
 
     #[test]
     fn test_has_tick_in_progress_all_states() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-tipall-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-tipall");
 
         let stores = test_stores(&dir);
         let mut tick = Tick::new(1);
@@ -1356,8 +1337,7 @@ mod tests {
 
     #[test]
     fn test_stale_policy_replan_at_safe_point() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-replan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-replan");
 
         let mut config = Config {
             project: ProjectConfig {
@@ -1403,8 +1383,7 @@ mod tests {
 
     #[test]
     fn test_stale_policy_auto_replay_and_verify() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-replay-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-replay");
 
         let mut config = Config {
             project: ProjectConfig {
@@ -1470,8 +1449,7 @@ mod tests {
 
     #[test]
     fn test_recover_stuck_ticks_learning_creation() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-recovlearn-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-recovlearn");
         let stores = test_stores(&dir);
 
         let mut tick = Tick::new(1);
@@ -1500,8 +1478,7 @@ mod tests {
 
     #[test]
     fn test_cycle_tick_creation_error_handling() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-tcreate-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-tcreate");
         let stores = test_stores(&dir);
         let config = IntegratorConfig {
             validation_commands: vec!["echo stderr_msg >&2; false".to_string()],
@@ -1527,8 +1504,7 @@ mod tests {
 
     #[test]
     fn test_cycle_bundle_sealing_error_handling() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-bseal-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-bseal");
         let stores = test_stores(&dir);
 
         let mut b1 = Bundle::new("wi-1".into(), None, "feature/a".into(), vec!["claims".into()]);
@@ -1552,8 +1528,7 @@ mod tests {
 
     #[test]
     fn test_cycle_validation_multi_command_sequence() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-multi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-multi");
         let stores = test_stores(&dir);
 
         let config = IntegratorConfig {
@@ -1608,8 +1583,7 @@ mod tests {
 
     #[test]
     fn test_cycle_tick_publish_learning_creation() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-publearn-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-publearn");
         let stores = test_stores(&dir);
 
         let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
@@ -1638,8 +1612,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_integrator_cancellation() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-cancel-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-cancel");
         let stores = test_stores(&dir);
         let config = IntegratorConfig {
             validation_commands: vec!["true".to_string()],
@@ -1665,8 +1638,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_integrator_timeout() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-timeout-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-timeout");
         let stores = test_stores(&dir);
         let config = IntegratorConfig {
             validation_commands: vec!["true".to_string()],
@@ -1737,8 +1709,7 @@ mod tests {
 
     #[test]
     fn test_merge_bundle_branches_success() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-merge-ok-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-merge-ok");
 
         // Initialize git repo with initial commit
         std::process::Command::new("git")
@@ -1811,8 +1782,7 @@ mod tests {
 
     #[test]
     fn test_merge_bundle_branches_failure_cleans_up() {
-        let dir = std::env::temp_dir().join(format!("loopr-intg-merge-abort-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-intg-merge-abort");
 
         // Initialize git repo
         std::process::Command::new("git")

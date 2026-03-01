@@ -70,20 +70,19 @@ impl AgentIpcBridge {
 mod tests {
     use super::*;
     use crate::config::{Config, ProjectConfig};
+    use crate::test_util::TestDir;
     use taskstore::Store;
 
-    fn test_bridge() -> AgentIpcBridge {
-        let id = crate::id::generate_id();
-        let dir = std::env::temp_dir().join(format!("loopr-bridge-test-{id}"));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn test_bridge() -> (TestDir, AgentIpcBridge) {
+        let dir = TestDir::new("loopr-bridge-test");
         let config = Config {
             project: ProjectConfig {
-                repo_path: dir.clone(),
+                repo_path: dir.to_path_buf(),
                 ..ProjectConfig::default()
             },
             ..Config::default()
         };
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let (event_tx, _) = broadcast::channel(16);
 
         // Open TaskStore and rebuild indexes like DaemonContext does
@@ -91,12 +90,15 @@ mod tests {
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
 
-        AgentIpcBridge::new(Arc::new(stores), event_tx, worktree_mgr, config)
+        (
+            dir,
+            AgentIpcBridge::new(Arc::new(stores), event_tx, worktree_mgr, config),
+        )
     }
 
     #[test]
     fn test_bridge_handshake() {
-        let bridge = test_bridge();
+        let (_dir, bridge) = test_bridge();
         let resp = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
         assert!(!resp.is_error());
         assert!(resp.result.unwrap()["protocol"].is_string());
@@ -104,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_bridge_unknown_method() {
-        let bridge = test_bridge();
+        let (_dir, bridge) = test_bridge();
         let resp = bridge.request("nonexistent.method", serde_json::json!(null));
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("nonexistent.method"));
@@ -112,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_bridge_plan_create() {
-        let bridge = test_bridge();
+        let (_dir, bridge) = test_bridge();
         let resp = bridge.request(
             "plan.create",
             serde_json::json!({
@@ -129,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_bridge_increments_request_ids() {
-        let bridge = test_bridge();
+        let (_dir, bridge) = test_bridge();
         let resp1 = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
         let resp2 = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
         assert_ne!(resp1.id, resp2.id);
@@ -137,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_bridge_event_tx() {
-        let bridge = test_bridge();
+        let (_dir, bridge) = test_bridge();
         let mut rx = bridge.event_tx().subscribe();
         let event = DaemonEvent::record_created("test", "t1");
         bridge.event_tx().send(event).unwrap();

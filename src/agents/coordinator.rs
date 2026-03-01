@@ -1447,6 +1447,7 @@ mod tests {
     use crate::domain::spec::Spec;
     use crate::domain::tick::Tick;
     use crate::domain::work::Work;
+    use crate::test_util::TestDir;
     use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -1555,8 +1556,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-empty-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-empty");
         let stores = test_stores(&dir);
 
         let agent_log = test_agent_logger(&dir);
@@ -1566,8 +1566,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_with_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-plan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-plan");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Test Plan".into(), "A test plan".into(), "Tests pass".into());
@@ -1583,8 +1582,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_excludes_completed() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-excl-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-excl");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Done Plan".into(), "desc".into(), "crit".into());
@@ -1599,8 +1597,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_with_works() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-wi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-wi");
         let stores = test_stores(&dir);
 
         let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
@@ -1614,8 +1611,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_with_bundles() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-bun-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-bun");
         let stores = test_stores(&dir);
 
         let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
@@ -1629,8 +1625,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_with_active_sessions() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-sess-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-sess");
         let stores = test_stores(&dir);
 
         let session = AgentSession::new(AgentType::Implementer, "model".into());
@@ -1648,8 +1643,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_with_locks() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-lock-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-lock");
         let stores = test_stores(&dir);
 
         let lock = Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into());
@@ -1663,8 +1657,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_excludes_terminal_sessions() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-termsess-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-termsess");
         let stores = test_stores(&dir);
 
         let mut session = AgentSession::new(AgentType::Implementer, "model".into());
@@ -1684,8 +1677,7 @@ mod tests {
 
     #[test]
     fn test_is_cancelled_false() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-canc1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-canc1");
         let stores = test_stores(&dir);
         let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
 
@@ -1703,8 +1695,7 @@ mod tests {
 
     #[test]
     fn test_is_cancelled_true() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-canc2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-canc2");
         let stores = test_stores(&dir);
         let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
 
@@ -1723,8 +1714,7 @@ mod tests {
 
     #[test]
     fn test_is_cancelled_missing() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-canc3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-canc3");
         let stores = test_stores(&dir);
         // Agent session not inserted into stores — should treat as cancelled
         let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
@@ -1736,8 +1726,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_iteration_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-itdone-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-itdone");
         let stores = test_stores(&dir);
 
         let agent = test_coordinator(
@@ -1761,8 +1750,7 @@ mod tests {
     #[tokio::test]
     async fn test_coordinator_iteration_need_help() {
         crate::prompts::init_defaults();
-        let dir = std::env::temp_dir().join(format!("loopr-coord-ithelp-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-ithelp");
         let stores = test_stores(&dir);
 
         let agent = test_coordinator(
@@ -1786,8 +1774,7 @@ mod tests {
     #[tokio::test]
     async fn test_coordinator_iteration_continue_with_stub_actions() {
         crate::prompts::init_defaults();
-        let dir = std::env::temp_dir().join(format!("loopr-coord-itstub-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-itstub");
         let stores = test_stores(&dir);
 
         let agent = test_coordinator(
@@ -1811,8 +1798,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_iteration_empty_actions_is_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-itempty-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-itempty");
         let stores = test_stores(&dir);
 
         let agent = test_coordinator(&dir, &stores, vec!["[]".to_string()], CoordinatorConfig::default());
@@ -1832,8 +1818,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_exits_on_need_help() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-runhelp-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-runhelp");
         let stores = test_stores(&dir);
 
         let mut agent = test_coordinator(
@@ -1859,8 +1844,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_exits_on_cancellation() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-runcanc-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-runcanc");
         let stores = test_stores(&dir);
 
         let mut agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
@@ -1965,8 +1949,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_comprehensive() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-comp-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-comp");
         let stores = test_stores(&dir);
 
         // Add plan
@@ -2003,8 +1986,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_iteration_persists() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-itpersist-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-itpersist");
         let stores = test_stores(&dir);
 
         let config = CoordinatorConfig {
@@ -2080,8 +2062,7 @@ mod tests {
     fn test_build_generation_footer_generation_needed() {
         crate::prompts::init_defaults();
         // No plans exist → generation is needed at Plan level
-        let dir = std::env::temp_dir().join(format!("loopr-coord-genftr-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-genftr");
         let stores = test_stores(&dir);
 
         let agent_log = test_agent_logger(&dir);
@@ -2099,8 +2080,7 @@ mod tests {
     fn test_build_generation_footer_validation_cap_reached() {
         use crate::domain::validation::{ValidationReport, ValidationVerdict};
 
-        let dir = std::env::temp_dir().join(format!("loopr-coord-valcap-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-valcap");
         let stores = test_stores_with_validator(&dir);
 
         // Create a Draft plan so determine_generation_level returns None
@@ -2137,8 +2117,7 @@ mod tests {
     fn test_build_generation_footer_draft_needs_regen() {
         use crate::domain::validation::{ValidationReport, ValidationVerdict};
 
-        let dir = std::env::temp_dir().join(format!("loopr-coord-regen-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-regen");
         let stores = test_stores_with_validator(&dir);
 
         // Create a Draft plan
@@ -2178,8 +2157,7 @@ mod tests {
 
     #[test]
     fn test_check_phase_completion_no_active_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-noplan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-noplan");
         let stores = test_stores(&dir);
 
         // No plans at all → should return empty
@@ -2192,8 +2170,7 @@ mod tests {
     #[tokio::test]
     async fn test_coordinator_iteration_filters_multi_level_actions() {
         crate::prompts::init_defaults();
-        let dir = std::env::temp_dir().join(format!("loopr-coord-multilevel-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-multilevel");
         let stores = test_stores(&dir);
 
         let agent = test_coordinator(
@@ -2225,8 +2202,7 @@ mod tests {
     #[tokio::test]
     async fn test_coordinator_iteration_empty_after_filter() {
         crate::prompts::init_defaults();
-        let dir = std::env::temp_dir().join(format!("loopr-coord-emptyfilter-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-emptyfilter");
         let stores = test_stores(&dir);
 
         let agent = test_coordinator(
@@ -2274,8 +2250,7 @@ mod tests {
 
     #[test]
     fn test_load_or_create_coordinator_state_no_goal() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-nogoal-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-nogoal");
         let stores = test_stores(&dir);
 
         let result = load_or_create_coordinator_state(&stores);
@@ -2284,8 +2259,7 @@ mod tests {
 
     #[test]
     fn test_load_or_create_coordinator_state_with_goal() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-goal-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-goal");
         let stores = test_stores(&dir);
 
         let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("Build app".to_string());
@@ -2299,8 +2273,7 @@ mod tests {
 
     #[test]
     fn test_load_or_create_coordinator_state_resumes_existing() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-resume-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-resume");
         let stores = test_stores(&dir);
 
         let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("Build app".to_string());
@@ -2326,8 +2299,7 @@ mod tests {
 
     #[test]
     fn test_check_fsm_transition_planning_to_activate() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-plan2act-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-plan2act");
         let stores = test_stores(&dir);
 
         // Create Plan → Spec → Phase hierarchy (all Active)
@@ -2354,8 +2326,7 @@ mod tests {
 
     #[test]
     fn test_check_fsm_transition_executing_to_phase_gate() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-exec2gate-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-exec2gate");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2378,8 +2349,7 @@ mod tests {
 
     #[test]
     fn test_check_fsm_transition_phase_gate_to_goal_complete() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-gate2done-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-gate2done");
         let stores = test_stores(&dir);
 
         // No more phases to activate
@@ -2393,8 +2363,7 @@ mod tests {
 
     #[test]
     fn test_persist_coordinator_state() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-persist-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-persist");
         let stores = test_stores(&dir);
 
         let mut state = CoordinatorState::new("goal-1".to_string());
@@ -2410,8 +2379,7 @@ mod tests {
 
     #[test]
     fn test_build_phase_status_no_phase() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-nophase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-nophase");
         let stores = test_stores(&dir);
 
         let coord_state = CoordinatorState::new("goal-1".to_string());
@@ -2421,8 +2389,7 @@ mod tests {
 
     #[test]
     fn test_build_phase_status_with_works() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-fsm-phstatus-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-fsm-phstatus");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Build Phase".into(), "desc".into(), 1);
@@ -2451,8 +2418,7 @@ mod tests {
 
     #[test]
     fn test_fsm_planning_stays_when_no_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-plannoplan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-plannoplan");
         let stores = test_stores(&dir);
 
         let coord_state = CoordinatorState::new("goal-1".to_string());
@@ -2462,8 +2428,7 @@ mod tests {
 
     #[test]
     fn test_fsm_planning_stays_when_plan_but_no_spec() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-plannospec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-plannospec");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("P".into(), "d".into(), "c".into());
@@ -2477,8 +2442,7 @@ mod tests {
 
     #[test]
     fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-plannophase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-plannophase");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("P".into(), "d".into(), "c".into());
@@ -2497,8 +2461,7 @@ mod tests {
 
     #[test]
     fn test_fsm_planning_stays_when_plan_is_draft() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-plandraft-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-plandraft");
         let stores = test_stores(&dir);
 
         // Plan exists but is Draft, not Active
@@ -2514,8 +2477,7 @@ mod tests {
 
     #[test]
     fn test_fsm_activate_phase_to_executing_when_wis_exist() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-act2exec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-act2exec");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2538,8 +2500,7 @@ mod tests {
 
     #[test]
     fn test_fsm_activate_phase_stays_when_no_phase_id() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-actnopid-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-actnopid");
         let stores = test_stores(&dir);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
@@ -2552,8 +2513,7 @@ mod tests {
 
     #[test]
     fn test_fsm_activate_phase_stays_when_no_wis() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-actnowi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-actnowi");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2573,8 +2533,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_stays_when_wis_in_progress() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-execwip-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-execwip");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2595,8 +2554,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-execmix-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-execmix");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2623,8 +2581,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_stays_when_partial_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-execpartial-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-execpartial");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2648,8 +2605,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_to_phase_gate_on_zero_wis() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-exec0wi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-exec0wi");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2671,8 +2627,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-exectimeout-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-exectimeout");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2703,8 +2658,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-execgoalto-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-execgoalto");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2734,8 +2688,7 @@ mod tests {
 
     #[test]
     fn test_fsm_executing_no_current_phase_stays() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-execnophase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-execnophase");
         let stores = test_stores(&dir);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
@@ -2750,8 +2703,7 @@ mod tests {
 
     #[test]
     fn test_fsm_phase_gate_to_activate_when_more_phases() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-gate2act-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-gate2act");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("P".into(), "d".into(), "c".into());
@@ -2789,8 +2741,7 @@ mod tests {
 
     #[test]
     fn test_fsm_goal_complete_returns_none() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-goalnone-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-goalnone");
         let stores = test_stores(&dir);
 
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
@@ -2804,8 +2755,7 @@ mod tests {
 
     #[test]
     fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-phtopri-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-phtopri");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2836,8 +2786,7 @@ mod tests {
 
     #[test]
     fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-goaltopri-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-goaltopri");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
@@ -2871,8 +2820,7 @@ mod tests {
 
     #[test]
     fn test_find_next_phase_skips_completed() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-nextphskip-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-nextphskip");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("P".into(), "d".into(), "c".into());
@@ -2907,8 +2855,7 @@ mod tests {
 
     #[test]
     fn test_find_next_phase_returns_none_all_completed() {
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-nextphnone-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-nextphnone");
         let stores = test_stores(&dir);
 
         // No phases at all
@@ -2923,8 +2870,7 @@ mod tests {
     fn test_fsm_transition_handler_complete_phase_on_activate() {
         // When transitioning PhaseGate → ActivatePhase, the previous phase
         // should be completed (added to phases_completed).
-        let dir = std::env::temp_dir().join(format!("loopr-fsm-thcomplete-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-fsm-thcomplete");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("P".into(), "d".into(), "c".into());
@@ -2970,8 +2916,7 @@ mod tests {
 
     #[test]
     fn test_find_pending_draft_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-draft-plan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-draft-plan");
         let stores = test_stores(&dir);
 
         // Insert a Draft plan
@@ -2988,8 +2933,7 @@ mod tests {
 
     #[test]
     fn test_find_pending_draft_none_when_active() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-draft-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-draft-none");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
@@ -3002,8 +2946,7 @@ mod tests {
     #[test]
     fn test_build_generation_footer_draft_validator_disabled_activates_directly() {
         crate::prompts::init_defaults();
-        let dir = std::env::temp_dir().join(format!("loopr-coord-draftfooter-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-draftfooter");
         let stores = test_stores(&dir); // validator is None (disabled)
 
         // Create an Active plan
@@ -3040,8 +2983,7 @@ mod tests {
     #[test]
     fn test_build_generation_footer_draft_validator_enabled_validates() {
         crate::prompts::init_defaults();
-        let dir = std::env::temp_dir().join(format!("loopr-coord-draftval-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-draftval");
         let stores = test_stores_with_validator(&dir);
 
         // Create an Active plan
@@ -3069,8 +3011,7 @@ mod tests {
 
     #[test]
     fn test_mark_phase_record_complete() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-phasecomplete-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-phasecomplete");
         let stores = test_stores(&dir);
 
         let mut phase = Phase::new("spec-1".into(), "Test Phase".into(), "desc".into(), 1);
@@ -3093,8 +3034,7 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_resolves_batch_0() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-batch0-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-batch0");
         let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
         let action = AgentAction::CreateWork {
@@ -3114,8 +3054,7 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_out_of_range() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-batchoor-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-batchoor");
         let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::CreateWork {
@@ -3136,8 +3075,7 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_no_batch_refs() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-batchnone-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-batchnone");
         let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::CreateWork {
@@ -3154,8 +3092,7 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_non_create_action() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-batchnoncreate-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-batchnoncreate");
         let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::Done { summary: "done".into() };
@@ -3167,8 +3104,7 @@ mod tests {
 
     #[test]
     fn test_prune_independent_deps_removes_disjoint() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-prune1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-prune1");
         let stores = test_stores(&dir);
         let agent_log = test_agent_logger(&dir);
 
@@ -3193,8 +3129,7 @@ mod tests {
 
     #[test]
     fn test_prune_independent_deps_keeps_overlapping() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-prune2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-prune2");
         let stores = test_stores(&dir);
         let agent_log = test_agent_logger(&dir);
 
@@ -3219,8 +3154,7 @@ mod tests {
 
     #[test]
     fn test_prune_independent_deps_keeps_external() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-prune3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-prune3");
         let stores = test_stores(&dir);
         let agent_log = test_agent_logger(&dir);
 
@@ -3249,8 +3183,7 @@ mod tests {
 
     #[test]
     fn test_prune_independent_deps_empty_batch() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-prune4-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-prune4");
         let stores = test_stores(&dir);
         let agent_log = test_agent_logger(&dir);
 
@@ -3262,8 +3195,7 @@ mod tests {
 
     #[test]
     fn test_build_phase_status_shows_dependencies() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-depstatus-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-depstatus");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
@@ -3290,8 +3222,7 @@ mod tests {
 
     #[test]
     fn test_build_phase_status_shows_blocked_deps() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-depblocked-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-depblocked");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
@@ -3348,8 +3279,7 @@ mod tests {
 
     #[test]
     fn test_build_phase_status_includes_failure_learnings() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-learnings-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-learnings");
         let stores = test_stores(&dir);
 
         let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
@@ -3398,8 +3328,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_includes_recently_merged_bundles() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-c2-merged-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-c2-merged");
         let stores = test_stores(&dir);
 
         // Create a WI in Integrated status (not Done)
@@ -3426,8 +3355,7 @@ mod tests {
 
     #[test]
     fn test_build_state_summary_excludes_merged_when_wi_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-c2-done-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-c2-done");
         let stores = test_stores(&dir);
 
         // Create a WI in Done status
@@ -3454,8 +3382,7 @@ mod tests {
 
     #[test]
     fn test_find_draft_scoped_to_active_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-l2-scope-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-l2-scope");
         let stores = test_stores(&dir);
 
         // Create an active plan
@@ -3479,8 +3406,7 @@ mod tests {
 
     #[test]
     fn test_find_draft_ignores_orphan_from_other_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-l2-orphan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-l2-orphan");
         let stores = test_stores(&dir);
 
         // Create an active plan
@@ -3511,8 +3437,7 @@ mod tests {
 
     #[test]
     fn test_find_draft_returns_none_when_no_drafts() {
-        let dir = std::env::temp_dir().join(format!("loopr-coord-l2-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-coord-l2-none");
         let stores = test_stores(&dir);
 
         let result = find_pending_draft_for_validation(&stores);

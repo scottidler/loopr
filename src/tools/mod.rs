@@ -214,6 +214,7 @@ impl ToolRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::TestDir;
 
     fn test_entries() -> Vec<ToolEntry> {
         vec![
@@ -427,8 +428,7 @@ mod tests {
 
     #[test]
     fn test_detect_js_project() {
-        let dir = std::env::temp_dir().join(format!("loopr-tool-js-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-tool-js");
         std::fs::write(dir.join("package.json"), "{}").unwrap();
 
         let runner = ToolRunner::detect_or_default(&dir, &[]);
@@ -447,8 +447,7 @@ mod tests {
 
     #[test]
     fn test_detect_python_project() {
-        let dir = std::env::temp_dir().join(format!("loopr-tool-py-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-tool-py");
         std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
 
         let runner = ToolRunner::detect_or_default(&dir, &[]);
@@ -464,8 +463,7 @@ mod tests {
 
     #[test]
     fn test_detect_rust_project_uses_config() {
-        let dir = std::env::temp_dir().join(format!("loopr-tool-rs-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-tool-rs");
         std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
 
         let configured = vec![ToolEntry {
@@ -486,8 +484,7 @@ mod tests {
 
     #[test]
     fn test_detect_no_markers_uses_config() {
-        let dir = std::env::temp_dir().join(format!("loopr-tool-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-tool-none");
 
         let configured = vec![ToolEntry {
             name: "make-test".into(),
@@ -507,8 +504,7 @@ mod tests {
 
     #[test]
     fn test_detect_priority_order_js_over_python() {
-        let dir = std::env::temp_dir().join(format!("loopr-tool-priority-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-tool-priority");
         // Both markers exist — package.json has higher priority
         std::fs::write(dir.join("package.json"), "{}").unwrap();
         std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();

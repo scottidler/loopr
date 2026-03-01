@@ -223,6 +223,7 @@ pub fn assemble_guidance(guidance: &AgentGuidance, role: Role, guidance_budget: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::TestDir;
 
     // =====================================================
     // generate_schema_doc: Coordinator
@@ -575,8 +576,7 @@ mod tests {
 
     #[test]
     fn test_load_optional_file_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-guidance-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-guidance");
         let file = dir.join("LOOPR.md");
         std::fs::write(&file, "   \n  ").unwrap();
         let result = load_optional_file(&file);
@@ -585,8 +585,7 @@ mod tests {
 
     #[test]
     fn test_load_optional_file_content() {
-        let dir = std::env::temp_dir().join(format!("loopr-guidance-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-guidance");
         let file = dir.join("LOOPR.md");
         std::fs::write(&file, "# Conventions\n- Use rspec").unwrap();
         let result = load_optional_file(&file);
@@ -599,8 +598,7 @@ mod tests {
 
     #[test]
     fn test_load_guidance_no_files() {
-        let dir = std::env::temp_dir().join(format!("loopr-guidance-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-guidance");
         let guidance = load_guidance(&dir);
         assert!(guidance.project_md.is_none());
         // global_md depends on whether ~/.config/loopr/LOOPR.md exists
@@ -609,8 +607,7 @@ mod tests {
 
     #[test]
     fn test_load_guidance_with_project_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-guidance-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-guidance");
         std::fs::write(dir.join("LOOPR.md"), "# Project\n- Use Jest").unwrap();
 
         let guidance = load_guidance(&dir);

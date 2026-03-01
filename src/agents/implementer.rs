@@ -507,6 +507,7 @@ mod tests {
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
     use crate::domain::work::Work;
+    use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
     use std::path::Path;
@@ -646,8 +647,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_direct_json() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse1");
         let agent_log = test_agent_logger(&dir);
         let json = r#"[{"action": "done", "summary": "All done"}]"#;
         let actions = parse_actions(json, &agent_log).unwrap();
@@ -657,8 +657,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_wrapped_in_code_block() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse2");
         let agent_log = test_agent_logger(&dir);
         let response = "Here are the actions:\n```json\n[{\"action\": \"done\", \"summary\": \"done\"}]\n```";
         let actions = parse_actions(response, &agent_log).unwrap();
@@ -667,8 +666,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_multiple() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse3");
         let agent_log = test_agent_logger(&dir);
         let json = r#"[
             {"action": "write_file", "path": "src/foo.rs", "content": "fn foo() {}"},
@@ -681,8 +679,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_invalid() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse4-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse4");
         let agent_log = test_agent_logger(&dir);
         let bad = "This is not JSON at all";
         assert!(parse_actions(bad, &agent_log).is_err());
@@ -690,8 +687,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_empty_array() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse5-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse5");
         let agent_log = test_agent_logger(&dir);
         let json = "[]";
         let actions = parse_actions(json, &agent_log).unwrap();
@@ -702,8 +698,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_for_implementer() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-ctx-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-ctx");
         let stores = setup_stores(&dir);
         let tool_runner = ToolRunner::new(&[ToolEntry {
             name: "test".into(),
@@ -732,8 +727,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_missing_work() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-miss-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-miss");
         let stores = setup_stores(&dir);
 
         let result = ContextBuilder::new(&stores, Role::Implementer).load_work_hierarchy("nonexistent");
@@ -745,8 +739,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-iter-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-iter");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#));
@@ -758,8 +751,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_need_help() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-help-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-help");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#));
@@ -771,8 +763,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_continue_with_actions() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-cont-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-cont");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new(
@@ -791,8 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_llm_failure() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-fail-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-fail");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm: Box<dyn LlmClient> = Box::new(FailingLlm);
@@ -804,8 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_bad_response() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-bad-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-bad");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new("This is not valid JSON"));
@@ -817,8 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_empty_actions() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-empty-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-empty");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new("[]"));
@@ -833,8 +821,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_implementer_completes_on_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-run-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-run");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "Complete"}]"#));
@@ -847,8 +834,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_implementer_max_iterations() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-max-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-max");
         let stores = setup_stores(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
@@ -867,8 +853,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_implementer_need_help_stops() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-helpstop-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-helpstop");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new(r#"[{"action": "need_help", "reason": "Stuck"}]"#));
@@ -897,8 +882,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain1");
         let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         drop(tx);
@@ -908,8 +892,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_finds_tick() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain2");
         let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::tick_published("tick-42", "abc123"));
@@ -919,8 +902,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_returns_latest() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain3");
         let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::tick_published("tick-1", "aaa"));
@@ -932,8 +914,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_ignores_other_events() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain4-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain4");
         let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
@@ -950,8 +931,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_mixed_events() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain5-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain5");
         let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
@@ -963,8 +943,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_with_staleness() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-stale2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-stale2");
         let stores = setup_stores(&dir);
         let wi_id = get_work_id(&stores);
 
@@ -980,8 +959,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_iteration_with_staleness_note() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-stale-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-stale");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
         let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "Rebased and done"}]"#));
@@ -994,8 +972,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_implementer_detects_staleness() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-staleness-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-staleness");
         let stores = setup_stores(&dir);
         let wi_id = get_work_id(&stores);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
@@ -1055,8 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_action_results_accumulate() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-accum-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-accum");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
 
@@ -1083,8 +1059,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_skips_malformed_in_fallback() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse6-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse6");
         let agent_log = test_agent_logger(&dir);
         // Array with one valid and one malformed action — fallback should skip the bad one
         let json = r#"[
@@ -1098,8 +1073,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_normalizes_type_to_action() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse7-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse7");
         let agent_log = test_agent_logger(&dir);
         // LLMs sometimes use "type" instead of "action" as the discriminant key
         let json = r#"[{"type": "read_file", "path": "src/main.rs"}]"#;
@@ -1110,8 +1084,7 @@ mod tests {
 
     #[test]
     fn test_parse_actions_normalizes_type_in_prose() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parse8-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parse8");
         let agent_log = test_agent_logger(&dir);
         let response = r#"I'll read the file first.
 
@@ -1125,8 +1098,7 @@ mod tests {
 
     #[test]
     fn test_build_implementer_summary_empty_locks_and_siblings() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-emptysummary-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-emptysummary");
         let stores = setup_stores(&dir);
         let wi_id = get_work_id(&stores);
 
@@ -1139,8 +1111,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_iteration_done_stops_remaining_actions() {
         // When a Done action appears mid-list, subsequent actions should not execute
-        let dir = std::env::temp_dir().join(format!("loopr-impl-donestop-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-donestop");
         let stores = setup_stores(&dir);
         let config = AgentRoleConfig::default_implementer();
 
@@ -1161,8 +1132,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_closed_channel() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain6-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain6");
         let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
         // Send a tick, then close
@@ -1175,8 +1145,7 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_lagged_channel() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-drain7-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-drain7");
         let agent_log = test_agent_logger(&dir);
         // Create a very small buffer so sending more messages than capacity causes lag
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(2);
@@ -1217,8 +1186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_implementer_session_iteration_persisted() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-persist-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-persist");
         let stores = setup_stores(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 2;
@@ -1268,8 +1236,7 @@ mod tests {
         use crate::domain::coordinator_goal::CoordinatorGoal;
         use std::sync::Mutex as StdMutex2;
 
-        let dir = std::env::temp_dir().join(format!("loopr-impl-goal-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-goal");
         let stores = setup_stores(&dir);
 
         // Set a coordinator goal
@@ -1341,8 +1308,7 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join(format!("loopr-impl-parseretry-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-parseretry");
         let stores = setup_stores(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
@@ -1376,8 +1342,7 @@ mod tests {
     #[test]
     fn test_build_implementer_summary_with_locks_and_siblings() {
         use crate::domain::lock::{Lock, LockStatus};
-        let dir = std::env::temp_dir().join(format!("loopr-impl-fullsummary-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-fullsummary");
         let stores = setup_stores(&dir);
         let wi_id = get_work_id(&stores);
 
@@ -1438,8 +1403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_budget_exhaustion_prompt_injected_at_penultimate_iteration() {
-        let dir = std::env::temp_dir().join(format!("loopr-impl-budget-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-budget");
         let stores = setup_stores(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3; // Budget warning should appear at iterations 2 and 3
@@ -1469,8 +1433,7 @@ mod tests {
     #[tokio::test]
     async fn test_force_propose_claims_content() {
         // Verify the force-propose uses the expected claims text
-        let dir = std::env::temp_dir().join(format!("loopr-impl-forceclaims-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-forceclaims");
         let stores = setup_stores(&dir);
         let wi_id = get_work_id(&stores);
         let mut config = AgentRoleConfig::default_implementer();
@@ -1518,8 +1481,7 @@ mod tests {
     #[tokio::test]
     async fn test_has_proposed_true_skips_force_propose() {
         // If the LLM proposes a bundle within the loop, force-propose should not trigger
-        let dir = std::env::temp_dir().join(format!("loopr-impl-noforceprop-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-impl-noforceprop");
         let stores = setup_stores(&dir);
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 2;

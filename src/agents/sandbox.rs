@@ -99,11 +99,10 @@ fn canonicalize_nonexistent(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::TestDir;
 
-    fn make_test_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("loopr-sandbox-{label}-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn make_test_dir(label: &str) -> TestDir {
+        TestDir::new(&format!("loopr-sandbox-{label}"))
     }
 
     // --- Layer 1: Lexical checks ---

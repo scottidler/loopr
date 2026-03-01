@@ -18,6 +18,7 @@ mod tests {
     use crate::domain::learning::{Learning, LearningScope};
     use crate::domain::tick::TickStatus;
     use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
+    use crate::test_util::TestDir;
     use crate::worktree::manager::WorktreeManager;
 
     use std::path::PathBuf;
@@ -692,8 +693,7 @@ mod tests {
             .insert(session.id.clone(), session);
 
         // Build state summary (used by Coordinator to understand current state)
-        let _agent_dir = std::env::temp_dir().join(format!("loopr-intg-logger-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&_agent_dir).unwrap();
+        let _agent_dir = TestDir::new("loopr-intg-logger");
         let agent_log = test_agent_logger(&_agent_dir);
         let summary = crate::agents::coordinator::build_state_summary(&stores, &agent_log);
         assert!(summary.contains("Test Plan"), "summary should include plan");
@@ -776,8 +776,7 @@ mod tests {
         use std::path::Path;
 
         let repo_root = Path::new("/tmp/test-repo");
-        let _agent_dir = std::env::temp_dir().join(format!("loopr-intg-logger-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&_agent_dir).unwrap();
+        let _agent_dir = TestDir::new("loopr-intg-logger");
         let agent_log = test_agent_logger(&_agent_dir);
 
         // Valid relative path
@@ -1399,12 +1398,11 @@ mod tests {
         use crate::agents::executor::{ActionResult, execute_action};
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join(format!("loopr-e2e-createplan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-e2e-createplan");
 
         let stores = test_stores();
         let tx = test_event_tx();
-        let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
 
         let action = AgentAction::CreatePlan {
@@ -1437,12 +1435,11 @@ mod tests {
         use crate::agents::executor::{ActionResult, execute_action};
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join(format!("loopr-e2e-hierarchy-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-e2e-hierarchy");
 
         let stores = test_stores();
         let tx = test_event_tx();
-        let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
         let ctx = test_agent_context(&stores, bridge, tx, agent_log);
@@ -1552,8 +1549,7 @@ mod tests {
         use crate::domain::bundle::BundleStatus;
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join(format!("loopr-e2e-triage-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-e2e-triage");
 
         let stores = test_stores();
         let tx = test_event_tx();
@@ -1873,8 +1869,7 @@ mod tests {
 
     #[test]
     fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
-        let dir = std::env::temp_dir().join(format!("loopr-e2e-full-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-e2e-full");
 
         // Initialize a real git repo so tick publish can get HEAD sha
         std::process::Command::new("git")
@@ -1890,7 +1885,7 @@ mod tests {
 
         let stores = test_stores();
         let tx = test_event_tx();
-        let wm = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
             ..Default::default()
@@ -2230,12 +2225,11 @@ mod tests {
         use crate::agents::executor::{ActionResult, execute_action};
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let dir = std::env::temp_dir().join(format!("loopr-e2e-badparent-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-e2e-badparent");
 
         let stores = test_stores();
         let tx = test_event_tx();
-        let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
+        let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
         let ctx = test_agent_context(&stores, bridge, tx, agent_log);
@@ -2271,8 +2265,7 @@ mod tests {
         use async_trait::async_trait;
         use eyre::Result;
 
-        let dir = std::env::temp_dir().join(format!("loopr-e2e-pipeline-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-e2e-pipeline");
 
         // Init git repo so worktree code doesn't fail
         std::process::Command::new("git")
@@ -2288,7 +2281,7 @@ mod tests {
 
         // Build stores with repo_path set BEFORE wrapping in Arc
         let mut raw_stores = Stores::new();
-        raw_stores.config.project.repo_path = dir.clone();
+        raw_stores.config.project.repo_path = dir.to_path_buf();
         let stores = Arc::new(raw_stores);
 
         let tx = test_event_tx();
@@ -2319,7 +2312,7 @@ mod tests {
         assert_eq!(wi_resp["status"].as_str().unwrap(), "Ready");
 
         // Execute AssignAgent — should auto-transition Ready→InProgress
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, stores.config.clone());
 
         let assign_action = crate::agents::AgentAction::AssignAgent {
@@ -2377,7 +2370,7 @@ mod tests {
         let impl_bridge = crate::agents::bridge::AgentIpcBridge::new(
             stores.clone(),
             tx.clone(),
-            WorktreeManager::new(dir.clone(), dir.join(".worktrees")),
+            WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees")),
             stores.config.clone(),
         );
         let ctx = crate::agents::AgentContext {
@@ -2388,7 +2381,7 @@ mod tests {
             tool_runner: stores.tool_runner.clone(),
             log: agent_log,
         };
-        let agent = implementer::ImplementerAgent::new(ctx, llm, config, wi_id.clone(), dir.clone());
+        let agent = implementer::ImplementerAgent::new(ctx, llm, config, wi_id.clone(), dir.to_path_buf());
 
         let outcome = agent
             .run_iteration(1, None, &mut crate::agents::lifeguard::Lifeguard::new())

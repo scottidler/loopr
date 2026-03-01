@@ -1157,6 +1157,7 @@ fn persist_session(stores: &Stores, session: &AgentSession) {
 mod tests {
     use super::*;
     use crate::config::{Config, ProjectConfig, ToolEntry};
+    use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
@@ -1293,8 +1294,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transition_action_uses_correct_param() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-transparam-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-transparam");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -1321,8 +1321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assign_agent_auto_transitions_draft() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-autotrans-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-autotrans");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -1363,8 +1362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_run_tool() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-test-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-test");
 
         let entries = vec![ToolEntry {
             name: "echo-test".to_string(),
@@ -1390,8 +1388,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_write_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-write-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-write");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
@@ -1411,8 +1408,7 @@ mod tests {
     async fn test_write_file_lock_strict_blocks() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
-        let dir = std::env::temp_dir().join(format!("loopr-exec-lockstrict-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-lockstrict");
 
         let stores = test_stores(&dir);
         let config = Config {
@@ -1446,8 +1442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_lock_advisory_allows() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-lockadvisory-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-lockadvisory");
 
         let stores = test_stores(&dir);
         // Default config has LockAdvisory
@@ -1471,8 +1466,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_read_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-read-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-read");
         std::fs::write(dir.join("read-me.txt"), "file content").unwrap();
 
         let stores = test_stores(&dir);
@@ -1491,8 +1485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-done-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-done");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
@@ -1510,8 +1503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_need_help() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-help-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-help");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
@@ -1529,8 +1521,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_unknown_tool() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-unk-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-unk");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
@@ -1545,8 +1536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_acquire_lock() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-acqlock-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-acqlock");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -1566,8 +1556,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_acquire_lock_conflict() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-lockconf-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-lockconf");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -1599,8 +1588,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_release_lock() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-rellock-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-rellock");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -1631,8 +1619,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_action_acquire_after_release() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-reacq-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-reacq");
 
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -1666,12 +1653,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_agent_task_lifecycle() {
-        let dir = std::env::temp_dir().join(format!("loopr-agent-task-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-agent-task");
 
         let stores = test_stores(&dir);
         let (event_tx, mut event_rx) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
         // Create an agent session
         let session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
@@ -1712,8 +1698,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-createplan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-createplan");
         let stores = test_stores(&dir);
 
         let action = AgentAction::CreatePlan {
@@ -1734,8 +1719,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_spec() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-createspec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-createspec");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -1757,8 +1741,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_phase() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-createphase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-createphase");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -1781,8 +1764,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_work() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-createwi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-createwi");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -1816,8 +1798,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_commit_success() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-commit-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-commit");
 
         // Initialize a git repo
         tokio::process::Command::new("git")
@@ -1858,8 +1839,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_commit_specific_paths() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-commitpaths-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-commitpaths");
 
         // Initialize git repo
         tokio::process::Command::new("git")
@@ -1896,8 +1876,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_propose_bundle() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-propbundle-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-propbundle");
 
         // Initialize git repo
         tokio::process::Command::new("git")
@@ -1951,8 +1930,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_propose_bundle_no_work() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-propnowi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-propnowi");
 
         // Initialize git repo
         tokio::process::Command::new("git")
@@ -2003,8 +1981,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_learning_with_all_fields() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-learning-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-learning");
         let stores = test_stores(&dir);
 
         let action = AgentAction::CreateLearning {
@@ -2025,8 +2002,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_learning_minimal() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-learnmin-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-learnmin");
         let stores = test_stores(&dir);
 
         let action = AgentAction::CreateLearning {
@@ -2043,8 +2019,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_spawn_researcher() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-spawnres-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-spawnres");
         let stores = test_stores(&dir);
 
         let action = AgentAction::SpawnResearcher {
@@ -2064,8 +2039,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_validate_document() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-valdoc-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-valdoc");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2089,8 +2063,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_triage_bundle() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-triage-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-triage");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2121,8 +2094,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_accept_bundle() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-accept-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-accept");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2162,8 +2134,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_path_escape() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-escape-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-escape");
         let stores = test_stores(&dir);
 
         let action = AgentAction::WriteFile {
@@ -2178,8 +2149,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_not_found() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-readnf-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-readnf");
         let stores = test_stores(&dir);
 
         let action = AgentAction::ReadFile {
@@ -2192,8 +2162,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transition_role_inference() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-roleinfer-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-roleinfer");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2218,8 +2187,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_creates_parent_dirs() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-writedirs-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-writedirs");
         let stores = test_stores(&dir);
 
         let action = AgentAction::WriteFile {
@@ -2235,8 +2203,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_code_action() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-searchcode-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-searchcode");
         std::fs::write(dir.join("example.rs"), "fn main() { println!(\"hello\"); }").unwrap();
         let stores = test_stores(&dir);
 
@@ -2257,8 +2224,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_action() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-listdir-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-listdir");
         std::fs::write(dir.join("file1.txt"), "a").unwrap();
         std::fs::write(dir.join("file2.txt"), "b").unwrap();
         let stores = test_stores(&dir);
@@ -2280,8 +2246,7 @@ mod tests {
         crate::prompts::init_defaults();
         // Coordinator restart loop: will fail due to no API key. Cancel the session during restart
         // to exercise the cancellation-during-restart path.
-        let dir = std::env::temp_dir().join(format!("loopr-exec-coordrestart-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-coordrestart");
 
         let config = Config {
             project: ProjectConfig {
@@ -2305,7 +2270,7 @@ mod tests {
         let stores = Arc::new(custom_stores);
 
         let (event_tx, _rx) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
         let session = AgentSession::new(AgentType::Coordinator, "test-model".to_string());
         let session_id = session.id.clone();
@@ -2347,12 +2312,11 @@ mod tests {
     async fn test_run_agent_task_researcher_flow() {
         crate::prompts::init_defaults();
         // Researcher flow — pre-cancel the session so it exits quickly from the loop
-        let dir = std::env::temp_dir().join(format!("loopr-exec-resflow-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-resflow");
 
         let stores = test_stores(&dir);
         let (event_tx, _rx) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
         let mut session = AgentSession::new(AgentType::Researcher, "test-model".to_string());
         session.target_id = Some("plan-1".to_string());
@@ -2393,8 +2357,7 @@ mod tests {
     async fn test_run_agent_task_integrator_flow() {
         crate::prompts::init_defaults();
         // Integrator flow — pre-cancel the session so it exits quickly from the loop
-        let dir = std::env::temp_dir().join(format!("loopr-exec-integflow-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-integflow");
 
         // Use custom config with interval_secs=0 so the integrator loop doesn't block
         let config = Config {
@@ -2416,7 +2379,7 @@ mod tests {
         let stores = Arc::new(custom_stores);
 
         let (event_tx, _rx) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
         let session = AgentSession::new(AgentType::Integrator, "test-model".to_string());
         let session_id = session.id.clone();
@@ -2455,8 +2418,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_agent_task_worktree_cleanup() {
         // Implementer with work_id should attempt worktree creation and cleanup
-        let dir = std::env::temp_dir().join(format!("loopr-exec-wtcleanup-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-wtcleanup");
 
         // Initialize git repo (needed for worktree operations)
         tokio::process::Command::new("git")
@@ -2493,7 +2455,7 @@ mod tests {
 
         let stores = test_stores(&dir);
         let (event_tx, _rx) = broadcast::channel(16);
-        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
         let mut session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
         session.work_id = Some("wi-test-123".to_string());
@@ -2522,8 +2484,7 @@ mod tests {
     #[tokio::test]
     async fn test_transition_role_inference_all_collections() {
         // Test normalize_collection with all collection variants
-        let dir = std::env::temp_dir().join(format!("loopr-exec-transall-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-transall");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2566,8 +2527,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transition_assignee_validation_for_inprogress() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-assignee-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-assignee");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2588,8 +2548,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_plan_error_path() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-plnerr-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-plnerr");
         let stores = test_stores(&dir);
 
         // Create a first plan (Draft)
@@ -2618,8 +2577,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_spec_error_path() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-specerr-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-specerr");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2651,8 +2609,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_phase_error_path() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-phaseerr-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-phaseerr");
         let stores = test_stores(&dir);
 
         // Use a nonexistent spec_id — should get error from bridge
@@ -2673,8 +2630,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_create_work_error_path() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-wierr-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-wierr");
         let stores = test_stores(&dir);
 
         // Use a nonexistent phase_id — should get error from bridge
@@ -2698,8 +2654,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_triage_bundle_full() {
         // Test triage on a bundle that's not in the right state (error path)
-        let dir = std::env::temp_dir().join(format!("loopr-exec-triagefull-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-triagefull");
         let stores = test_stores(&dir);
 
         // Triage a nonexistent bundle
@@ -2718,8 +2673,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_accept_bundle_full() {
         // Test accept on a bundle that's not in the right state (error path)
-        let dir = std::env::temp_dir().join(format!("loopr-exec-acceptfull-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-acceptfull");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2750,8 +2704,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_spawn_researcher_via_action() {
         // Test SpawnResearcher action (exercises the spawn path)
-        let dir = std::env::temp_dir().join(format!("loopr-exec-spawnres2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-spawnres2");
         let stores = test_stores(&dir);
 
         let action = AgentAction::SpawnResearcher {
@@ -2772,8 +2725,7 @@ mod tests {
     #[tokio::test]
     async fn test_lock_conflict_policy_ignore() {
         // Under LockAdvisory (default), writes to locked paths should succeed
-        let dir = std::env::temp_dir().join(format!("loopr-exec-lockign-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-lockign");
         let stores = test_stores(&dir);
         // Default config: LockAdvisory
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -2802,8 +2754,7 @@ mod tests {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
         // Under LockStrict, writes to locked paths should return ActionError
-        let dir = std::env::temp_dir().join(format!("loopr-exec-lockwarn-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-lockwarn");
         let stores = test_stores(&dir);
         let config = Config {
             strategy: StrategyConfig {
@@ -2835,8 +2786,7 @@ mod tests {
 
     #[test]
     fn test_resolve_worktree_base_no_ticks() {
-        let dir = std::env::temp_dir().join(format!("loopr-wt-base-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-wt-base-none");
         let stores = test_stores(&dir);
         let base = resolve_worktree_base(&stores);
         assert_eq!(base, "HEAD");
@@ -2844,8 +2794,7 @@ mod tests {
 
     #[test]
     fn test_resolve_worktree_base_no_published_ticks() {
-        let dir = std::env::temp_dir().join(format!("loopr-wt-base-nopub-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-wt-base-nopub");
         let stores = test_stores(&dir);
         {
             let mut ticks = stores.ticks.write().unwrap();
@@ -2860,8 +2809,7 @@ mod tests {
 
     #[test]
     fn test_resolve_worktree_base_picks_latest_published() {
-        let dir = std::env::temp_dir().join(format!("loopr-wt-base-latest-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-wt-base-latest");
         let stores = test_stores(&dir);
         {
             let mut ticks = stores.ticks.write().unwrap();
@@ -2887,8 +2835,7 @@ mod tests {
 
     #[test]
     fn test_resolve_worktree_base_published_without_sha_falls_back() {
-        let dir = std::env::temp_dir().join(format!("loopr-wt-base-nosha-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-wt-base-nosha");
         let stores = test_stores(&dir);
         {
             let mut ticks = stores.ticks.write().unwrap();
@@ -2903,8 +2850,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assign_agent_dependency_not_met() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-depnotmet-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-depnotmet");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -2953,8 +2899,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_assign_agent_dependency_met() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-depmet-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-depmet");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -3016,8 +2961,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_work_with_dependencies() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-wideps-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-wideps");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -3045,8 +2989,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_work_duplicate_rejected() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-widup-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-widup");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -3083,8 +3026,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_work_duplicate_case_insensitive() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-widupcase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-widupcase");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -3122,8 +3064,7 @@ mod tests {
 
     #[test]
     fn test_resolve_latest_published_tick_id_none_at_bootstrap() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-tickid-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-tickid-none");
 
         let stores = test_stores(&dir);
 
@@ -3134,8 +3075,7 @@ mod tests {
 
     #[test]
     fn test_resolve_latest_published_tick_id_returns_published() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-tickid-pub-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-tickid-pub");
 
         let stores = test_stores(&dir);
 
@@ -3159,8 +3099,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_propose_bundle_includes_base_tick_id() {
-        let dir = std::env::temp_dir().join(format!("loopr-exec-propbase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-propbase");
 
         // Initialize git repo
         tokio::process::Command::new("git")
@@ -3229,8 +3168,7 @@ mod tests {
     #[tokio::test]
     async fn test_propose_bundle_uses_deterministic_branch_name() {
         // F2: ProposeBundle should use format!("agent/{}", work_id) not git rev-parse
-        let dir = std::env::temp_dir().join(format!("loopr-exec-f2branch-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-exec-f2branch");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
@@ -3295,8 +3233,7 @@ mod tests {
 
     #[test]
     fn test_handback_succeeded_returns_in_review() {
-        let dir = std::env::temp_dir().join(format!("loopr-handback-ok-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-handback-ok");
         let stores = test_stores(&dir);
         let result = determine_work_handback(&stores, "wi-1", "sess-1", true);
         assert_eq!(result, Some("InReview"));
@@ -3304,8 +3241,7 @@ mod tests {
 
     #[test]
     fn test_handback_failed_no_bundles_returns_blocked() {
-        let dir = std::env::temp_dir().join(format!("loopr-handback-nobd-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-handback-nobd");
         let stores = test_stores(&dir);
         let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
         assert_eq!(result, Some("Blocked"));
@@ -3313,8 +3249,7 @@ mod tests {
 
     #[test]
     fn test_handback_failed_with_active_bundle_returns_in_review() {
-        let dir = std::env::temp_dir().join(format!("loopr-handback-actbd-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-handback-actbd");
         let stores = test_stores(&dir);
 
         // Insert an Accepted bundle for the work
@@ -3333,8 +3268,7 @@ mod tests {
 
     #[test]
     fn test_handback_failed_all_rejected_bundles_returns_blocked() {
-        let dir = std::env::temp_dir().join(format!("loopr-handback-rejbd-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-handback-rejbd");
         let stores = test_stores(&dir);
 
         // Insert a Rejected bundle for the work
@@ -3353,8 +3287,7 @@ mod tests {
 
     #[test]
     fn test_handback_failed_sibling_active_returns_none() {
-        let dir = std::env::temp_dir().join(format!("loopr-handback-sib-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-handback-sib");
         let stores = test_stores(&dir);
 
         // Insert a non-terminal sibling implementer session for the same work_id
@@ -3373,8 +3306,7 @@ mod tests {
 
     #[test]
     fn test_handback_failed_sibling_terminal_checks_bundles() {
-        let dir = std::env::temp_dir().join(format!("loopr-handback-sibterm-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-handback-sibterm");
         let stores = test_stores(&dir);
 
         // Insert a terminal sibling implementer session — should NOT count as active

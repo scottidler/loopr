@@ -245,6 +245,7 @@ mod tests {
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
     use crate::domain::work::Work;
+    use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
@@ -447,8 +448,7 @@ mod tests {
 
     #[test]
     fn test_parse_review_result_direct_json() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-parse1-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-parse1");
         let agent_log = test_agent_logger(&dir);
         let json = r#"{"verdict": "approve", "issues": [], "summary": "All good"}"#;
         let result = parse_review_result(json, &agent_log).unwrap();
@@ -457,8 +457,7 @@ mod tests {
 
     #[test]
     fn test_parse_review_result_wrapped_in_code_block() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-parse2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-parse2");
         let agent_log = test_agent_logger(&dir);
         let response =
             "Here is my review:\n```json\n{\"verdict\": \"approve\", \"issues\": [], \"summary\": \"LGTM\"}\n```";
@@ -469,8 +468,7 @@ mod tests {
 
     #[test]
     fn test_parse_review_result_invalid() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-parse3-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-parse3");
         let agent_log = test_agent_logger(&dir);
         let bad = "This is not JSON at all";
         assert!(parse_review_result(bad, &agent_log).is_err());
@@ -478,8 +476,7 @@ mod tests {
 
     #[test]
     fn test_parse_review_result_wrong_schema() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-parse4-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-parse4");
         let agent_log = test_agent_logger(&dir);
         let json = r#"{"wrong": "schema"}"#;
         assert!(parse_review_result(json, &agent_log).is_err());
@@ -489,8 +486,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_for_reviewer() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-ctx-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-ctx");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         let ctx = ContextBuilder::new(&stores, Role::Reviewer)
@@ -510,8 +506,7 @@ mod tests {
 
     #[test]
     fn test_context_builder_missing_bundle() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-miss-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-miss");
         let (stores, _) = setup_stores_with_bundle(&dir);
 
         let result = ContextBuilder::new(&stores, Role::Reviewer).load_bundle_hierarchy("nonexistent");
@@ -523,8 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_reviewer_approve() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-approve-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-approve");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         let llm = Box::new(MockReviewLlm::new(
@@ -542,8 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_reviewer_reject() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-reject-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-reject");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         let llm = Box::new(MockReviewLlm::new(
@@ -560,8 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_reviewer_request_changes() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-changes-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-changes");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         let llm = Box::new(MockReviewLlm::new(
@@ -579,8 +571,7 @@ mod tests {
 
     #[test]
     fn test_reviewer_missing_bundle_id() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-noid-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-noid");
         let (stores, _) = setup_stores_with_bundle(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
@@ -604,8 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_reviewer_llm_failure() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-fail-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-fail");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(FailingReviewLlm);
@@ -616,8 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_reviewer_bad_response() {
-        let dir = std::env::temp_dir().join(format!("loopr-rev-bad-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-rev-bad");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         let llm = Box::new(MockReviewLlm::new("Not valid JSON"));

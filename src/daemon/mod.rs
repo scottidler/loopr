@@ -347,28 +347,28 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::ipc::client::IpcClient;
+    use crate::test_util::TestDir;
     use serde_json::json;
 
-    fn test_config() -> Config {
-        let id = crate::id::generate_id();
-        let dir = std::env::temp_dir().join(format!("loopr-daemon-test-{id}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        Config {
+    fn test_config() -> (TestDir, Config) {
+        let dir = TestDir::new("loopr-daemon-test");
+        let config = Config {
             daemon: crate::config::DaemonConfig {
                 socket_path: dir.join("test.sock"),
                 pid_path: dir.join("test.pid"),
             },
             project: crate::config::ProjectConfig {
-                repo_path: dir.clone(),
+                repo_path: dir.to_path_buf(),
                 ..crate::config::ProjectConfig::default()
             },
             ..Config::default()
-        }
+        };
+        (dir, config)
     }
 
     #[tokio::test]
     async fn test_write_and_remove_pid_file() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
 
@@ -383,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_handshake() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
         let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
@@ -411,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_pid_file_lifecycle() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let pid_path = config.daemon.pid_path.clone();
         let socket_path = config.daemon.socket_path.clone();
         let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
@@ -433,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_multiple_clients() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
         let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
@@ -458,7 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_status() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
         let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
 
@@ -482,7 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_one_daemon_stale_pid_cleanup() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
 
@@ -500,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_one_daemon_live_daemon_errors() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
 
@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_one_daemon_stale_socket_cleanup() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
 
@@ -535,7 +535,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_version_file() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
         let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
 
@@ -603,7 +603,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_ipc_shutdown() {
-        let config = test_config();
+        let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
         let pid_path = config.daemon.pid_path.clone();
         let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();

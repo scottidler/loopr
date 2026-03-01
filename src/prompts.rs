@@ -103,6 +103,7 @@ pub fn store() -> &'static PromptStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::TestDir;
     use std::fs;
 
     #[test]
@@ -165,11 +166,10 @@ mod tests {
     fn test_override_from_temp_dir() {
         // This test uses a fresh OnceLock via a subprocess-like pattern.
         // Since OnceLock can only be set once per process, we test the load closure directly.
-        let dir = std::env::temp_dir().join(format!("loopr-pmt-override-{}", crate::id::generate_id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-pmt-override");
         fs::write(dir.join("coordinator.pmt"), "CUSTOM COORDINATOR PROMPT").unwrap();
 
-        let overrides_dir = Some(dir.clone());
+        let overrides_dir = Some(dir.to_path_buf());
         let load = |filename: &str, default: &str| -> String {
             if let Some(ref dir) = overrides_dir {
                 let path = dir.join(filename);
@@ -189,11 +189,10 @@ mod tests {
 
     #[test]
     fn test_empty_override_falls_back() {
-        let dir = std::env::temp_dir().join(format!("loopr-pmt-empty-{}", crate::id::generate_id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-pmt-empty");
         fs::write(dir.join("coordinator.pmt"), "   \n  ").unwrap();
 
-        let overrides_dir = Some(dir.clone());
+        let overrides_dir = Some(dir.to_path_buf());
         let load = |filename: &str, default: &str| -> String {
             if let Some(ref dir) = overrides_dir {
                 let path = dir.join(filename);

@@ -724,6 +724,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, ProjectConfig};
     use crate::daemon::context::Stores;
+    use crate::test_util::TestDir;
     use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
 
@@ -958,16 +959,14 @@ mod tests {
 
     #[test]
     fn test_determine_level_plan_when_empty() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-empty-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-empty");
         let stores = test_stores(&dir);
         assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Plan));
     }
 
     #[test]
     fn test_determine_level_none_when_draft_plan_exists() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-draftplan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-draftplan");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -979,8 +978,7 @@ mod tests {
 
     #[test]
     fn test_determine_level_spec_when_active_plan_no_specs() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-needspec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-needspec");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -992,8 +990,7 @@ mod tests {
 
     #[test]
     fn test_determine_level_none_when_draft_spec_exists() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-draftspec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-draftspec");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1009,8 +1006,7 @@ mod tests {
 
     #[test]
     fn test_determine_level_phase_when_active_spec_no_phases() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-needphase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-needphase");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1027,8 +1023,7 @@ mod tests {
 
     #[test]
     fn test_determine_level_work_when_active_phase_no_wis() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-needwi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-needwi");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1050,8 +1045,7 @@ mod tests {
 
     #[test]
     fn test_determine_level_none_when_all_levels_populated() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-full-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-full");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1079,16 +1073,14 @@ mod tests {
 
     #[test]
     fn test_find_active_plan_none() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fap-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fap-none");
         let stores = test_stores(&dir);
         assert!(find_active_plan(&stores).is_none());
     }
 
     #[test]
     fn test_find_active_plan_some() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fap-some-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fap-some");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Active".into(), "desc".into(), "crit".into());
@@ -1101,8 +1093,7 @@ mod tests {
 
     #[test]
     fn test_find_active_plan_skips_draft() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fap-skip-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fap-skip");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft".into(), "desc".into(), "crit".into());
@@ -1113,8 +1104,7 @@ mod tests {
 
     #[test]
     fn test_find_active_specs_for_plan() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fasp-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fasp");
         let stores = test_stores(&dir);
 
         let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into(), "desc".into());
@@ -1135,8 +1125,7 @@ mod tests {
 
     #[test]
     fn test_find_active_phases_for_spec_sorted() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-faps-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-faps");
         let stores = test_stores(&dir);
 
         let mut p2 = Phase::new("spec-1".into(), "Phase 2".into(), "desc".into(), 2);
@@ -1155,8 +1144,7 @@ mod tests {
 
     #[test]
     fn test_find_works_for_phase() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fwip-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fwip");
         let stores = test_stores(&dir);
 
         let wi1 = Work::new("phase-1".into(), "WI 1".into(), "desc".into());
@@ -1172,8 +1160,7 @@ mod tests {
 
     #[test]
     fn test_find_phase_needing_works() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fpnwi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fpnwi");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1207,8 +1194,7 @@ mod tests {
 
     #[test]
     fn test_find_phase_needing_works_none_when_all_have() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fpnwi2-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fpnwi2");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1236,8 +1222,7 @@ mod tests {
 
     #[test]
     fn test_is_phase_complete_true() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-true-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ipc-true");
         let stores = test_stores(&dir);
 
         let mut wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
@@ -1249,8 +1234,7 @@ mod tests {
 
     #[test]
     fn test_is_phase_complete_false_not_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-false-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ipc-false");
         let stores = test_stores(&dir);
 
         let wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
@@ -1261,8 +1245,7 @@ mod tests {
 
     #[test]
     fn test_is_phase_complete_false_no_wis() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-empty-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ipc-empty");
         let stores = test_stores(&dir);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
@@ -1271,8 +1254,7 @@ mod tests {
     // Fix #6: is_phase_complete now accepts Abandoned as terminal
     #[test]
     fn test_is_phase_complete_true_with_abandoned() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-aband-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ipc-aband");
         let stores = test_stores(&dir);
 
         let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
@@ -1288,8 +1270,7 @@ mod tests {
 
     #[test]
     fn test_is_phase_complete_false_mixed_nonterminal() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ipc-mixed-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ipc-mixed");
         let stores = test_stores(&dir);
 
         let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
@@ -1361,8 +1342,7 @@ mod tests {
 
     #[test]
     fn test_find_failed_validations_empty_store() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-empty-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ffv-empty");
         let stores = test_stores(&dir);
         let reports = find_failed_validations(&stores, "plans", "plan-1");
         assert!(reports.is_empty());
@@ -1371,8 +1351,7 @@ mod tests {
     #[test]
     fn test_find_failed_validations_returns_only_fails() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-fails-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ffv-fails");
         let stores = test_stores(&dir);
 
         let fail_report = ValidationReport::new(
@@ -1406,16 +1385,14 @@ mod tests {
 
     #[test]
     fn test_find_draft_needing_regeneration_no_drafts() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fdnr-none");
         let stores = test_stores(&dir);
         assert!(find_draft_needing_regeneration(&stores, 3).is_none());
     }
 
     #[test]
     fn test_find_draft_needing_regeneration_draft_no_failures() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-nofail-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fdnr-nofail");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -1428,8 +1405,7 @@ mod tests {
     #[test]
     fn test_find_draft_needing_regeneration_plan_with_failures() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-plan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fdnr-plan");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -1457,8 +1433,7 @@ mod tests {
     #[test]
     fn test_find_draft_needing_regeneration_cap_reached() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fdnr-cap-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fdnr-cap");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -1486,8 +1461,7 @@ mod tests {
 
     #[test]
     fn test_is_validation_cap_reached_false_no_drafts() {
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-none-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ivcr-none");
         let stores = test_stores(&dir);
         assert!(!is_validation_cap_reached(&stores, 3));
     }
@@ -1495,8 +1469,7 @@ mod tests {
     #[test]
     fn test_is_validation_cap_reached_false_under_cap() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-under-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ivcr-under");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -1519,8 +1492,7 @@ mod tests {
     #[test]
     fn test_is_validation_cap_reached_true_at_cap() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-at-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ivcr-at");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -1548,8 +1520,7 @@ mod tests {
     fn test_determine_level_multiple_active_plans() {
         // When multiple active plans exist, determine_generation_level should still find one
         // and proceed to check specs (returns Spec since no specs exist).
-        let dir = std::env::temp_dir().join(format!("loopr-gen-multi-plan-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-multi-plan");
         let stores = test_stores(&dir);
 
         let mut plan1 = Plan::new("Plan A".into(), "desc".into(), "crit".into());
@@ -1567,8 +1538,7 @@ mod tests {
     #[test]
     fn test_determine_level_multiple_active_specs() {
         // Multiple active specs under one active plan; no phases → should want Phase.
-        let dir = std::env::temp_dir().join(format!("loopr-gen-multi-spec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-multi-spec");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1590,8 +1560,7 @@ mod tests {
     #[test]
     fn test_determine_level_draft_spec_with_active_plan() {
         // Active plan + draft spec (no active spec) → None (wait for validation).
-        let dir = std::env::temp_dir().join(format!("loopr-gen-draft-spec-ap-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-draft-spec-ap");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1610,8 +1579,7 @@ mod tests {
     fn test_find_draft_regen_spec_with_failures() {
         // Draft spec under active plan with failed validation → should return Spec regen info.
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-spec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-regen-spec");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1644,8 +1612,7 @@ mod tests {
     fn test_find_draft_regen_phase_with_failures() {
         // Draft phase under active spec/plan with failed validation → Phase regen info.
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-phase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-regen-phase");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
@@ -1683,8 +1650,7 @@ mod tests {
     fn test_find_draft_regen_multiple_drafts_returns_first() {
         // When a draft plan exists, it is checked first even if there are draft specs deeper.
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-multi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-regen-multi");
         let stores = test_stores(&dir);
 
         // Draft plan with failures
@@ -1712,8 +1678,7 @@ mod tests {
     fn test_is_validation_cap_over_cap() {
         // When failures exceed cap, is_validation_cap_reached should still return true.
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ivcr-over-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ivcr-over");
         let stores = test_stores(&dir);
 
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -1740,8 +1705,7 @@ mod tests {
     fn test_find_failed_validations_multiple_for_same_target() {
         // Multiple fail reports for the same target should all be returned, sorted by created_at.
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-multi-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ffv-multi");
         let stores = test_stores(&dir);
 
         for i in 0..4 {
@@ -1768,8 +1732,7 @@ mod tests {
     fn test_find_failed_validations_wrong_collection_excluded() {
         // Fail reports for a different collection should not be returned.
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-ffv-coll-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-ffv-coll");
         let stores = test_stores(&dir);
 
         let report = ValidationReport::new(
@@ -1790,8 +1753,7 @@ mod tests {
     #[test]
     fn test_find_works_for_phase_ordering() {
         // find_works_for_phase returns all WIs for the phase regardless of status.
-        let dir = std::env::temp_dir().join(format!("loopr-gen-fwip-ord-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-fwip-ord");
         let stores = test_stores(&dir);
 
         let mut wi1 = Work::new("phase-x".into(), "WI A".into(), "desc a".into());
@@ -1872,8 +1834,7 @@ mod tests {
     #[test]
     fn test_is_validation_cap_reached_at_spec_level() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-vcap-spec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-vcap-spec");
         let stores = test_stores(&dir);
 
         // Active plan
@@ -1906,8 +1867,7 @@ mod tests {
     #[test]
     fn test_is_validation_cap_reached_at_phase_level() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-vcap-phase-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-vcap-phase");
         let stores = test_stores(&dir);
 
         // Active plan
@@ -1946,8 +1906,7 @@ mod tests {
     #[test]
     fn test_find_draft_regen_returns_none_for_phase_at_cap() {
         use crate::domain::validation::ValidationVerdict;
-        let dir = std::env::temp_dir().join(format!("loopr-gen-regen-phase-cap-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-gen-regen-phase-cap");
         let stores = test_stores(&dir);
 
         let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());

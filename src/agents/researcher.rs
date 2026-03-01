@@ -414,6 +414,7 @@ mod tests {
     use crate::agents::{AgentContext, AgentSession, AgentType};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig};
     use crate::daemon::context::Stores;
+    use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
@@ -499,8 +500,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_relative_ok() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathok-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathok");
         std::fs::write(dir.join("test.rs"), "fn main() {}").unwrap();
         let agent_log = test_agent_logger(&dir);
 
@@ -510,8 +510,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_absolute() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathabs-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathabs");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "/etc/passwd", &agent_log);
@@ -521,8 +520,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_env_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathenv-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathenv");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, ".env", &agent_log);
@@ -532,8 +530,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_key_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathkey-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathkey");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "server.key", &agent_log);
@@ -543,8 +540,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_pem_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathpem-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathpem");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "cert.pem", &agent_log);
@@ -554,8 +550,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_credentials() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathcred-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathcred");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "credentials.json", &agent_log);
@@ -565,8 +560,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_secret_file() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathsec-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-pathsec");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "my_secret_config.yml", &agent_log);
@@ -576,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_allows_normal_files() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-pathnorm-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-pathnorm");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/main.rs"), "fn main() {}").unwrap();
         let agent_log = test_agent_logger(&dir);
@@ -595,8 +589,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_injects_query() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-sysprompt-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-sysprompt");
         let agent_log = test_agent_logger(&dir);
         let prompt = build_system_prompt("Find all error handling patterns", &agent_log);
         assert!(prompt.contains("Find all error handling patterns"));
@@ -661,7 +654,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_search_code_finds_content() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-sc-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-sc");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/test.rs"), "fn hello_world() {}\nfn goodbye() {}").unwrap();
         let agent_log = test_agent_logger(&dir);
@@ -674,7 +667,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_search_code_no_matches() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-scnone-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-scnone");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/test.rs"), "fn main() {}").unwrap();
         let agent_log = test_agent_logger(&dir);
@@ -686,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_search_files_finds_files() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-sf-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-sf");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/foo.rs"), "").unwrap();
         std::fs::write(dir.join("src/bar.rs"), "").unwrap();
@@ -700,8 +693,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_search_files_no_matches() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-sfnone-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-sfnone");
         let agent_log = test_agent_logger(&dir);
 
         let result = execute_search_files(&dir, "*.xyz", None, &agent_log).await;
@@ -711,7 +703,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_list_directory() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-ld-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-ld");
         std::fs::create_dir_all(dir.join("mydir")).unwrap();
         std::fs::write(dir.join("mydir/a.txt"), "").unwrap();
         std::fs::write(dir.join("mydir/b.txt"), "").unwrap();
@@ -726,8 +718,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_list_directory_not_a_dir() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-ldfile-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-ldfile");
         std::fs::write(dir.join("file.txt"), "").unwrap();
         let agent_log = test_agent_logger(&dir);
 
@@ -740,8 +731,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_researcher_done_on_first_iteration() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-done-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-done");
         let stores = test_stores(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
@@ -755,8 +745,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_researcher_need_help_exits() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-help-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-help");
         let stores = test_stores(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
@@ -770,7 +759,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_researcher_max_iterations() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-maxiter-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-maxiter");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/test.rs"), "fn main() {}").unwrap();
         let stores = test_stores(&dir);
@@ -814,8 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_researcher_exits_on_cancellation() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-canc-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-canc");
         let stores = test_stores(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![]));
@@ -836,8 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_researcher_blocks_write_actions() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-block-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-block");
         let stores = test_stores(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
@@ -887,8 +874,7 @@ mod tests {
 
     #[test]
     fn test_validate_path_rejects_parent_dir() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-parent-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-parent");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "../etc/passwd", &agent_log);
@@ -899,8 +885,7 @@ mod tests {
     #[test]
     fn test_validate_path_nonexistent_file_in_repo() {
         // A nonexistent file that is within the repo root should be accepted
-        let dir = std::env::temp_dir().join(format!("loopr-res-nonexist-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-nonexist");
         let agent_log = test_agent_logger(&dir);
 
         let result = validate_path(&dir, "src/does_not_exist.rs", &agent_log);
@@ -912,8 +897,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_search_code_truncation_over_100_lines() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-sc-trunc-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-sc-trunc");
         let agent_log = test_agent_logger(&dir);
 
         // Create a file with 150 lines that all match
@@ -931,8 +915,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_search_files_truncation_at_200() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-sf-trunc-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-sf-trunc");
         let agent_log = test_agent_logger(&dir);
 
         // Create 210 files
@@ -950,7 +933,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_list_directory_empty_dir() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-ld-empty-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-ld-empty");
         std::fs::create_dir_all(dir.join("emptydir")).unwrap();
         let agent_log = test_agent_logger(&dir);
 
@@ -960,7 +943,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_list_directory_entry_truncation_at_500() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-ld-trunc-{}", crate::id::generate_id()));
+        let dir = TestDir::new("loopr-res-ld-trunc");
         let sub = dir.join("bigdir");
         std::fs::create_dir_all(&sub).unwrap();
         let agent_log = test_agent_logger(&dir);
@@ -979,8 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_researcher_iteration_empty_actions_returns_done() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-empty-act-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-empty-act");
         let stores = test_stores(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![r#"[]"#.to_string()]));
@@ -991,8 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_researcher_iteration_mixed_allowed_disallowed() {
-        let dir = std::env::temp_dir().join(format!("loopr-res-mixed-{}", crate::id::generate_id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TestDir::new("loopr-res-mixed");
         let stores = test_stores(&dir);
 
         let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
