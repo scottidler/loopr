@@ -108,6 +108,50 @@ pub fn work_transitions() -> Vec<TransitionRule<WorkStatus>> {
     ]
 }
 
+/// Override transitions available only to the Coordinator with the override flag.
+/// These bypass normal role constraints for recovery from stuck states.
+pub fn override_transitions() -> Vec<TransitionRule<WorkStatus>> {
+    use WorkStatus::*;
+    vec![
+        // Reset stuck InProgress back to Ready for re-assignment
+        TransitionRule {
+            from: InProgress,
+            to: Ready,
+            role: Some(Role::Coordinator),
+        },
+        // Force-advance InProgress to InReview when a valid Bundle exists
+        TransitionRule {
+            from: InProgress,
+            to: InReview,
+            role: Some(Role::Coordinator),
+        },
+        // Abandon stuck InProgress
+        TransitionRule {
+            from: InProgress,
+            to: Abandoned,
+            role: Some(Role::Coordinator),
+        },
+        // Reset InReview back to Ready (no valid Bundle)
+        TransitionRule {
+            from: InReview,
+            to: Ready,
+            role: Some(Role::Coordinator),
+        },
+        // Abandon stuck InReview
+        TransitionRule {
+            from: InReview,
+            to: Abandoned,
+            role: Some(Role::Coordinator),
+        },
+        // Abandon stuck Blocked
+        TransitionRule {
+            from: Blocked,
+            to: Abandoned,
+            role: Some(Role::Coordinator),
+        },
+    ]
+}
+
 /// A single item in a Work's completion checklist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChecklistItem {
@@ -436,5 +480,69 @@ mod tests {
             fields.get("phase_id"),
             Some(&IndexValue::String("phase-abc".to_string()))
         );
+    }
+
+    // --- Override transition tests ---
+
+    #[test]
+    fn test_override_in_progress_to_ready_coordinator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_override_in_progress_to_in_review_coordinator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::InReview, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_override_in_progress_to_abandoned_coordinator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Abandoned, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_override_in_review_to_ready_coordinator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Ready, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_override_in_review_to_abandoned_coordinator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Abandoned, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_override_blocked_to_abandoned_coordinator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::Blocked, WorkStatus::Abandoned, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_override_rejected_for_implementer() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Implementer, &rules).is_err());
+    }
+
+    #[test]
+    fn test_override_rejected_for_integrator() {
+        let rules = override_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Integrator, &rules).is_err());
+    }
+
+    #[test]
+    fn test_override_not_in_normal_transitions() {
+        // InProgress → Ready is NOT in the normal table (only override)
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Coordinator, &rules).is_err());
+    }
+
+    #[test]
+    fn test_override_in_review_to_ready_not_in_normal() {
+        // InReview → Ready is NOT in the normal table
+        let rules = work_transitions();
+        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Ready, Role::Coordinator, &rules).is_err());
     }
 }

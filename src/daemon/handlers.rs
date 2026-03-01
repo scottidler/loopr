@@ -18,7 +18,7 @@ use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::tick::{Tick, TickStatus, tick_transitions};
 use crate::domain::transition::validate_transition;
 use crate::domain::validation::{ValidationReport, ValidationVerdict};
-use crate::domain::work::{Work, WorkStatus, work_transitions};
+use crate::domain::work::{Work, WorkStatus, override_transitions, work_transitions};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
@@ -1401,6 +1401,14 @@ fn handle_work_transition(
         None => Role::Coordinator,
     };
 
+    let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
+    let override_reason = req
+        .params
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("no reason provided")
+        .to_string();
+
     let mut works = stores.works.write().unwrap();
     let wi = match works.get_mut(&id) {
         Some(w) => w,
@@ -1408,7 +1416,7 @@ fn handle_work_transition(
     };
 
     let from = wi.status;
-    let rules = work_transitions();
+    let rules = if is_override { override_transitions() } else { work_transitions() };
     if let Err(e) = validate_transition(from, target_status, role, &rules) {
         let _ = event_tx.send(DaemonEvent::transition_rejected(
             "works",
@@ -1484,6 +1492,25 @@ fn handle_work_transition(
         &target_status.to_string(),
         &role.to_string(),
     ));
+
+    if is_override {
+        log::warn!(
+            "OVERRIDE: Work {} transitioned {:?} → {:?} by Coordinator (reason: {})",
+            id,
+            from,
+            target_status,
+            override_reason
+        );
+        let _ = event_tx.send(DaemonEvent::new(
+            "work.override_transition",
+            serde_json::json!({
+                "work_id": id,
+                "from": format!("{:?}", from),
+                "to": format!("{:?}", target_status),
+                "reason": override_reason,
+            }),
+        ));
+    }
 
     DaemonResponse::ok(req.id, wi_json)
 }
