@@ -1222,8 +1222,12 @@ impl CoordinatorAgent {
                 Err(e) => {
                     let err_msg = e.to_string();
                     self.ctx.warn(&format!("action failed (non-fatal): {err_msg}"));
-                    // Lifeguard: check for repeated errors
-                    if let Verdict::Escalate(reason) = guard.record_error(&err_msg) {
+                    // Lifeguard: check for repeated errors (config errors don't escalate)
+                    let (verdict, warning) = guard.record_error(&err_msg);
+                    if let Some(w) = warning {
+                        self.ctx.warn(&w);
+                    }
+                    if let Verdict::Escalate(reason) = verdict {
                         self.ctx.warn(&format!("lifeguard: {}", reason));
                         return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
                     }
