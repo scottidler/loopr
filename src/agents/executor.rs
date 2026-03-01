@@ -297,231 +297,65 @@ async fn run_agent_loop(
     }
     agent_log.info("Bridge health check passed");
 
-    match agent_type {
+    let ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
+
+    let (result, iteration) = match agent_type {
         AgentType::Implementer => {
             let config = stores.config.agents.implementer.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
-
-            let session = {
-                let sessions = stores.agent_sessions.read().unwrap();
-                sessions
-                    .get(session_id)
-                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
-                    .clone()
-            };
-
-            let impl_bridge = AgentIpcBridge::new(
-                stores.clone(),
-                event_tx.clone(),
-                WorktreeManager::new(
-                    stores.config.project.repo_path.clone(),
-                    stores.config.project.repo_path.join(".worktrees"),
-                ),
-                stores.config.clone(),
-            );
-            let impl_log = AgentLogger::new(AgentType::Implementer, session_id)?;
-            let work_id = session
+            let work_id = ctx
+                .session
                 .work_id
                 .clone()
                 .ok_or_else(|| eyre!("implementer session missing work_id"))?;
-            let worktree_path = session
+            let worktree_path = ctx
+                .session
                 .worktree_path
                 .as_ref()
                 .map(std::path::PathBuf::from)
                 .ok_or_else(|| eyre!("implementer session missing worktree_path"))?;
-            let ctx = crate::agents::AgentContext {
-                session,
-                stores: stores.clone(),
-                bridge: impl_bridge,
-                event_tx: event_tx.clone(),
-                tool_runner: stores.tool_runner.clone(),
-                log: impl_log,
-            };
             let mut agent = implementer::ImplementerAgent::new(ctx, llm, config, work_id, worktree_path);
             let result = agent.run().await;
-
-            // Write back updated session iteration count
-            {
-                let mut sessions = stores.agent_sessions.write().unwrap();
-                if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = agent.ctx.session.iteration;
-                }
-            }
-
-            result
+            (result, agent.ctx.session.iteration)
         }
         AgentType::Reviewer => {
             let config = stores.config.agents.reviewer.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
-
-            let session = {
-                let sessions = stores.agent_sessions.read().unwrap();
-                sessions
-                    .get(session_id)
-                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
-                    .clone()
-            };
-
-            let rev_bridge = AgentIpcBridge::new(
-                stores.clone(),
-                event_tx.clone(),
-                WorktreeManager::new(
-                    stores.config.project.repo_path.clone(),
-                    stores.config.project.repo_path.join(".worktrees"),
-                ),
-                stores.config.clone(),
-            );
-            let rev_log = AgentLogger::new(AgentType::Reviewer, session_id)?;
-            let ctx = crate::agents::AgentContext {
-                session,
-                stores: stores.clone(),
-                bridge: rev_bridge,
-                event_tx: event_tx.clone(),
-                tool_runner: stores.tool_runner.clone(),
-                log: rev_log,
-            };
             let mut agent = reviewer::ReviewerAgent::new(ctx, llm, config)?;
             let result = agent.run().await;
-
-            {
-                let mut sessions = stores.agent_sessions.write().unwrap();
-                if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = agent.ctx.session.iteration;
-                }
-            }
-
-            result
+            (result, agent.ctx.session.iteration)
         }
         AgentType::Coordinator => {
             let config = stores.config.agents.coordinator.clone();
             let llm = create_llm_client(&config.role, session_id, event_tx)?;
-
-            let session = {
-                let sessions = stores.agent_sessions.read().unwrap();
-                sessions
-                    .get(session_id)
-                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
-                    .clone()
-            };
-
-            let coord_bridge = AgentIpcBridge::new(
-                stores.clone(),
-                event_tx.clone(),
-                WorktreeManager::new(
-                    stores.config.project.repo_path.clone(),
-                    stores.config.project.repo_path.join(".worktrees"),
-                ),
-                stores.config.clone(),
-            );
-            let coord_log = AgentLogger::new(AgentType::Coordinator, session_id)?;
-            let ctx = crate::agents::AgentContext {
-                session,
-                stores: stores.clone(),
-                bridge: coord_bridge,
-                event_tx: event_tx.clone(),
-                tool_runner: stores.tool_runner.clone(),
-                log: coord_log,
-            };
             let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
             let result = agent.run().await;
-
-            // Write back updated session iteration count
-            {
-                let mut sessions = stores.agent_sessions.write().unwrap();
-                if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = agent.ctx.session.iteration;
-                }
-            }
-
-            result
+            (result, agent.ctx.session.iteration)
         }
         AgentType::Researcher => {
             let config = stores.config.agents.researcher.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
-
-            let session = {
-                let sessions = stores.agent_sessions.read().unwrap();
-                sessions
-                    .get(session_id)
-                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
-                    .clone()
-            };
-
-            let res_bridge = AgentIpcBridge::new(
-                stores.clone(),
-                event_tx.clone(),
-                WorktreeManager::new(
-                    stores.config.project.repo_path.clone(),
-                    stores.config.project.repo_path.join(".worktrees"),
-                ),
-                stores.config.clone(),
-            );
-            let res_log = AgentLogger::new(AgentType::Researcher, session_id)?;
-            let ctx = crate::agents::AgentContext {
-                session,
-                stores: stores.clone(),
-                bridge: res_bridge,
-                event_tx: event_tx.clone(),
-                tool_runner: stores.tool_runner.clone(),
-                log: res_log,
-            };
             let mut agent = researcher::ResearcherAgent::new(ctx, llm, config);
             let result = agent.run().await;
-
-            {
-                let mut sessions = stores.agent_sessions.write().unwrap();
-                if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = agent.ctx.session.iteration;
-                }
-            }
-
-            result
+            (result, agent.ctx.session.iteration)
         }
         AgentType::Integrator => {
             let config = stores.config.integrator.clone();
-
-            let session = {
-                let sessions = stores.agent_sessions.read().unwrap();
-                sessions
-                    .get(session_id)
-                    .ok_or_else(|| eyre!("session not found: {}", session_id))?
-                    .clone()
-            };
-
-            // Integrator uses AgentContext which owns its bridge and logger.
-            // Create a fresh bridge (cheap — just wiring references) and logger for the agent.
-            let intg_bridge = AgentIpcBridge::new(
-                stores.clone(),
-                event_tx.clone(),
-                WorktreeManager::new(
-                    stores.config.project.repo_path.clone(),
-                    stores.config.project.repo_path.join(".worktrees"),
-                ),
-                stores.config.clone(),
-            );
-            let intg_log = AgentLogger::new(AgentType::Integrator, session_id)?;
-            let ctx = crate::agents::AgentContext {
-                session,
-                stores: stores.clone(),
-                bridge: intg_bridge,
-                event_tx: event_tx.clone(),
-                tool_runner: stores.tool_runner.clone(),
-                log: intg_log,
-            };
             let mut agent = integrator::IntegratorAgent::new(ctx, config);
             let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
+    };
 
-            // Write back updated session iteration count
-            {
-                let mut sessions = stores.agent_sessions.write().unwrap();
-                if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = agent.ctx.session.iteration;
-                }
-            }
-
-            result
+    // Unified iteration writeback
+    {
+        let mut sessions = stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(session_id) {
+            s.iteration = iteration;
         }
     }
+
+    result
 }
 
 /// Execute a single agent action. Used by the agent loop to process parsed LLM responses.

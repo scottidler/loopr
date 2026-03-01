@@ -26,6 +26,7 @@ use crate::daemon::context::Stores;
 use crate::id;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
+use crate::worktree::manager::WorktreeManager;
 
 /// Common trait for all agent implementations.
 #[async_trait]
@@ -48,6 +49,42 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
+    /// Create an AgentContext by cloning the session from stores.
+    pub fn from_session_id(
+        session_id: &str,
+        agent_type: AgentType,
+        stores: Arc<Stores>,
+        event_tx: broadcast::Sender<DaemonEvent>,
+    ) -> eyre::Result<Self> {
+        let session = {
+            let sessions = stores.agent_sessions.read().unwrap();
+            sessions
+                .get(session_id)
+                .ok_or_else(|| eyre::eyre!("session not found: {}", session_id))?
+                .clone()
+        };
+
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx.clone(),
+            WorktreeManager::new(
+                stores.config.project.repo_path.clone(),
+                stores.config.project.repo_path.join(".worktrees"),
+            ),
+            stores.config.clone(),
+        );
+        let log = AgentLogger::new(agent_type, session_id)?;
+
+        Ok(Self {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx,
+            tool_runner: stores.tool_runner.clone(),
+            log,
+        })
+    }
+
     pub fn info(&self, msg: &str) {
         self.log.info(msg)
     }
