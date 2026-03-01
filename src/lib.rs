@@ -34,6 +34,11 @@ use crate::config::Config;
 /// 3. `config.log_level` — from YAML config
 /// 4. Default → `Info`
 pub fn resolve_log_level(config: &Config, cli_log_level: Option<&str>) -> LevelFilter {
+    let env_level = std::env::var("LOOPR_LOG_LEVEL").ok();
+    resolve_log_level_from(config, cli_log_level, env_level.as_deref())
+}
+
+fn resolve_log_level_from(config: &Config, cli_log_level: Option<&str>, env_level: Option<&str>) -> LevelFilter {
     // CLI wins
     if let Some(level) = cli_log_level
         && let Some(parsed) = parse_level_filter(level)
@@ -42,8 +47,8 @@ pub fn resolve_log_level(config: &Config, cli_log_level: Option<&str>) -> LevelF
     }
 
     // Env var overrides config
-    if let Ok(env_level) = std::env::var("LOOPR_LOG_LEVEL")
-        && let Some(parsed) = parse_level_filter(&env_level)
+    if let Some(level) = env_level
+        && let Some(parsed) = parse_level_filter(level)
     {
         return parsed;
     }
@@ -134,47 +139,40 @@ mod log_level_tests {
 
     #[test]
     fn test_resolve_log_level_default_is_info() {
-        unsafe { std::env::remove_var("LOOPR_LOG_LEVEL") };
         let config = config_with_level(None);
-        assert_eq!(resolve_log_level(&config, None), LevelFilter::Info);
+        assert_eq!(resolve_log_level_from(&config, None, None), LevelFilter::Info);
     }
 
     #[test]
     fn test_resolve_log_level_config_debug() {
-        unsafe { std::env::remove_var("LOOPR_LOG_LEVEL") };
         let config = config_with_level(Some("debug"));
-        assert_eq!(resolve_log_level(&config, None), LevelFilter::Debug);
+        assert_eq!(resolve_log_level_from(&config, None, None), LevelFilter::Debug);
     }
 
     #[test]
     fn test_resolve_log_level_env_overrides_config() {
-        unsafe { std::env::set_var("LOOPR_LOG_LEVEL", "warn") };
         let config = config_with_level(Some("debug"));
-        let result = resolve_log_level(&config, None);
-        unsafe { std::env::remove_var("LOOPR_LOG_LEVEL") };
-        assert_eq!(result, LevelFilter::Warn);
+        assert_eq!(resolve_log_level_from(&config, None, Some("warn")), LevelFilter::Warn);
     }
 
     #[test]
     fn test_resolve_log_level_cli_overrides_all() {
-        unsafe { std::env::set_var("LOOPR_LOG_LEVEL", "warn") };
         let config = config_with_level(Some("error"));
-        let result = resolve_log_level(&config, Some("trace"));
-        unsafe { std::env::remove_var("LOOPR_LOG_LEVEL") };
-        assert_eq!(result, LevelFilter::Trace);
+        assert_eq!(
+            resolve_log_level_from(&config, Some("trace"), Some("warn")),
+            LevelFilter::Trace
+        );
     }
 
     #[test]
     fn test_resolve_log_level_invalid_falls_through() {
-        unsafe { std::env::remove_var("LOOPR_LOG_LEVEL") };
         let config = config_with_level(Some("invalid_level"));
-        assert_eq!(resolve_log_level(&config, None), LevelFilter::Info);
+        assert_eq!(resolve_log_level_from(&config, None, None), LevelFilter::Info);
     }
 
     #[test]
     fn test_resolve_log_level_case_insensitive() {
-        unsafe { std::env::remove_var("LOOPR_LOG_LEVEL") };
         let config = config_with_level(Some("DEBUG"));
-        assert_eq!(resolve_log_level(&config, None), LevelFilter::Debug);
+        assert_eq!(resolve_log_level_from(&config, None, None), LevelFilter::Debug);
     }
 }
