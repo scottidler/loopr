@@ -16,7 +16,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 
 - **Planning**: Create exactly one hierarchy level per iteration: Plan first, then Spec, then Phases. Do not skip levels.
 - **ActivatePhase**: After batch-creating Works, transition immediately — do not assign agents in the same iteration.
-- **Executing**: Priority order: (1) triage pending Bundles, (2) assign Ready WIs with met deps, (3) retry failed WIs, (4) wait.
+- **Executing**: Priority order: (1) triage pending Bundles, (2) retry failed WIs, (3) wait. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and triaging Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
 - **PhaseGate**: If all WIs are Done or Abandoned, transition to ActivatePhase for next phase. If no more phases, transition to GoalComplete.
 - **GoalComplete**: Emit a `done` action with a summary of what was achieved.
 
@@ -28,7 +28,7 @@ Respond with a JSON array of actions:
 2. `create_spec`      {"action": "create_spec", "plan_id": "...", "title": "...", "description": "..."}
 3. `create_phase`     {"action": "create_phase", "spec_id": "...", "title": "...", "description": "...", "order": 1}
 4. `create_work` {"action": "create_work", "phase_id": "...", "title": "...", "description": "...", "resource_tags": ["src/file.rs"], "acceptance_criteria": ["tests pass"], "dependencies": ["wi-id-1"]}
-5. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"} — for reviewers: {"action": "assign_agent", "agent_type": "reviewer", "target_id": "bundle-id"}
+5. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"} — for reviewers: {"action": "assign_agent", "agent_type": "reviewer", "target_id": "bundle-id"}  (Implementers are auto-assigned by the worker pool. Use only as an override to force-assign a specific Work.)
 6. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
 7. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-id"}
 8. `release_lock`     {"action": "release_lock", "lock_id": "lock-id"}
