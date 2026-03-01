@@ -187,6 +187,28 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         }
     }
 
+    // Spawn pull-based worker pool when enabled
+    let mut worker_handles = Vec::new();
+    {
+        let c = ctx.read().await;
+        if c.config.agents.pull_based_workers && c.config.agents.enabled {
+            let pool_size = c.config.agents.worker_pool_size;
+            info!("Spawning {} pull-based workers", pool_size);
+            for i in 0..pool_size {
+                let s = c.stores.clone();
+                let e = event_tx.clone();
+                let w = c.worktree_manager.clone();
+                let ic = c.config.agents.implementer.clone();
+                let wc = crate::agents::worker::WorkerConfig {
+                    worker_id: i,
+                    poll_interval_secs: 5,
+                    idle_interval_secs: 15,
+                };
+                worker_handles.push(tokio::spawn(crate::agents::worker::run_worker(s, e, w, ic, wc)));
+            }
+        }
+    }
+
     // Spawn coordinator supervisor — watches for coordinator failures and restarts with backoff
     let supervisor_handle = {
         let c = ctx.read().await;
@@ -207,6 +229,15 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
 
     // Abort the supervisor task on shutdown
     supervisor_handle.abort();
+
+    // Signal workers to shut down
+    {
+        let c = ctx.read().await;
+        c.stores.shutting_down.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    for handle in worker_handles {
+        handle.abort();
+    }
 
     // Graceful shutdown: cancel agent sessions, wait for tasks, abort stragglers
     {

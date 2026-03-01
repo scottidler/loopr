@@ -220,6 +220,7 @@ fn auto_start_agents(
         && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
         && target == "InProgress"
         && stores.config.agents.auto_start_implementer
+        && !stores.config.agents.pull_based_workers  // Workers handle their own spawning
         && let Some(wi_id) = params.get("id").and_then(|v| v.as_str())
     {
         let start_req = DaemonRequest::new(

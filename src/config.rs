@@ -220,6 +220,11 @@ pub struct AgentConfig {
     pub auto_start_implementer: bool,
     pub auto_start_reviewer: bool,
     pub auto_start_coordinator: bool,
+    /// When true, persistent worker pool pulls Ready Works instead of
+    /// push-based AssignAgent. Default false (feature flag).
+    pub pull_based_workers: bool,
+    /// Number of persistent worker tasks in the pull-based pool.
+    pub worker_pool_size: u32,
     pub implementer: AgentRoleConfig,
     pub reviewer: AgentRoleConfig,
     pub coordinator: CoordinatorConfig,
@@ -234,6 +239,8 @@ impl Default for AgentConfig {
             auto_start_implementer: false,
             auto_start_reviewer: false,
             auto_start_coordinator: false,
+            pull_based_workers: false,
+            worker_pool_size: 2,
             implementer: AgentRoleConfig::default_implementer(),
             reviewer: AgentRoleConfig::default_reviewer(),
             coordinator: CoordinatorConfig::default(),

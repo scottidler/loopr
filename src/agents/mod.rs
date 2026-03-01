@@ -11,6 +11,7 @@ pub mod llm_client;
 pub mod researcher;
 pub mod reviewer;
 pub mod sandbox;
+pub mod worker;
 
 use std::collections::HashMap;
 use std::fmt;

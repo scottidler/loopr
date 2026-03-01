@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
 use log::{debug, info, warn};
@@ -62,6 +63,8 @@ pub struct Stores {
     /// Fix #10: Advisory lock for main repo git operations (merge, reset).
     /// Prevents concurrent Integrator merges from racing.
     pub git_lock: StdMutex<()>,
+    /// Signal for graceful shutdown of persistent workers.
+    pub shutting_down: AtomicBool,
 }
 
 impl Stores {
@@ -87,6 +90,7 @@ impl Stores {
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
             git_lock: StdMutex::new(()),
+            shutting_down: AtomicBool::new(false),
             guidance: AgentGuidance::schema_only(),
         }
     }
