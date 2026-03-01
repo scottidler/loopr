@@ -61,22 +61,22 @@ impl AgentLogger {
 
     pub fn debug(&self, msg: &str) {
         self.write_line("DEBUG", msg);
-        log::debug!("[{}] {}", self.session_id, msg);
+        log::debug!("[{}:{}] {}", self.agent_type, self.session_id, msg);
     }
 
     pub fn info(&self, msg: &str) {
         self.write_line("INFO", msg);
-        log::info!("[{}] {}", self.session_id, msg);
+        log::info!("[{}:{}] {}", self.agent_type, self.session_id, msg);
     }
 
     pub fn warn(&self, msg: &str) {
         self.write_line("WARN", msg);
-        log::warn!("[{}] {}", self.session_id, msg);
+        log::warn!("[{}:{}] {}", self.agent_type, self.session_id, msg);
     }
 
     pub fn error(&self, msg: &str) {
         self.write_line("ERROR", msg);
-        log::error!("[{}] {}", self.session_id, msg);
+        log::error!("[{}:{}] {}", self.agent_type, self.session_id, msg);
     }
 
     fn write_line(&self, level: &str, msg: &str) {

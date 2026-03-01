@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::AgentAction;
@@ -41,8 +40,8 @@ fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
 ///
 /// Uses lock-snapshot pattern: acquires each lock briefly, clones/summarizes, releases.
 /// The summary is designed to fit within the Coordinator's state_summary token budget (3000 tokens).
-pub fn build_state_summary(stores: &Stores) -> String {
-    debug!("build_state_summary()");
+pub fn build_state_summary(stores: &Stores, agent_log: &AgentLogger) -> String {
+    agent_log.debug("build_state_summary()");
     let mut summary = String::with_capacity(4096);
 
     // --- Plans ---
@@ -257,6 +256,7 @@ fn build_generation_footer(
     goal: &str,
     max_validation_attempts: u32,
     guidance_section: Option<&str>,
+    agent_log: &AgentLogger,
 ) -> Option<String> {
     // Case 1: Check if generation is needed at any level (no document exists)
     if let Some(level) = generation::determine_generation_level(stores) {
@@ -279,19 +279,19 @@ fn build_generation_footer(
             }
         };
 
-        info!(
-            "Coordinator generation needed at level: {} (prompt level: {})",
+        agent_log.info(&format!(
+            "generation needed at level: {} (prompt level: {})",
             level, prompt.level
-        );
+        ));
         return Some(prompt.user_message);
     }
 
     // Case 3: Check if validation cap is reached → signal NeedHelp
     if generation::is_validation_cap_reached(stores, max_validation_attempts) {
-        info!(
-            "Coordinator: validation cap reached ({} attempts), signaling need_help",
+        agent_log.info(&format!(
+            "validation cap reached ({} attempts), signaling need_help",
             max_validation_attempts
-        );
+        ));
         return Some(format!(
             "A Draft document has failed validation {} times (the maximum). \
              You cannot fix it further. Respond with:\n\
@@ -302,13 +302,13 @@ fn build_generation_footer(
 
     // Case 2: Check if a Draft exists with failed validation → re-generate with accumulated failures
     if let Some(regen) = generation::find_draft_needing_regeneration(stores, max_validation_attempts) {
-        info!(
-            "Coordinator re-generation needed: {} {} (attempt {}/{})",
+        agent_log.info(&format!(
+            "re-generation needed: {} {} (attempt {}/{})",
             regen.collection,
             regen.target_id,
             regen.attempt_count + 1,
             max_validation_attempts
-        );
+        ));
         let prompt = match regen.level {
             GenerationLevel::Plan => build_plan_prompt(goal, &[], &regen.accumulated_failures, guidance_section),
             GenerationLevel::Spec => {
@@ -344,10 +344,7 @@ fn build_generation_footer(
     // When determine_generation_level() returned None (a Draft exists but has no failed
     // validations yet), the Coordinator needs to be told to validate it.
     if let Some(draft_info) = find_pending_draft_for_validation(stores) {
-        info!(
-            "Coordinator: Draft {} '{}' needs validation",
-            draft_info.0, draft_info.1
-        );
+        agent_log.info(&format!("Draft {} '{}' needs validation", draft_info.0, draft_info.1));
         return Some(format!(
             "A {} is in Draft status and needs validation before proceeding.\n\
              Use ValidateDocument to validate it.\n\
@@ -361,7 +358,11 @@ fn build_generation_footer(
 
 /// Fix #2: Resolve batch:N dependency references in a CreateWork action.
 /// Returns Some(modified_action) if batch deps were resolved, None if no changes needed.
-fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]) -> Option<AgentAction> {
+fn resolve_batch_dependencies(
+    action: &AgentAction,
+    batch_created_ids: &[String],
+    agent_log: &AgentLogger,
+) -> Option<AgentAction> {
     if let AgentAction::CreateWork {
         phase_id,
         title,
@@ -385,11 +386,11 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
                     if let Some(resolved_id) = batch_created_ids.get(idx) {
                         return resolved_id.clone();
                     }
-                    warn!(
+                    agent_log.warn(&format!(
                         "batch:{} out of range (only {} items created so far)",
                         idx,
                         batch_created_ids.len()
-                    );
+                    ));
                 }
                 dep.clone()
             })
@@ -410,7 +411,7 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
 
 /// Fix #12: Mark the Phase domain record as Complete before calling coord_state.complete_phase().
 /// This ensures the Phase record status and CoordinatorState are updated together.
-fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState) {
+fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, agent_log: &AgentLogger) {
     if let Some(ref phase_id) = coord_state.current_phase_id {
         // L1: Clone-then-drop-then-persist to avoid deadlock and ensure TaskStore persistence
         let phase_to_persist = {
@@ -418,7 +419,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState) {
             if let Some(phase) = phases.get_mut(phase_id) {
                 phase.status = HierarchyStatus::Complete;
                 phase.updated_at = crate::id::now_millis();
-                info!("Phase {} marked Complete (record status updated)", phase_id);
+                agent_log.info(&format!("Phase {} marked Complete (record status updated)", phase_id));
                 Some(phase.clone())
             } else {
                 None
@@ -428,7 +429,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState) {
             && let Some(ref store) = stores.store
             && let Err(e) = store.lock().unwrap().update(phase)
         {
-            warn!("Failed to persist Phase complete status: {}", e);
+            agent_log.warn(&format!("Failed to persist Phase complete status: {}", e));
         }
     }
 }
@@ -557,11 +558,19 @@ fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
 }
 
 /// Determine the FSM state footer — state-specific instructions for the LLM.
-fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str, config: &CoordinatorConfig) -> String {
+fn build_fsm_footer(
+    stores: &Stores,
+    coord_state: &CoordinatorState,
+    goal: &str,
+    config: &CoordinatorConfig,
+    agent_log: &AgentLogger,
+) -> String {
     match coord_state.fsm_state {
         CoordinatorFsmState::Planning => {
             // Use existing generation footer logic for Plan→Spec→Phase hierarchy
-            if let Some(gen_footer) = build_generation_footer(stores, goal, config.max_validation_attempts, None) {
+            if let Some(gen_footer) =
+                build_generation_footer(stores, goal, config.max_validation_attempts, None, agent_log)
+            {
                 gen_footer
             } else {
                 // All hierarchy levels exist — ready to transition to ActivatePhase
@@ -842,6 +851,7 @@ struct IterationContext<'a> {
     config: &'a CoordinatorConfig,
     iteration: u32,
     previous_summary: Option<String>,
+    agent_log: &'a AgentLogger,
 }
 
 /// Run a single coordinator iteration: load context → call LLM → parse → execute actions.
@@ -855,27 +865,22 @@ async fn run_coordinator_iteration(
     let config = ctx.config;
     let bridge = ctx.bridge;
     let iteration = ctx.iteration;
+    let agent_log = ctx.agent_log;
     // Check for FSM state transitions before the iteration
     if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
-        info!(
-            "Coordinator {} FSM transition: {} → {}",
-            session.id, coord_state.fsm_state, new_state
-        );
+        agent_log.info(&format!("FSM transition: {} → {}", coord_state.fsm_state, new_state));
 
         // Handle ActivatePhase: complete previous phase, find and set the next phase
         if new_state == CoordinatorFsmState::ActivatePhase {
             // If transitioning from PhaseGate, complete the previous phase
             if coord_state.current_phase_id.is_some() {
                 // Fix #12: Mark Phase record Complete atomically
-                mark_phase_record_complete(stores, coord_state);
+                mark_phase_record_complete(stores, coord_state, agent_log);
                 coord_state.complete_phase();
             }
             let next_phase = find_next_phase_to_activate(stores, coord_state);
             if let Some((phase_id, phase_title)) = next_phase {
-                info!(
-                    "Coordinator {} activating phase: {} ({})",
-                    session.id, phase_title, phase_id
-                );
+                agent_log.info(&format!("activating phase: {} ({})", phase_title, phase_id));
                 // Set phase context without changing FSM state to Executing
                 coord_state.current_phase_id = Some(phase_id);
                 coord_state.phase_activated_at = Some(crate::id::now_millis());
@@ -893,7 +898,7 @@ async fn run_coordinator_iteration(
             // Complete current phase if transitioning from PhaseGate
             if coord_state.current_phase_id.is_some() {
                 // Fix #12: Mark Phase record Complete atomically
-                mark_phase_record_complete(stores, coord_state);
+                mark_phase_record_complete(stores, coord_state, agent_log);
                 coord_state.complete_phase();
             }
             coord_state.transition_to(CoordinatorFsmState::GoalComplete);
@@ -916,10 +921,10 @@ async fn run_coordinator_iteration(
     // Check if any phases have completed (all Works Done) — legacy helper
     let completed_phases = check_phase_completion(stores);
     for cp in &completed_phases {
-        info!("Coordinator {} detected: {}", session.id, cp);
+        agent_log.info(&format!("detected: {}", cp));
     }
 
-    let state_summary = build_state_summary(stores);
+    let state_summary = build_state_summary(stores, agent_log);
 
     let goal = {
         let goals = stores.coordinator_goals.read().unwrap();
@@ -933,7 +938,7 @@ async fn run_coordinator_iteration(
     let event_tx = bridge.event_tx();
 
     // Build FSM-aware footer
-    let footer = build_fsm_footer(stores, coord_state, &goal, config);
+    let footer = build_fsm_footer(stores, coord_state, &goal, config, agent_log);
 
     // Add FSM state context to state summary
     let fsm_context = format!(
@@ -952,10 +957,10 @@ async fn run_coordinator_iteration(
 
     let assembled = builder.build(&crate::prompts::store().coordinator);
 
-    info!(
-        "Coordinator {} iteration {} (FSM: {}) context: ~{} tokens",
-        session.id, iteration, coord_state.fsm_state, assembled.token_estimate
-    );
+    agent_log.info(&format!(
+        "iteration {} (FSM: {}) context: ~{} tokens",
+        iteration, coord_state.fsm_state, assembled.token_estimate
+    ));
 
     let _ = event_tx.send(DaemonEvent::agent_status_changed(
         &session.id,
@@ -963,13 +968,12 @@ async fn run_coordinator_iteration(
     ));
 
     let response = ctx.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-    info!(
-        "Coordinator {} raw LLM response ({} chars): {}",
-        session.id,
+    agent_log.info(&format!(
+        "raw LLM response ({} chars): {}",
         response.len(),
         &response[..response.len().min(800)]
-    );
-    let mut actions = implementer::parse_actions(&response)?;
+    ));
+    let mut actions = implementer::parse_actions(&response, agent_log)?;
 
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session.id, AgentStatus::Running));
 
@@ -981,10 +985,10 @@ async fn run_coordinator_iteration(
     let levels: std::collections::HashSet<_> = actions.iter().filter_map(infer_action_level).collect();
     if levels.len() > 1 {
         let first_level = infer_action_level(&actions[0]);
-        warn!(
-            "Coordinator attempted multi-level actions: {:?}. Executing only first level.",
+        agent_log.warn(&format!(
+            "attempted multi-level actions: {:?}. Executing only first level.",
             levels
-        );
+        ));
         actions.retain(|a| infer_action_level(a) == first_level || infer_action_level(a).is_none());
     }
 
@@ -997,7 +1001,7 @@ async fn run_coordinator_iteration(
     let mut last_summary = String::new();
     for action in &actions {
         // Fix #2: Resolve batch:N dependencies before executing CreateWork
-        let resolved_action = resolve_batch_dependencies(action, &batch_created_ids);
+        let resolved_action = resolve_batch_dependencies(action, &batch_created_ids, agent_log);
         let action_ref = resolved_action.as_ref().unwrap_or(action);
 
         // Fix #4: Enforce max_work_retries for implementer assignments
@@ -1007,10 +1011,10 @@ async fn run_coordinator_iteration(
             let attempts = coord_state.increment_attempts(target_id);
             let max_retries = config.max_work_retries;
             if attempts > max_retries {
-                warn!(
+                agent_log.warn(&format!(
                     "Work {} exceeded max retries ({}/{}), transitioning to Abandoned",
                     target_id, attempts, max_retries
-                );
+                ));
                 // Transition to Abandoned via bridge
                 let _ = bridge.request(
                     "work.transition",
@@ -1037,14 +1041,23 @@ async fn run_coordinator_iteration(
             }
         }
 
-        let result =
-            match execute_action(action_ref, tool_runner, bridge, repo_root, None, AgentType::Coordinator).await {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("Coordinator {} action failed (non-fatal): {e}", session.id);
-                    ActionResult::ActionError(e.to_string())
-                }
-            };
+        let result = match execute_action(
+            action_ref,
+            tool_runner,
+            bridge,
+            repo_root,
+            None,
+            AgentType::Coordinator,
+            agent_log,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                agent_log.warn(&format!("action failed (non-fatal): {e}"));
+                ActionResult::ActionError(e.to_string())
+            }
+        };
 
         // B4: Only count successful AgentSpawned as actual attempts.
         // DependencyNotMet and ActionError/other non-spawn results should not burn retry slots.
@@ -1132,20 +1145,20 @@ pub async fn run_coordinator(
             agent_log.info("No active goal, waiting");
             // No active goal — run in legacy mode (idle until goal is set)
             // Fall through to loop, which will sleep idle_interval
-            return run_coordinator_legacy(llm, session, stores, bridge, config, event_tx).await;
+            return run_coordinator_legacy(llm, session, stores, bridge, config, event_tx, agent_log).await;
         }
     };
 
     loop {
         // Check cancellation
         if is_session_cancelled(stores, &session.id) {
-            info!("Coordinator {} cancelled, exiting loop", session.id);
+            agent_log.info("cancelled, exiting loop");
             return Ok(());
         }
 
         // Check if goal is complete
         if coord_state.fsm_state.is_terminal() {
-            info!("Coordinator {} goal complete, exiting loop", session.id);
+            agent_log.info("goal complete, exiting loop");
             return Ok(());
         }
 
@@ -1158,10 +1171,7 @@ pub async fn run_coordinator(
                 s.iteration = session.iteration;
             }
         }
-        info!(
-            "Coordinator {} iteration {} (FSM: {})",
-            session.id, iteration, coord_state.fsm_state
-        );
+        agent_log.info(&format!("iteration {} (FSM: {})", iteration, coord_state.fsm_state));
 
         let ctx = IterationContext {
             llm,
@@ -1171,16 +1181,14 @@ pub async fn run_coordinator(
             config,
             iteration,
             previous_summary: previous_summary.clone(),
+            agent_log,
         };
         let outcome = run_coordinator_iteration(&ctx, &mut coord_state).await;
 
         let interval = match &outcome {
             Ok(IterationOutcome::Done(summary)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
-                info!(
-                    "Coordinator {} idle (FSM: {}): {}",
-                    session.id, coord_state.fsm_state, summary
-                );
+                agent_log.info(&format!("idle (FSM: {}): {}", coord_state.fsm_state, summary));
                 previous_summary = Some(summary.clone());
                 // Use active interval for FSM states that need quick transitions
                 match coord_state.fsm_state {
@@ -1192,23 +1200,17 @@ pub async fn run_coordinator(
             }
             Ok(IterationOutcome::Continue(summary)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, summary));
-                info!(
-                    "Coordinator {} continue (FSM: {}): {}",
-                    session.id, coord_state.fsm_state, summary
-                );
+                agent_log.info(&format!("continue (FSM: {}): {}", coord_state.fsm_state, summary));
                 previous_summary = Some(summary.clone());
                 config.active_interval_secs
             }
             Ok(IterationOutcome::NeedHelp(reason)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, reason));
-                warn!("Coordinator {} needs help: {}", session.id, reason);
+                agent_log.warn(&format!("needs help: {}", reason));
                 return Err(eyre!("coordinator needs help: {}", reason));
             }
             Err(e) => {
-                warn!(
-                    "Coordinator {} iteration {} failed (will retry): {}",
-                    session.id, iteration, e
-                );
+                agent_log.warn(&format!("iteration {} failed (will retry): {}", iteration, e));
                 previous_summary = Some(format!(
                     "ERROR: Your previous response could not be parsed. \
                      You MUST respond with ONLY a JSON array of action objects. \
@@ -1233,6 +1235,7 @@ async fn run_coordinator_legacy(
     bridge: &AgentIpcBridge,
     config: &CoordinatorConfig,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
 ) -> Result<()> {
     let mut iteration: u32 = 0;
     let mut previous_summary: Option<String> = None;
@@ -1242,7 +1245,7 @@ async fn run_coordinator_legacy(
 
     loop {
         if is_session_cancelled(stores, &session.id) {
-            info!("Coordinator {} cancelled, exiting loop", session.id);
+            agent_log.info("cancelled, exiting loop");
             return Ok(());
         }
 
@@ -1263,7 +1266,7 @@ async fn run_coordinator_legacy(
                 s.iteration = session.iteration;
             }
         }
-        info!("Coordinator {} iteration {}", session.id, iteration);
+        agent_log.info(&format!("iteration {}", iteration));
 
         let ctx = IterationContext {
             llm,
@@ -1273,6 +1276,7 @@ async fn run_coordinator_legacy(
             config,
             iteration,
             previous_summary: previous_summary.clone(),
+            agent_log,
         };
         let outcome = run_coordinator_iteration(&ctx, &mut coord_state).await;
 
@@ -1289,14 +1293,11 @@ async fn run_coordinator_legacy(
             }
             Ok(IterationOutcome::NeedHelp(reason)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, reason));
-                warn!("Coordinator {} needs help: {}", session.id, reason);
+                agent_log.warn(&format!("needs help: {}", reason));
                 return Err(eyre!("coordinator needs help: {}", reason));
             }
             Err(e) => {
-                warn!(
-                    "Coordinator {} iteration {} failed (will retry): {}",
-                    session.id, iteration, e
-                );
+                agent_log.warn(&format!("iteration {} failed (will retry): {}", iteration, e));
                 previous_summary = Some(format!(
                     "ERROR: Your previous response could not be parsed. \
                      You MUST respond with ONLY a JSON array of action objects. \
@@ -1420,7 +1421,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("No active records"));
     }
 
@@ -1434,7 +1436,8 @@ mod tests {
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("### Plans"));
         assert!(summary.contains("Test Plan"));
         assert!(summary.contains("draft"));
@@ -1450,7 +1453,8 @@ mod tests {
         plan.status = HierarchyStatus::Complete;
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(!summary.contains("Done Plan"));
         assert!(summary.contains("No active records"));
     }
@@ -1464,7 +1468,8 @@ mod tests {
         let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("### Works"));
         assert!(summary.contains("Add auth"));
     }
@@ -1478,7 +1483,8 @@ mod tests {
         let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("### Bundles"));
         assert!(summary.contains("Proposed"));
     }
@@ -1496,7 +1502,8 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("### Active Agents"));
         assert!(summary.contains("implementer"));
     }
@@ -1510,7 +1517,8 @@ mod tests {
         let lock = Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into());
         stores.locks.write().unwrap().insert(lock.id.clone(), lock);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("### Active Locks"));
         assert!(summary.contains("src/main.rs"));
     }
@@ -1529,7 +1537,8 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(!summary.contains("### Active Agents"));
     }
 
@@ -1588,6 +1597,7 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
+        let agent_log = test_agent_logger(&dir);
         let outcome = run_coordinator_iteration(
             &IterationContext {
                 llm: &llm,
@@ -1597,6 +1607,7 @@ mod tests {
                 config: &CoordinatorConfig::default(),
                 iteration: 1,
                 previous_summary: None,
+                agent_log: &agent_log,
             },
             &mut CoordinatorState::new("test-goal".to_string()),
         )
@@ -1622,6 +1633,7 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
+        let agent_log = test_agent_logger(&dir);
         let outcome = run_coordinator_iteration(
             &IterationContext {
                 llm: &llm,
@@ -1631,6 +1643,7 @@ mod tests {
                 config: &CoordinatorConfig::default(),
                 iteration: 1,
                 previous_summary: None,
+                agent_log: &agent_log,
             },
             &mut CoordinatorState::new("test-goal".to_string()),
         )
@@ -1656,6 +1669,7 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
+        let agent_log = test_agent_logger(&dir);
         let outcome = run_coordinator_iteration(
             &IterationContext {
                 llm: &llm,
@@ -1665,6 +1679,7 @@ mod tests {
                 config: &CoordinatorConfig::default(),
                 iteration: 1,
                 previous_summary: None,
+                agent_log: &agent_log,
             },
             &mut CoordinatorState::new("test-goal".to_string()),
         )
@@ -1688,6 +1703,7 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
+        let agent_log = test_agent_logger(&dir);
         let outcome = run_coordinator_iteration(
             &IterationContext {
                 llm: &llm,
@@ -1697,6 +1713,7 @@ mod tests {
                 config: &CoordinatorConfig::default(),
                 iteration: 1,
                 previous_summary: None,
+                agent_log: &agent_log,
             },
             &mut CoordinatorState::new("test-goal".to_string()),
         )
@@ -1875,7 +1892,8 @@ mod tests {
         let tick = Tick::new(1);
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(summary.contains("### Plans"));
         assert!(summary.contains("### Specs"));
         assert!(summary.contains("### Phases"));
@@ -1965,7 +1983,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let footer = build_generation_footer(&stores, "Build an auth system", 3, None);
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(&stores, "Build an auth system", 3, None, &agent_log);
         assert!(footer.is_some(), "should return generation footer when no plan exists");
         let text = footer.unwrap();
         // The Plan-level generation prompt should mention creating a plan
@@ -2006,7 +2025,8 @@ mod tests {
             }
         }
 
-        let footer = build_generation_footer(&stores, "Build auth", 3, None);
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log);
         assert!(footer.is_some(), "should return footer when validation cap is reached");
         let text = footer.unwrap();
         assert!(text.contains("need_help"), "should signal need_help when cap reached");
@@ -2040,7 +2060,8 @@ mod tests {
             store.create(report).unwrap();
         }
 
-        let footer = build_generation_footer(&stores, "Build auth", 3, None);
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log);
         assert!(
             footer.is_some(),
             "should return regen footer when draft has failures below cap"
@@ -2088,6 +2109,7 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
+        let agent_log = test_agent_logger(&dir);
         let outcome = run_coordinator_iteration(
             &IterationContext {
                 llm: &llm,
@@ -2097,6 +2119,7 @@ mod tests {
                 config: &CoordinatorConfig::default(),
                 iteration: 1,
                 previous_summary: None,
+                agent_log: &agent_log,
             },
             &mut CoordinatorState::new("test-goal".to_string()),
         )
@@ -2128,6 +2151,7 @@ mod tests {
         let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
 
+        let agent_log = test_agent_logger(&dir);
         let outcome = run_coordinator_iteration(
             &IterationContext {
                 llm: &llm,
@@ -2137,6 +2161,7 @@ mod tests {
                 config: &CoordinatorConfig::default(),
                 iteration: 1,
                 previous_summary: None,
+                agent_log: &agent_log,
             },
             &mut CoordinatorState::new("test-goal".to_string()),
         )
@@ -2915,7 +2940,8 @@ mod tests {
         let spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-        let footer = build_generation_footer(&stores, "Build a todo app", 3, None);
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log);
         assert!(footer.is_some(), "should emit footer for Draft validation");
         let footer_text = footer.unwrap();
         assert!(
@@ -2946,7 +2972,8 @@ mod tests {
         let mut coord_state = CoordinatorState::new("goal-1".to_string());
         coord_state.current_phase_id = Some(phase_id.clone());
 
-        mark_phase_record_complete(&stores, &coord_state);
+        let agent_log = test_agent_logger(&dir);
+        mark_phase_record_complete(&stores, &coord_state, &agent_log);
 
         let phases = stores.phases.read().unwrap();
         let updated = phases.get(&phase_id).unwrap();
@@ -2957,6 +2984,9 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_resolves_batch_0() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-batch0-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
         let action = AgentAction::CreateWork {
             phase_id: "phase-1".into(),
@@ -2966,7 +2996,7 @@ mod tests {
             acceptance_criteria: vec![],
             dependencies: vec!["batch:0".to_string()],
         };
-        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
         assert!(resolved.is_some());
         if let Some(AgentAction::CreateWork { dependencies, .. }) = resolved {
             assert_eq!(dependencies, vec!["wi-aaa".to_string()]);
@@ -2975,6 +3005,9 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_out_of_range() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-batchoor-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::CreateWork {
             phase_id: "phase-1".into(),
@@ -2984,7 +3017,7 @@ mod tests {
             acceptance_criteria: vec![],
             dependencies: vec!["batch:5".to_string()],
         };
-        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
         assert!(resolved.is_some());
         // Out of range falls through — keeps the original "batch:5" string
         if let Some(AgentAction::CreateWork { dependencies, .. }) = resolved {
@@ -2994,6 +3027,9 @@ mod tests {
 
     #[test]
     fn test_resolve_batch_deps_no_batch_refs() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-batchnone-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::CreateWork {
             phase_id: "phase-1".into(),
@@ -3003,15 +3039,18 @@ mod tests {
             acceptance_criteria: vec![],
             dependencies: vec!["wi-existing".to_string()],
         };
-        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
         assert!(resolved.is_none(), "no batch refs should return None");
     }
 
     #[test]
     fn test_resolve_batch_deps_non_create_action() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-batchnoncreate-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let batch_ids = vec!["wi-aaa".to_string()];
         let action = AgentAction::Done { summary: "done".into() };
-        let resolved = resolve_batch_dependencies(&action, &batch_ids);
+        let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
         assert!(resolved.is_none(), "non-CreateWork should return None");
     }
 
@@ -3171,7 +3210,8 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(
             summary.contains("Recently Merged Bundles"),
             "should include recently merged bundles section: {}",
@@ -3197,7 +3237,8 @@ mod tests {
         bundle.status = BundleStatus::Merged;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let summary = build_state_summary(&stores);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
         assert!(
             !summary.contains("Recently Merged Bundles"),
             "should NOT include merged bundles when WI is Done: {}",

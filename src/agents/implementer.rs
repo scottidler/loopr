@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
 
 use tokio::sync::broadcast;
 
@@ -34,8 +33,8 @@ fn normalize_action_keys(response: &str) -> String {
 
 /// Parse the LLM response into a list of agent actions.
 /// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
-pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
-    debug!("parse_actions(response_len={})", response.len());
+pub fn parse_actions(response: &str, agent_log: &AgentLogger) -> Result<Vec<AgentAction>> {
+    agent_log.debug(&format!("parse_actions(response_len={})", response.len()));
     // Normalize "type" → "action" before any parsing attempts
     let normalized = normalize_action_keys(response);
     let response = &normalized;
@@ -79,8 +78,8 @@ pub fn parse_actions(response: &str) -> Result<Vec<AgentAction>> {
 }
 
 /// Build a focused state summary for the implementer: active locks and sibling agents.
-pub fn build_implementer_summary(stores: &Stores, work_id: &str) -> String {
-    debug!("build_implementer_summary(work_id={})", work_id);
+pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &AgentLogger) -> String {
+    agent_log.debug(&format!("build_implementer_summary(work_id={})", work_id));
     use crate::domain::lock::LockStatus;
 
     let mut summary = String::with_capacity(512);
@@ -155,7 +154,7 @@ pub async fn run_iteration(
         iteration,
         previous_summary.is_some()
     ));
-    let state_summary = build_implementer_summary(params.stores, params.work_id);
+    let state_summary = build_implementer_summary(params.stores, params.work_id, params.agent_log);
     let assembled = ContextBuilder::new(params.stores, Role::Implementer)
         .load_work_hierarchy(params.work_id)?
         .with_guidance(&params.stores.guidance)
@@ -168,21 +167,19 @@ pub async fn run_iteration(
         .with_footer("Implement the Work described above. Respond with a JSON array of actions.".into())
         .build(&crate::prompts::store().implementer);
 
-    info!(
-        "Implementer {} context: ~{} tokens",
-        params.session_id, assembled.token_estimate
-    );
+    params
+        .agent_log
+        .info(&format!("context: ~{} tokens", assembled.token_estimate));
     let response = params
         .llm
         .call(&assembled.system_prompt, &assembled.user_message)
         .await?;
-    info!(
-        "Implementer {} raw LLM response ({} chars): {}",
-        params.session_id,
+    params.agent_log.info(&format!(
+        "raw LLM response ({} chars): {}",
         response.len(),
         &response[..response.len().min(800)]
-    );
-    let actions = parse_actions(&response)?;
+    ));
+    let actions = parse_actions(&response, params.agent_log)?;
 
     if actions.is_empty() {
         return Err(eyre!("LLM returned empty action list"));
@@ -204,12 +201,13 @@ pub async fn run_iteration(
             params.worktree_path,
             Some(params.work_id),
             AgentType::Implementer,
+            params.agent_log,
         )
         .await
         {
             Ok(r) => r,
             Err(e) => {
-                warn!("Implementer {} action failed (non-fatal): {e}", params.session_id);
+                params.agent_log.warn(&format!("action failed (non-fatal): {e}"));
                 ActionResult::ActionError(e.to_string())
             }
         };
@@ -241,8 +239,8 @@ pub async fn run_iteration(
 }
 
 /// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
-fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>) -> Option<String> {
-    debug!("drain_tick_published()");
+fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, agent_log: &AgentLogger) -> Option<String> {
+    agent_log.debug("drain_tick_published()");
     let mut latest_tick_id: Option<String> = None;
     loop {
         match event_rx.try_recv() {
@@ -316,7 +314,7 @@ pub async fn run_implementer(
                 s.iteration = session.iteration;
             }
         }
-        info!("Implementer {} iteration {}/{}", session.id, i, max_iterations);
+        agent_log.info(&format!("iteration {}/{}", i, max_iterations));
 
         // F3(A): Budget-exhaustion prompt injection on penultimate iteration
         if i >= max_iterations.saturating_sub(1) {
@@ -333,11 +331,8 @@ pub async fn run_implementer(
         }
 
         // Check for staleness (tick.published events since last iteration)
-        let staleness_note = if let Some(new_tick_id) = drain_tick_published(&mut event_rx) {
-            info!(
-                "Implementer {} detected stale: new tick {} published",
-                session.id, new_tick_id
-            );
+        let staleness_note = if let Some(new_tick_id) = drain_tick_published(&mut event_rx, agent_log) {
+            agent_log.info(&format!("detected stale: new tick {} published", new_tick_id));
             let _ = event_tx.send(DaemonEvent::agent_staleness_detected(&session.id, &new_tick_id));
             Some(format!(
                 "A new Tick '{}' has been published since your last iteration. \
@@ -355,12 +350,12 @@ pub async fn run_implementer(
                 // Done means the agent explicitly called Done — proposal tracking
                 // is irrelevant since we return immediately.
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &summary));
-                info!("Implementer {} completed: {}", session.id, summary);
+                agent_log.info(&format!("completed: {}", summary));
                 return Ok(());
             }
             Ok(IterationOutcome::NeedHelp(reason)) => {
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &reason));
-                warn!("Implementer {} needs help: {}", session.id, reason);
+                agent_log.warn(&format!("needs help: {}", reason));
                 return Err(eyre!("agent needs help: {}", reason));
             }
             Ok(IterationOutcome::Continue(summary)) => {
@@ -368,11 +363,11 @@ pub async fn run_implementer(
                     has_proposed = true;
                 }
                 let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, i, &summary));
-                info!("Implementer {} iteration {} done: {}", session.id, i, summary);
+                agent_log.info(&format!("iteration {} done: {}", i, summary));
                 previous_summary = Some(summary);
             }
             Err(e) => {
-                warn!("Implementer {} iteration {} failed (will retry): {}", session.id, i, e);
+                agent_log.warn(&format!("iteration {} failed (will retry): {}", i, e));
                 previous_summary = Some(format!(
                     "ERROR: Your previous response could not be parsed. \
                      You MUST respond with ONLY a JSON array of action objects. \
@@ -388,7 +383,7 @@ pub async fn run_implementer(
 
     // F3(B): Force-propose if the loop exhausted without a proposal
     if !has_proposed {
-        info!("Implementer {} force-proposing at iteration cap", session.id);
+        agent_log.info("force-proposing at iteration cap");
         // Commit whatever is in the worktree
         let _ = execute_action(
             &AgentAction::Commit {
@@ -400,6 +395,7 @@ pub async fn run_implementer(
             &worktree_path,
             Some(&work_id),
             AgentType::Implementer,
+            agent_log,
         )
         .await;
         // Propose the bundle
@@ -416,6 +412,7 @@ pub async fn run_implementer(
             &worktree_path,
             Some(&work_id),
             AgentType::Implementer,
+            agent_log,
         )
         .await;
     }
@@ -596,40 +593,55 @@ mod tests {
 
     #[test]
     fn test_parse_actions_direct_json() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse1-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let json = r#"[{"action": "done", "summary": "All done"}]"#;
-        let actions = parse_actions(json).unwrap();
+        let actions = parse_actions(json, &agent_log).unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], AgentAction::Done { .. }));
     }
 
     #[test]
     fn test_parse_actions_wrapped_in_code_block() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let response = "Here are the actions:\n```json\n[{\"action\": \"done\", \"summary\": \"done\"}]\n```";
-        let actions = parse_actions(response).unwrap();
+        let actions = parse_actions(response, &agent_log).unwrap();
         assert_eq!(actions.len(), 1);
     }
 
     #[test]
     fn test_parse_actions_multiple() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse3-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let json = r#"[
             {"action": "write_file", "path": "src/foo.rs", "content": "fn foo() {}"},
             {"action": "run_tool", "tool": "test", "args": []},
             {"action": "done", "summary": "Implemented foo"}
         ]"#;
-        let actions = parse_actions(json).unwrap();
+        let actions = parse_actions(json, &agent_log).unwrap();
         assert_eq!(actions.len(), 3);
     }
 
     #[test]
     fn test_parse_actions_invalid() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse4-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let bad = "This is not JSON at all";
-        assert!(parse_actions(bad).is_err());
+        assert!(parse_actions(bad, &agent_log).is_err());
     }
 
     #[test]
     fn test_parse_actions_empty_array() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse5-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let json = "[]";
-        let actions = parse_actions(json).unwrap();
+        let actions = parse_actions(json, &agent_log).unwrap();
         assert!(actions.is_empty());
     }
 
@@ -996,32 +1008,44 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_empty() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain1-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         drop(tx);
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_drain_tick_published_finds_tick() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::tick_published("tick-42", "abc123"));
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert_eq!(result, Some("tick-42".to_string()));
     }
 
     #[test]
     fn test_drain_tick_published_returns_latest() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain3-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::tick_published("tick-1", "aaa"));
         let _ = tx.send(DaemonEvent::tick_published("tick-2", "bbb"));
         let _ = tx.send(DaemonEvent::tick_published("tick-3", "ccc"));
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert_eq!(result, Some("tick-3".to_string()));
     }
 
     #[test]
     fn test_drain_tick_published_ignores_other_events() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain4-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
         let _ = tx.send(DaemonEvent::transition_completed(
@@ -1031,17 +1055,20 @@ mod tests {
             "proposed",
             "implementer",
         ));
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert!(result.is_none());
     }
 
     #[test]
     fn test_drain_tick_published_mixed_events() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain5-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
         let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
         let _ = tx.send(DaemonEvent::tick_published("tick-5", "sha5"));
         let _ = tx.send(DaemonEvent::record_updated("bundle", "b-1"));
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert_eq!(result, Some("tick-5".to_string()));
     }
 
@@ -1195,33 +1222,42 @@ mod tests {
 
     #[test]
     fn test_parse_actions_skips_malformed_in_fallback() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse6-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         // Array with one valid and one malformed action — fallback should skip the bad one
         let json = r#"[
             {"action": "done", "summary": "All good"},
             {"action": "totally_bogus", "invalid_field": 42}
         ]"#;
-        let actions = parse_actions(json).unwrap();
+        let actions = parse_actions(json, &agent_log).unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], AgentAction::Done { .. }));
     }
 
     #[test]
     fn test_parse_actions_normalizes_type_to_action() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse7-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         // LLMs sometimes use "type" instead of "action" as the discriminant key
         let json = r#"[{"type": "read_file", "path": "src/main.rs"}]"#;
-        let actions = parse_actions(json).unwrap();
+        let actions = parse_actions(json, &agent_log).unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
     }
 
     #[test]
     fn test_parse_actions_normalizes_type_in_prose() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-parse8-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let response = r#"I'll read the file first.
 
 ```json
 [{"type": "read_file", "path": "Cargo.toml"}]
 ```"#;
-        let actions = parse_actions(response).unwrap();
+        let actions = parse_actions(response, &agent_log).unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
     }
@@ -1234,7 +1270,8 @@ mod tests {
         let wi_id = get_work_id(&stores);
 
         // No active locks, no sibling agents — summary should be empty
-        let summary = build_implementer_summary(&stores, &wi_id);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_implementer_summary(&stores, &wi_id, &agent_log);
         assert!(summary.is_empty(), "expected empty summary, got: {}", summary);
     }
 
@@ -1276,17 +1313,23 @@ mod tests {
 
     #[test]
     fn test_drain_tick_published_closed_channel() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain6-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
         // Send a tick, then close
         let _ = tx.send(DaemonEvent::tick_published("tick-closed", "sha"));
         drop(tx);
         // Should still find the tick before hitting Closed
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert_eq!(result, Some("tick-closed".to_string()));
     }
 
     #[test]
     fn test_drain_tick_published_lagged_channel() {
+        let dir = std::env::temp_dir().join(format!("loopr-impl-drain7-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         // Create a very small buffer so sending more messages than capacity causes lag
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(2);
         // Send 4 messages to overflow the buffer of 2 — receiver will lag
@@ -1295,7 +1338,7 @@ mod tests {
         let _ = tx.send(DaemonEvent::record_created("x", "3"));
         let _ = tx.send(DaemonEvent::tick_published("tick-lagged", "sha"));
         // drain should recover from lag and find the tick
-        let result = drain_tick_published(&mut rx);
+        let result = drain_tick_published(&mut rx, &agent_log);
         assert_eq!(result, Some("tick-lagged".to_string()));
     }
 
@@ -1546,7 +1589,8 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        let summary = build_implementer_summary(&stores, &wi_id);
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_implementer_summary(&stores, &wi_id, &agent_log);
         assert!(summary.contains("### Active Locks"), "should contain locks section");
         assert!(summary.contains("src/main.rs"), "should contain lock resource");
         assert!(

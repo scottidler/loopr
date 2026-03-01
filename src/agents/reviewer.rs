@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -66,8 +65,8 @@ pub struct ReviewResult {
 
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
-pub fn parse_review_result(response: &str) -> Result<ReviewResult> {
-    debug!("parse_review_result(response_len={})", response.len());
+pub fn parse_review_result(response: &str, agent_log: &AgentLogger) -> Result<ReviewResult> {
+    agent_log.debug(&format!("parse_review_result(response_len={})", response.len()));
     // Try direct parse first
     if let Ok(result) = serde_json::from_str::<ReviewResult>(response) {
         return Ok(result);
@@ -125,15 +124,14 @@ pub async fn run_reviewer(
     let assembled = ctx.build(&crate::prompts::store().reviewer);
 
     let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-    let review = parse_review_result(&response)?;
+    let review = parse_review_result(&response, agent_log)?;
 
-    info!(
-        "Reviewer {} verdict: {} ({} issues) — {}",
-        session.id,
+    agent_log.info(&format!(
+        "verdict: {} ({} issues) — {}",
         review.verdict,
         review.issues.len(),
         review.summary
-    );
+    ));
 
     // Store review as a Learning scoped to the Bundle's work
     let learning_content = format!(
@@ -149,10 +147,7 @@ pub async fn run_reviewer(
         }),
     );
     if learning_resp.is_error() {
-        warn!(
-            "Reviewer {} failed to create learning: {:?}",
-            session.id, learning_resp.error
-        );
+        agent_log.warn(&format!("failed to create learning: {:?}", learning_resp.error));
     }
 
     // Execute verdict action via FSM transition
@@ -168,13 +163,10 @@ pub async fn run_reviewer(
                 }),
             );
             if resp.is_error() {
-                warn!(
-                    "Reviewer {} failed to transition bundle to Reviewed: {:?}",
-                    session.id, resp.error
-                );
+                agent_log.warn(&format!("failed to transition bundle to Reviewed: {:?}", resp.error));
                 return Err(eyre!("failed to transition bundle: {:?}", resp.error));
             }
-            info!("Reviewer {} approved bundle {}", session.id, bundle_id);
+            agent_log.info(&format!("approved bundle {}", bundle_id));
         }
         ReviewVerdict::RequestChanges => {
             // #21: Reject the bundle — Coordinator will re-assign for rework
@@ -187,10 +179,7 @@ pub async fn run_reviewer(
                 }),
             );
             if resp.is_error() {
-                warn!(
-                    "Reviewer {} failed to reject bundle (request_changes): {:?}",
-                    session.id, resp.error
-                );
+                agent_log.warn(&format!("failed to reject bundle (request_changes): {:?}", resp.error));
                 return Err(eyre!("failed to reject bundle: {:?}", resp.error));
             }
             // Create a Learning with the review feedback so the next
@@ -203,10 +192,10 @@ pub async fn run_reviewer(
                     "source_id": work_title,
                 }),
             );
-            info!(
-                "Reviewer {} requested changes on bundle {} (→Rejected + Learning)",
-                session.id, bundle_id
-            );
+            agent_log.info(&format!(
+                "requested changes on bundle {} (→Rejected + Learning)",
+                bundle_id
+            ));
         }
         ReviewVerdict::Reject => {
             let resp = bridge.request(
@@ -218,10 +207,10 @@ pub async fn run_reviewer(
                 }),
             );
             if resp.is_error() {
-                warn!("Reviewer {} failed to reject bundle: {:?}", session.id, resp.error);
+                agent_log.warn(&format!("failed to reject bundle: {:?}", resp.error));
                 return Err(eyre!("failed to reject bundle: {:?}", resp.error));
             }
-            info!("Reviewer {} rejected bundle {}", session.id, bundle_id);
+            agent_log.info(&format!("rejected bundle {}", bundle_id));
         }
     }
 
@@ -433,30 +422,42 @@ mod tests {
 
     #[test]
     fn test_parse_review_result_direct_json() {
+        let dir = std::env::temp_dir().join(format!("loopr-rev-parse1-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let json = r#"{"verdict": "approve", "issues": [], "summary": "All good"}"#;
-        let result = parse_review_result(json).unwrap();
+        let result = parse_review_result(json, &agent_log).unwrap();
         assert_eq!(result.verdict, ReviewVerdict::Approve);
     }
 
     #[test]
     fn test_parse_review_result_wrapped_in_code_block() {
+        let dir = std::env::temp_dir().join(format!("loopr-rev-parse2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let response =
             "Here is my review:\n```json\n{\"verdict\": \"approve\", \"issues\": [], \"summary\": \"LGTM\"}\n```";
-        let result = parse_review_result(response).unwrap();
+        let result = parse_review_result(response, &agent_log).unwrap();
         assert_eq!(result.verdict, ReviewVerdict::Approve);
         assert_eq!(result.summary, "LGTM");
     }
 
     #[test]
     fn test_parse_review_result_invalid() {
+        let dir = std::env::temp_dir().join(format!("loopr-rev-parse3-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let bad = "This is not JSON at all";
-        assert!(parse_review_result(bad).is_err());
+        assert!(parse_review_result(bad, &agent_log).is_err());
     }
 
     #[test]
     fn test_parse_review_result_wrong_schema() {
+        let dir = std::env::temp_dir().join(format!("loopr-rev-parse4-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let agent_log = test_agent_logger(&dir);
         let json = r#"{"wrong": "schema"}"#;
-        assert!(parse_review_result(json).is_err());
+        assert!(parse_review_result(json, &agent_log).is_err());
     }
 
     // --- context builder integration tests ---

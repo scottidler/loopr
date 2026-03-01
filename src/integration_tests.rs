@@ -26,6 +26,16 @@ mod tests {
         Arc::new(Stores::new())
     }
 
+    fn test_agent_logger(dir: &std::path::Path) -> crate::agents::agent_logger::AgentLogger {
+        let file_path = dir.join("test-integration.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        crate::agents::agent_logger::AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+    }
+
     fn test_event_tx() -> broadcast::Sender<DaemonEvent> {
         let (tx, _) = broadcast::channel(64);
         tx
@@ -664,7 +674,10 @@ mod tests {
             .insert(session.id.clone(), session);
 
         // Build state summary (used by Coordinator to understand current state)
-        let summary = crate::agents::coordinator::build_state_summary(&stores);
+        let _agent_dir = std::env::temp_dir().join(format!("loopr-intg-logger-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&_agent_dir).unwrap();
+        let agent_log = test_agent_logger(&_agent_dir);
+        let summary = crate::agents::coordinator::build_state_summary(&stores, &agent_log);
         assert!(summary.contains("Test Plan"), "summary should include plan");
         assert!(summary.contains("WI-1"), "summary should include work item");
         assert!(summary.contains("implementer"), "summary should include agent session");
@@ -745,40 +758,43 @@ mod tests {
         use std::path::Path;
 
         let repo_root = Path::new("/tmp/test-repo");
+        let _agent_dir = std::env::temp_dir().join(format!("loopr-intg-logger-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&_agent_dir).unwrap();
+        let agent_log = test_agent_logger(&_agent_dir);
 
         // Valid relative path
         assert!(
-            crate::agents::researcher::validate_path(repo_root, "src/main.rs").is_ok(),
+            crate::agents::researcher::validate_path(repo_root, "src/main.rs", &agent_log).is_ok(),
             "relative path should be valid"
         );
 
         // Absolute path rejected
         assert!(
-            crate::agents::researcher::validate_path(repo_root, "/etc/passwd").is_err(),
+            crate::agents::researcher::validate_path(repo_root, "/etc/passwd", &agent_log).is_err(),
             "absolute path should be rejected"
         );
 
         // Path traversal rejected
         assert!(
-            crate::agents::researcher::validate_path(repo_root, "../../../etc/passwd").is_err(),
+            crate::agents::researcher::validate_path(repo_root, "../../../etc/passwd", &agent_log).is_err(),
             "traversal path should be rejected"
         );
 
         // Denied file patterns
         assert!(
-            crate::agents::researcher::validate_path(repo_root, ".env").is_err(),
+            crate::agents::researcher::validate_path(repo_root, ".env", &agent_log).is_err(),
             ".env should be denied"
         );
         assert!(
-            crate::agents::researcher::validate_path(repo_root, "keys/server.key").is_err(),
+            crate::agents::researcher::validate_path(repo_root, "keys/server.key", &agent_log).is_err(),
             "*.key should be denied"
         );
         assert!(
-            crate::agents::researcher::validate_path(repo_root, "certs/server.pem").is_err(),
+            crate::agents::researcher::validate_path(repo_root, "certs/server.pem", &agent_log).is_err(),
             "*.pem should be denied"
         );
         assert!(
-            crate::agents::researcher::validate_path(repo_root, "credentials.json").is_err(),
+            crate::agents::researcher::validate_path(repo_root, "credentials.json", &agent_log).is_err(),
             "credentials.* should be denied"
         );
     }
@@ -1381,6 +1397,7 @@ mod tests {
             acceptance_criteria: "All tests pass".to_string(),
         };
 
+        let agent_log = test_agent_logger(&dir);
         let result = rt
             .block_on(execute_action(
                 &action,
@@ -1389,6 +1406,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
 
@@ -1421,6 +1439,7 @@ mod tests {
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let runner = ToolRunner::new(&[]);
         let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
 
         // Create Plan
         let plan_result = rt
@@ -1435,6 +1454,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
         let plan_id = match plan_result {
@@ -1455,6 +1475,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
         let spec_id = match spec_result {
@@ -1476,6 +1497,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
         let phase_id = match phase_result {
@@ -1499,6 +1521,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
         let wi_id = match wi_result {
@@ -1586,6 +1609,7 @@ mod tests {
         let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
         // TriageBundle via executor
+        let agent_log = test_agent_logger(&dir);
         let triage_result = rt
             .block_on(execute_action(
                 &AgentAction::TriageBundle {
@@ -1596,6 +1620,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
         assert!(
@@ -1631,6 +1656,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
         assert!(
@@ -2226,6 +2252,7 @@ mod tests {
         let wm = WorktreeManager::new(dir.clone(), dir.join(".wt"));
         let runner = ToolRunner::new(&[]);
         let bridge = AgentIpcBridge::new(stores.clone(), tx, wm, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
 
         let result = rt
             .block_on(execute_action(
@@ -2239,6 +2266,7 @@ mod tests {
                 &dir,
                 None,
                 AgentType::Coordinator,
+                &agent_log,
             ))
             .unwrap();
 
@@ -2316,6 +2344,7 @@ mod tests {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
+        let agent_log = test_agent_logger(&dir);
         let _ = crate::agents::executor::execute_action(
             &assign_action,
             &runner,
@@ -2323,6 +2352,7 @@ mod tests {
             &dir,
             None,
             AgentType::Coordinator,
+            &agent_log,
         )
         .await;
 

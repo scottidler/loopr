@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{debug, error, info, warn};
 use tokio::sync::broadcast;
 
 use crate::agents::agent_logger::AgentLogger;
@@ -21,8 +20,8 @@ use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
 
 /// Check if the integrator session has been cancelled.
-fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
-    debug!("is_session_cancelled(session_id={})", session_id);
+fn is_session_cancelled(stores: &Stores, session_id: &str, agent_log: &AgentLogger) -> bool {
+    agent_log.debug(&format!("is_session_cancelled(session_id={})", session_id));
     let sessions = stores.agent_sessions.read().unwrap();
     sessions
         .get(session_id)
@@ -31,8 +30,8 @@ fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
 }
 
 /// Find the latest published Tick number from the stores.
-fn latest_published_tick_id(stores: &Stores) -> Option<String> {
-    debug!("latest_published_tick_id()");
+fn latest_published_tick_id(stores: &Stores, agent_log: &AgentLogger) -> Option<String> {
+    agent_log.debug("latest_published_tick_id()");
     let ticks = stores.ticks.read().unwrap();
     ticks
         .values()
@@ -42,15 +41,15 @@ fn latest_published_tick_id(stores: &Stores) -> Option<String> {
 }
 
 /// Get the next tick number (max existing + 1, or 1 if none).
-fn next_tick_number(stores: &Stores) -> u32 {
-    debug!("next_tick_number()");
+fn next_tick_number(stores: &Stores, agent_log: &AgentLogger) -> u32 {
+    agent_log.debug("next_tick_number()");
     let ticks = stores.ticks.read().unwrap();
     ticks.values().map(|t| t.number).max().unwrap_or(0) + 1
 }
 
 /// Check if there's already a Tick in a non-terminal state (Open, Sealing, Validating).
-fn has_tick_in_progress(stores: &Stores) -> bool {
-    debug!("has_tick_in_progress()");
+fn has_tick_in_progress(stores: &Stores, agent_log: &AgentLogger) -> bool {
+    agent_log.debug("has_tick_in_progress()");
     let ticks = stores.ticks.read().unwrap();
     ticks.values().any(|t| {
         matches!(
@@ -62,8 +61,8 @@ fn has_tick_in_progress(stores: &Stores) -> bool {
 
 /// Recover stuck Ticks (Open/Sealing/Validating) from a previous crash.
 /// Returns the number of ticks recovered.
-fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
-    debug!("recover_stuck_ticks()");
+fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge, agent_log: &AgentLogger) -> u32 {
+    agent_log.debug("recover_stuck_ticks()");
     let stuck_tick_ids: Vec<String> = {
         let ticks = stores.ticks.read().unwrap();
         ticks
@@ -104,10 +103,10 @@ fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
                 }),
             );
             if resp.is_error() {
-                warn!(
-                    "Integrator: failed to recover stuck tick {} (Open→Failed): {:?}",
+                agent_log.warn(&format!(
+                    "failed to recover stuck tick {} (Open→Failed): {:?}",
                     tick_id, resp.error
-                );
+                ));
                 ok = false;
             }
         } else {
@@ -121,10 +120,10 @@ fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
                     }),
                 );
                 if resp.is_error() {
-                    warn!(
-                        "Integrator: failed to recover stuck tick {} (Sealing→Validating): {:?}",
+                    agent_log.warn(&format!(
+                        "failed to recover stuck tick {} (Sealing→Validating): {:?}",
                         tick_id, resp.error
-                    );
+                    ));
                     ok = false;
                 }
             }
@@ -139,17 +138,17 @@ fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
                     }),
                 );
                 if resp.is_error() {
-                    warn!(
-                        "Integrator: failed to recover stuck tick {} (→Failed): {:?}",
+                    agent_log.warn(&format!(
+                        "failed to recover stuck tick {} (→Failed): {:?}",
                         tick_id, resp.error
-                    );
+                    ));
                     ok = false;
                 }
             }
         }
 
         if ok {
-            info!("Integrator: recovered stuck tick {} → Failed", tick_id);
+            agent_log.info(&format!("recovered stuck tick {} → Failed", tick_id));
             recovered += 1;
 
             // Create a learning about the crash recovery
@@ -192,16 +191,17 @@ pub fn run_integrator_cycle(
     stores: &Stores,
     bridge: &AgentIpcBridge,
     config: &IntegratorConfig,
+    agent_log: &AgentLogger,
 ) -> Result<IntegratorCycleResult> {
-    debug!("run_integrator_cycle()");
+    agent_log.debug("run_integrator_cycle()");
     // 1. Recover stuck ticks from crash
-    let recovered = recover_stuck_ticks(stores, bridge);
+    let recovered = recover_stuck_ticks(stores, bridge, agent_log);
     if recovered > 0 {
         return Ok(IntegratorCycleResult::Recovered { count: recovered });
     }
 
     // 2. Check for in-progress ticks — don't create a new one if one exists
-    if has_tick_in_progress(stores) {
+    if has_tick_in_progress(stores, agent_log) {
         return Ok(IntegratorCycleResult::Idle);
     }
 
@@ -220,7 +220,7 @@ pub fn run_integrator_cycle(
     }
 
     // 4. Validate-then-mutate: check preconditions before any mutations
-    let latest_tick_id = latest_published_tick_id(stores);
+    let latest_tick_id = latest_published_tick_id(stores, agent_log);
 
     // Partition into valid (matching base_tick_id) and stale
     let mut valid_bundle_ids: Vec<String> = Vec::new();
@@ -247,12 +247,9 @@ pub fn run_integrator_cycle(
                     }),
                 );
                 if resp.is_error() {
-                    warn!(
-                        "Integrator: failed to reject stale bundle {}: {:?}",
-                        stale_id, resp.error
-                    );
+                    agent_log.warn(&format!("failed to reject stale bundle {}: {:?}", stale_id, resp.error));
                 } else {
-                    info!("Integrator: rejected stale bundle {}", stale_id);
+                    agent_log.info(&format!("rejected stale bundle {}", stale_id));
                 }
             }
             crate::config::StalePolicy::ReplanAtSafePoint => {
@@ -278,7 +275,7 @@ pub fn run_integrator_cycle(
                         "bundle.stale_replan_needed",
                         serde_json::json!({"bundle_id": stale_id, "work_id": wi_id, "reason": "stale_base_tick"}),
                     ));
-                    info!("Integrator: rejected stale bundle {} (replan at safe point)", stale_id);
+                    agent_log.info(&format!("rejected stale bundle {} (replan at safe point)", stale_id));
                 }
             }
             crate::config::StalePolicy::AutoReplayAndVerify => {
@@ -313,7 +310,7 @@ pub fn run_integrator_cycle(
                         "bundle.transition",
                         serde_json::json!({"id": stale_id, "target_status": "Rejected", "role": "integrator"}),
                     );
-                    warn!("Integrator: auto-replay failed for bundle {}, rejected", stale_id);
+                    agent_log.warn(&format!("auto-replay failed for bundle {}, rejected", stale_id));
                 } else {
                     // Update bundle's base_tick_id to latest and move to valid
                     let _ = bridge.request(
@@ -321,7 +318,7 @@ pub fn run_integrator_cycle(
                         serde_json::json!({"id": stale_id, "base_tick_id": latest_tick_id}),
                     );
                     valid_bundle_ids.push(stale_id.clone());
-                    info!("Integrator: auto-replayed stale bundle {}", stale_id);
+                    agent_log.info(&format!("auto-replayed stale bundle {}", stale_id));
                 }
             }
         }
@@ -366,7 +363,7 @@ pub fn run_integrator_cycle(
     }
 
     // 6. Create Tick
-    let tick_number = next_tick_number(stores);
+    let tick_number = next_tick_number(stores, agent_log);
     let create_resp = bridge.request("tick.create", serde_json::json!({ "number": tick_number }));
     if create_resp.is_error() {
         return Err(eyre!("Failed to create tick: {:?}", create_resp.error));
@@ -379,12 +376,12 @@ pub fn run_integrator_cycle(
         .ok_or_else(|| eyre!("tick.create did not return id"))?
         .to_string();
 
-    info!(
-        "Integrator: created Tick {} (number {}) with {} bundles",
+    agent_log.info(&format!(
+        "created Tick {} (number {}) with {} bundles",
         tick_id,
         tick_number,
         valid_bundle_ids.len()
-    );
+    ));
 
     // 7. Transition Tick: Open → Sealing
     let seal_resp = bridge.request(
@@ -410,10 +407,10 @@ pub fn run_integrator_cycle(
             }),
         );
         if resp.is_error() {
-            warn!(
-                "Integrator: failed to transition bundle {} to Integrating: {:?}",
+            agent_log.warn(&format!(
+                "failed to transition bundle {} to Integrating: {:?}",
                 bundle_id, resp.error
-            );
+            ));
         }
     }
 
@@ -435,7 +432,7 @@ pub fn run_integrator_cycle(
         && let Some(ref store) = stores.store
         && let Err(e) = store.lock().unwrap().update(tick)
     {
-        warn!("Failed to persist tick bundle_ids: {}", e);
+        agent_log.warn(&format!("Failed to persist tick bundle_ids: {}", e));
     }
 
     // Gap #14: Merge bundle branches into integration branch
@@ -462,7 +459,7 @@ pub fn run_integrator_cycle(
                 }
             }
             Err(e) => {
-                warn!("Integrator: merge failed: {}", e);
+                agent_log.warn(&format!("merge failed: {}", e));
                 // B3: Transition tick Sealing → Failed via IPC (FSM + events + persistence)
                 let fail_resp = bridge.request(
                     "tick.transition",
@@ -473,7 +470,7 @@ pub fn run_integrator_cycle(
                     }),
                 );
                 if fail_resp.is_error() {
-                    error!("Integrator: failed to fail tick {}: {:?}", tick_id, fail_resp.error);
+                    agent_log.error(&format!("failed to fail tick {}: {:?}", tick_id, fail_resp.error));
                 }
 
                 // B2: Transition bundles Integrating → Rejected
@@ -487,10 +484,10 @@ pub fn run_integrator_cycle(
                         }),
                     );
                     if resp.is_error() {
-                        warn!(
-                            "Integrator: failed to reject bundle {} after merge failure: {:?}",
+                        agent_log.warn(&format!(
+                            "failed to reject bundle {} after merge failure: {:?}",
                             bundle_id, resp.error
-                        );
+                        ));
                     }
                 }
 
@@ -541,7 +538,7 @@ pub fn run_integrator_cycle(
         && let Some(ref store) = stores.store
         && let Err(e) = store.lock().unwrap().update(tick)
     {
-        warn!("Failed to persist tick validation_log: {}", e);
+        agent_log.warn(&format!("Failed to persist tick validation_log: {}", e));
     }
 
     // 11. Publish or Fail
@@ -577,7 +574,7 @@ pub fn run_integrator_cycle(
             && let Some(ref store) = stores.store
             && let Err(e) = store.lock().unwrap().update(tick)
         {
-            warn!("Failed to persist tick integration_sha: {}", e);
+            agent_log.warn(&format!("Failed to persist tick integration_sha: {}", e));
         }
 
         // Transition bundles: Integrating → Merged
@@ -591,10 +588,10 @@ pub fn run_integrator_cycle(
                 }),
             );
             if resp.is_error() {
-                warn!(
-                    "Integrator: failed to transition bundle {} to Merged: {:?}",
+                agent_log.warn(&format!(
+                    "failed to transition bundle {} to Merged: {:?}",
                     bundle_id, resp.error
-                );
+                ));
             }
         }
 
@@ -627,17 +624,17 @@ pub fn run_integrator_cycle(
                     }),
                 );
                 if resp.is_error() {
-                    warn!(
-                        "Integrator: failed to transition WI {} to Integrated: {:?}",
+                    agent_log.warn(&format!(
+                        "failed to transition WI {} to Integrated: {:?}",
                         wi_id, resp.error
-                    );
+                    ));
                 } else {
-                    info!("Integrator: Work {} transitioned to Integrated", wi_id);
+                    agent_log.info(&format!("Work {} transitioned to Integrated", wi_id));
                 }
             }
         }
 
-        info!("Integrator: Tick {} published successfully", tick_id);
+        agent_log.info(&format!("Tick {} published successfully", tick_id));
         Ok(IntegratorCycleResult::Published {
             tick_id: tick_id.clone(),
         })
@@ -652,7 +649,7 @@ pub fn run_integrator_cycle(
             }),
         );
         if fail_resp.is_error() {
-            error!("Integrator: failed to fail tick {}: {:?}", tick_id, fail_resp.error);
+            agent_log.error(&format!("failed to fail tick {}: {:?}", tick_id, fail_resp.error));
         }
 
         // Transition bundles: Integrating → Rejected
@@ -666,10 +663,10 @@ pub fn run_integrator_cycle(
                 }),
             );
             if resp.is_error() {
-                warn!(
-                    "Integrator: failed to reject bundle {} after validation failure: {:?}",
+                agent_log.warn(&format!(
+                    "failed to reject bundle {} after validation failure: {:?}",
                     bundle_id, resp.error
-                );
+                ));
             }
         }
 
@@ -683,7 +680,7 @@ pub fn run_integrator_cycle(
             }),
         );
 
-        info!("Integrator: Tick {} validation failed", tick_id);
+        agent_log.info(&format!("Tick {} validation failed", tick_id));
         Ok(IntegratorCycleResult::ValidationFailed {
             tick_id: tick_id.clone(),
             log: validation_log,
@@ -710,14 +707,14 @@ pub async fn run_integrator(
 
     loop {
         // Check cancellation
-        if is_session_cancelled(stores, &session.id) {
-            info!("Integrator {} cancelled, exiting loop", session.id);
+        if is_session_cancelled(stores, &session.id, agent_log) {
+            agent_log.info("cancelled, exiting loop");
             return Ok(());
         }
 
         session.iteration = session.iteration.saturating_add(1);
 
-        match run_integrator_cycle(stores, bridge, config) {
+        match run_integrator_cycle(stores, bridge, config, agent_log) {
             Ok(result) => {
                 let summary = match &result {
                     IntegratorCycleResult::Idle => "idle".to_string(),
@@ -747,7 +744,7 @@ pub async fn run_integrator(
                 }
             }
             Err(e) => {
-                error!("Integrator {} cycle error: {}", session.id, e);
+                agent_log.error(&format!("cycle error: {}", e));
                 let _ = event_tx.send(DaemonEvent::new(
                     "integrator.error",
                     serde_json::json!({
@@ -928,7 +925,8 @@ mod tests {
         let sid = session.id.clone();
         stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
 
-        assert!(!is_session_cancelled(&stores, &sid));
+        let agent_log = test_agent_logger(&dir);
+        assert!(!is_session_cancelled(&stores, &sid, &agent_log));
     }
 
     #[test]
@@ -943,7 +941,8 @@ mod tests {
         let sid = session.id.clone();
         stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
 
-        assert!(is_session_cancelled(&stores, &sid));
+        let agent_log = test_agent_logger(&dir);
+        assert!(is_session_cancelled(&stores, &sid, &agent_log));
     }
 
     #[test]
@@ -952,7 +951,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        assert!(is_session_cancelled(&stores, "nonexistent-id"));
+        let agent_log = test_agent_logger(&dir);
+        assert!(is_session_cancelled(&stores, "nonexistent-id", &agent_log));
     }
 
     // --- Helper function tests ---
@@ -963,7 +963,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        assert!(latest_published_tick_id(&stores).is_none());
+        let agent_log = test_agent_logger(&dir);
+        assert!(latest_published_tick_id(&stores, &agent_log).is_none());
     }
 
     #[test]
@@ -984,7 +985,8 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick2.id.clone(), tick2);
         stores.ticks.write().unwrap().insert(tick3.id.clone(), tick3);
 
-        assert_eq!(latest_published_tick_id(&stores), Some(tick2_id));
+        let agent_log = test_agent_logger(&dir);
+        assert_eq!(latest_published_tick_id(&stores, &agent_log), Some(tick2_id));
     }
 
     #[test]
@@ -993,7 +995,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        assert_eq!(next_tick_number(&stores), 1);
+        let agent_log = test_agent_logger(&dir);
+        assert_eq!(next_tick_number(&stores, &agent_log), 1);
     }
 
     #[test]
@@ -1005,7 +1008,8 @@ mod tests {
         let tick = Tick::new(5);
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        assert_eq!(next_tick_number(&stores), 6);
+        let agent_log = test_agent_logger(&dir);
+        assert_eq!(next_tick_number(&stores, &agent_log), 6);
     }
 
     #[test]
@@ -1014,14 +1018,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        assert!(!has_tick_in_progress(&stores));
+        let agent_log = test_agent_logger(&dir);
+        assert!(!has_tick_in_progress(&stores, &agent_log));
 
         // Add a published tick — still no in-progress
         let mut tick = Tick::new(1);
         tick.status = TickStatus::Published;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        assert!(!has_tick_in_progress(&stores));
+        assert!(!has_tick_in_progress(&stores, &agent_log));
     }
 
     #[test]
@@ -1033,7 +1038,8 @@ mod tests {
         let tick = Tick::new(1); // status = Open
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        assert!(has_tick_in_progress(&stores));
+        let agent_log = test_agent_logger(&dir);
+        assert!(has_tick_in_progress(&stores, &agent_log));
     }
 
     // --- recover_stuck_ticks tests ---
@@ -1045,7 +1051,8 @@ mod tests {
         let stores = test_stores(&dir);
         let (bridge, _) = test_bridge(stores.clone(), &dir);
 
-        assert_eq!(recover_stuck_ticks(&stores, &bridge), 0);
+        let agent_log = test_agent_logger(&dir);
+        assert_eq!(recover_stuck_ticks(&stores, &bridge, &agent_log), 0);
     }
 
     #[test]
@@ -1060,7 +1067,8 @@ mod tests {
         let tick_id = tick.id.clone();
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        assert_eq!(recover_stuck_ticks(&stores, &bridge), 1);
+        let agent_log = test_agent_logger(&dir);
+        assert_eq!(recover_stuck_ticks(&stores, &bridge, &agent_log), 1);
 
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
@@ -1078,7 +1086,8 @@ mod tests {
         let tick_id = tick.id.clone();
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        assert_eq!(recover_stuck_ticks(&stores, &bridge), 1);
+        let agent_log = test_agent_logger(&dir);
+        assert_eq!(recover_stuck_ticks(&stores, &bridge, &agent_log), 1);
 
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
@@ -1094,7 +1103,8 @@ mod tests {
         let (bridge, _) = test_bridge(stores.clone(), &dir);
         let config = test_config();
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert_eq!(result, IntegratorCycleResult::Idle);
     }
 
@@ -1117,7 +1127,8 @@ mod tests {
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         // Open tick is recovered first, then next cycle can proceed
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert_eq!(result, IntegratorCycleResult::Recovered { count: 1 });
 
         // Verify the tick was transitioned to Failed
@@ -1137,7 +1148,8 @@ mod tests {
         tick.status = TickStatus::Sealing;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert_eq!(result, IntegratorCycleResult::Recovered { count: 1 });
     }
 
@@ -1155,7 +1167,8 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert!(
             matches!(result, IntegratorCycleResult::Published { .. }),
             "expected Published, got {:?}",
@@ -1181,7 +1194,8 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert!(
             matches!(result, IntegratorCycleResult::ValidationFailed { .. }),
             "expected ValidationFailed, got {:?}",
@@ -1218,7 +1232,8 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
 
         // Verify bundle is rejected
@@ -1275,7 +1290,8 @@ mod tests {
             .unwrap()
             .insert(stale_bundle.id.clone(), stale_bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         // Should publish because there's at least one valid bundle
         assert!(
             matches!(result, IntegratorCycleResult::Published { .. }),
@@ -1308,28 +1324,29 @@ mod tests {
         let mut tick = Tick::new(1);
         tick.status = TickStatus::Sealing;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
-        assert!(has_tick_in_progress(&stores));
+        let agent_log = test_agent_logger(&dir);
+        assert!(has_tick_in_progress(&stores, &agent_log));
 
         // Validating is in-progress
         let stores = test_stores(&dir);
         let mut tick = Tick::new(2);
         tick.status = TickStatus::Validating;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
-        assert!(has_tick_in_progress(&stores));
+        assert!(has_tick_in_progress(&stores, &agent_log));
 
         // Published is NOT in-progress
         let stores = test_stores(&dir);
         let mut tick = Tick::new(3);
         tick.status = TickStatus::Published;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
-        assert!(!has_tick_in_progress(&stores));
+        assert!(!has_tick_in_progress(&stores, &agent_log));
 
         // Failed is NOT in-progress
         let stores = test_stores(&dir);
         let mut tick = Tick::new(4);
         tick.status = TickStatus::Failed;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
-        assert!(!has_tick_in_progress(&stores));
+        assert!(!has_tick_in_progress(&stores, &agent_log));
     }
 
     // --- Stale policy tests ---
@@ -1369,7 +1386,8 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &intg_config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &intg_config, &agent_log).unwrap();
         assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
 
         // Bundle should be rejected
@@ -1422,7 +1440,8 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &intg_config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &intg_config, &agent_log).unwrap();
         // With no worktree setup, refresh fails → bundle gets rejected
         assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
 
@@ -1452,7 +1471,7 @@ mod tests {
         // Reset the stale bundle to Accepted so it gets processed again
         stores.bundles.write().unwrap().get_mut(&bundle_id).unwrap().status = BundleStatus::Accepted;
 
-        let result = run_integrator_cycle(&stores, &bridge, &intg_config).unwrap();
+        let result = run_integrator_cycle(&stores, &bridge, &intg_config, &agent_log).unwrap();
         // valid bundle produces Published, stale one fallback-rejected
         assert!(
             matches!(result, IntegratorCycleResult::Published { .. }),
@@ -1478,7 +1497,8 @@ mod tests {
         let tick_id = tick.id.clone();
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-        let recovered = recover_stuck_ticks(&stores, &bridge);
+        let agent_log = test_agent_logger(&dir);
+        let recovered = recover_stuck_ticks(&stores, &bridge, &agent_log);
         assert_eq!(recovered, 1);
 
         // Verify tick is Failed
@@ -1523,7 +1543,8 @@ mod tests {
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         match result {
             IntegratorCycleResult::ValidationFailed { log, .. } => {
                 assert!(log.contains("stderr_msg"), "log should contain stderr: {}", log);
@@ -1551,7 +1572,8 @@ mod tests {
         stores.bundles.write().unwrap().insert(b1.id.clone(), b1);
 
         // Run cycle — should succeed for the valid bundle
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         assert!(
             matches!(result, IntegratorCycleResult::Published { .. }),
             "expected Published, got {:?}",
@@ -1583,7 +1605,8 @@ mod tests {
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         match result {
             IntegratorCycleResult::ValidationFailed { log, .. } => {
                 assert!(log.contains("step1"), "should have step1 output");
@@ -1611,7 +1634,7 @@ mod tests {
         bundle2.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle2.id.clone(), bundle2);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config_pass).unwrap();
+        let result = run_integrator_cycle(&stores, &bridge, &config_pass, &agent_log).unwrap();
         assert!(
             matches!(result, IntegratorCycleResult::Published { .. }),
             "expected Published, got {:?}",
@@ -1633,7 +1656,8 @@ mod tests {
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = run_integrator_cycle(&stores, &bridge, &config, &agent_log).unwrap();
         let tick_id = match &result {
             IntegratorCycleResult::ValidationFailed { tick_id, .. } => tick_id.clone(),
             other => panic!("expected ValidationFailed, got {:?}", other),

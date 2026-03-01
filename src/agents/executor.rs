@@ -6,6 +6,9 @@ use eyre::{Result, eyre};
 use log::{debug, error, info, warn};
 use tokio::sync::broadcast;
 
+// Note: log:: macros are still used in run_agent_task (pre-logger section) and utility functions.
+// Post-logger code uses agent_log. execute_action uses agent_log passed as parameter.
+
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::coordinator;
@@ -162,7 +165,7 @@ pub async fn run_agent_task(
         let mut sessions = stores.agent_sessions.write().unwrap();
         if let Some(session) = sessions.get_mut(&session_id) {
             if let Err(e) = session.transition_to(AgentStatus::Running) {
-                error!("Agent {} failed to start: {}", session_id, e);
+                agent_log.error(&format!("failed to start: {}", e));
                 return;
             }
             persist_session(&stores, session);
@@ -214,21 +217,21 @@ pub async fn run_agent_task(
             serde_json::json!({ "id": wi_id, "target_status": wi_status, "role": "implementer" }),
         );
         if resp.is_error() {
-            warn!(
-                "Agent {} failed to transition work {} → {}: {:?}",
-                session_id, wi_id, wi_status, resp.error
-            );
+            agent_log.warn(&format!(
+                "failed to transition work {} → {}: {:?}",
+                wi_id, wi_status, resp.error
+            ));
         } else {
-            info!("Agent {} transitioned work {} → {}", session_id, wi_id, wi_status);
+            agent_log.info(&format!("transitioned work {} → {}", wi_id, wi_status));
         }
     }
 
     // Clean up worktree after agent loop exits (only for non-thinking-plane agents)
     if let Some(ref key) = cleanup_key {
         if let Err(e) = cleanup_mgr.cleanup(key) {
-            warn!("Worktree cleanup failed for {} (key={}): {}", session_id, key, e);
+            agent_log.warn(&format!("worktree cleanup failed (key={}): {}", key, e));
         } else {
-            info!("Worktree cleaned up for {} (key={})", session_id, key);
+            agent_log.info(&format!("worktree cleaned up (key={})", key));
         }
     }
 
@@ -236,7 +239,7 @@ pub async fn run_agent_task(
     let terminal_status = match result {
         Ok(_) => AgentStatus::Completed,
         Err(ref e) => {
-            warn!("Agent {} failed: {}", session_id, e);
+            agent_log.warn(&format!("failed: {}", e));
             AgentStatus::Failed
         }
     };
@@ -245,10 +248,7 @@ pub async fn run_agent_task(
         let mut sessions = stores.agent_sessions.write().unwrap();
         if let Some(session) = sessions.get_mut(&session_id) {
             if let Err(e) = session.transition_to(terminal_status) {
-                error!(
-                    "Agent {} failed to transition to {:?}: {}",
-                    session_id, terminal_status, e
-                );
+                agent_log.error(&format!("failed to transition to {:?}: {}", terminal_status, e));
                 return;
             }
             if let Err(ref e) = result {
@@ -298,18 +298,12 @@ pub async fn run_agent_task(
         if let Some(store_arc) = &stores.store {
             let _ = store_arc.lock().unwrap().create(learning);
         }
-        info!(
-            "Created failure learning {} for implementer {} on '{}'",
-            learning_id, session_id, wi_title
-        );
+        agent_log.info(&format!("created failure learning {} on '{}'", learning_id, wi_title));
     }
 
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
 
-    info!(
-        "Agent task finished: {} ({}) → {:?}",
-        session_id, agent_type, terminal_status
-    );
+    agent_log.info(&format!("task finished → {:?}", terminal_status));
 }
 
 /// Agent loop — dispatches to the appropriate agent implementation based on type.
@@ -483,8 +477,9 @@ pub async fn execute_action(
     worktree_path: &Path,
     work_id: Option<&str>,
     agent_type: AgentType,
+    agent_log: &AgentLogger,
 ) -> Result<ActionResult> {
-    debug!("execute_action(action={:?}, agent_type={})", action, agent_type);
+    agent_log.debug(&format!("execute_action(action={:?})", action));
     match action {
         AgentAction::RunTool { tool, args } => {
             let tool_result = tool_runner
@@ -586,7 +581,10 @@ pub async fn execute_action(
                 if let Some(ref err) = resp.error
                     && err.code == -32002
                 {
-                    warn!("Bundle stale ({}), retrying with fresh base_tick_id", err.message);
+                    agent_log.warn(&format!(
+                        "Bundle stale ({}), retrying with fresh base_tick_id",
+                        err.message
+                    ));
                     let new_base_tick_id = resolve_latest_published_tick_id(bridge.stores());
                     if let Some(tick_id) = &new_base_tick_id {
                         params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
@@ -699,7 +697,7 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("CreatePlan: {} (id: {})", title, id);
+            agent_log.info(&format!("CreatePlan: {} (id: {})", title, id));
             Ok(ActionResult::RecordCreated {
                 collection: "plans".to_string(),
                 id,
@@ -743,7 +741,7 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("CreateSpec: {} (id: {})", title, id);
+            agent_log.info(&format!("CreateSpec: {} (id: {})", title, id));
             Ok(ActionResult::RecordCreated {
                 collection: "specs".to_string(),
                 id,
@@ -775,7 +773,7 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("CreatePhase: {} (id: {})", title, id);
+            agent_log.info(&format!("CreatePhase: {} (id: {})", title, id));
             Ok(ActionResult::RecordCreated {
                 collection: "phases".to_string(),
                 id,
@@ -811,7 +809,7 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("CreateWork: {} (id: {}, deps: {:?})", title, id, dependencies);
+            agent_log.info(&format!("CreateWork: {} (id: {}, deps: {:?})", title, id, dependencies));
             Ok(ActionResult::RecordCreated {
                 collection: "works".to_string(),
                 id,
@@ -890,10 +888,10 @@ pub async fn execute_action(
                                 msg
                             )));
                         }
-                        info!(
+                        agent_log.info(&format!(
                             "AssignAgent: auto-transitioned work {} Draft→Ready→InProgress",
                             target_id
-                        );
+                        ));
                     }
                     "Ready" => {
                         // Ready → InProgress
@@ -908,7 +906,10 @@ pub async fn execute_action(
                                 msg
                             )));
                         }
-                        info!("AssignAgent: auto-transitioned work {} Ready→InProgress", target_id);
+                        agent_log.info(&format!(
+                            "AssignAgent: auto-transitioned work {} Ready→InProgress",
+                            target_id
+                        ));
                     }
                     "InProgress" => {
                         // Already correct
@@ -947,7 +948,10 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("AssignAgent: {} → {} (session: {})", agent_type, target_id, session_id);
+            agent_log.info(&format!(
+                "AssignAgent: {} → {} (session: {})",
+                agent_type, target_id, session_id
+            ));
             Ok(ActionResult::AgentSpawned {
                 session_id,
                 agent_type: agent_type.clone(),
@@ -973,10 +977,10 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!(
+            agent_log.info(&format!(
                 "SpawnResearcher: {} (scope: {}, session: {})",
                 query, scope_id, session_id
-            );
+            ));
             Ok(ActionResult::AgentSpawned {
                 session_id,
                 agent_type: "researcher".to_string(),
@@ -1023,13 +1027,13 @@ pub async fn execute_action(
                         .collect()
                 })
                 .unwrap_or_default();
-            info!(
+            agent_log.info(&format!(
                 "ValidateDocument {}/{}: verdict={}, issues={}",
                 collection,
                 id,
                 verdict,
                 issues.len()
-            );
+            ));
             Ok(ActionResult::DocumentValidated {
                 verdict,
                 summary,
@@ -1083,7 +1087,10 @@ pub async fn execute_action(
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            info!("Lock acquired: {} on '{}' for {}", lock_id, resource, holder_id);
+            agent_log.info(&format!(
+                "Lock acquired: {} on '{}' for {}",
+                lock_id, resource, holder_id
+            ));
             Ok(ActionResult::LockAcquired(lock_id))
         }
         AgentAction::ReleaseLock { lock_id } => {
@@ -1091,7 +1098,7 @@ pub async fn execute_action(
             if resp.is_error() {
                 return Err(eyre!("lock.release failed: {:?}", resp.error));
             }
-            info!("Lock released: {}", lock_id);
+            agent_log.info(&format!("Lock released: {}", lock_id));
             Ok(ActionResult::LockReleased(lock_id.clone()))
         }
         AgentAction::TriageBundle { bundle_id } => {
@@ -1107,7 +1114,7 @@ pub async fn execute_action(
                 let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
                 return Ok(ActionResult::ActionError(format!("triage_bundle failed: {}", msg)));
             }
-            info!("TriageBundle: {} → Triaged", bundle_id);
+            agent_log.info(&format!("TriageBundle: {} → Triaged", bundle_id));
             Ok(ActionResult::Transitioned(format!("bundle/{} → Triaged", bundle_id)))
         }
         AgentAction::AcceptBundle { bundle_id } => {
@@ -1123,28 +1130,29 @@ pub async fn execute_action(
                 let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
                 return Ok(ActionResult::ActionError(format!("accept_bundle failed: {}", msg)));
             }
-            info!("AcceptBundle: {} → Accepted", bundle_id);
+            agent_log.info(&format!("AcceptBundle: {} → Accepted", bundle_id));
             Ok(ActionResult::Transitioned(format!("bundle/{} → Accepted", bundle_id)))
         }
 
         // --- Researcher actions (wired in Phase 4 researcher.rs) ---
         AgentAction::SearchCode { pattern, glob, path } => {
             let repo_root = worktree_path; // For Researcher, worktree_path is the repo root
-            match researcher::execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref()).await {
+            match researcher::execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref(), agent_log).await
+            {
                 Ok(output) => Ok(ActionResult::FileRead(output)),
                 Err(e) => Ok(ActionResult::ActionError(e.to_string())),
             }
         }
         AgentAction::SearchFiles { pattern, path } => {
             let repo_root = worktree_path;
-            match researcher::execute_search_files(repo_root, pattern, path.as_deref()).await {
+            match researcher::execute_search_files(repo_root, pattern, path.as_deref(), agent_log).await {
                 Ok(output) => Ok(ActionResult::FileRead(output)),
                 Err(e) => Ok(ActionResult::ActionError(e.to_string())),
             }
         }
         AgentAction::ListDirectory { path } => {
             let repo_root = worktree_path;
-            match researcher::execute_list_directory(repo_root, path).await {
+            match researcher::execute_list_directory(repo_root, path, agent_log).await {
                 Ok(output) => Ok(ActionResult::FileRead(output)),
                 Err(e) => Ok(ActionResult::ActionError(e.to_string())),
             }
@@ -1209,6 +1217,17 @@ mod tests {
     use crate::config::{Config, ProjectConfig, ToolEntry};
     use std::sync::Mutex as StdMutex;
     use taskstore::Store;
+
+    fn test_agent_logger(dir: &Path) -> AgentLogger {
+        use crate::agents::AgentType;
+        let file_path = dir.join("test-executor.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+    }
 
     fn test_stores(dir: &Path) -> Arc<Stores> {
         let config = Config {
@@ -1283,9 +1302,18 @@ mod tests {
             target_status: "Abandoned".to_string(),
             role: Some("coordinator".to_string()),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
 
         // Should succeed (not "target_status required" error)
         assert!(
@@ -1313,9 +1341,18 @@ mod tests {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
 
         // The agent.start may fail (no LLM key) but the auto-transition should have happened
         // Check work item status is InProgress
@@ -1363,9 +1400,18 @@ mod tests {
             tool: "echo-test".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::ToolRun(tool_result) = result {
             assert_eq!(tool_result.exit_code, 0);
             assert_eq!(tool_result.stdout.trim(), "hello");
@@ -1389,9 +1435,18 @@ mod tests {
             path: "test.txt".to_string(),
             content: "hello world".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
 
         let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
@@ -1430,9 +1485,18 @@ mod tests {
             path: "src/main.rs".to_string(),
             content: "should be blocked".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
             "expected ActionError for locked file, got: {:?}",
@@ -1464,9 +1528,18 @@ mod tests {
             path: "test.txt".to_string(),
             content: "should work".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
     }
 
@@ -1485,9 +1558,18 @@ mod tests {
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::FileRead(content) = result {
             assert_eq!(content, "file content");
         } else {
@@ -1509,9 +1591,18 @@ mod tests {
         let action = AgentAction::Done {
             summary: "All done".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::Done(summary) = result {
             assert_eq!(summary, "All done");
         } else {
@@ -1533,9 +1624,18 @@ mod tests {
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::NeedHelp(reason) = result {
             assert_eq!(reason, "Ambiguous spec");
         } else {
@@ -1558,7 +1658,17 @@ mod tests {
             tool: "nonexistent".to_string(),
             args: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -1577,9 +1687,18 @@ mod tests {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-123".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::LockAcquired(lock_id) = &result {
             assert!(!lock_id.is_empty());
             assert_ne!(lock_id, "unknown");
@@ -1604,9 +1723,18 @@ mod tests {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-100".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::LockAcquired(_)));
 
         // Try to acquire again on same resource — should get ActionError
@@ -1614,9 +1742,17 @@ mod tests {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-200".to_string(),
         };
-        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result2 = execute_action(
+            &action2,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::ActionError(msg) = &result2 {
             assert!(
                 msg.contains("already locked"),
@@ -1644,9 +1780,18 @@ mod tests {
             resource: "src/lib.rs".to_string(),
             holder_id: "wi-456".to_string(),
         };
-        let acquire_result = execute_action(&acquire_action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let acquire_result = execute_action(
+            &acquire_action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         let lock_id = if let ActionResult::LockAcquired(id) = acquire_result {
             id
         } else {
@@ -1657,9 +1802,17 @@ mod tests {
         let release_action = AgentAction::ReleaseLock {
             lock_id: lock_id.clone(),
         };
-        let release_result = execute_action(&release_action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let release_result = execute_action(
+            &release_action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::LockReleased(id) = &release_result {
             assert_eq!(id, &lock_id);
         } else {
@@ -1683,9 +1836,18 @@ mod tests {
             resource: "src/config.rs".to_string(),
             holder_id: "wi-1".to_string(),
         };
-        let r1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let r1 = execute_action(
+            &action1,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         let lock_id = if let ActionResult::LockAcquired(id) = r1 {
             id
         } else {
@@ -1696,18 +1858,34 @@ mod tests {
         let release = AgentAction::ReleaseLock {
             lock_id: lock_id.clone(),
         };
-        execute_action(&release, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        execute_action(
+            &release,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
 
         // Re-acquire same resource by different holder — should succeed
         let action2 = AgentAction::AcquireLock {
             resource: "src/config.rs".to_string(),
             holder_id: "wi-2".to_string(),
         };
-        let r2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let r2 = execute_action(
+            &action2,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(r2, ActionResult::LockAcquired(_)));
     }
 
@@ -1773,9 +1951,18 @@ mod tests {
             description: "Plan desc".to_string(),
             acceptance_criteria: "Tests pass".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "plans");
             assert!(!id.is_empty());
@@ -1803,9 +1990,18 @@ mod tests {
             title: "New Spec".to_string(),
             description: "Spec desc".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "specs");
             assert!(!id.is_empty());
@@ -1833,9 +2029,18 @@ mod tests {
             description: "Phase desc".to_string(),
             order: 2,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "phases");
             assert!(!id.is_empty());
@@ -1872,9 +2077,18 @@ mod tests {
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "works");
             assert!(!id.is_empty());
@@ -1923,9 +2137,18 @@ mod tests {
             message: "test commit".to_string(),
             paths: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::Committed(ref msg) if msg == "test commit"),
             "expected Committed, got: {:?}",
@@ -1971,9 +2194,18 @@ mod tests {
             message: "add a.txt only".to_string(),
             paths: vec!["a.txt".to_string()],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::Committed(_)));
     }
 
@@ -2028,9 +2260,18 @@ mod tests {
             description: "My bundle".to_string(),
             claims: vec!["Implemented feature X".to_string()],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, Some(&wi_id), AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            Some(&wi_id),
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::BundleProposed(ref desc) if desc == "My bundle"),
             "expected BundleProposed, got: {:?}",
@@ -2087,7 +2328,17 @@ mod tests {
             claims: vec![],
         };
         // work_id = None should fail
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work_id"));
     }
@@ -2112,9 +2363,18 @@ mod tests {
             applicable_roles: Some(vec!["implementer".to_string()]),
             resource_tags: Some(vec!["src/".to_string()]),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::LearningCreated(ref c) if c == "Always add tests"),
             "expected LearningCreated, got: {:?}",
@@ -2140,9 +2400,18 @@ mod tests {
             applicable_roles: None,
             resource_tags: None,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::LearningCreated(_)));
     }
 
@@ -2161,9 +2430,18 @@ mod tests {
             query: "How does auth work?".to_string(),
             scope_id: "plan-1".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         // agent.start may fail (no LLM key), which returns ActionError
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
@@ -2190,9 +2468,18 @@ mod tests {
             collection: "plan".to_string(),
             id: plan_id,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         // Validation may fail (no LLM key) returning ActionError, or succeed with DocumentValidated
         assert!(
             matches!(
@@ -2232,9 +2519,18 @@ mod tests {
         let action = AgentAction::TriageBundle {
             bundle_id: bundle_id.clone(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Triaged")),
             "expected Transitioned to Triaged, got: {:?}",
@@ -2277,9 +2573,18 @@ mod tests {
         let action = AgentAction::AcceptBundle {
             bundle_id: bundle_id.clone(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Accepted")),
             "expected Transitioned to Accepted, got: {:?}",
@@ -2304,7 +2609,17 @@ mod tests {
             path: "../../../etc/passwd".to_string(),
             content: "pwned".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("escapes worktree"));
     }
@@ -2323,7 +2638,17 @@ mod tests {
         let action = AgentAction::ReadFile {
             path: "nonexistent.txt".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await;
         assert!(result.is_err());
     }
 
@@ -2349,9 +2674,18 @@ mod tests {
             target_status: "Abandoned".to_string(),
             role: None, // Should infer "coordinator" from AgentType::Coordinator
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(_)),
             "expected Transitioned with inferred role, got: {:?}",
@@ -2374,9 +2708,18 @@ mod tests {
             path: "deep/nested/dir/file.txt".to_string(),
             content: "nested content".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
         let content = std::fs::read_to_string(dir.join("deep/nested/dir/file.txt")).unwrap();
         assert_eq!(content, "nested content");
@@ -2399,7 +2742,8 @@ mod tests {
             glob: None,
             path: None,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher)
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher, &agent_log)
             .await
             .unwrap();
         assert!(
@@ -2424,7 +2768,8 @@ mod tests {
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
 
         let action = AgentAction::ListDirectory { path: ".".to_string() };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher)
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Researcher, &agent_log)
             .await
             .unwrap();
         assert!(
@@ -2701,9 +3046,18 @@ mod tests {
             target_status: "abandoned".to_string(),
             role: None,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("plans")),
             "expected Transitioned for plans, got: {:?}",
@@ -2717,9 +3071,17 @@ mod tests {
             target_status: "abandoned".to_string(),
             role: None,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::Transitioned(_)));
 
         // Test "phases" (plural) → normalizes to "phase"
@@ -2729,9 +3091,17 @@ mod tests {
             target_status: "abandoned".to_string(),
             role: None,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result, ActionResult::Transitioned(_)));
     }
 
@@ -2756,7 +3126,17 @@ mod tests {
             target_status: "InProgress".to_string(),
             role: Some("coordinator".to_string()),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator).await;
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await;
         // Should fail (transition error) since InProgress requires assignee
         assert!(result.is_err(), "InProgress without assignee should fail: {:?}", result);
     }
@@ -2778,9 +3158,18 @@ mod tests {
             description: "desc".to_string(),
             acceptance_criteria: "pass".to_string(),
         };
-        let result1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result1 = execute_action(
+            &action1,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Try to create another plan — should get ActionError due to draft-awareness guard
@@ -2789,9 +3178,17 @@ mod tests {
             description: "desc".to_string(),
             acceptance_criteria: "pass".to_string(),
         };
-        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result2 = execute_action(
+            &action2,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Plan already exists")),
             "expected draft-awareness error, got: {:?}",
@@ -2819,9 +3216,18 @@ mod tests {
             title: "New Spec".to_string(),
             description: "desc".to_string(),
         };
-        let result1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result1 = execute_action(
+            &action1,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Try to create another spec under same plan — should get draft-awareness error
@@ -2830,9 +3236,17 @@ mod tests {
             title: "Another Spec".to_string(),
             description: "desc".to_string(),
         };
-        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result2 = execute_action(
+            &action2,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Spec already exists")),
             "expected draft-awareness error for spec, got: {:?}",
@@ -2858,9 +3272,18 @@ mod tests {
             description: "desc".to_string(),
             order: 1,
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_phase failed")),
             "expected error for nonexistent spec, got: {:?}",
@@ -2888,9 +3311,18 @@ mod tests {
             acceptance_criteria: vec![],
             dependencies: vec![],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_work failed")),
             "expected error for nonexistent phase, got: {:?}",
@@ -2914,9 +3346,18 @@ mod tests {
         let action = AgentAction::TriageBundle {
             bundle_id: "nonexistent-bundle".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("triage_bundle failed")),
             "expected triage error, got: {:?}",
@@ -2952,9 +3393,18 @@ mod tests {
         let action = AgentAction::AcceptBundle {
             bundle_id: bundle_id.clone(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("accept_bundle failed")),
             "expected accept error for un-triaged bundle, got: {:?}",
@@ -2978,9 +3428,18 @@ mod tests {
             query: "What patterns are used in the codebase?".to_string(),
             scope_id: "spec-1".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         // agent.start will either succeed or fail (no LLM key) — both are acceptable
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
@@ -3014,9 +3473,18 @@ mod tests {
             path: "locked.txt".to_string(),
             content: "advisory allows this".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::FileWritten(_)),
             "expected write to succeed under advisory policy, got: {:?}",
@@ -3056,9 +3524,18 @@ mod tests {
             path: "strict.txt".to_string(),
             content: "should be blocked".to_string(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked") && msg.contains("LockStrict")),
             "expected lock-blocked error, got: {:?}",
@@ -3179,9 +3656,18 @@ mod tests {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
 
         assert!(
             matches!(result, ActionResult::DependencyNotMet { .. }),
@@ -3248,9 +3734,18 @@ mod tests {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
 
         assert!(
             matches!(result, ActionResult::AgentSpawned { .. }),
@@ -3281,9 +3776,18 @@ mod tests {
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![wi_id.clone()],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(result, ActionResult::RecordCreated { .. }));
 
@@ -3316,9 +3820,18 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let result1 = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result1 = execute_action(
+            &action1,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         // Create duplicate WI with same title — should fail
@@ -3330,9 +3843,17 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result2 = execute_action(
+            &action2,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
             "expected duplicate error, got: {:?}",
@@ -3362,7 +3883,17 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let _ = execute_action(&action1, &runner, &bridge, &dir, None, AgentType::Coordinator).await;
+        let agent_log = test_agent_logger(&dir);
+        let _ = execute_action(
+            &action1,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await;
 
         // Create duplicate with different case — should also fail
         let action2 = AgentAction::CreateWork {
@@ -3373,9 +3904,17 @@ mod tests {
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
-        let result2 = execute_action(&action2, &runner, &bridge, &dir, None, AgentType::Coordinator)
-            .await
-            .unwrap();
+        let result2 = execute_action(
+            &action2,
+            &runner,
+            &bridge,
+            &dir,
+            None,
+            AgentType::Coordinator,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Duplicate")),
             "expected case-insensitive duplicate error, got: {:?}",
@@ -3493,9 +4032,18 @@ mod tests {
             claims: vec!["claim".to_string()],
         };
         // The call succeeds — bundle.create receives base_tick_id and accepts it
-        let result = execute_action(&action, &runner, &bridge, &dir, Some(&wi_id), AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            Some(&wi_id),
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         assert!(
             matches!(result, ActionResult::BundleProposed(ref d) if d == "Bundle with base tick"),
             "expected BundleProposed, got: {:?}",
@@ -3555,9 +4103,18 @@ mod tests {
             description: "Test bundle".to_string(),
             claims: vec!["implemented feature".to_string()],
         };
-        let result = execute_action(&action, &runner, &bridge, &dir, Some(&wi_id), AgentType::Implementer)
-            .await
-            .unwrap();
+        let agent_log = test_agent_logger(&dir);
+        let result = execute_action(
+            &action,
+            &runner,
+            &bridge,
+            &dir,
+            Some(&wi_id),
+            AgentType::Implementer,
+            &agent_log,
+        )
+        .await
+        .unwrap();
         // The bundle should be created with branch_name "agent/<wi_id>"
         assert!(
             matches!(result, ActionResult::BundleProposed(_)),
