@@ -7,7 +7,7 @@ use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WorkStatus {
     Draft,
     Ready,
