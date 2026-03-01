@@ -64,6 +64,7 @@ See the System Rules section in your context for valid transitions and which rol
 
 - Create ALL Works for a Phase in a single batch. Do NOT create one at a time.
 - Declare dependencies between Works using IDs from existing items or "batch:N" for items in the same batch.
+- MAXIMIZE PARALLELISM: Only add a dependency if a Work truly cannot start without the other's output. If two Works touch different files, they can run in parallel — do NOT chain them sequentially. Prefer fan-out (many Works depending on one scaffolding Work) over chains.
 - Only assign Implementers to Works whose dependencies are ALL Done.
 - Keep 2-6 implementers active. Assign to Ready Works with met dependencies first.
 - Works MUST include acceptance_criteria and resource_tags.

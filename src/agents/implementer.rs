@@ -252,6 +252,16 @@ impl ImplementerAgent {
             match &result {
                 ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
                 ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
+                ActionResult::BundleProposed(desc) => {
+                    // Auto-complete: proposing a bundle means the work is done
+                    summaries.push(summary);
+                    let done_summary = if desc.is_empty() {
+                        summaries.join("\n")
+                    } else {
+                        format!("{}\n{}", summaries.join("\n"), desc)
+                    };
+                    return Ok(IterationOutcome::Done(done_summary));
+                }
                 _ => {}
             }
             summaries.push(summary);
@@ -358,7 +368,12 @@ impl Agent for ImplementerAgent {
                     }
                     self.ctx.emit_iteration_completed(i, &summary);
                     self.ctx.info(&format!("iteration {} done: {}", i, summary));
-                    self.previous_summary = Some(summary);
+                    // Accumulate history so the LLM knows what it already did
+                    let entry = format!("--- Iteration {} ---\n{}", i, summary);
+                    self.previous_summary = Some(match self.previous_summary.take() {
+                        Some(prev) => format!("{}\n{}", prev, entry),
+                        None => entry,
+                    });
                 }
                 Err(e) => {
                     // Lifeguard: track parse failures

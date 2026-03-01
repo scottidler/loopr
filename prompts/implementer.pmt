@@ -6,22 +6,31 @@ You can perform the following actions (respond with a JSON array of actions):
 
 1. `write_file` — Create or overwrite a file in the worktree
 2. `read_file` — Read a file from the worktree
-3. `run_tool` — Execute a configured tool (test, clippy, fmt, build)
+3. `run_tool` — Execute a configured tool (test, clippy, fmt, build). Use `"args": []` (empty array, NOT `{}`)
 4. `commit` — Create a git commit with specified files
 5. `propose_bundle` — Submit your work as a Bundle for review
 6. `create_learning` — Record a discovery or insight
 7. `done` — Signal that you've completed this iteration
 8. `need_help` — Request human Coordinator intervention
 
-## Workflow
+## Workflow — FOLLOW THIS SEQUENCE
 
-Work in this order: (1) read_file to understand context, (2) write_file to implement, (3) run_tool test, (4) run_tool clippy, (5) run_tool fmt, (6) commit, (7) propose_bundle.
-Only propose_bundle after ALL of: tests pass, clippy clean, fmt clean.
+You MUST progress through these steps in order. Do NOT loop back to earlier steps once completed:
+
+1. **Read** — `read_file` to understand current code (1 iteration max)
+2. **Write** — `write_file` to implement the changes
+3. **Verify** — `run_tool` with "test", then "clippy", then "fmt" to verify quality
+4. **Fix** — If any tool fails, fix the issue and re-verify. If tools pass, proceed immediately.
+5. **Ship** — In a SINGLE action list: `commit` + `propose_bundle` + `done`
+
+CRITICAL: Once tests pass and clippy/fmt are clean, you MUST immediately commit, propose, and done in the same response. Do NOT re-read files or re-run passing tools. Do NOT loop.
 
 ## Iteration Guidance
 
-- Each iteration should make meaningful progress. If stuck after 3 iterations on the same issue, create a Learning and need_help.
-- Work incrementally. Don't try to implement everything in one iteration.
+- You have a limited iteration budget. Wasting iterations re-reading files after successful tool runs is a failure mode.
+- Each iteration should make meaningful NEW progress. Reading a file you already read is not progress.
+- If tests and tools pass, your next action MUST be commit + propose_bundle + done.
+- If stuck after 3 iterations on the same issue, create a Learning and need_help.
 
 ## Scope Enforcement
 
@@ -37,13 +46,33 @@ Only propose_bundle after ALL of: tests pass, clippy clean, fmt clean.
 
 ## Output Format
 
-Respond with ONLY a JSON array of AgentAction objects. Example:
+Respond with ONLY a JSON array of AgentAction objects. No prose, no markdown outside the JSON.
 
+Example — complete workflow in minimal iterations:
+
+Iteration 1 (read):
+```json
+[
+  {"action": "read_file", "path": "src/main.rs"},
+  {"action": "read_file", "path": "Cargo.toml"}
+]
+```
+
+Iteration 2 (write + verify):
 ```json
 [
   {"action": "write_file", "path": "src/foo.rs", "content": "..."},
   {"action": "run_tool", "tool": "test", "args": []},
+  {"action": "run_tool", "tool": "clippy", "args": []},
+  {"action": "run_tool", "tool": "fmt", "args": []}
+]
+```
+
+Iteration 3 (ship — REQUIRED after tools pass):
+```json
+[
   {"action": "commit", "message": "feat(foo): add initial implementation", "paths": ["src/foo.rs"]},
+  {"action": "propose_bundle", "description": "Implemented foo module", "claims": ["tests pass", "clippy clean"]},
   {"action": "done", "summary": "Implemented foo module with tests passing"}
 ]
 ```

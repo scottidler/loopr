@@ -58,6 +58,13 @@ where
         fn visit_unit<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
             Ok(Vec::new())
         }
+
+        /// LLMs sometimes send `"args": {}` instead of `"args": []` — treat empty map as empty vec.
+        fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<Self::Value, A::Error> {
+            // Drain any entries (shouldn't be any for empty {}) and return empty vec
+            while map.next_entry::<de::IgnoredAny, de::IgnoredAny>()?.is_some() {}
+            Ok(Vec::new())
+        }
     }
 
     deserializer.deserialize_any(StringOrVecVisitor)
@@ -372,11 +379,11 @@ pub enum AgentAction {
     },
     Commit {
         message: String,
-        #[serde(default, deserialize_with = "string_or_vec")]
+        #[serde(default, alias = "files", deserialize_with = "string_or_vec")]
         paths: Vec<String>,
     },
     ProposeBundle {
-        #[serde(default)]
+        #[serde(default, alias = "summary")]
         description: String,
         #[serde(default, deserialize_with = "string_or_vec")]
         claims: Vec<String>,
@@ -401,6 +408,7 @@ pub enum AgentAction {
         resource_tags: Option<Vec<String>>,
     },
     Done {
+        #[serde(default)]
         summary: String,
     },
     NeedHelp {
@@ -1517,6 +1525,18 @@ mod tests {
     #[test]
     fn test_string_or_vec_null_input() {
         let json = r#"{"action": "run_tool", "tool": "pytest", "args": null}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::RunTool { args, .. } = action {
+            assert!(args.is_empty());
+        } else {
+            panic!("expected RunTool");
+        }
+    }
+
+    #[test]
+    fn test_string_or_vec_empty_object() {
+        // LLMs sometimes send "args": {} instead of "args": [] — should parse as empty vec
+        let json = r#"{"action": "run_tool", "tool": "test", "args": {}}"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         if let AgentAction::RunTool { args, .. } = action {
             assert!(args.is_empty());

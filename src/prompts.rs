@@ -265,7 +265,7 @@ mod tests {
         ] {
             assert!(p.contains(action), "implementer.pmt missing action: {}", action);
         }
-        assert!(p.contains("Work incrementally"));
+        assert!(p.contains("iteration budget"));
         assert!(p.contains("clippy"));
     }
 
