@@ -602,7 +602,7 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
             }
         }
         CoordinatorFsmState::Executing => {
-            // Build executing context — monitor work items, assign agents, triage bundles
+            // Build executing context — monitor works, assign agents, triage bundles
             let phase_status = build_phase_status(stores, coord_state);
             format!(
                 "## Executing Phase\n\n{}\n\n\
@@ -658,7 +658,7 @@ fn find_next_phase_to_activate(stores: &Stores, coord_state: &CoordinatorState) 
     ordered.first().map(|p| (p.id.clone(), p.title.clone()))
 }
 
-/// Build a status summary for the current phase's work items.
+/// Build a status summary for the current phase's works.
 fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String {
     let phase_id = match &coord_state.current_phase_id {
         Some(id) => id,

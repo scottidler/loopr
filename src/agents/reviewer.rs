@@ -127,7 +127,7 @@ pub async fn run_reviewer(
         review.summary
     );
 
-    // Store review as a Learning scoped to the Bundle's work item
+    // Store review as a Learning scoped to the Bundle's work
     let learning_content = format!(
         "Review of bundle {}: verdict={}, summary={}",
         bundle_id, review.verdict, review.summary

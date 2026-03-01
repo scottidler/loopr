@@ -74,7 +74,7 @@ impl fmt::Display for View {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             View::Dashboard => write!(f, "Dashboard"),
-            View::Works => write!(f, "Work Items"),
+            View::Works => write!(f, "Works"),
             View::Bundles => write!(f, "Bundles"),
             View::Ticks => write!(f, "Ticks"),
             View::Learnings => write!(f, "Learnings"),
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn test_view_display() {
         assert_eq!(View::Dashboard.to_string(), "Dashboard");
-        assert_eq!(View::Works.to_string(), "Work Items");
+        assert_eq!(View::Works.to_string(), "Works");
         assert_eq!(View::Bundles.to_string(), "Bundles");
         assert_eq!(View::Ticks.to_string(), "Ticks");
         assert_eq!(View::Learnings.to_string(), "Learnings");

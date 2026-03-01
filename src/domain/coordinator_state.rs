@@ -84,7 +84,7 @@ impl CoordinatorState {
         self.updated_at = id::now_millis();
     }
 
-    /// Increment the attempt counter for a work item. Returns the new count.
+    /// Increment the attempt counter for a work. Returns the new count.
     pub fn increment_attempts(&mut self, work_id: &str) -> u32 {
         let count = self.work_attempts.entry(work_id.to_string()).or_insert(0);
         *count += 1;
@@ -92,7 +92,7 @@ impl CoordinatorState {
         *count
     }
 
-    /// Get the attempt count for a work item.
+    /// Get the attempt count for a work.
     pub fn attempts(&self, work_id: &str) -> u32 {
         self.work_attempts.get(work_id).copied().unwrap_or(0)
     }

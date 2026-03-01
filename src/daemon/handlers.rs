@@ -372,7 +372,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
             .map(|t| t.id.clone())
     };
 
-    // Gap #33: Stale work items count
+    // Gap #33: Stale works count
     let stale_works: usize = {
         let wis = stores.works.read().unwrap();
         let bundles_map = stores.bundles.read().unwrap();
@@ -636,9 +636,22 @@ fn handle_spec_create(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("plan_id is required")),
     };
 
-    // Verify parent plan exists
-    if !stores.plans.read().unwrap().contains_key(&plan_id) {
-        return DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id));
+    // Verify parent plan exists and is not in a terminal state
+    {
+        let plans = stores.plans.read().unwrap();
+        match plans.get(&plan_id) {
+            None => return DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id)),
+            Some(plan) if matches!(plan.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Cannot create spec under {} plan '{}'",
+                        plan.status, plan_id
+                    )),
+                );
+            }
+            _ => {}
+        }
     }
 
     let title = req
@@ -857,9 +870,22 @@ fn handle_phase_create(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("spec_id is required")),
     };
 
-    // Verify parent spec exists
-    if !stores.specs.read().unwrap().contains_key(&spec_id) {
-        return DaemonResponse::err(req.id, RpcError::not_found("spec", &spec_id));
+    // Verify parent spec exists and is not in a terminal state
+    {
+        let specs = stores.specs.read().unwrap();
+        match specs.get(&spec_id) {
+            None => return DaemonResponse::err(req.id, RpcError::not_found("spec", &spec_id)),
+            Some(spec) if matches!(spec.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Cannot create phase under {} spec '{}'",
+                        spec.status, spec_id
+                    )),
+                );
+            }
+            _ => {}
+        }
     }
 
     let title = req
@@ -1079,9 +1105,22 @@ fn handle_work_create(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("phase_id is required")),
     };
 
-    // Verify parent phase exists
-    if !stores.phases.read().unwrap().contains_key(&phase_id) {
-        return DaemonResponse::err(req.id, RpcError::not_found("phase", &phase_id));
+    // Verify parent phase exists and is not in a terminal state
+    {
+        let phases = stores.phases.read().unwrap();
+        match phases.get(&phase_id) {
+            None => return DaemonResponse::err(req.id, RpcError::not_found("phase", &phase_id)),
+            Some(phase) if matches!(phase.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Cannot create work under {} phase '{}'",
+                        phase.status, phase_id
+                    )),
+                );
+            }
+            _ => {}
+        }
     }
 
     let title = req
@@ -1101,7 +1140,7 @@ fn handle_work_create(
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
     }
 
-    // Duplicate detection: reject work items with same title in same phase (unless Abandoned)
+    // Duplicate detection: reject work with same title in same phase (unless Abandoned)
     {
         let works = stores.works.read().unwrap();
         let duplicate = works.values().find(|wi| {
@@ -1113,7 +1152,7 @@ fn handle_work_create(
             return DaemonResponse::err(
                 req.id,
                 RpcError::precondition_failed(&format!(
-                    "Duplicate work item '{}' already exists in phase {} with status {} (ID: {})",
+                    "Duplicate work '{}' already exists in phase {} with status {} (ID: {})",
                     title, phase_id, dup.status, dup.id
                 )),
             );
@@ -1396,9 +1435,22 @@ fn handle_bundle_create(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
     };
 
-    // Verify parent work item exists
-    if !stores.works.read().unwrap().contains_key(&work_id) {
-        return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id));
+    // Verify parent work exists and is not in a terminal state
+    {
+        let works = stores.works.read().unwrap();
+        match works.get(&work_id) {
+            None => return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id)),
+            Some(work) if matches!(work.status, WorkStatus::Done | WorkStatus::Abandoned) => {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Cannot create bundle under {} work '{}'",
+                        work.status, work_id
+                    )),
+                );
+            }
+            _ => {}
+        }
     }
 
     let branch_name = req
@@ -2523,7 +2575,7 @@ fn handle_worktree_create(
         .unwrap_or("HEAD")
         .to_string();
 
-    // Validate the work item exists (TaskStore first, fallback to HashMap)
+    // Validate the work exists (TaskStore first, fallback to HashMap)
     {
         let found = if let Some(store) = &stores.store {
             store.lock().unwrap().get::<Work>(&work_id).ok().is_some()
@@ -2542,7 +2594,7 @@ fn handle_worktree_create(
     if worktree_mgr.exists(&work_id) {
         return DaemonResponse::err(
             req.id,
-            RpcError::invalid_params(&format!("worktree already exists for work item {work_id}")),
+            RpcError::invalid_params(&format!("worktree already exists for work {work_id}")),
         );
     }
 
@@ -2579,7 +2631,7 @@ fn handle_worktree_cleanup(
         None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
     };
 
-    // Validate the work item exists (TaskStore first, fallback to HashMap)
+    // Validate the work exists (TaskStore first, fallback to HashMap)
     {
         let found = if let Some(store) = &stores.store {
             store.lock().unwrap().get::<Work>(&work_id).ok().is_some()
@@ -4605,6 +4657,275 @@ mod tests {
         let retrieved: Option<Spec> = store.get(&spec_id).unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().title, "Persisted Spec");
+    }
+
+    // --- parent status validation tests ---
+
+    #[test]
+    fn test_spec_create_rejects_complete_plan() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+
+        // Transition plan: Draft → Active → Complete
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "plan.transition",
+                json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "plan.transition",
+                json!({"id": plan_id, "target_status": "complete", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "Spec Under Complete"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("complete plan"));
+    }
+
+    #[test]
+    fn test_spec_create_rejects_abandoned_plan() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+
+        // Transition plan: Draft → Abandoned
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "plan.transition",
+                json!({"id": plan_id, "target_status": "abandoned", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "Spec Under Abandoned"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("abandoned plan"));
+    }
+
+    #[test]
+    fn test_phase_create_rejects_complete_spec() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
+
+        // Transition spec: Draft → Active → Complete
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "spec.transition",
+                json!({"id": spec_id, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "spec.transition",
+                json!({"id": spec_id, "target_status": "complete", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Phase Under Complete", "order": 1}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("complete spec"));
+    }
+
+    #[test]
+    fn test_phase_create_rejects_abandoned_spec() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
+
+        // Transition spec: Draft → Abandoned
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "spec.transition",
+                json!({"id": spec_id, "target_status": "abandoned", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Phase Under Abandoned", "order": 1}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("abandoned spec"));
+    }
+
+    #[test]
+    fn test_work_create_rejects_complete_phase() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        // Transition phase: Draft → Active → Complete
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "phase.transition",
+                json!({"id": phase_id, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "phase.transition",
+                json!({"id": phase_id, "target_status": "complete", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "work.create",
+            json!({"phase_id": phase_id, "title": "Work Under Complete", "resource_tags": ["src/"]}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("complete phase"));
+    }
+
+    #[test]
+    fn test_work_create_rejects_abandoned_phase() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, _spec_id, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        // Transition phase: Draft → Abandoned
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "phase.transition",
+                json!({"id": phase_id, "target_status": "abandoned", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "work.create",
+            json!({"phase_id": phase_id, "title": "Work Under Abandoned", "resource_tags": ["src/"]}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("abandoned phase"));
+    }
+
+    #[test]
+    fn test_bundle_create_rejects_done_work() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
+
+        // Directly set work status to Done via the HashMap (bypasses transition preconditions)
+        {
+            let mut works = stores.works.write().unwrap();
+            let work = works.get_mut(&wi_id).unwrap();
+            work.status = WorkStatus::Done;
+        }
+
+        let req = DaemonRequest::new(
+            2,
+            "bundle.create",
+            json!({"work_id": wi_id, "branch_name": "feature/late"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("Done work"));
+    }
+
+    #[test]
+    fn test_bundle_create_rejects_abandoned_work() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_phase_id, wi_id) = create_test_work(&stores, &tx, &wm);
+
+        // Transition work: Ready → Abandoned
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "work.transition",
+                json!({"id": wi_id, "target_status": "Abandoned", "role": "coordinator"}),
+            ),
+        );
+
+        let req = DaemonRequest::new(
+            2,
+            "bundle.create",
+            json!({"work_id": wi_id, "branch_name": "feature/abandoned"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("Abandoned work"));
     }
 
     // --- spec.get tests ---

@@ -44,7 +44,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             app.state.phases.len(),
         )),
         Line::from(format!(
-            "Work Items: {}  Bundles: {}",
+            "Works: {}  Bundles: {}",
             app.state.works.len(),
             app.state.bundles.len(),
         )),

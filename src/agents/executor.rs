@@ -180,7 +180,7 @@ pub async fn run_agent_task(
         run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx).await
     };
 
-    // Transition work item based on agent result (implementer only)
+    // Transition work based on agent result (implementer only)
     if agent_type == AgentType::Implementer
         && let Some(ref wi_id) = worktree_key
     {
@@ -195,11 +195,11 @@ pub async fn run_agent_task(
         );
         if resp.is_error() {
             warn!(
-                "Agent {} failed to transition work item {} → {}: {:?}",
+                "Agent {} failed to transition work {} → {}: {:?}",
                 session_id, wi_id, wi_status, resp.error
             );
         } else {
-            info!("Agent {} transitioned work item {} → {}", session_id, wi_id, wi_status);
+            info!("Agent {} transitioned work {} → {}", session_id, wi_id, wi_status);
         }
     }
 
@@ -793,7 +793,7 @@ pub async fn execute_action(
 
         // --- Coordinator agent management actions ---
         AgentAction::AssignAgent { agent_type, target_id } => {
-            // For implementer assignments, check dependencies and auto-transition work item
+            // For implementer assignments, check dependencies and auto-transition work
             if agent_type == "implementer" {
                 let get_resp = bridge.request("work.get", serde_json::json!({ "id": target_id }));
 
@@ -864,7 +864,7 @@ pub async fn execute_action(
                             )));
                         }
                         info!(
-                            "AssignAgent: auto-transitioned work item {} Draft→Ready→InProgress",
+                            "AssignAgent: auto-transitioned work {} Draft→Ready→InProgress",
                             target_id
                         );
                     }
@@ -881,17 +881,14 @@ pub async fn execute_action(
                                 msg
                             )));
                         }
-                        info!(
-                            "AssignAgent: auto-transitioned work item {} Ready→InProgress",
-                            target_id
-                        );
+                        info!("AssignAgent: auto-transitioned work {} Ready→InProgress", target_id);
                     }
                     "InProgress" => {
                         // Already correct
                     }
                     other => {
                         return Ok(ActionResult::ActionError(format!(
-                            "cannot assign implementer to work item {} in state '{}'",
+                            "cannot assign implementer to work {} in state '{}'",
                             target_id, other
                         )));
                     }
@@ -1162,7 +1159,7 @@ pub enum ActionResult {
         session_id: String,
         agent_type: String,
     },
-    /// Work item dependency not met — cannot assign agent until deps are Done.
+    /// Work dependency not met — cannot assign agent until deps are Done.
     DependencyNotMet {
         work_id: String,
         message: String,

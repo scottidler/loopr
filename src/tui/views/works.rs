@@ -15,7 +15,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Work Items"))
+        .block(Block::default().borders(Borders::ALL).title("Works"))
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         .highlight_symbol("> ");
 

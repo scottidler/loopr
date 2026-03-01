@@ -105,6 +105,9 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             description,
             parent,
             order,
+            resource_tags,
+            acceptance_criteria,
+            dependencies,
         } => {
             let mut params = json!({
                 "title": title,
@@ -122,6 +125,18 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             }
             if let Some(order) = order {
                 params["order"] = json!(order);
+            }
+            // Work-specific fields
+            if collection == "work" {
+                if !resource_tags.is_empty() {
+                    params["resource_tags"] = json!(resource_tags);
+                }
+                if !acceptance_criteria.is_empty() {
+                    params["acceptance_criteria"] = json!(acceptance_criteria);
+                }
+                if !dependencies.is_empty() {
+                    params["dependencies"] = json!(dependencies);
+                }
             }
             (format!("{collection}.create"), params)
         }
@@ -169,6 +184,8 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             branch,
             description,
             base_tick_id,
+            claims,
+            touched_paths,
         } => {
             let mut params = json!({
                 "work_id": work_id,
@@ -177,6 +194,12 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             });
             if let Some(tick_id) = base_tick_id {
                 params["base_tick_id"] = json!(tick_id);
+            }
+            if !claims.is_empty() {
+                params["claims"] = json!(claims);
+            }
+            if !touched_paths.is_empty() {
+                params["touched_paths"] = json!(touched_paths);
             }
             ("bundle.create".to_string(), params)
         }
@@ -346,6 +369,9 @@ mod tests {
                 description: "A test".to_string(),
                 parent: None,
                 order: None,
+                resource_tags: vec![],
+                acceptance_criteria: vec![],
+                dependencies: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -362,6 +388,9 @@ mod tests {
                 description: "".to_string(),
                 parent: Some("plan-1".to_string()),
                 order: None,
+                resource_tags: vec![],
+                acceptance_criteria: vec![],
+                dependencies: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -377,6 +406,9 @@ mod tests {
                 description: "".to_string(),
                 parent: Some("spec-1".to_string()),
                 order: Some(1),
+                resource_tags: vec![],
+                acceptance_criteria: vec![],
+                dependencies: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -409,6 +441,8 @@ mod tests {
                 branch: "feature/foo".to_string(),
                 description: "A bundle".to_string(),
                 base_tick_id: Some("tick-1".to_string()),
+                claims: vec![],
+                touched_paths: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
@@ -848,6 +882,9 @@ mod tests {
                 description: "JWT tokens".to_string(),
                 parent: Some("plan-42".to_string()),
                 order: Some(3),
+                resource_tags: vec![],
+                acceptance_criteria: vec![],
+                dependencies: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
@@ -896,6 +933,8 @@ mod tests {
                 branch: "feat/bar".to_string(),
                 description: "No tick".to_string(),
                 base_tick_id: None,
+                claims: vec![],
+                touched_paths: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
@@ -978,11 +1017,53 @@ mod tests {
                 description: "JWT".to_string(),
                 parent: Some("phase-1".to_string()),
                 order: None,
+                resource_tags: vec!["src/".to_string()],
+                acceptance_criteria: vec!["tests pass".to_string()],
+                dependencies: vec![],
             },
         };
         let (method, params) = command_to_ipc(&cmd, Role::Implementer);
         assert_eq!(method, "work.create");
         assert_eq!(params["phase_id"], "phase-1");
+        assert_eq!(params["resource_tags"], json!(["src/"]));
+        assert_eq!(params["acceptance_criteria"], json!(["tests pass"]));
+    }
+
+    #[test]
+    fn test_work_create_skips_work_fields_for_non_work() {
+        // resource_tags should NOT appear in plan.create params
+        let cmd = Command::Plan {
+            cmd: CrudCmd::Create {
+                title: "Plan".to_string(),
+                description: "".to_string(),
+                parent: None,
+                order: None,
+                resource_tags: vec!["should-be-ignored".to_string()],
+                acceptance_criteria: vec![],
+                dependencies: vec![],
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "plan.create");
+        assert!(params.get("resource_tags").is_none());
+    }
+
+    #[test]
+    fn test_bundle_create_with_claims_and_touched_paths() {
+        let cmd = Command::Bundle {
+            cmd: BundleCmd::Create {
+                work_id: "wi-1".to_string(),
+                branch: "feature/auth".to_string(),
+                description: "".to_string(),
+                base_tick_id: None,
+                claims: vec!["Add JWT".to_string()],
+                touched_paths: vec!["src/auth.rs".to_string()],
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Implementer);
+        assert_eq!(method, "bundle.create");
+        assert_eq!(params["claims"], json!(["Add JWT"]));
+        assert_eq!(params["touched_paths"], json!(["src/auth.rs"]));
     }
 
     #[test]

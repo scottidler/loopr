@@ -21,6 +21,15 @@ pub enum CrudCmd {
         /// Order (for Phase)
         #[arg(long)]
         order: Option<u32>,
+        /// Resource tags (for Work, repeatable)
+        #[arg(long = "resource-tag")]
+        resource_tags: Vec<String>,
+        /// Acceptance criteria (for Work, repeatable)
+        #[arg(long = "acceptance-criteria")]
+        acceptance_criteria: Vec<String>,
+        /// Dependencies (for Work, repeatable)
+        #[arg(long = "dependency")]
+        dependencies: Vec<String>,
     },
     /// Get a record by ID
     Get {
@@ -50,7 +59,7 @@ pub enum CrudCmd {
 pub enum BundleCmd {
     /// Create a new bundle
     Create {
-        /// Work item ID
+        /// Work ID
         work_id: String,
         /// Branch name
         #[arg(short, long)]
@@ -61,6 +70,12 @@ pub enum BundleCmd {
         /// Base tick ID (for staleness guard)
         #[arg(long)]
         base_tick_id: Option<String>,
+        /// Claims (repeatable)
+        #[arg(long = "claim")]
+        claims: Vec<String>,
+        /// Touched paths (repeatable)
+        #[arg(long = "touched-path")]
+        touched_paths: Vec<String>,
     },
     /// Get a bundle by ID
     Get {
@@ -69,7 +84,7 @@ pub enum BundleCmd {
     },
     /// List bundles (optional work_id filter)
     List {
-        /// Filter by work item ID
+        /// Filter by work ID
         #[arg(short, long)]
         work_id: Option<String>,
     },
@@ -123,9 +138,9 @@ pub enum TickCmd {
 /// Worktree subcommands.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum WorktreeCmd {
-    /// Create a worktree for a work item
+    /// Create a worktree for a work
     Create {
-        /// Work item ID
+        /// Work ID
         work_id: String,
         /// Git ref to base the worktree on
         #[arg(short, long, default_value = "HEAD")]
@@ -135,12 +150,12 @@ pub enum WorktreeCmd {
     List,
     /// Clean up a worktree
     Cleanup {
-        /// Work item ID
+        /// Work ID
         work_id: String,
     },
     /// Refresh a worktree to a new ref
     Refresh {
-        /// Work item ID
+        /// Work ID
         work_id: String,
         /// Git ref to reset to
         #[arg(short, long, default_value = "HEAD")]
@@ -192,10 +207,10 @@ pub enum LearningCmd {
 /// Agent subcommands.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum AgentCmd {
-    /// Start an implementer agent for a work item
+    /// Start an implementer agent for a work
     #[command(name = "start-implementer")]
     StartImplementer {
-        /// Work item ID
+        /// Work ID
         work_id: String,
     },
     /// Start a reviewer agent for a bundle
@@ -274,7 +289,7 @@ pub enum LockCmd {
     Create {
         /// Resource path
         resource: String,
-        /// Holder ID (e.g. work item ID)
+        /// Holder ID (e.g. work ID)
         holder_id: String,
         /// Granted by
         granted_by: String,
@@ -350,7 +365,7 @@ pub enum Command {
         #[command(subcommand)]
         cmd: CrudCmd,
     },
-    /// Work item operations
+    /// Work operations
     #[command(name = "work")]
     Work {
         #[command(subcommand)]
@@ -534,6 +549,82 @@ mod tests {
                 assert_eq!(branch, "feature/foo");
             }
             _ => panic!("expected Bundle Create"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_work_create_with_resource_tags() {
+        let cli = Cli::parse_from([
+            "loopr",
+            "work",
+            "create",
+            "Task 1",
+            "-p",
+            "phase-1",
+            "--resource-tag",
+            "src/auth/",
+            "--resource-tag",
+            "src/lib.rs",
+            "--acceptance-criteria",
+            "tests pass",
+            "--dependency",
+            "wi-0",
+        ]);
+        match cli.command {
+            Some(Command::Work {
+                cmd:
+                    CrudCmd::Create {
+                        title,
+                        parent,
+                        resource_tags,
+                        acceptance_criteria,
+                        dependencies,
+                        ..
+                    },
+            }) => {
+                assert_eq!(title, "Task 1");
+                assert_eq!(parent, Some("phase-1".to_string()));
+                assert_eq!(resource_tags, vec!["src/auth/", "src/lib.rs"]);
+                assert_eq!(acceptance_criteria, vec!["tests pass"]);
+                assert_eq!(dependencies, vec!["wi-0"]);
+            }
+            _ => panic!("expected Work Create with resource tags"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_bundle_create_with_claims() {
+        let cli = Cli::parse_from([
+            "loopr",
+            "bundle",
+            "create",
+            "wi-1",
+            "-b",
+            "feature/foo",
+            "--claim",
+            "Add JWT signing",
+            "--touched-path",
+            "src/auth.rs",
+            "--touched-path",
+            "src/lib.rs",
+        ]);
+        match cli.command {
+            Some(Command::Bundle {
+                cmd:
+                    BundleCmd::Create {
+                        work_id,
+                        branch,
+                        claims,
+                        touched_paths,
+                        ..
+                    },
+            }) => {
+                assert_eq!(work_id, "wi-1");
+                assert_eq!(branch, "feature/foo");
+                assert_eq!(claims, vec!["Add JWT signing"]);
+                assert_eq!(touched_paths, vec!["src/auth.rs", "src/lib.rs"]);
+            }
+            _ => panic!("expected Bundle Create with claims"),
         }
     }
 

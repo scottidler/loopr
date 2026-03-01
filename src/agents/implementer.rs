@@ -95,7 +95,7 @@ pub fn build_implementer_summary(stores: &Stores, work_id: &str) -> String {
         }
     }
 
-    // Active agents working on sibling work items
+    // Active agents working on sibling works
     {
         let sessions = stores.agent_sessions.read().unwrap();
         let siblings: Vec<_> = sessions
@@ -590,7 +590,7 @@ mod tests {
 
         let result = ContextBuilder::new(&stores, Role::Implementer).load_work_hierarchy("nonexistent");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("work item not found"));
+        assert!(result.unwrap_err().to_string().contains("work not found"));
     }
 
     // --- run_iteration tests ---

@@ -258,13 +258,11 @@ impl<'a> ContextBuilder<'a> {
         }
     }
 
-    /// Load the full hierarchy from a work item ID: Work -> Phase -> Spec -> Plan.
+    /// Load the full hierarchy from a work ID: Work -> Phase -> Spec -> Plan.
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         let (wi_title, wi_desc, phase_id) = {
             let guard = self.stores.works.read().unwrap();
-            let wi = guard
-                .get(work_id)
-                .ok_or_else(|| eyre!("work item not found: {}", work_id))?;
+            let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
             (wi.title.clone(), wi.description.clone(), wi.phase_id.clone())
         };
 
@@ -396,7 +394,7 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
-    /// Access the loaded work item title (available after load_*_hierarchy).
+    /// Access the loaded work title (available after load_*_hierarchy).
     pub fn work_title(&self) -> Option<&str> {
         self.work.as_ref().map(|(t, _)| t.as_str())
     }
@@ -438,7 +436,7 @@ impl<'a> ContextBuilder<'a> {
             }
         }
 
-        // --- Sibling Work Items section (after hierarchy) ---
+        // --- Sibling Works section (after hierarchy) ---
         if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_id) {
             let works = self.stores.works.read().unwrap();
             let siblings: Vec<String> = works
@@ -447,7 +445,7 @@ impl<'a> ContextBuilder<'a> {
                 .map(|wi| format!("- [{}] {}", wi.status, wi.title))
                 .collect();
             if !siblings.is_empty() {
-                msg.push_str("## Sibling Work Items\n\n");
+                msg.push_str("## Sibling Works\n\n");
                 for s in &siblings {
                     msg.push_str(s);
                     msg.push('\n');
@@ -1132,7 +1130,7 @@ mod tests {
 
         let result = ContextBuilder::new(&stores, Role::Implementer).load_work_hierarchy("nonexistent");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("work item not found"));
+        assert!(result.unwrap_err().to_string().contains("work not found"));
     }
 
     #[test]

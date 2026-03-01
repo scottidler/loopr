@@ -10,9 +10,9 @@ pub struct WorktreeInfo {
     pub head: String,
 }
 
-/// Manages Git worktrees for work item isolation.
+/// Manages Git worktrees for work isolation.
 ///
-/// Each work item gets its own worktree under `worktree_dir`, allowing
+/// Each work gets its own worktree under `worktree_dir`, allowing
 /// implementers to work in isolated branches.
 #[derive(Debug, Clone)]
 pub struct WorktreeManager {
@@ -26,10 +26,10 @@ pub enum WorktreeError {
     #[error("git command failed: {0}")]
     GitCommand(String),
 
-    #[error("worktree not found for work item: {0}")]
+    #[error("worktree not found for work: {0}")]
     NotFound(String),
 
-    #[error("worktree already exists for work item: {0}")]
+    #[error("worktree already exists for work: {0}")]
     AlreadyExists(String),
 
     #[error(transparent)]
@@ -45,7 +45,7 @@ impl WorktreeManager {
         }
     }
 
-    /// Create a worktree for a work item.
+    /// Create a worktree for a work.
     ///
     /// Runs: `git worktree add <path> -b agent/<work_id> <base_ref>`
     pub fn create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
@@ -141,12 +141,12 @@ impl WorktreeManager {
         Ok(worktrees)
     }
 
-    /// Get the worktree path for a work item.
+    /// Get the worktree path for a work.
     pub fn worktree_path(&self, work_id: &str) -> PathBuf {
         self.worktree_dir.join(work_id)
     }
 
-    /// Check if a worktree exists for a work item.
+    /// Check if a worktree exists for a work.
     pub fn exists(&self, work_id: &str) -> bool {
         self.worktree_dir.join(work_id).exists()
     }
@@ -286,10 +286,10 @@ branch refs/heads/agent/wi-001
         assert_eq!(err.to_string(), "git command failed: fatal: something");
 
         let err = WorktreeError::NotFound("wi-001".to_string());
-        assert_eq!(err.to_string(), "worktree not found for work item: wi-001");
+        assert_eq!(err.to_string(), "worktree not found for work: wi-001");
 
         let err = WorktreeError::AlreadyExists("wi-001".to_string());
-        assert_eq!(err.to_string(), "worktree already exists for work item: wi-001");
+        assert_eq!(err.to_string(), "worktree already exists for work: wi-001");
     }
 
     #[test]
