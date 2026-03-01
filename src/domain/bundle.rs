@@ -396,9 +396,95 @@ mod tests {
     #[test]
     fn test_invalid_triaged_to_accepted_wrong_role() {
         let rules = bundle_transitions();
-        // Only Coordinator can bypass review
+        // Only Coordinator can bypass review — all other roles rejected
         assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Implementer, &rules).is_err());
         assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Reviewer, &rules).is_err());
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Researcher, &rules).is_err());
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Integrator, &rules).is_err());
+    }
+
+    #[test]
+    fn test_advisory_bypass_does_not_break_normal_happy_path() {
+        // The original happy path Proposed→Triaged→Reviewed→Accepted still works
+        let rules = bundle_transitions();
+        assert!(validate_transition(BundleStatus::Proposed, BundleStatus::Triaged, Role::Coordinator, &rules).is_ok());
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Reviewed, Role::Reviewer, &rules).is_ok());
+        assert!(
+            validate_transition(
+                BundleStatus::Reviewed,
+                BundleStatus::Accepted,
+                Role::Coordinator,
+                &rules
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_transition(
+                BundleStatus::Accepted,
+                BundleStatus::Integrating,
+                Role::Integrator,
+                &rules
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_transition(
+                BundleStatus::Integrating,
+                BundleStatus::Merged,
+                Role::Integrator,
+                &rules
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_advisory_bypass_path_continues_to_integrating() {
+        // After advisory bypass: Triaged→Accepted→Integrating→Merged
+        let rules = bundle_transitions();
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Coordinator, &rules).is_ok());
+        assert!(
+            validate_transition(
+                BundleStatus::Accepted,
+                BundleStatus::Integrating,
+                Role::Integrator,
+                &rules
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_transition(
+                BundleStatus::Integrating,
+                BundleStatus::Merged,
+                Role::Integrator,
+                &rules
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_advisory_accepted_can_still_be_rejected() {
+        // A bundle accepted via advisory bypass can still be rejected by Integrator
+        let rules = bundle_transitions();
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Coordinator, &rules).is_ok());
+        assert!(validate_transition(BundleStatus::Accepted, BundleStatus::Rejected, Role::Integrator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_advisory_accepted_can_be_superseded() {
+        // A bundle accepted via advisory bypass can be superseded by Coordinator
+        let rules = bundle_transitions();
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Coordinator, &rules).is_ok());
+        assert!(
+            validate_transition(
+                BundleStatus::Accepted,
+                BundleStatus::Superseded,
+                Role::Coordinator,
+                &rules
+            )
+            .is_ok()
+        );
     }
 
     // --- Valid transitions: rejection ---

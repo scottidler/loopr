@@ -1026,4 +1026,53 @@ mod tests {
         let summary = format_action_summary(&action, &result);
         assert!(summary.contains("Committed"));
     }
+
+    // --- Self-correction loop tests for Researcher ---
+
+    #[tokio::test]
+    async fn test_researcher_self_correction_parse_failure_then_success() {
+        // First response is malformed, second is valid JSON.
+        // Self-correction loop should re-prompt and succeed within the same iteration.
+        let dir = TestDir::new("loopr-res-selfcorr1");
+        let stores = test_stores(&dir);
+
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+            "I'll investigate the codebase now.".to_string(), // malformed
+            r#"[{"action": "done", "summary": "Self-corrected researcher"}]"#.to_string(), // valid
+        ]));
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+
+        let result = agent.run().await;
+        assert!(
+            result.is_ok(),
+            "expected success after self-correction, got: {:?}",
+            result.err()
+        );
+        // Should complete in 1 iteration (self-correction within iteration)
+        assert_eq!(agent.ctx.session.iteration, 1);
+    }
+
+    #[tokio::test]
+    async fn test_researcher_self_correction_max_requeries_exceeded() {
+        // All responses are malformed. After max_requeries retries, should fail.
+        let dir = TestDir::new("loopr-res-selfcorr2");
+        let stores = test_stores(&dir);
+
+        // max_requeries=3 default: initial + 3 retries = 4 responses, all bad
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+            "bad 1".to_string(),
+            "bad 2".to_string(),
+            "bad 3".to_string(),
+            "bad 4".to_string(),
+        ]));
+
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+
+        let result = agent.run().await;
+        assert!(result.is_err(), "expected error when max_requeries exceeded");
+        assert!(
+            result.unwrap_err().to_string().contains("failed to parse"),
+            "error should be a parse error"
+        );
+    }
 }

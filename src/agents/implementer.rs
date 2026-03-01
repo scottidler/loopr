@@ -1842,4 +1842,110 @@ mod tests {
         // Should complete in 2 iterations (correction happened within iteration 1)
         assert_eq!(agent.ctx.session.iteration, 2);
     }
+
+    // --- Tool error correction tests (Phase 2) ---
+
+    #[tokio::test]
+    async fn test_tool_error_correction_path_escapes() {
+        // WriteFile with path traversal → correctable error → LLM re-prompt → corrected action
+        let dir = TestDir::new("loopr-impl-toolcorr1");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer();
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            // First: returns an action that will fail (path escapes sandbox)
+            r#"[{"action": "write_file", "path": "../../etc/passwd", "content": "bad"}]"#,
+            // Correction: returns a valid action
+            r#"[{"action": "done", "summary": "Corrected path issue"}]"#,
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s == "Corrected path issue"),
+            "expected Done after tool error correction, got: {:?}",
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_correction_non_correctable_falls_through() {
+        // Non-correctable errors (like test failures) should NOT trigger re-prompt.
+        // They go to the lifeguard path instead.
+        let dir = TestDir::new("loopr-impl-toolcorr2");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer();
+
+        // RunTool with a tool that doesn't exist in ToolRunner — triggers "unknown tool" which IS correctable
+        // Instead, use write_file to a valid path then read_file from a nonexistent path
+        // read_file errors are NOT in is_correctable_error, so they fall through
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            r#"[{"action": "read_file", "path": "nonexistent_file_xyz.rs"}]"#,
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        // Should be Continue with an error summary (not Done, since read_file error is non-fatal)
+        if let IterationOutcome::Continue(summary) = &outcome {
+            assert!(summary.contains("ERROR"), "summary should contain error: {}", summary);
+        } else {
+            panic!("expected Continue with error, got: {:?}", outcome);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_correction_budget_shared_with_parse() {
+        // If parse corrections used some budget, tool corrections get the remainder.
+        // max_requeries=1: use 1 for parse correction → 0 left for tool correction
+        let dir = TestDir::new("loopr-impl-toolcorr3");
+        let stores = setup_stores(&dir);
+        let mut config = AgentRoleConfig::default_implementer();
+        config.max_requeries = 1; // Only 1 re-prompt allowed total
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            "not json", // parse fail → uses 1 requery
+            r#"[{"action": "write_file", "path": "../../etc/passwd", "content": "bad"}]"#, // corrected parse, but path escapes
+                                                                                           // No more re-prompts available — tool error should NOT trigger correction
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        // The path escapes error should fall through (no budget left), producing an error summary
+        if let IterationOutcome::Continue(summary) = &outcome {
+            assert!(summary.contains("ERROR"), "should contain error: {}", summary);
+        } else {
+            panic!(
+                "expected Continue with error (no correction budget), got: {:?}",
+                outcome
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_correction_parse_failure_on_corrected_response() {
+        // Tool error triggers correction, but the corrected response is also malformed.
+        // Should fall back to ActionError for the original error.
+        let dir = TestDir::new("loopr-impl-toolcorr4");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer();
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            // First: path escapes (correctable)
+            r#"[{"action": "write_file", "path": "../../etc/passwd", "content": "bad"}]"#,
+            // Correction response: malformed (can't parse)
+            "I apologize, here is the fix",
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        // Should continue with an ActionError (correction failed, original error recorded)
+        if let IterationOutcome::Continue(summary) = &outcome {
+            assert!(summary.contains("ERROR"), "should contain error: {}", summary);
+        } else {
+            panic!(
+                "expected Continue with error (correction parse failed), got: {:?}",
+                outcome
+            );
+        }
+    }
 }

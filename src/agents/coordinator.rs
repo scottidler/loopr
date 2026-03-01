@@ -3630,4 +3630,70 @@ mod tests {
         let result = find_pending_draft_for_validation(&stores);
         assert!(result.is_none());
     }
+
+    // --- Self-correction loop tests for Coordinator ---
+
+    #[tokio::test]
+    async fn test_coordinator_self_correction_parse_failure_then_success() {
+        // First LLM response is malformed, second is valid JSON.
+        // Self-correction loop should re-prompt and succeed within the same iteration.
+        let dir = TestDir::new("loopr-coord-selfcorr1");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![
+                "Let me think about the plan first.".to_string(), // malformed
+                r#"[{"action": "done", "summary": "Self-corrected coordinator"}]"#.to_string(), // valid
+            ],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Self-corrected")),
+            "expected Done after self-correction, got: {:?}",
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_self_correction_max_requeries_exceeded() {
+        // All responses are malformed. After max_requeries retries, should return Err.
+        let dir = TestDir::new("loopr-coord-selfcorr2");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![
+                "bad 1".to_string(),
+                "bad 2".to_string(),
+                "bad 3".to_string(),
+                "bad 4".to_string(), // max_requeries=3: initial + 3 retries
+            ],
+            CoordinatorConfig::default(),
+        );
+
+        let result = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut Lifeguard::new(),
+            )
+            .await;
+
+        assert!(result.is_err(), "expected error when max_requeries exceeded");
+        assert!(
+            result.unwrap_err().to_string().contains("failed to parse"),
+            "error should be a parse error"
+        );
+    }
 }

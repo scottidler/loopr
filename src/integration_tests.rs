@@ -3141,6 +3141,106 @@ mod tests {
     }
 
     #[test]
+    fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
+        // Verify that only the Coordinator can use Triaged→Accepted through the IPC handler.
+        let dir = TestDir::new("loopr-int-advisory-reject");
+        let stores = test_stores_with_persistence(&dir);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = IntegratorConfig::default();
+
+        // Create hierarchy
+        let plan_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "plan.create",
+            json!({"title": "T", "description": "d", "acceptance_criteria": "c"}),
+        );
+        let plan_id = plan_resp["id"].as_str().unwrap();
+        let spec_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "spec.create",
+            json!({"plan_id": plan_id, "title": "S", "description": "d"}),
+        );
+        let spec_id = spec_resp["id"].as_str().unwrap();
+        let phase_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "P", "description": "d", "order": 1}),
+        );
+        let phase_id = phase_resp["id"].as_str().unwrap();
+        let work_resp = dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "work.create",
+            json!({"phase_id": phase_id, "title": "W", "description": "d", "resource_tags": ["src/x.rs"]}),
+        );
+        let work_id = work_resp["id"].as_str().unwrap();
+
+        // Create and triage a bundle
+        {
+            use crate::domain::bundle::{Bundle, BundleStatus};
+            let mut bundle = Bundle::new(work_id.to_string(), None, "f/t".to_string(), vec!["claim".to_string()]);
+            bundle.status = BundleStatus::Proposed;
+            stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+        }
+        let bundle_id = stores.bundles.read().unwrap().keys().next().unwrap().clone();
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+
+        // Reviewer trying Triaged→Accepted should FAIL
+        let req = DaemonRequest::new(
+            1,
+            "bundle.transition",
+            json!({"id": &bundle_id, "target_status": "Accepted", "role": "reviewer", "verification": "v"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+        assert!(resp.is_error(), "Reviewer should not be able to use Triaged→Accepted");
+
+        // Implementer trying Triaged→Accepted should FAIL
+        let req = DaemonRequest::new(
+            2,
+            "bundle.transition",
+            json!({"id": &bundle_id, "target_status": "Accepted", "role": "implementer", "verification": "v"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+        assert!(
+            resp.is_error(),
+            "Implementer should not be able to use Triaged→Accepted"
+        );
+
+        // Coordinator trying Triaged→Accepted should SUCCEED
+        dispatch_ok(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            "bundle.transition",
+            json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct"}),
+        );
+        assert_eq!(
+            stores.bundles.read().unwrap()[&bundle_id].status,
+            crate::domain::bundle::BundleStatus::Accepted
+        );
+    }
+
+    #[test]
     fn test_is_correctable_error_classification() {
         use crate::agents::implementer::is_correctable_error;
 
