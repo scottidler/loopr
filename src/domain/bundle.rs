@@ -50,6 +50,12 @@ pub fn bundle_transitions() -> Vec<TransitionRule<BundleStatus>> {
             to: Accepted,
             role: Some(Role::Coordinator),
         },
+        // Advisory review: Coordinator can bypass review and accept directly
+        TransitionRule {
+            from: Triaged,
+            to: Accepted,
+            role: Some(Role::Coordinator),
+        },
         TransitionRule {
             from: Accepted,
             to: Integrating,
@@ -377,6 +383,22 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    // --- Valid transitions: advisory review (Triaged → Accepted) ---
+
+    #[test]
+    fn test_valid_triaged_to_accepted_coordinator() {
+        let rules = bundle_transitions();
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Coordinator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_triaged_to_accepted_wrong_role() {
+        let rules = bundle_transitions();
+        // Only Coordinator can bypass review
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Implementer, &rules).is_err());
+        assert!(validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Reviewer, &rules).is_err());
     }
 
     // --- Valid transitions: rejection ---

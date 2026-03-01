@@ -734,7 +734,7 @@ mod tests {
                 (BundleStatus::Proposed, BundleStatus::Accepted),
                 (BundleStatus::Proposed, BundleStatus::Integrating),
                 (BundleStatus::Proposed, BundleStatus::Merged),
-                (BundleStatus::Triaged, BundleStatus::Accepted),
+                // Triaged→Accepted is now valid for Coordinator (advisory review bypass)
                 (BundleStatus::Triaged, BundleStatus::Integrating),
                 (BundleStatus::Triaged, BundleStatus::Merged),
                 (BundleStatus::Reviewed, BundleStatus::Integrating),
@@ -746,6 +746,13 @@ mod tests {
                     let r = validate_transition(*from, *to, *role, &rules);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
+            }
+            // Triaged→Accepted: valid for Coordinator only
+            let r = validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Coordinator, &rules);
+            assert_valid("Triaged", "Accepted (Coordinator)", &r);
+            for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
+                let r = validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, role, &rules);
+                assert_invalid("Triaged", format!("Accepted ({:?})", role), &r);
             }
         }
 

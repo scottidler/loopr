@@ -155,6 +155,18 @@ impl Agent for ReviewerAgent {
                 .warn(&format!("failed to create learning: {:?}", learning_resp.error));
         }
 
+        // Create feedback Learning tagged with review:feedback (advisory feedback for all verdicts)
+        let feedback_tag = format!("review:{}", review.verdict);
+        let _ = self.ctx.bridge.request(
+            "learning.create",
+            serde_json::json!({
+                "content": format!("Review feedback ({}): {}", review.verdict, review.summary),
+                "scope": "work",
+                "source_id": work_title,
+                "resource_tags": [feedback_tag],
+            }),
+        );
+
         match review.verdict {
             ReviewVerdict::Approve => {
                 let resp = self.ctx.bridge.request(
@@ -167,11 +179,15 @@ impl Agent for ReviewerAgent {
                     }),
                 );
                 if resp.is_error() {
-                    self.ctx
-                        .warn(&format!("failed to transition bundle to Reviewed: {:?}", resp.error));
-                    return Err(eyre!("failed to transition bundle: {:?}", resp.error));
+                    // Bundle may have already advanced past Triaged (advisory review race).
+                    // Log and continue — the feedback Learning was already created above.
+                    self.ctx.warn(&format!(
+                        "bundle {} already advanced past Triaged (advisory review race): {:?}",
+                        self.bundle_id, resp.error
+                    ));
+                } else {
+                    self.ctx.info(&format!("approved bundle {}", self.bundle_id));
                 }
-                self.ctx.info(&format!("approved bundle {}", self.bundle_id));
             }
             ReviewVerdict::RequestChanges => {
                 let resp = self.ctx.bridge.request(
@@ -183,22 +199,17 @@ impl Agent for ReviewerAgent {
                     }),
                 );
                 if resp.is_error() {
-                    self.ctx
-                        .warn(&format!("failed to reject bundle (request_changes): {:?}", resp.error));
-                    return Err(eyre!("failed to reject bundle: {:?}", resp.error));
+                    // Bundle may have already advanced (advisory review race).
+                    self.ctx.warn(&format!(
+                        "bundle {} already advanced (advisory review race): {:?}",
+                        self.bundle_id, resp.error
+                    ));
+                } else {
+                    self.ctx.info(&format!(
+                        "requested changes on bundle {} (→Rejected + Learning)",
+                        self.bundle_id
+                    ));
                 }
-                let _ = self.ctx.bridge.request(
-                    "learning.create",
-                    serde_json::json!({
-                        "content": format!("Review requested changes: {}", review.summary),
-                        "scope": "work",
-                        "source_id": work_title,
-                    }),
-                );
-                self.ctx.info(&format!(
-                    "requested changes on bundle {} (→Rejected + Learning)",
-                    self.bundle_id
-                ));
             }
             ReviewVerdict::Reject => {
                 let resp = self.ctx.bridge.request(
@@ -210,10 +221,14 @@ impl Agent for ReviewerAgent {
                     }),
                 );
                 if resp.is_error() {
-                    self.ctx.warn(&format!("failed to reject bundle: {:?}", resp.error));
-                    return Err(eyre!("failed to reject bundle: {:?}", resp.error));
+                    // Bundle may have already advanced (advisory review race).
+                    self.ctx.warn(&format!(
+                        "bundle {} already advanced (advisory review race): {:?}",
+                        self.bundle_id, resp.error
+                    ));
+                } else {
+                    self.ctx.info(&format!("rejected bundle {}", self.bundle_id));
                 }
-                self.ctx.info(&format!("rejected bundle {}", self.bundle_id));
             }
         }
 
@@ -613,6 +628,67 @@ mod tests {
         let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_err());
+    }
+
+    // --- Advisory review race condition tests ---
+
+    #[tokio::test]
+    async fn test_reviewer_handles_already_accepted_bundle() {
+        // Simulate advisory review race: bundle is already Accepted when Reviewer runs.
+        // The Reviewer should create its feedback Learning and complete normally (not error).
+        let dir = TestDir::new("loopr-rev-race");
+        let (stores, bundle_id) = setup_stores_with_bundle(&dir);
+
+        // Advance bundle to Accepted (simulating Coordinator direct acceptance)
+        {
+            let mut bundles = stores.bundles.write().unwrap();
+            let bundle = bundles.get_mut(&bundle_id).unwrap();
+            bundle.status = BundleStatus::Accepted;
+        }
+
+        let llm = Box::new(MockReviewLlm::new(
+            r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#,
+        ));
+        let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
+        let result = agent.run().await;
+        // Should succeed (not error) even though bundle.transition fails
+        assert!(
+            result.is_ok(),
+            "Reviewer should handle advisory race gracefully, got: {:?}",
+            result.err()
+        );
+
+        // Verify feedback Learning was still created
+        let learnings = stores.learnings.read().unwrap();
+        let has_feedback = learnings
+            .values()
+            .any(|l| l.content.contains("Review feedback") || l.content.contains("Review of bundle"));
+        assert!(
+            has_feedback,
+            "Feedback Learning should be created even in race condition"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reviewer_creates_feedback_learning_on_approve() {
+        // Verify the reviewer creates a review:feedback Learning on all verdicts (not just reject).
+        let dir = TestDir::new("loopr-rev-feedback");
+        let (stores, bundle_id) = setup_stores_with_bundle(&dir);
+
+        let llm = Box::new(MockReviewLlm::new(
+            r#"{"verdict": "approve", "issues": [], "summary": "Clean code"}"#,
+        ));
+        let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
+        let result = agent.run().await;
+        assert!(result.is_ok());
+
+        // Check for the feedback Learning (created before the transition)
+        let learnings = stores.learnings.read().unwrap();
+        let feedback_count = learnings
+            .values()
+            .filter(|l| l.content.contains("Review feedback (approve)"))
+            .count();
+        assert!(feedback_count >= 1, "Should create feedback Learning on approve");
     }
 
     // --- system prompt tests ---
