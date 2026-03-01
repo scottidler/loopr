@@ -1,16 +1,11 @@
-use std::sync::Arc;
-
+use async_trait::async_trait;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 
-use crate::agents::AgentSession;
-use crate::agents::agent_logger::AgentLogger;
-use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::implementer::LlmClient;
+use crate::agents::{Agent, AgentContext, AgentType};
 use crate::config::AgentRoleConfig;
-use crate::daemon::context::Stores;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
@@ -65,14 +60,12 @@ pub struct ReviewResult {
 
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
-pub fn parse_review_result(response: &str, agent_log: &AgentLogger) -> Result<ReviewResult> {
-    agent_log.debug(&format!("parse_review_result(response_len={})", response.len()));
-    // Try direct parse first
+pub fn parse_review_result(response: &str, log: &crate::agents::agent_logger::AgentLogger) -> Result<ReviewResult> {
+    log.debug(&format!("parse_review_result(response_len={})", response.len()));
     if let Ok(result) = serde_json::from_str::<ReviewResult>(response) {
         return Ok(result);
     }
 
-    // Try to find a JSON object in the response (may be wrapped in markdown code blocks)
     let trimmed = response.trim();
     if let Some(start) = trimmed.find('{')
         && let Some(end) = trimmed.rfind('}')
@@ -86,161 +79,180 @@ pub fn parse_review_result(response: &str, agent_log: &AgentLogger) -> Result<Re
     Err(eyre!("failed to parse ReviewResult from LLM response"))
 }
 
-/// Run the full reviewer loop. Reviewers are typically single-iteration.
-pub async fn run_reviewer(
-    llm: &dyn LlmClient,
-    session: &mut AgentSession,
-    stores: &Arc<Stores>,
-    bridge: &AgentIpcBridge,
-    config: &AgentRoleConfig,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    agent_log: &AgentLogger,
-) -> Result<()> {
-    agent_log.debug(&format!(
-        "run_reviewer(session_id={}, bundle_id={:?})",
-        session.id, session.bundle_id
-    ));
-    let bundle_id = session
-        .bundle_id
-        .as_ref()
-        .ok_or_else(|| eyre!("reviewer session missing bundle_id"))?
-        .clone();
+/// The Reviewer agent — single-iteration LLM agent.
+pub struct ReviewerAgent {
+    pub ctx: AgentContext,
+    llm: Box<dyn LlmClient>,
+    config: AgentRoleConfig,
+    bundle_id: String,
+}
 
-    // Reviewer is single-iteration: load context, call LLM, execute verdict.
-    session.iteration = 1;
-    agent_log.info(&format!(
-        "Reviewer iteration 1 (max_iterations={})",
-        config.max_iterations
-    ));
+impl ReviewerAgent {
+    pub fn new(ctx: AgentContext, llm: Box<dyn LlmClient>, config: AgentRoleConfig) -> Result<Self> {
+        let bundle_id = ctx
+            .session
+            .bundle_id
+            .as_ref()
+            .ok_or_else(|| eyre!("reviewer session missing bundle_id"))?
+            .clone();
+        Ok(Self {
+            ctx,
+            llm,
+            config,
+            bundle_id,
+        })
+    }
+}
 
-    let ctx = ContextBuilder::new(stores, Role::Reviewer)
-        .load_bundle_hierarchy(&bundle_id)?
-        .with_guidance(&stores.guidance)
-        .with_footer(
-            "Review this Bundle against the Work requirements and review criteria above. Respond with ONLY valid JSON."
-                .into(),
+#[async_trait]
+impl Agent for ReviewerAgent {
+    async fn run(&mut self) -> Result<()> {
+        self.ctx.debug(&format!(
+            "run(session_id={}, bundle_id={})",
+            self.ctx.session.id, self.bundle_id
+        ));
+
+        self.ctx.session.iteration = 1;
+        self.ctx.info(&format!(
+            "Reviewer iteration 1 (max_iterations={})",
+            self.config.max_iterations
+        ));
+
+        let ctx_builder = ContextBuilder::new(&self.ctx.stores, Role::Reviewer)
+            .load_bundle_hierarchy(&self.bundle_id)?
+            .with_guidance(&self.ctx.stores.guidance)
+            .with_footer(
+                "Review this Bundle against the Work requirements and review criteria above. Respond with ONLY valid JSON."
+                    .into(),
+            );
+        let work_title = ctx_builder.work_title().unwrap_or("unknown").to_string();
+        let assembled = ctx_builder.build(&crate::prompts::store().reviewer);
+
+        let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
+        let review = parse_review_result(&response, &self.ctx.log)?;
+
+        self.ctx.info(&format!(
+            "verdict: {} ({} issues) — {}",
+            review.verdict,
+            review.issues.len(),
+            review.summary
+        ));
+
+        let learning_content = format!(
+            "Review of bundle {}: verdict={}, summary={}",
+            self.bundle_id, review.verdict, review.summary
         );
-    let work_title = ctx.work_title().unwrap_or("unknown").to_string();
-    let assembled = ctx.build(&crate::prompts::store().reviewer);
+        let learning_resp = self.ctx.bridge.request(
+            "learning.create",
+            serde_json::json!({
+                "content": learning_content,
+                "scope": "work",
+                "source_id": work_title,
+            }),
+        );
+        if learning_resp.is_error() {
+            self.ctx
+                .warn(&format!("failed to create learning: {:?}", learning_resp.error));
+        }
 
-    let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-    let review = parse_review_result(&response, agent_log)?;
+        match review.verdict {
+            ReviewVerdict::Approve => {
+                let resp = self.ctx.bridge.request(
+                    "bundle.transition",
+                    serde_json::json!({
+                        "id": self.bundle_id,
+                        "target_status": "Reviewed",
+                        "role": "reviewer",
+                        "verification": format!("Reviewer approved: {}", review.summary),
+                    }),
+                );
+                if resp.is_error() {
+                    self.ctx
+                        .warn(&format!("failed to transition bundle to Reviewed: {:?}", resp.error));
+                    return Err(eyre!("failed to transition bundle: {:?}", resp.error));
+                }
+                self.ctx.info(&format!("approved bundle {}", self.bundle_id));
+            }
+            ReviewVerdict::RequestChanges => {
+                let resp = self.ctx.bridge.request(
+                    "bundle.transition",
+                    serde_json::json!({
+                        "id": self.bundle_id,
+                        "target_status": "Rejected",
+                        "role": "reviewer",
+                    }),
+                );
+                if resp.is_error() {
+                    self.ctx
+                        .warn(&format!("failed to reject bundle (request_changes): {:?}", resp.error));
+                    return Err(eyre!("failed to reject bundle: {:?}", resp.error));
+                }
+                let _ = self.ctx.bridge.request(
+                    "learning.create",
+                    serde_json::json!({
+                        "content": format!("Review requested changes: {}", review.summary),
+                        "scope": "work",
+                        "source_id": work_title,
+                    }),
+                );
+                self.ctx.info(&format!(
+                    "requested changes on bundle {} (→Rejected + Learning)",
+                    self.bundle_id
+                ));
+            }
+            ReviewVerdict::Reject => {
+                let resp = self.ctx.bridge.request(
+                    "bundle.transition",
+                    serde_json::json!({
+                        "id": self.bundle_id,
+                        "target_status": "Rejected",
+                        "role": "reviewer",
+                    }),
+                );
+                if resp.is_error() {
+                    self.ctx.warn(&format!("failed to reject bundle: {:?}", resp.error));
+                    return Err(eyre!("failed to reject bundle: {:?}", resp.error));
+                }
+                self.ctx.info(&format!("rejected bundle {}", self.bundle_id));
+            }
+        }
 
-    agent_log.info(&format!(
-        "verdict: {} ({} issues) — {}",
-        review.verdict,
-        review.issues.len(),
-        review.summary
-    ));
+        let _ = self.ctx.event_tx.send(DaemonEvent::agent_iteration_completed(
+            &self.ctx.session.id,
+            1,
+            &format!("{}: {}", review.verdict, review.summary),
+        ));
 
-    // Store review as a Learning scoped to the Bundle's work
-    let learning_content = format!(
-        "Review of bundle {}: verdict={}, summary={}",
-        bundle_id, review.verdict, review.summary
-    );
-    let learning_resp = bridge.request(
-        "learning.create",
-        serde_json::json!({
-            "content": learning_content,
-            "scope": "work",
-            "source_id": work_title,
-        }),
-    );
-    if learning_resp.is_error() {
-        agent_log.warn(&format!("failed to create learning: {:?}", learning_resp.error));
+        Ok(())
     }
 
-    // Execute verdict action via FSM transition
-    match review.verdict {
-        ReviewVerdict::Approve => {
-            let resp = bridge.request(
-                "bundle.transition",
-                serde_json::json!({
-                    "id": bundle_id,
-                    "target_status": "Reviewed",
-                    "role": "reviewer",
-                    "verification": format!("Reviewer approved: {}", review.summary),
-                }),
-            );
-            if resp.is_error() {
-                agent_log.warn(&format!("failed to transition bundle to Reviewed: {:?}", resp.error));
-                return Err(eyre!("failed to transition bundle: {:?}", resp.error));
-            }
-            agent_log.info(&format!("approved bundle {}", bundle_id));
-        }
-        ReviewVerdict::RequestChanges => {
-            // #21: Reject the bundle — Coordinator will re-assign for rework
-            let resp = bridge.request(
-                "bundle.transition",
-                serde_json::json!({
-                    "id": bundle_id,
-                    "target_status": "Rejected",
-                    "role": "reviewer",
-                }),
-            );
-            if resp.is_error() {
-                agent_log.warn(&format!("failed to reject bundle (request_changes): {:?}", resp.error));
-                return Err(eyre!("failed to reject bundle: {:?}", resp.error));
-            }
-            // Create a Learning with the review feedback so the next
-            // Implementer iteration has context about what to fix
-            let _ = bridge.request(
-                "learning.create",
-                serde_json::json!({
-                    "content": format!("Review requested changes: {}", review.summary),
-                    "scope": "work",
-                    "source_id": work_title,
-                }),
-            );
-            agent_log.info(&format!(
-                "requested changes on bundle {} (→Rejected + Learning)",
-                bundle_id
-            ));
-        }
-        ReviewVerdict::Reject => {
-            let resp = bridge.request(
-                "bundle.transition",
-                serde_json::json!({
-                    "id": bundle_id,
-                    "target_status": "Rejected",
-                    "role": "reviewer",
-                }),
-            );
-            if resp.is_error() {
-                agent_log.warn(&format!("failed to reject bundle: {:?}", resp.error));
-                return Err(eyre!("failed to reject bundle: {:?}", resp.error));
-            }
-            agent_log.info(&format!("rejected bundle {}", bundle_id));
-        }
+    fn agent_type(&self) -> AgentType {
+        AgentType::Reviewer
     }
-
-    let _ = event_tx.send(DaemonEvent::agent_iteration_completed(
-        &session.id,
-        1,
-        &format!("{}: {}", review.verdict, review.summary),
-    ));
-
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentSession, AgentType};
-    use crate::config::{Config, ProjectConfig};
+    use crate::agents::agent_logger::AgentLogger;
+    use crate::agents::bridge::AgentIpcBridge;
+    use crate::agents::{AgentContext, AgentSession, AgentType};
+    use crate::config::{AgentRoleConfig, Config, ProjectConfig};
+    use crate::daemon::context::Stores;
     use crate::domain::bundle::{Bundle, BundleStatus};
     use crate::domain::learning::{Learning, LearningScope};
     use crate::domain::phase::Phase;
     use crate::domain::plan::Plan;
     use crate::domain::spec::Spec;
     use crate::domain::work::Work;
+    use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
     use std::path::Path;
-    use std::sync::Mutex as StdMutex;
+    use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
+    use tokio::sync::broadcast;
 
-    /// Mock LLM client for review tests.
     struct MockReviewLlm {
         response: String,
     }
@@ -282,7 +294,6 @@ mod tests {
         stores.store = Some(Arc::new(StdMutex::new(store)));
         stores.config = config;
 
-        // Populate hierarchy
         let plan = Plan::new("Test Plan".into(), "A test plan".into(), "criteria".into());
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
@@ -299,7 +310,6 @@ mod tests {
         let wi_id = wi.id.clone();
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        // Create a bundle in Triaged state (ready for review)
         let mut bundle = Bundle::new(
             wi_id,
             Some("tick-001".into()),
@@ -311,7 +321,6 @@ mod tests {
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-        // Add a learning
         let learning = Learning::new(
             phase_id,
             LearningScope::Phase,
@@ -323,7 +332,6 @@ mod tests {
     }
 
     fn test_agent_logger(dir: &Path) -> AgentLogger {
-        use crate::agents::AgentType;
         let file_path = dir.join("test-reviewer.log");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -333,11 +341,28 @@ mod tests {
         AgentLogger::_new_for_test(AgentType::Reviewer, "test-session", file, file_path)
     }
 
-    fn test_bridge(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
+    fn test_reviewer(dir: &Path, stores: Arc<Stores>, bundle_id: &str, llm: Box<dyn LlmClient>) -> ReviewerAgent {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-        (bridge, event_tx)
+        let agent_log = test_agent_logger(dir);
+        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
+        session.bundle_id = Some(bundle_id.to_string());
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+        let config = AgentRoleConfig::default_reviewer();
+        let ctx = AgentContext {
+            session,
+            stores,
+            bridge,
+            event_tx,
+            tool_runner: Arc::new(ToolRunner::new(&[])),
+            log: agent_log,
+        };
+        ReviewerAgent::new(ctx, llm, config).unwrap()
     }
 
     // --- ReviewVerdict tests ---
@@ -494,27 +519,22 @@ mod tests {
         assert!(result.err().unwrap().to_string().contains("bundle not found"));
     }
 
-    // --- run_reviewer tests ---
+    // --- ReviewerAgent tests ---
 
     #[tokio::test]
     async fn test_run_reviewer_approve() {
         let dir = std::env::temp_dir().join(format!("loopr-rev-approve-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
-        let (bridge, event_tx) = test_bridge(stores.clone(), &dir);
-        let config = AgentRoleConfig::default_reviewer();
 
-        let llm = MockReviewLlm::new(r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#);
+        let llm = Box::new(MockReviewLlm::new(
+            r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#,
+        ));
+        let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
+        let result = agent.run().await;
+        assert!(result.is_ok(), "run failed: {:?}", result.err());
+        assert_eq!(agent.ctx.session.iteration, 1);
 
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
-        session.bundle_id = Some(bundle_id.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
-        assert!(result.is_ok(), "run_reviewer failed: {:?}", result.err());
-        assert_eq!(session.iteration, 1);
-
-        // Bundle should have been transitioned to Reviewed
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
         assert_eq!(bundle.status, BundleStatus::Reviewed);
@@ -525,21 +545,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-rev-reject-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
-        let (bridge, event_tx) = test_bridge(stores.clone(), &dir);
-        let config = AgentRoleConfig::default_reviewer();
 
-        let llm = MockReviewLlm::new(
+        let llm = Box::new(MockReviewLlm::new(
             r#"{"verdict": "reject", "issues": [{"severity": "error", "file": "src/main.rs", "message": "Wrong approach"}], "summary": "Fundamentally wrong"}"#,
-        );
-
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
-        session.bundle_id = Some(bundle_id.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        ));
+        let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
+        let result = agent.run().await;
         assert!(result.is_ok());
 
-        // Bundle should have been transitioned to Rejected
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
         assert_eq!(bundle.status, BundleStatus::Rejected);
@@ -550,18 +563,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-rev-changes-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
-        let (bridge, event_tx) = test_bridge(stores.clone(), &dir);
-        let config = AgentRoleConfig::default_reviewer();
 
-        let llm = MockReviewLlm::new(
+        let llm = Box::new(MockReviewLlm::new(
             r#"{"verdict": "request_changes", "issues": [{"severity": "warning", "file": "src/lib.rs", "message": "Add more tests"}], "summary": "Needs work"}"#,
-        );
-
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
-        session.bundle_id = Some(bundle_id.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        ));
+        let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
+        let result = agent.run().await;
         assert!(result.is_ok());
 
         // #21: request_changes now transitions to Rejected (not Reviewed)
@@ -570,22 +577,29 @@ mod tests {
         assert_eq!(bundle.status, BundleStatus::Rejected);
     }
 
-    #[tokio::test]
-    async fn test_run_reviewer_missing_bundle_id() {
+    #[test]
+    fn test_reviewer_missing_bundle_id() {
         let dir = std::env::temp_dir().join(format!("loopr-rev-noid-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, _) = setup_stores_with_bundle(&dir);
-        let (bridge, event_tx) = test_bridge(stores.clone(), &dir);
-        let config = AgentRoleConfig::default_reviewer();
-        let llm = MockReviewLlm::new("{}");
-
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
-        // No bundle_id set
-
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing bundle_id"));
+        let session = AgentSession::new(AgentType::Reviewer, "test".into());
+        // No bundle_id set
+        let ctx = AgentContext {
+            session,
+            stores,
+            bridge,
+            event_tx,
+            tool_runner: Arc::new(ToolRunner::new(&[])),
+            log: agent_log,
+        };
+        let llm = Box::new(MockReviewLlm::new("{}"));
+        let result = ReviewerAgent::new(ctx, llm, AgentRoleConfig::default_reviewer());
+        let err = result.err().expect("expected error for missing bundle_id");
+        assert!(err.to_string().contains("missing bundle_id"));
     }
 
     #[tokio::test]
@@ -593,15 +607,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-rev-fail-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
-        let (bridge, event_tx) = test_bridge(stores.clone(), &dir);
-        let config = AgentRoleConfig::default_reviewer();
 
-        let llm = FailingReviewLlm;
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
-        session.bundle_id = Some(bundle_id);
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        let llm: Box<dyn LlmClient> = Box::new(FailingReviewLlm);
+        let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
+        let result = agent.run().await;
         assert!(result.is_err());
     }
 
@@ -610,15 +619,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-rev-bad-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
-        let (bridge, event_tx) = test_bridge(stores.clone(), &dir);
-        let config = AgentRoleConfig::default_reviewer();
 
-        let llm = MockReviewLlm::new("Not valid JSON");
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
-        session.bundle_id = Some(bundle_id);
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_reviewer(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        let llm = Box::new(MockReviewLlm::new("Not valid JSON"));
+        let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
+        let result = agent.run().await;
         assert!(result.is_err());
     }
 
