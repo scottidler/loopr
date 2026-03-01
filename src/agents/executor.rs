@@ -435,7 +435,7 @@ async fn run_agent_loop(
             let config = stores.config.agents.researcher.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
 
-            let mut session = {
+            let session = {
                 let sessions = stores.agent_sessions.read().unwrap();
                 sessions
                     .get(session_id)
@@ -443,15 +443,31 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result =
-                researcher::run_researcher(llm.as_ref(), &mut session, stores, bridge, &config, event_tx, agent_log)
-                    .await;
+            let res_bridge = AgentIpcBridge::new(
+                stores.clone(),
+                event_tx.clone(),
+                WorktreeManager::new(
+                    stores.config.project.repo_path.clone(),
+                    stores.config.project.repo_path.join(".worktrees"),
+                ),
+                stores.config.clone(),
+            );
+            let res_log = AgentLogger::new(AgentType::Researcher, session_id)?;
+            let ctx = crate::agents::AgentContext {
+                session,
+                stores: stores.clone(),
+                bridge: res_bridge,
+                event_tx: event_tx.clone(),
+                tool_runner: stores.tool_runner.clone(),
+                log: res_log,
+            };
+            let mut agent = researcher::ResearcherAgent::new(ctx, llm, config);
+            let result = agent.run().await;
 
-            // Write back updated session iteration count
             {
                 let mut sessions = stores.agent_sessions.write().unwrap();
                 if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = session.iteration;
+                    s.iteration = agent.ctx.session.iteration;
                 }
             }
 

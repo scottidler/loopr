@@ -1,17 +1,14 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
+use async_trait::async_trait;
 use eyre::{Result, eyre};
-use tokio::sync::broadcast;
 
 use crate::agents::agent_logger::AgentLogger;
-use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::implementer::{self, IterationOutcome, LlmClient};
-use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
+use crate::agents::{Agent, AgentAction, AgentContext, AgentStatus, AgentType};
 use crate::config::AgentRoleConfig;
-use crate::daemon::context::Stores;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
@@ -226,136 +223,6 @@ pub async fn execute_list_directory(repo_root: &Path, path: &str, agent_log: &Ag
     }
 }
 
-/// Run a single researcher iteration: build context → call LLM → parse → execute.
-async fn run_researcher_iteration(
-    llm: &dyn LlmClient,
-    session: &AgentSession,
-    stores: &Arc<Stores>,
-    bridge: &AgentIpcBridge,
-    iteration: u32,
-    previous_summary: Option<String>,
-    agent_log: &AgentLogger,
-) -> Result<IterationOutcome> {
-    let query = session.query.as_deref().unwrap_or("(no query specified)");
-    let system_prompt = build_system_prompt(query, agent_log);
-
-    // Build scope chain from target_id if available
-    let builder = ContextBuilder::new(stores, Role::Researcher).with_guidance(&stores.guidance);
-
-    let footer = format!(
-        "Iteration {}: Investigate the codebase to answer the query. Respond with a JSON array of actions.",
-        iteration
-    );
-
-    let builder = builder
-        .with_previous_summary(previous_summary)
-        .with_iteration(iteration)
-        .with_footer(footer);
-
-    let assembled = builder.build(&system_prompt);
-
-    let event_tx = bridge.event_tx();
-    agent_log.info(&format!(
-        "iteration {} context: ~{} tokens",
-        iteration, assembled.token_estimate
-    ));
-
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(
-        &session.id,
-        AgentStatus::WaitingForLlm,
-    ));
-
-    let response = llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-    let actions = implementer::parse_actions(&response, agent_log)?;
-
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session.id, AgentStatus::Running));
-
-    if actions.is_empty() {
-        return Ok(IterationOutcome::Done("No actions returned".to_string()));
-    }
-
-    let repo_root = &stores.config.project.repo_path;
-    let tool_runner = &*stores.tool_runner;
-
-    let mut last_summary = String::new();
-    for action in &actions {
-        // Validate: Researcher can only use read-only actions
-        if !is_allowed_researcher_action(action) {
-            agent_log.warn(&format!("attempted disallowed action: {:?}", action));
-            last_summary = format!("ERROR: action not allowed for Researcher: {:?}", action);
-            continue;
-        }
-
-        let result = match action {
-            // Handle Researcher-specific actions inline
-            AgentAction::SearchCode { pattern, glob, path } => {
-                match execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref(), agent_log).await {
-                    Ok(output) => ActionResult::FileRead(output),
-                    Err(e) => ActionResult::ActionError(e.to_string()),
-                }
-            }
-            AgentAction::SearchFiles { pattern, path } => {
-                match execute_search_files(repo_root, pattern, path.as_deref(), agent_log).await {
-                    Ok(output) => ActionResult::FileRead(output),
-                    Err(e) => ActionResult::ActionError(e.to_string()),
-                }
-            }
-            AgentAction::ListDirectory { path } => match execute_list_directory(repo_root, path, agent_log).await {
-                Ok(output) => ActionResult::FileRead(output),
-                Err(e) => ActionResult::ActionError(e.to_string()),
-            },
-            AgentAction::ReadFile { path } => {
-                // Apply path sandboxing for ReadFile
-                match validate_path(repo_root, path, agent_log) {
-                    Ok(full_path) => match tokio::fs::read_to_string(&full_path).await {
-                        Ok(content) => {
-                            // Truncate to ~2000 lines
-                            let lines: Vec<&str> = content.lines().take(2000).collect();
-                            let mut truncated = lines.join("\n");
-                            if content.lines().count() > 2000 {
-                                truncated.push_str("\n... [truncated]");
-                            }
-                            ActionResult::FileRead(truncated)
-                        }
-                        Err(e) => ActionResult::ActionError(format!("read_file '{}': {}", path, e)),
-                    },
-                    Err(e) => ActionResult::ActionError(e.to_string()),
-                }
-            }
-            // Shared actions delegated to executor
-            _ => match execute_action(
-                action,
-                tool_runner,
-                bridge,
-                repo_root,
-                None,
-                AgentType::Researcher,
-                agent_log,
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    agent_log.warn(&format!("action failed (non-fatal): {e}"));
-                    ActionResult::ActionError(e.to_string())
-                }
-            },
-        };
-
-        let summary = format_action_summary(action, &result);
-        let _ = event_tx.send(DaemonEvent::agent_action_completed(&session.id, &summary));
-
-        match &result {
-            ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
-            ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
-            _ => {}
-        }
-        last_summary = summary;
-    }
-
-    Ok(IterationOutcome::Continue(last_summary))
-}
-
 /// Check if the action is allowed for a Researcher (read-only + CreateLearning + Done/NeedHelp).
 fn is_allowed_researcher_action(action: &AgentAction) -> bool {
     matches!(
@@ -370,79 +237,202 @@ fn is_allowed_researcher_action(action: &AgentAction) -> bool {
     )
 }
 
-/// Run the Researcher's iteration loop.
-///
-/// Unlike Coordinator (indefinite), Researcher has a max_iterations cap.
-/// Terminates on: Done, NeedHelp, max_iterations, or error.
-pub async fn run_researcher(
-    llm: &dyn LlmClient,
-    session: &mut AgentSession,
-    stores: &Arc<Stores>,
-    bridge: &AgentIpcBridge,
-    config: &AgentRoleConfig,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    agent_log: &AgentLogger,
-) -> Result<()> {
-    agent_log.debug(&format!("run_researcher(session_id={})", session.id));
-    agent_log.info(&format!(
-        "Researcher starting (query: {:?}, target: {:?})",
-        session.query.as_deref().unwrap_or("none"),
-        session.target_id.as_deref().unwrap_or("none"),
-    ));
+/// The Researcher agent — multi-iteration LLM agent for codebase investigation.
+pub struct ResearcherAgent {
+    pub ctx: AgentContext,
+    llm: Box<dyn LlmClient>,
+    config: AgentRoleConfig,
+    previous_summary: Option<String>,
+}
 
-    let mut previous_summary: Option<String> = None;
-
-    for iteration in 1..=config.max_iterations {
-        // Check cancellation
-        {
-            let sessions = stores.agent_sessions.read().unwrap();
-            if let Some(s) = sessions.get(&session.id)
-                && s.status == AgentStatus::Cancelled
-            {
-                agent_log.info("cancelled, exiting loop");
-                return Ok(());
-            }
-        }
-
-        session.iteration = iteration;
-        agent_log.info(&format!("iteration {}/{}", iteration, config.max_iterations));
-
-        let outcome = run_researcher_iteration(
+impl ResearcherAgent {
+    pub fn new(ctx: AgentContext, llm: Box<dyn LlmClient>, config: AgentRoleConfig) -> Self {
+        Self {
+            ctx,
             llm,
-            session,
-            stores,
-            bridge,
-            iteration,
-            previous_summary.clone(),
-            agent_log,
-        )
-        .await;
-
-        match outcome {
-            Ok(IterationOutcome::Done(summary)) => {
-                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, &summary));
-                agent_log.info(&format!("done: {}", summary));
-                return Ok(());
-            }
-            Ok(IterationOutcome::Continue(summary)) => {
-                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, &summary));
-                agent_log.info(&format!("continue: {}", summary));
-                previous_summary = Some(summary);
-            }
-            Ok(IterationOutcome::NeedHelp(reason)) => {
-                let _ = event_tx.send(DaemonEvent::agent_iteration_completed(&session.id, iteration, &reason));
-                agent_log.warn(&format!("needs help: {}", reason));
-                return Err(eyre!("researcher needs help: {}", reason));
-            }
-            Err(e) => {
-                agent_log.warn(&format!("iteration {} failed: {}", iteration, e));
-                return Err(eyre!("researcher iteration failed: {}", e));
-            }
+            config,
+            previous_summary: None,
         }
     }
 
-    agent_log.warn(&format!("reached max iterations ({})", config.max_iterations));
-    Err(eyre!("researcher reached max iterations ({})", config.max_iterations))
+    async fn run_iteration(&self, iteration: u32) -> Result<IterationOutcome> {
+        let query = self.ctx.session.query.as_deref().unwrap_or("(no query specified)");
+        let system_prompt = build_system_prompt(query, &self.ctx.log);
+
+        let builder = ContextBuilder::new(&self.ctx.stores, Role::Researcher).with_guidance(&self.ctx.stores.guidance);
+
+        let footer = format!(
+            "Iteration {}: Investigate the codebase to answer the query. Respond with a JSON array of actions.",
+            iteration
+        );
+
+        let builder = builder
+            .with_previous_summary(self.previous_summary.clone())
+            .with_iteration(iteration)
+            .with_footer(footer);
+
+        let assembled = builder.build(&system_prompt);
+
+        self.ctx.info(&format!(
+            "iteration {} context: ~{} tokens",
+            iteration, assembled.token_estimate
+        ));
+
+        let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
+            &self.ctx.session.id,
+            AgentStatus::WaitingForLlm,
+        ));
+
+        let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
+        let actions = implementer::parse_actions(&response, &self.ctx.log)?;
+
+        let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
+            &self.ctx.session.id,
+            AgentStatus::Running,
+        ));
+
+        if actions.is_empty() {
+            return Ok(IterationOutcome::Done("No actions returned".to_string()));
+        }
+
+        let repo_root = &self.ctx.stores.config.project.repo_path;
+        let tool_runner = &*self.ctx.stores.tool_runner;
+
+        let mut last_summary = String::new();
+        for action in &actions {
+            if !is_allowed_researcher_action(action) {
+                self.ctx.warn(&format!("attempted disallowed action: {:?}", action));
+                last_summary = format!("ERROR: action not allowed for Researcher: {:?}", action);
+                continue;
+            }
+
+            let result = match action {
+                AgentAction::SearchCode { pattern, glob, path } => {
+                    match execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref(), &self.ctx.log).await
+                    {
+                        Ok(output) => ActionResult::FileRead(output),
+                        Err(e) => ActionResult::ActionError(e.to_string()),
+                    }
+                }
+                AgentAction::SearchFiles { pattern, path } => {
+                    match execute_search_files(repo_root, pattern, path.as_deref(), &self.ctx.log).await {
+                        Ok(output) => ActionResult::FileRead(output),
+                        Err(e) => ActionResult::ActionError(e.to_string()),
+                    }
+                }
+                AgentAction::ListDirectory { path } => {
+                    match execute_list_directory(repo_root, path, &self.ctx.log).await {
+                        Ok(output) => ActionResult::FileRead(output),
+                        Err(e) => ActionResult::ActionError(e.to_string()),
+                    }
+                }
+                AgentAction::ReadFile { path } => match validate_path(repo_root, path, &self.ctx.log) {
+                    Ok(full_path) => match tokio::fs::read_to_string(&full_path).await {
+                        Ok(content) => {
+                            let lines: Vec<&str> = content.lines().take(2000).collect();
+                            let mut truncated = lines.join("\n");
+                            if content.lines().count() > 2000 {
+                                truncated.push_str("\n... [truncated]");
+                            }
+                            ActionResult::FileRead(truncated)
+                        }
+                        Err(e) => ActionResult::ActionError(format!("read_file '{}': {}", path, e)),
+                    },
+                    Err(e) => ActionResult::ActionError(e.to_string()),
+                },
+                _ => match execute_action(
+                    action,
+                    tool_runner,
+                    &self.ctx.bridge,
+                    repo_root,
+                    None,
+                    AgentType::Researcher,
+                    &self.ctx.log,
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.ctx.warn(&format!("action failed (non-fatal): {e}"));
+                        ActionResult::ActionError(e.to_string())
+                    }
+                },
+            };
+
+            let summary = format_action_summary(action, &result);
+            let _ = self
+                .ctx
+                .event_tx
+                .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &summary));
+
+            match &result {
+                ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
+                ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
+                _ => {}
+            }
+            last_summary = summary;
+        }
+
+        Ok(IterationOutcome::Continue(last_summary))
+    }
+}
+
+#[async_trait]
+impl Agent for ResearcherAgent {
+    async fn run(&mut self) -> Result<()> {
+        self.ctx.debug(&format!("run(session_id={})", self.ctx.session.id));
+        self.ctx.info(&format!(
+            "Researcher starting (query: {:?}, target: {:?})",
+            self.ctx.session.query.as_deref().unwrap_or("none"),
+            self.ctx.session.target_id.as_deref().unwrap_or("none"),
+        ));
+
+        for iteration in 1..=self.config.max_iterations {
+            if self.ctx.is_cancelled() {
+                self.ctx.info("cancelled, exiting loop");
+                return Ok(());
+            }
+
+            self.ctx.session.iteration = iteration;
+            self.ctx
+                .info(&format!("iteration {}/{}", iteration, self.config.max_iterations));
+
+            let outcome = self.run_iteration(iteration).await;
+
+            match outcome {
+                Ok(IterationOutcome::Done(summary)) => {
+                    self.ctx.emit_iteration_completed(iteration, &summary);
+                    self.ctx.info(&format!("done: {}", summary));
+                    return Ok(());
+                }
+                Ok(IterationOutcome::Continue(summary)) => {
+                    self.ctx.emit_iteration_completed(iteration, &summary);
+                    self.ctx.info(&format!("continue: {}", summary));
+                    self.previous_summary = Some(summary);
+                }
+                Ok(IterationOutcome::NeedHelp(reason)) => {
+                    self.ctx.emit_iteration_completed(iteration, &reason);
+                    self.ctx.warn(&format!("needs help: {}", reason));
+                    return Err(eyre!("researcher needs help: {}", reason));
+                }
+                Err(e) => {
+                    self.ctx.warn(&format!("iteration {} failed: {}", iteration, e));
+                    return Err(eyre!("researcher iteration failed: {}", e));
+                }
+            }
+        }
+
+        self.ctx
+            .warn(&format!("reached max iterations ({})", self.config.max_iterations));
+        Err(eyre!(
+            "researcher reached max iterations ({})",
+            self.config.max_iterations
+        ))
+    }
+
+    fn agent_type(&self) -> AgentType {
+        AgentType::Researcher
+    }
 }
 
 fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String {
@@ -474,11 +464,17 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentSession;
-    use crate::config::{Config, ProjectConfig};
+    use crate::agents::bridge::AgentIpcBridge;
+    use crate::agents::{AgentContext, AgentSession, AgentType};
+    use crate::config::{AgentRoleConfig, Config, ProjectConfig};
+    use crate::daemon::context::Stores;
+    use crate::tools::ToolRunner;
+    use crate::worktree::manager::WorktreeManager;
     use async_trait::async_trait;
-    use std::sync::Mutex as StdMutex;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
+    use tokio::sync::broadcast;
 
     struct MockLlm {
         responses: StdMutex<Vec<String>>,
@@ -520,7 +516,6 @@ mod tests {
     }
 
     fn test_agent_logger(dir: &Path) -> AgentLogger {
-        use crate::agents::AgentType;
         let file_path = dir.join("test-researcher.log");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -528,6 +523,30 @@ mod tests {
             .open(&file_path)
             .unwrap();
         AgentLogger::_new_for_test(AgentType::Researcher, "test-session", file, file_path)
+    }
+
+    fn test_researcher_agent(dir: &Path, stores: Arc<Stores>, llm: Box<dyn LlmClient>) -> ResearcherAgent {
+        let (event_tx, _) = broadcast::channel(64);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(dir);
+        let config = AgentRoleConfig::default_researcher();
+        let mut session = AgentSession::new(AgentType::Researcher, "test".into());
+        session.query = Some("test query".into());
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session.clone());
+        let ctx = AgentContext {
+            session,
+            stores,
+            bridge,
+            event_tx,
+            tool_runner: Arc::new(ToolRunner::new(&[])),
+            log: agent_log,
+        };
+        ResearcherAgent::new(ctx, llm, config)
     }
 
     // --- Path sandboxing tests ---
@@ -771,37 +790,21 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("not a directory"));
     }
 
-    // --- run_researcher tests ---
+    // --- ResearcherAgent tests ---
 
     #[tokio::test]
     async fn test_researcher_done_on_first_iteration() {
         let dir = std::env::temp_dir().join(format!("loopr-res-done-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        let llm = MockLlm::new(vec![
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
             r#"[{"action": "done", "summary": "Found the pattern"}]"#.to_string(),
-        ]);
-
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
-        session.query = Some("Find error handling".into());
-        session.target_id = Some("wi-1".into());
-        let _ = session.transition_to(AgentStatus::Running);
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
-
-        let config = AgentRoleConfig::default_researcher();
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        ]));
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+        let result = agent.run().await;
         assert!(result.is_ok());
-        assert_eq!(session.iteration, 1);
+        assert_eq!(agent.ctx.session.iteration, 1);
     }
 
     #[tokio::test]
@@ -809,27 +812,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-res-help-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        let llm = MockLlm::new(vec![
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
             r#"[{"action": "need_help", "reason": "Cannot find module"}]"#.to_string(),
-        ]);
-
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
-        session.query = Some("Find module X".into());
-        let _ = session.transition_to(AgentStatus::Running);
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
-
-        let config = AgentRoleConfig::default_researcher();
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        ]));
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+        let result = agent.run().await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("needs help"));
     }
@@ -840,37 +828,42 @@ mod tests {
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/test.rs"), "fn main() {}").unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        // Always return a continue action — should hit max iterations
         let mut responses = Vec::new();
         for _ in 0..15 {
             responses.push(
                 r#"[{"action": "search_code", "pattern": "fn main", "glob": "*.rs", "path": "src"}]"#.to_string(),
             );
         }
-        let llm = MockLlm::new(responses);
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(responses));
 
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
+        // Need custom config with max_iterations = 3
+        let (event_tx, _) = broadcast::channel(64);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
+        let mut config = AgentRoleConfig::default_researcher();
+        config.max_iterations = 3;
+        let mut session = AgentSession::new(AgentType::Researcher, "test".into());
         session.query = Some("Search forever".into());
-        let _ = session.transition_to(AgentStatus::Running);
         stores
             .agent_sessions
             .write()
             .unwrap()
             .insert(session.id.clone(), session.clone());
-
-        let mut config = AgentRoleConfig::default_researcher();
-        config.max_iterations = 3; // Low cap for testing
-
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        let ctx = AgentContext {
+            session,
+            stores,
+            bridge,
+            event_tx,
+            tool_runner: Arc::new(ToolRunner::new(&[])),
+            log: agent_log,
+        };
+        let mut agent = ResearcherAgent::new(ctx, llm, config);
+        let result = agent.run().await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max iterations"));
-        assert_eq!(session.iteration, 3);
+        assert_eq!(agent.ctx.session.iteration, 3);
     }
 
     #[tokio::test]
@@ -878,26 +871,21 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-res-canc-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        let llm = MockLlm::new(vec![]);
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![]));
+        let mut agent = test_researcher_agent(&dir, stores.clone(), llm);
 
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
-        let _ = session.transition_to(AgentStatus::Running);
-        let _ = session.transition_to(AgentStatus::Cancelled);
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
+        // Cancel the agent's session
+        {
+            let mut sessions = stores.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&agent.ctx.session.id) {
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        }
 
-        let config = AgentRoleConfig::default_researcher();
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
-        assert!(result.is_ok()); // Cancelled = graceful exit
+        let result = agent.run().await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
@@ -905,31 +893,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("loopr-res-block-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        // LLM tries to write a file — should be blocked
-        let llm = MockLlm::new(vec![
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
             r#"[{"action": "write_file", "path": "hack.txt", "content": "pwned"}, {"action": "done", "summary": "tried to write"}]"#.to_string(),
-        ]);
+        ]));
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+        let result = agent.run().await;
+        assert!(result.is_ok());
 
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
-        session.query = Some("Test".into());
-        let _ = session.transition_to(AgentStatus::Running);
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
-
-        let config = AgentRoleConfig::default_researcher();
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
-        assert!(result.is_ok()); // Completes with Done
-
-        // Verify file was NOT written
         assert!(!dir.join("hack.txt").exists());
     }
 
@@ -1062,63 +1033,28 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_researcher_iteration_empty_actions_returns_done() {
-        // When the LLM returns an empty action array, the researcher should finish (Done).
         let dir = std::env::temp_dir().join(format!("loopr-res-empty-act-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        // Return empty actions array
-        let llm = MockLlm::new(vec![r#"[]"#.to_string()]);
-
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
-        session.query = Some("Find something".into());
-        let _ = session.transition_to(AgentStatus::Running);
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
-
-        let config = AgentRoleConfig::default_researcher();
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
-        // Empty actions → Done("No actions returned") → Ok(())
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![r#"[]"#.to_string()]));
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+        let result = agent.run().await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_run_researcher_iteration_mixed_allowed_disallowed() {
-        // Mix of disallowed (write_file) and allowed (done) actions — should skip write, process done.
         let dir = std::env::temp_dir().join(format!("loopr-res-mixed-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
-        let (event_tx, _rx) = broadcast::channel(16);
 
-        let llm = MockLlm::new(vec![
+        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
             r#"[{"action": "write_file", "path": "bad.txt", "content": "nope"}, {"action": "done", "summary": "mixed test done"}]"#.to_string(),
-        ]);
-
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".into());
-        session.query = Some("Mixed test".into());
-        let _ = session.transition_to(AgentStatus::Running);
-        stores
-            .agent_sessions
-            .write()
-            .unwrap()
-            .insert(session.id.clone(), session.clone());
-
-        let config = AgentRoleConfig::default_researcher();
-        let worktree_mgr = crate::worktree::manager::WorktreeManager::new(dir.clone(), dir.join(".wt"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-        let agent_log = test_agent_logger(&dir);
-        let result = run_researcher(&llm, &mut session, &stores, &bridge, &config, &event_tx, &agent_log).await;
+        ]));
+        let mut agent = test_researcher_agent(&dir, stores, llm);
+        let result = agent.run().await;
         assert!(result.is_ok());
-        // Write file should NOT have been created
         assert!(!dir.join("bad.txt").exists());
     }
 
