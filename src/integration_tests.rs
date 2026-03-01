@@ -2383,7 +2383,7 @@ mod tests {
             }
         }
 
-        let llm = PipelineLlm;
+        let llm: Box<dyn LlmClient> = Box::new(PipelineLlm);
         let log_file_path = dir.join("test-pipeline.log");
         let log_file = std::fs::OpenOptions::new()
             .create(true)
@@ -2396,19 +2396,21 @@ mod tests {
             log_file,
             log_file_path,
         );
-        let params = implementer::IterationParams {
-            llm: &llm,
-            stores: &stores,
-            tool_runner: &runner,
-            bridge: &bridge,
-            work_id: &wi_id,
-            worktree_path: &dir,
-            session_id: "test-pipeline",
-            event_tx: &tx,
-            agent_log: &agent_log,
+        let config = crate::config::AgentRoleConfig::default_implementer();
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "test".into());
+        session.work_id = Some(wi_id.clone());
+        session.worktree_path = Some(dir.to_string_lossy().into());
+        let ctx = crate::agents::AgentContext {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx: tx.clone(),
+            tool_runner: stores.tool_runner.clone(),
+            log: agent_log,
         };
+        let agent = implementer::ImplementerAgent::new(ctx, llm, config, wi_id.clone(), dir.clone());
 
-        let outcome = implementer::run_iteration(&params, 1, None, None).await.unwrap();
+        let outcome = agent.run_iteration(1, None).await.unwrap();
         assert!(
             matches!(outcome, IterationOutcome::Done(ref s) if s.contains("hello.txt")),
             "expected Done with hello.txt, got: {:?}",

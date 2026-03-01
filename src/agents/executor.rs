@@ -328,12 +328,10 @@ async fn run_agent_loop(
 
     match agent_type {
         AgentType::Implementer => {
-            let tool_runner = &stores.tool_runner;
             let config = stores.config.agents.implementer.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
 
-            // Clone session out for the implementer loop
-            let mut session = {
+            let session = {
                 let sessions = stores.agent_sessions.read().unwrap();
                 sessions
                     .get(session_id)
@@ -341,23 +339,41 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = implementer::run_implementer(
-                llm.as_ref(),
-                &mut session,
-                stores,
-                tool_runner,
-                bridge,
-                &config,
-                event_tx,
-                agent_log,
-            )
-            .await;
+            let impl_bridge = AgentIpcBridge::new(
+                stores.clone(),
+                event_tx.clone(),
+                WorktreeManager::new(
+                    stores.config.project.repo_path.clone(),
+                    stores.config.project.repo_path.join(".worktrees"),
+                ),
+                stores.config.clone(),
+            );
+            let impl_log = AgentLogger::new(AgentType::Implementer, session_id)?;
+            let work_id = session
+                .work_id
+                .clone()
+                .ok_or_else(|| eyre!("implementer session missing work_id"))?;
+            let worktree_path = session
+                .worktree_path
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| eyre!("implementer session missing worktree_path"))?;
+            let ctx = crate::agents::AgentContext {
+                session,
+                stores: stores.clone(),
+                bridge: impl_bridge,
+                event_tx: event_tx.clone(),
+                tool_runner: stores.tool_runner.clone(),
+                log: impl_log,
+            };
+            let mut agent = implementer::ImplementerAgent::new(ctx, llm, config, work_id, worktree_path);
+            let result = agent.run().await;
 
             // Write back updated session iteration count
             {
                 let mut sessions = stores.agent_sessions.write().unwrap();
                 if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = session.iteration;
+                    s.iteration = agent.ctx.session.iteration;
                 }
             }
 
