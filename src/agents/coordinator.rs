@@ -286,7 +286,8 @@ fn build_generation_footer(
     }
 
     // Case 3: Check if validation cap is reached → signal NeedHelp
-    if generation::is_validation_cap_reached(stores, max_validation_attempts) {
+    // (Only relevant when validator is enabled — no validation failures exist when disabled)
+    if stores.validator.is_some() && generation::is_validation_cap_reached(stores, max_validation_attempts) {
         agent_log.info(&format!(
             "validation cap reached ({} attempts), signaling need_help",
             max_validation_attempts
@@ -300,7 +301,13 @@ fn build_generation_footer(
     }
 
     // Case 2: Check if a Draft exists with failed validation → re-generate with accumulated failures
-    if let Some(regen) = generation::find_draft_needing_regeneration(stores, max_validation_attempts) {
+    // (Only relevant when validator is enabled — no validation failures exist when disabled)
+    if let Some(regen) = stores
+        .validator
+        .is_some()
+        .then(|| generation::find_draft_needing_regeneration(stores, max_validation_attempts))
+        .flatten()
+    {
         agent_log.info(&format!(
             "re-generation needed: {} {} (attempt {}/{})",
             regen.collection,
@@ -339,17 +346,33 @@ fn build_generation_footer(
         return Some(footer);
     }
 
-    // Fix #8: Check if a Draft document exists that needs validation.
+    // Fix #8: Check if a Draft document exists that needs validation or activation.
     // When determine_generation_level() returned None (a Draft exists but has no failed
-    // validations yet), the Coordinator needs to be told to validate it.
+    // validations yet), the Coordinator needs to validate it (if validator enabled)
+    // or activate it directly (if validator disabled).
     if let Some(draft_info) = find_pending_draft_for_validation(stores) {
-        agent_log.info(&format!("Draft {} '{}' needs validation", draft_info.0, draft_info.1));
-        return Some(format!(
-            "A {} is in Draft status and needs validation before proceeding.\n\
-             Use ValidateDocument to validate it.\n\
-             Draft ID: {}\nTitle: {}",
-            draft_info.0, draft_info.1, draft_info.2
-        ));
+        if stores.validator.is_some() {
+            // Validator enabled — ask coordinator to validate
+            agent_log.info(&format!("Draft {} '{}' needs validation", draft_info.0, draft_info.1));
+            return Some(format!(
+                "A {} is in Draft status and needs validation before proceeding.\n\
+                 Use ValidateDocument to validate it.\n\
+                 Draft ID: {}\nTitle: {}",
+                draft_info.0, draft_info.1, draft_info.2
+            ));
+        } else {
+            // Validator disabled — tell coordinator to activate directly
+            agent_log.info(&format!(
+                "Draft {} '{}' — validator disabled, activate directly",
+                draft_info.0, draft_info.1
+            ));
+            return Some(format!(
+                "A {} is in Draft status. Validation is disabled — activate it directly.\n\
+                 Use TransitionStatus to move it from Draft to Active.\n\
+                 ID: {}\nTitle: {}",
+                draft_info.0, draft_info.1, draft_info.2
+            ));
+        }
     }
 
     None
@@ -1416,6 +1439,28 @@ mod tests {
         Arc::new(stores)
     }
 
+    fn test_stores_with_validator(dir: &std::path::Path) -> Arc<Stores> {
+        use crate::config::ValidatorConfig;
+        use crate::validator::DocValidator;
+
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(StdMutex::new(store)));
+        stores.config = config;
+        stores.validator = Some(Arc::new(DocValidator::new(ValidatorConfig {
+            enabled: true,
+            ..ValidatorConfig::default()
+        })));
+        Arc::new(stores)
+    }
+
     fn test_agent_logger(dir: &std::path::Path) -> AgentLogger {
         use crate::agents::AgentType;
         let file_path = dir.join("test-coordinator.log");
@@ -2001,7 +2046,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("loopr-coord-valcap-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let stores = test_stores(&dir);
+        let stores = test_stores_with_validator(&dir);
 
         // Create a Draft plan so determine_generation_level returns None
         // (Draft exists, so no generation needed)
@@ -2039,7 +2084,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("loopr-coord-regen-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let stores = test_stores(&dir);
+        let stores = test_stores_with_validator(&dir);
 
         // Create a Draft plan
         let plan = Plan::new("Draft Plan".into(), "desc".into(), "crit".into());
@@ -2900,11 +2945,11 @@ mod tests {
     }
 
     #[test]
-    fn test_build_generation_footer_includes_draft_validation() {
+    fn test_build_generation_footer_draft_validator_disabled_activates_directly() {
         crate::prompts::init_defaults();
         let dir = std::env::temp_dir().join(format!("loopr-coord-draftfooter-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let stores = test_stores(&dir);
+        let stores = test_stores(&dir); // validator is None (disabled)
 
         // Create an Active plan
         let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
@@ -2918,7 +2963,7 @@ mod tests {
 
         let agent_log = test_agent_logger(&dir);
         let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log);
-        assert!(footer.is_some(), "should emit footer for Draft validation");
+        assert!(footer.is_some(), "should emit footer for Draft activation");
         let footer_text = footer.unwrap();
         assert!(
             footer_text.contains("Draft"),
@@ -2926,8 +2971,41 @@ mod tests {
             footer_text
         );
         assert!(
-            footer_text.contains("ValidateDocument") || footer_text.contains("validation"),
-            "footer should instruct validation: {}",
+            footer_text.contains("TransitionStatus"),
+            "footer should instruct direct activation when validator disabled: {}",
+            footer_text
+        );
+        assert!(
+            footer_text.contains("Validation is disabled"),
+            "footer should note validator is disabled: {}",
+            footer_text
+        );
+    }
+
+    #[test]
+    fn test_build_generation_footer_draft_validator_enabled_validates() {
+        crate::prompts::init_defaults();
+        let dir = std::env::temp_dir().join(format!("loopr-coord-draftval-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores_with_validator(&dir);
+
+        // Create an Active plan
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Create a Draft spec under the active plan
+        let spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log);
+        assert!(footer.is_some(), "should emit footer for Draft validation");
+        let footer_text = footer.unwrap();
+        assert!(
+            footer_text.contains("ValidateDocument"),
+            "footer should instruct validation when validator enabled: {}",
             footer_text
         );
     }
