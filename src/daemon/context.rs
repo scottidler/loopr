@@ -52,6 +52,8 @@ pub struct Stores {
     pub tool_runner: Arc<ToolRunner>,
     /// Full config, available to handlers for agent spawning.
     pub config: Config,
+    /// Assembled guidance (schema docs + LOOPR.md files), loaded once at startup.
+    pub guidance: AgentGuidance,
     /// JoinHandles for spawned agent tasks, keyed by session ID.
     /// Used for graceful shutdown: cancel agents, wait, then abort.
     pub agent_handles: StdMutex<HashMap<String, JoinHandle<()>>>,
@@ -85,6 +87,7 @@ impl Stores {
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
             git_lock: StdMutex::new(()),
+            guidance: AgentGuidance::schema_only(),
         }
     }
 }
@@ -114,8 +117,6 @@ pub struct DaemonContext {
     pub config: Config,
     pub stores: Arc<Stores>,
     pub worktree_manager: WorktreeManager,
-    /// Assembled guidance (schema docs + LOOPR.md files), loaded at startup.
-    pub guidance: AgentGuidance,
 }
 
 impl DaemonContext {
@@ -241,14 +242,13 @@ impl DaemonContext {
         }
 
         // Load guidance: schema docs from transition rules + LOOPR.md files from disk
-        let guidance = crate::guidance::load_guidance(&repo_path);
+        stores.guidance = crate::guidance::load_guidance(&repo_path);
 
         Ok(Self {
             config,
             event_tx,
             stores: Arc::new(stores),
             worktree_manager,
-            guidance,
         })
     }
 

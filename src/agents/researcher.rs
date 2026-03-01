@@ -234,7 +234,7 @@ async fn run_researcher_iteration(
     let system_prompt = build_system_prompt(query);
 
     // Build scope chain from target_id if available
-    let builder = ContextBuilder::new(stores, Role::Researcher);
+    let builder = ContextBuilder::new(stores, Role::Researcher).with_guidance(&stores.guidance);
 
     let footer = format!(
         "Iteration {}: Investigate the codebase to answer the query. Respond with a JSON array of actions.",

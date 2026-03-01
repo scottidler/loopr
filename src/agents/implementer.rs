@@ -158,6 +158,7 @@ pub async fn run_iteration(
     let state_summary = build_implementer_summary(params.stores, params.work_id);
     let assembled = ContextBuilder::new(params.stores, Role::Implementer)
         .load_work_hierarchy(params.work_id)?
+        .with_guidance(&params.stores.guidance)
         .with_coordinator_goal()
         .with_state_summary(state_summary)
         .with_tools(params.tool_runner)

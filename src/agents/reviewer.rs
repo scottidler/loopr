@@ -116,6 +116,7 @@ pub async fn run_reviewer(
 
     let ctx = ContextBuilder::new(stores, Role::Reviewer)
         .load_bundle_hierarchy(&bundle_id)?
+        .with_guidance(&stores.guidance)
         .with_footer(
             "Review this Bundle against the Work requirements and review criteria above. Respond with ONLY valid JSON."
                 .into(),

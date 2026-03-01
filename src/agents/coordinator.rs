@@ -944,6 +944,7 @@ async fn run_coordinator_iteration(
     );
 
     let builder = ContextBuilder::new(stores, Role::Coordinator)
+        .with_guidance(&stores.guidance)
         .with_state_summary(format!("{}{}", fsm_context, state_summary))
         .with_previous_summary(ctx.previous_summary.clone())
         .with_iteration(iteration)
