@@ -1,5 +1,6 @@
 pub mod context;
 pub mod handlers;
+pub mod supervisor;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -185,7 +186,26 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         }
     }
 
+    // Spawn coordinator supervisor — watches for coordinator failures and restarts with backoff
+    let supervisor_handle = {
+        let c = ctx.read().await;
+        let stores = c.stores.clone();
+        let evt = event_tx.clone();
+        let wm = c.worktree_manager.clone();
+        let ic = c.config.integrator.clone();
+        tokio::spawn(supervisor::run_supervisor(
+            stores,
+            evt,
+            wm,
+            ic,
+            supervisor::SupervisorConfig::default(),
+        ))
+    };
+
     let result = accept_loop(listener, ctx.clone(), event_tx.clone()).await;
+
+    // Abort the supervisor task on shutdown
+    supervisor_handle.abort();
 
     // Graceful shutdown: cancel agent sessions, wait for tasks, abort stragglers
     {
