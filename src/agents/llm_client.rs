@@ -4,7 +4,7 @@ use log::{debug, info, warn};
 use reqwest::Client;
 use tokio::sync::broadcast;
 
-use crate::agents::implementer::LlmClient;
+use crate::agents::implementer::{ChatMessage, LlmClient};
 use crate::agents::{AgentEvent, AgentStatus};
 use crate::config::AgentRoleConfig;
 use crate::ipc::protocol::DaemonEvent;
@@ -87,21 +87,26 @@ impl AgentLlmClient {
             .send(DaemonEvent::agent_status_changed(&self.session_id, status));
     }
 
-    /// Call the Anthropic Messages API with SSE streaming.
+    /// Call the Anthropic Messages API with SSE streaming and multi-turn message history.
     /// Returns the accumulated full response text.
-    async fn call_streaming(&self, system_prompt: &str, user_message: &str) -> Result<String> {
+    async fn call_streaming_with_messages(&self, system_prompt: &str, messages: &[ChatMessage]) -> Result<String> {
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "role": m.role,
+                    "content": m.content,
+                })
+            })
+            .collect();
+
         let body = serde_json::json!({
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
             "stream": true,
             "system": system_prompt,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": user_message,
-                }
-            ]
+            "messages": api_messages,
         });
 
         self.emit_status(AgentStatus::WaitingForLlm);
@@ -136,6 +141,13 @@ impl AgentLlmClient {
         self.emit_chunk("", true);
 
         Ok(full_text)
+    }
+
+    /// Call the Anthropic Messages API with SSE streaming (single user message).
+    /// Delegates to `call_streaming_with_messages`.
+    async fn call_streaming(&self, system_prompt: &str, user_message: &str) -> Result<String> {
+        self.call_streaming_with_messages(system_prompt, &[ChatMessage::user(user_message)])
+            .await
     }
 
     /// Read an SSE stream from the response and accumulate text.
@@ -192,6 +204,15 @@ impl LlmClient for AgentLlmClient {
             user_message.len()
         );
         self.call_streaming(system_prompt, user_message).await
+    }
+
+    async fn call_with_history(&self, system_prompt: &str, messages: &[ChatMessage]) -> Result<String> {
+        debug!(
+            "AgentLlmClient::call_with_history(system_prompt_len={}, messages={})",
+            system_prompt.len(),
+            messages.len()
+        );
+        self.call_streaming_with_messages(system_prompt, messages).await
     }
 }
 

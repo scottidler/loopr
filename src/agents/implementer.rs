@@ -15,12 +15,46 @@ use crate::daemon::context::Stores;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
 
+/// A message in a multi-turn conversation (for self-correction loops).
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn user(content: &str) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.to_string(),
+        }
+    }
+    pub fn assistant(content: &str) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.to_string(),
+        }
+    }
+}
+
 /// Trait for LLM calls — allows mocking in tests.
 /// Phase 4 provides the real streaming implementation (`AgentLlmClient`).
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Call the LLM with a system prompt and user message, return the full response text.
     async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String>;
+
+    /// Call with multi-turn conversation history for self-correction.
+    /// Default implementation extracts the last user message and delegates to `call`.
+    async fn call_with_history(&self, system_prompt: &str, messages: &[ChatMessage]) -> Result<String> {
+        let last_user = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        self.call(system_prompt, last_user).await
+    }
 }
 
 /// Normalize common LLM key deviations: "type" → "action".
@@ -158,6 +192,8 @@ impl ImplementerAgent {
     }
 
     /// Run a single implementer iteration: load context -> prompt -> call LLM -> parse -> execute.
+    /// Includes a self-correction loop: if parse_actions fails, the error is fed back to the LLM
+    /// within the same iteration for up to `max_requeries` re-prompts.
     pub async fn run_iteration(
         &self,
         iteration: u32,
@@ -183,13 +219,43 @@ impl ImplementerAgent {
             .build(&crate::prompts::store().implementer);
 
         self.ctx.info(&format!("context: ~{} tokens", assembled.token_estimate));
-        let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-        self.ctx.info(&format!(
-            "raw LLM response ({} chars): {}",
-            response.len(),
-            &response[..response.len().min(800)]
-        ));
-        let actions = parse_actions(&response, &self.ctx.log)?;
+
+        // Self-correction loop: re-prompt on parse failure up to max_requeries times
+        let mut messages = vec![ChatMessage::user(&assembled.user_message)];
+        let mut requeries = 0u32;
+
+        let actions = loop {
+            let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
+            self.ctx.info(&format!(
+                "raw LLM response ({} chars): {}",
+                response.len(),
+                &response[..response.len().min(800)]
+            ));
+
+            match parse_actions(&response, &self.ctx.log) {
+                Ok(actions) => break actions,
+                Err(parse_err) => {
+                    requeries += 1;
+                    if requeries > self.config.max_requeries {
+                        // Exceeded re-prompt budget — error bubbles up to run() for lifeguard tracking
+                        return Err(parse_err);
+                    }
+                    self.ctx.info(&format!(
+                        "parse failed (requery {}/{}): {}",
+                        requeries, self.config.max_requeries, parse_err
+                    ));
+                    // Append the failed response and error as new messages
+                    messages.push(ChatMessage::assistant(&response));
+                    messages.push(ChatMessage::user(&format!(
+                        "Your response could not be parsed as a valid JSON action array.\n\
+                         Error: {}\n\n\
+                         Please respond with ONLY a valid JSON array of actions. \
+                         Do not include any text before or after the JSON.",
+                        parse_err
+                    )));
+                }
+            }
+        };
 
         guard.reset_parse_failures();
 
@@ -1280,30 +1346,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parse_failure_recovery_via_previous_summary() {
+    async fn test_parse_failure_recovery_via_self_correction() {
         // First call returns prose (parse failure), second call returns valid JSON.
-        // Verifies that the implementer retries instead of exiting on parse failure.
+        // With self-correction, the parse failure is corrected within the same iteration
+        // (not via previous_summary in the next iteration).
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
-        struct ProsThenValidLlm {
+        struct ProseThenValidLlm {
             call_count: Arc<std::sync::atomic::AtomicU32>,
         }
 
         #[async_trait]
-        impl LlmClient for ProsThenValidLlm {
+        impl LlmClient for ProseThenValidLlm {
             async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
                 let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n == 0 {
-                    // Return prose -- this should trigger a parse failure
+                    // Return prose -- triggers self-correction re-prompt
                     Ok("I think we should start by reading the file and understanding the codebase.".to_string())
                 } else {
-                    // On retry, verify the error feedback was included
+                    // Self-correction re-prompt: default call_with_history extracts last user
+                    // message, which is the correction prompt
                     assert!(
-                        user_msg.contains("ERROR: Your previous response could not be parsed"),
-                        "expected parse error feedback in retry prompt, got: {}",
+                        user_msg.contains("could not be parsed as a valid JSON action array"),
+                        "expected self-correction prompt, got: {}",
                         &user_msg[..user_msg.len().min(500)]
                     );
-                    Ok(r#"[{"action": "done", "summary": "Recovered from parse failure"}]"#.to_string())
+                    Ok(r#"[{"action": "done", "summary": "Recovered via self-correction"}]"#.to_string())
                 }
             }
         }
@@ -1313,7 +1381,7 @@ mod tests {
         let mut config = AgentRoleConfig::default_implementer();
         config.max_iterations = 3;
 
-        let llm: Box<dyn LlmClient> = Box::new(ProsThenValidLlm {
+        let llm: Box<dyn LlmClient> = Box::new(ProseThenValidLlm {
             call_count: call_count.clone(),
         });
         let mut agent = test_implementer(llm, stores.clone(), &dir, config);
@@ -1326,16 +1394,20 @@ mod tests {
             .insert(session_id.clone(), agent.ctx.session.clone());
 
         let result = agent.run().await;
-        assert!(result.is_ok(), "Expected success after retry, got: {:?}", result);
-        // Should have used 2 iterations: parse failure + successful recovery
+        assert!(
+            result.is_ok(),
+            "Expected success after self-correction, got: {:?}",
+            result
+        );
+        // Self-correction happens within iteration 1, so only 1 iteration used
         assert_eq!(
-            agent.ctx.session.iteration, 2,
-            "Should have completed on second iteration"
+            agent.ctx.session.iteration, 1,
+            "Should have completed on first iteration (self-correction within iteration)"
         );
         assert_eq!(
             call_count.load(std::sync::atomic::Ordering::SeqCst),
             2,
-            "LLM should have been called twice"
+            "LLM should have been called twice (initial + correction)"
         );
     }
 
@@ -1513,5 +1585,178 @@ mod tests {
 
         let result2 = agent2.run().await;
         assert!(result2.is_ok(), "done action should return Ok without force-propose");
+    }
+
+    // --- Self-correction loop tests (Phase 1: parse failure correction) ---
+
+    /// Mock LLM that returns a sequence of responses, one per call.
+    struct SequenceLlm {
+        responses: StdMutex<std::collections::VecDeque<String>>,
+    }
+
+    impl SequenceLlm {
+        fn new(responses: Vec<&str>) -> Self {
+            Self {
+                responses: StdMutex::new(responses.into_iter().map(String::from).collect()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for SequenceLlm {
+        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| eyre!("SequenceLlm: no more responses"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_self_correction_parse_failure_then_success() {
+        // First response is malformed, second is valid JSON.
+        // Self-correction loop should re-prompt and succeed within the same iteration.
+        let dir = TestDir::new("loopr-impl-selfcorrect1");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer();
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            "I think we should read the file first.",               // malformed
+            r#"[{"action": "done", "summary": "Self-corrected"}]"#, // valid
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s == "Self-corrected"),
+            "expected Done after self-correction, got: {:?}",
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn test_self_correction_multiple_retries_then_success() {
+        // Three malformed responses, then valid. max_requeries=3 means 3 retries allowed.
+        let dir = TestDir::new("loopr-impl-selfcorrect2");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer(); // max_requeries=3
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            "bad response 1",
+            "bad response 2",
+            "bad response 3",
+            r#"[{"action": "done", "summary": "Finally corrected"}]"#,
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s == "Finally corrected"),
+            "expected Done after 3 retries, got: {:?}",
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn test_self_correction_max_requeries_exceeded() {
+        // All responses are malformed. After max_requeries retries, should return Err.
+        let dir = TestDir::new("loopr-impl-selfcorrect3");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer(); // max_requeries=3
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            "bad 1", "bad 2", "bad 3", "bad 4", // 1 initial + 3 retries = 4 calls, then error
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
+        assert!(result.is_err(), "expected error when max_requeries exceeded");
+        assert!(
+            result.unwrap_err().to_string().contains("failed to parse"),
+            "error should be a parse error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_self_correction_disabled_when_max_requeries_zero() {
+        // max_requeries=0 means no correction attempts — first parse failure returns Err immediately.
+        let dir = TestDir::new("loopr-impl-selfcorrect4");
+        let stores = setup_stores(&dir);
+        let mut config = AgentRoleConfig::default_implementer();
+        config.max_requeries = 0;
+
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            "malformed response",
+            r#"[{"action": "done", "summary": "never reached"}]"#,
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
+        assert!(result.is_err(), "expected immediate error with max_requeries=0");
+    }
+
+    #[tokio::test]
+    async fn test_self_correction_no_overhead_on_valid_response() {
+        // Valid response on first try — no correction loop, no extra calls.
+        let dir = TestDir::new("loopr-impl-selfcorrect5");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer();
+
+        // SequenceLlm with only one response — second call would panic
+        let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+            r#"[{"action": "done", "summary": "First try success"}]"#,
+        ]));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s == "First try success"),
+            "expected Done on first try, got: {:?}",
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn test_self_correction_integrates_with_run_loop() {
+        // Self-correction within run_iteration should not count as a separate iteration.
+        // First iteration: malformed → corrected. Second iteration: done.
+        let dir = TestDir::new("loopr-impl-selfcorrect6");
+        let stores = setup_stores(&dir);
+        let mut config = AgentRoleConfig::default_implementer();
+        config.max_iterations = 5;
+
+        struct CorrectionThenDoneLlm {
+            call_count: std::sync::atomic::AtomicU32,
+        }
+
+        #[async_trait]
+        impl LlmClient for CorrectionThenDoneLlm {
+            async fn call(&self, _system: &str, _user: &str) -> Result<String> {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                match n {
+                    0 => Ok("not json".to_string()), // iter 1: malformed
+                    1 => Ok(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#.to_string()), // iter 1: corrected
+                    2 => Ok(r#"[{"action": "done", "summary": "All done"}]"#.to_string()), // iter 2: done
+                    _ => Err(eyre!("unexpected call")),
+                }
+            }
+        }
+
+        let llm: Box<dyn LlmClient> = Box::new(CorrectionThenDoneLlm {
+            call_count: std::sync::atomic::AtomicU32::new(0),
+        });
+        let mut agent = test_implementer(llm, stores.clone(), &dir, config);
+
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(agent.ctx.session.id.clone(), agent.ctx.session.clone());
+
+        let result = agent.run().await;
+        assert!(result.is_ok(), "expected success, got: {:?}", result);
+        // Should complete in 2 iterations (correction happened within iteration 1)
+        assert_eq!(agent.ctx.session.iteration, 2);
     }
 }

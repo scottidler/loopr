@@ -142,6 +142,7 @@ impl Default for CoordinatorConfig {
                 max_pool: 1,
                 temperature: 0.2,
                 session_timeout_secs: None, // Coordinator is long-lived
+                max_requeries: 3,
             },
             active_interval_secs: 5,
             idle_interval_secs: 30,
@@ -266,6 +267,8 @@ pub struct AgentRoleConfig {
     pub max_pool: u32,
     pub temperature: f32,
     pub session_timeout_secs: Option<u64>,
+    /// Max re-prompts per iteration for self-correction (parse/tool errors). 0 = disabled.
+    pub max_requeries: u32,
 }
 
 impl Default for AgentRoleConfig {
@@ -285,6 +288,7 @@ impl AgentRoleConfig {
             max_pool: 6,
             temperature: 0.3,
             session_timeout_secs: Some(1800), // 30 min
+            max_requeries: 3,
         }
     }
 
@@ -298,6 +302,7 @@ impl AgentRoleConfig {
             max_pool: 2,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
+            max_requeries: 3,
         }
     }
 
@@ -311,6 +316,7 @@ impl AgentRoleConfig {
             max_pool: 4,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
+            max_requeries: 3,
         }
     }
 }
@@ -539,6 +545,7 @@ mod tests {
         assert_eq!(rc.max_pool, 6);
         assert_eq!(rc.max_tokens, 8192);
         assert!((rc.temperature - 0.3).abs() < f32::EPSILON);
+        assert_eq!(rc.max_requeries, 3);
     }
 
     #[test]
@@ -548,6 +555,7 @@ mod tests {
         assert_eq!(rc.max_pool, 2);
         assert_eq!(rc.max_tokens, 4096);
         assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
+        assert_eq!(rc.max_requeries, 3);
     }
 
     #[test]
