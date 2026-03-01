@@ -485,6 +485,223 @@ pub enum AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::sync::Mutex as StdMutex;
+    use taskstore::Store;
+
+    // --- Test helpers ---
+
+    fn make_test_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("loopr-mod-{label}-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn test_agent_logger(dir: &Path) -> AgentLogger {
+        let file_path = dir.join("test-mod.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+    }
+
+    fn test_stores_with_dir(dir: &Path) -> Arc<Stores> {
+        use crate::config::{Config, ProjectConfig};
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(StdMutex::new(store)));
+        stores.config = config;
+        Arc::new(stores)
+    }
+
+    fn test_agent_context(
+        dir: &Path,
+        stores: &Arc<Stores>,
+        agent_type: AgentType,
+    ) -> (AgentContext, broadcast::Receiver<DaemonEvent>) {
+        let (event_tx, event_rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(dir);
+        let session = AgentSession::new(agent_type, "test-model".into());
+        let ctx = AgentContext {
+            session,
+            stores: stores.clone(),
+            bridge,
+            event_tx,
+            tool_runner: stores.tool_runner.clone(),
+            log: agent_log,
+        };
+        (ctx, event_rx)
+    }
+
+    // --- AgentContext tests ---
+
+    #[test]
+    fn test_agent_context_from_session_id_success() {
+        let dir = make_test_dir("from-session-ok");
+        let stores = test_stores_with_dir(&dir);
+
+        // Insert a session into stores
+        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session_id = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(session_id.clone(), session);
+
+        let (event_tx, _event_rx) = broadcast::channel(16);
+        let ctx = AgentContext::from_session_id(&session_id, AgentType::Implementer, stores.clone(), event_tx);
+        assert!(ctx.is_ok());
+        let ctx = ctx.unwrap();
+        assert_eq!(ctx.session.id, session_id);
+        assert_eq!(ctx.session.agent_type, AgentType::Implementer);
+    }
+
+    #[test]
+    fn test_agent_context_from_session_id_not_found() {
+        let dir = make_test_dir("from-session-missing");
+        let stores = test_stores_with_dir(&dir);
+
+        let (event_tx, _event_rx) = broadcast::channel(16);
+        let result = AgentContext::from_session_id("nonexistent", AgentType::Coordinator, stores, event_tx);
+        let err_msg = result.err().expect("expected Err").to_string();
+        assert!(err_msg.contains("session not found"), "expected 'session not found', got: {err_msg}");
+    }
+
+    #[test]
+    fn test_agent_context_log_delegates() {
+        let dir = make_test_dir("log-delegates");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        // These should not panic — they delegate to AgentLogger
+        ctx.info("info message");
+        ctx.warn("warn message");
+        ctx.debug("debug message");
+        ctx.error("error message");
+
+        // Verify messages were written to the log file
+        let log_content = std::fs::read_to_string(ctx.log.file_path()).unwrap();
+        assert!(log_content.contains("info message"));
+        assert!(log_content.contains("warn message"));
+        assert!(log_content.contains("debug message"));
+        assert!(log_content.contains("error message"));
+    }
+
+    #[test]
+    fn test_agent_context_is_cancelled_false_when_running() {
+        let dir = make_test_dir("cancel-false");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Insert session into stores with Starting status
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(ctx.session.id.clone(), ctx.session.clone());
+
+        assert!(!ctx.is_cancelled());
+    }
+
+    #[test]
+    fn test_agent_context_is_cancelled_true_when_cancelled() {
+        let dir = make_test_dir("cancel-true");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Insert session with Cancelled status
+        let mut session = ctx.session.clone();
+        session.status = AgentStatus::Cancelled;
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        assert!(ctx.is_cancelled());
+    }
+
+    #[test]
+    fn test_agent_context_is_cancelled_true_when_session_missing() {
+        let dir = make_test_dir("cancel-missing");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Don't insert session — simulates a removed/expired session
+        assert!(ctx.is_cancelled());
+    }
+
+    #[test]
+    fn test_agent_context_persist_iteration() {
+        let dir = make_test_dir("persist-iter");
+        let stores = test_stores_with_dir(&dir);
+        let (mut ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Insert session with iteration 0
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(ctx.session.id.clone(), ctx.session.clone());
+
+        // Bump iteration locally and persist
+        ctx.session.iteration = 5;
+        ctx.persist_iteration();
+
+        // Verify stores reflect the update
+        let sessions = stores.agent_sessions.read().unwrap();
+        let stored = sessions.get(&ctx.session.id).unwrap();
+        assert_eq!(stored.iteration, 5);
+    }
+
+    #[test]
+    fn test_agent_context_persist_iteration_noop_when_missing() {
+        let dir = make_test_dir("persist-iter-noop");
+        let stores = test_stores_with_dir(&dir);
+        let (mut ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Don't insert session — persist_iteration should silently no-op
+        ctx.session.iteration = 10;
+        ctx.persist_iteration(); // should not panic
+    }
+
+    #[test]
+    fn test_agent_context_emit_iteration_completed() {
+        let dir = make_test_dir("emit-iter");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, mut rx) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        ctx.emit_iteration_completed(3, "Planned 5 specs");
+
+        // Verify the event was received
+        let event = rx.try_recv().unwrap();
+        assert_eq!(event.event, "agent.iteration_completed");
+
+        // Verify payload contents
+        let data = event.data;
+        assert_eq!(data["session_id"], ctx.session.id);
+        assert_eq!(data["iteration"], 3);
+        assert_eq!(data["summary"], "Planned 5 specs");
+    }
+
+    #[test]
+    fn test_agent_context_emit_iteration_completed_no_receivers() {
+        let dir = make_test_dir("emit-no-rx");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, rx) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        // Drop receiver — emit should not panic (uses `let _ =`)
+        drop(rx);
+        ctx.emit_iteration_completed(1, "test summary");
+    }
 
     // --- AgentType tests ---
 
