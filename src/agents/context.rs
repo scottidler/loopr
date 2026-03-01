@@ -1350,4 +1350,152 @@ mod tests {
         assert!(assembled.token_estimate > 0);
         assert!(!assembled.user_message.is_empty());
     }
+
+    // =====================================================
+    // Guidance injection tests
+    // =====================================================
+
+    #[test]
+    fn test_context_builder_with_guidance_includes_schema_docs() {
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (stores, wi_id) = setup_stores(&dir);
+
+        let guidance = crate::guidance::AgentGuidance::schema_only();
+
+        let assembled = ContextBuilder::new(&stores, Role::Coordinator)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_guidance(&guidance)
+            .build("system");
+
+        // Schema docs should appear in the assembled user_message
+        assert!(
+            assembled.user_message.contains("## Work Status Transitions"),
+            "Assembled context missing work transitions"
+        );
+        assert!(
+            assembled.user_message.contains("## Bundle Status Transitions"),
+            "Assembled context missing bundle transitions"
+        );
+        assert!(
+            assembled.user_message.contains("## Plan/Spec/Phase Status Transitions"),
+            "Assembled context missing hierarchy transitions"
+        );
+        assert!(
+            assembled.user_message.contains("Terminal states:"),
+            "Assembled context missing terminal state annotations"
+        );
+    }
+
+    #[test]
+    fn test_context_builder_guidance_contains_role_specific_transitions() {
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-role-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (stores, wi_id) = setup_stores(&dir);
+
+        let guidance = crate::guidance::AgentGuidance::schema_only();
+
+        // Coordinator should see Draft → Ready
+        let coord = ContextBuilder::new(&stores, Role::Coordinator)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_guidance(&guidance)
+            .build("system");
+        assert!(
+            coord.user_message.contains("Draft → Ready"),
+            "Coordinator context missing Draft → Ready"
+        );
+
+        // Implementer should NOT see Draft → Ready (Coordinator-only)
+        let impl_ctx = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_guidance(&guidance)
+            .build("system");
+        assert!(
+            !impl_ctx.user_message.contains("Draft → Ready"),
+            "Implementer context should not contain Draft → Ready"
+        );
+        // Implementer should see InProgress → InReview
+        assert!(
+            impl_ctx.user_message.contains("InProgress → InReview"),
+            "Implementer context missing InProgress → InReview"
+        );
+    }
+
+    #[test]
+    fn test_context_builder_guidance_with_loopr_md() {
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-md-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (stores, wi_id) = setup_stores(&dir);
+
+        let mut guidance = crate::guidance::AgentGuidance::schema_only();
+        guidance.global_md = Some("Always use ES modules".to_string());
+        guidance.project_md = Some("Use rspec, not minitest".to_string());
+
+        let assembled = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_guidance(&guidance)
+            .build("system");
+
+        assert!(
+            assembled.user_message.contains("Always use ES modules"),
+            "Assembled context missing global LOOPR.md content"
+        );
+        assert!(
+            assembled.user_message.contains("Use rspec, not minitest"),
+            "Assembled context missing project LOOPR.md content"
+        );
+    }
+
+    #[test]
+    fn test_context_builder_guidance_appears_before_hierarchy() {
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-guid-order-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (stores, wi_id) = setup_stores(&dir);
+
+        let guidance = crate::guidance::AgentGuidance::schema_only();
+
+        let assembled = ContextBuilder::new(&stores, Role::Coordinator)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_guidance(&guidance)
+            .build("system");
+
+        let guidance_pos = assembled
+            .user_message
+            .find("## Work Status Transitions")
+            .expect("guidance section not found");
+        let hierarchy_pos = assembled
+            .user_message
+            .find("## Hierarchy")
+            .expect("hierarchy section not found");
+
+        assert!(
+            guidance_pos < hierarchy_pos,
+            "Guidance (pos {}) should appear before Hierarchy (pos {})",
+            guidance_pos,
+            hierarchy_pos
+        );
+    }
+
+    #[test]
+    fn test_context_builder_no_guidance_when_not_set() {
+        let dir = std::env::temp_dir().join(format!("loopr-ctx-noguid-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (stores, wi_id) = setup_stores(&dir);
+
+        // No with_guidance() call
+        let assembled = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .build("system");
+
+        assert!(
+            !assembled.user_message.contains("## Work Status Transitions"),
+            "Guidance should not appear when with_guidance() is not called"
+        );
+    }
 }
