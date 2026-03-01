@@ -39,6 +39,11 @@ Respond with a JSON array of actions:
 13. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
 14. `need_help`       {"action": "need_help", "reason": "..."}
 15. `done`            {"action": "done", "summary": "..."}
+16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "ready|abandoned", "reason": "..."}
+    USE ONLY when SLA is breached. Options:
+    - "ready": Reset for re-assignment (kills active agents, releases locks)
+    - "abandoned": Give up on this Work (blocks dependent Works; consider re-planning)
+    - "in_review": Force to review if a valid Bundle exists
 
 ## Status Transitions
 

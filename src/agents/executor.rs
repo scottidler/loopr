@@ -1076,6 +1076,103 @@ pub async fn execute_action(
             Ok(ActionResult::Transitioned(format!("bundle/{} → Accepted", bundle_id)))
         }
 
+        AgentAction::OverrideWork {
+            work_id,
+            target_status,
+            reason,
+        } => {
+            // Kill any active agent sessions on this Work
+            {
+                let sessions = bridge.stores().agent_sessions.read().unwrap();
+                let active_sessions: Vec<String> = sessions
+                    .values()
+                    .filter(|s| s.work_id.as_deref() == Some(work_id) && !s.status.is_terminal())
+                    .map(|s| s.id.clone())
+                    .collect();
+                drop(sessions);
+
+                for sid in &active_sessions {
+                    let stop_resp = bridge.request("agent.stop", serde_json::json!({ "session_id": sid }));
+                    if stop_resp.is_error() {
+                        agent_log.warn(&format!(
+                            "OverrideWork: failed to stop session {}: {:?}",
+                            sid, stop_resp.error
+                        ));
+                    } else {
+                        agent_log.info(&format!("OverrideWork: stopped session {}", sid));
+                    }
+                }
+            }
+
+            // Override transition
+            let resp = bridge.request(
+                "work.transition",
+                serde_json::json!({
+                    "id": work_id,
+                    "target_status": target_status,
+                    "role": "coordinator",
+                    "override": true,
+                    "reason": reason,
+                }),
+            );
+
+            if resp.is_error() {
+                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                agent_log.warn(&format!(
+                    "OverrideWork: transition failed for {} (may have already recovered): {}",
+                    work_id, msg
+                ));
+                return Ok(ActionResult::ActionError(format!(
+                    "override_work transition failed: {}",
+                    msg
+                )));
+            }
+
+            // Release any active locks held by this Work
+            {
+                let locks = bridge.stores().locks.read().unwrap();
+                let work_locks: Vec<String> = locks
+                    .values()
+                    .filter(|l| l.holder_id == *work_id && matches!(l.status, crate::domain::lock::LockStatus::Active))
+                    .map(|l| l.id.clone())
+                    .collect();
+                drop(locks);
+
+                for lid in &work_locks {
+                    let release_resp = bridge.request("lock.release", serde_json::json!({ "id": lid }));
+                    if release_resp.is_error() {
+                        agent_log.warn(&format!(
+                            "OverrideWork: failed to release lock {}: {:?}",
+                            lid, release_resp.error
+                        ));
+                    } else {
+                        agent_log.info(&format!("OverrideWork: released lock {}", lid));
+                    }
+                }
+            }
+
+            // Create audit Learning
+            let _ = bridge.request(
+                "learning.create",
+                serde_json::json!({
+                    "content": format!("Override: Work {} → {} (reason: {})", work_id, target_status, reason),
+                    "scope": "work",
+                    "source_id": work_id,
+                    "applicable_roles": ["coordinator"],
+                    "resource_tags": ["override", "audit"],
+                }),
+            );
+
+            agent_log.info(&format!(
+                "OverrideWork: {} → {} (reason: {})",
+                work_id, target_status, reason
+            ));
+            Ok(ActionResult::Transitioned(format!(
+                "override: work/{} → {}",
+                work_id, target_status
+            )))
+        }
+
         // --- Researcher actions (wired in Phase 4 researcher.rs) ---
         AgentAction::SearchCode { pattern, glob, path } => {
             let repo_root = worktree_path; // For Researcher, worktree_path is the repo root

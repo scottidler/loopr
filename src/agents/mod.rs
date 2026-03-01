@@ -468,6 +468,11 @@ pub enum AgentAction {
     AcceptBundle {
         bundle_id: String,
     },
+    OverrideWork {
+        work_id: String,
+        target_status: String,
+        reason: String,
+    },
 
     // === Researcher-only actions ===
     SearchCode {
@@ -1580,5 +1585,35 @@ mod tests {
         } else {
             panic!("expected CreateWork");
         }
+    }
+
+    #[test]
+    fn test_agent_action_override_work_serde() {
+        let action = AgentAction::OverrideWork {
+            work_id: "wi-123".to_string(),
+            target_status: "ready".to_string(),
+            reason: "SLA breached: 3/3 attempts, 45min/30min".to_string(),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
+        if let AgentAction::OverrideWork {
+            work_id,
+            target_status,
+            reason,
+        } = deserialized
+        {
+            assert_eq!(work_id, "wi-123");
+            assert_eq!(target_status, "ready");
+            assert!(reason.contains("SLA breached"));
+        } else {
+            panic!("expected OverrideWork");
+        }
+    }
+
+    #[test]
+    fn test_agent_action_override_work_parse_from_llm_json() {
+        let json = r#"{"action": "override_work", "work_id": "wi-456", "target_status": "abandoned", "reason": "stuck in InProgress for 60min"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        assert!(matches!(action, AgentAction::OverrideWork { .. }));
     }
 }
