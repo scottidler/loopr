@@ -6,7 +6,7 @@ use eyre::{Result, eyre};
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
-use crate::agents::implementer::{self, IterationOutcome, LlmClient};
+use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::sandbox;
 use crate::agents::{Agent, AgentAction, AgentContext, AgentStatus, AgentType};
@@ -229,8 +229,36 @@ impl ResearcherAgent {
             AgentStatus::WaitingForLlm,
         ));
 
-        let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-        let actions = implementer::parse_actions(&response, &self.ctx.log)?;
+        // Self-correction loop: re-prompt on parse failure up to max_requeries times
+        let mut messages = vec![ChatMessage::user(&assembled.user_message)];
+        let mut requeries = 0u32;
+        let max_requeries = self.config.max_requeries;
+
+        let actions = loop {
+            let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
+
+            match implementer::parse_actions(&response, &self.ctx.log) {
+                Ok(actions) => break actions,
+                Err(parse_err) => {
+                    requeries += 1;
+                    if requeries > max_requeries {
+                        return Err(parse_err);
+                    }
+                    self.ctx.info(&format!(
+                        "parse failed (requery {}/{}): {}",
+                        requeries, max_requeries, parse_err
+                    ));
+                    messages.push(ChatMessage::assistant(&response));
+                    messages.push(ChatMessage::user(&format!(
+                        "Your response could not be parsed as a valid JSON action array.\n\
+                         Error: {}\n\n\
+                         Please respond with ONLY a valid JSON array of actions. \
+                         Do not include any text before or after the JSON.",
+                        parse_err
+                    )));
+                }
+            }
+        };
 
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,

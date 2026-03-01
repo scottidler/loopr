@@ -109,6 +109,19 @@ pub fn parse_actions(response: &str, agent_log: &AgentLogger) -> Result<Vec<Agen
     ))
 }
 
+/// Classify an error as correctable (schema/path errors the LLM can fix with a re-prompt).
+/// Non-correctable errors (compilation failure, test failure, network error) require
+/// full-iteration reasoning and should NOT trigger intra-turn re-prompting.
+pub fn is_correctable_error(error: &str) -> bool {
+    error.contains("missing field")
+        || error.contains("unknown field")
+        || error.contains("invalid type")
+        || error.contains("expected array")
+        || error.contains("path escapes")
+        || error.contains("unknown tool")
+        || error.contains("path traversal")
+}
+
 /// Build a focused state summary for the implementer: active locks and sibling agents.
 pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &AgentLogger) -> String {
     agent_log.debug(&format!("build_implementer_summary(work_id={})", work_id));
@@ -263,6 +276,9 @@ impl ImplementerAgent {
             return Err(eyre!("LLM returned empty action list"));
         }
 
+        // Tool error correction budget: shared with parse corrections
+        let mut remaining_corrections = self.config.max_requeries.saturating_sub(requeries);
+
         let session_id = &self.ctx.session.id;
         let mut summaries = Vec::new();
         for action in &actions {
@@ -283,6 +299,47 @@ impl ImplementerAgent {
 
             let result = match execute_action(action, &self.ctx, &self.worktree_path, Some(&self.work_id)).await {
                 Ok(r) => r,
+                Err(e) if is_correctable_error(&e.to_string()) && remaining_corrections > 0 => {
+                    // Correctable tool error: re-prompt the LLM for a corrected action
+                    remaining_corrections -= 1;
+                    let err_msg = e.to_string();
+                    self.ctx.info(&format!(
+                        "correctable tool error (corrections left: {}): {}",
+                        remaining_corrections, err_msg
+                    ));
+
+                    let action_json = serde_json::to_string(action).unwrap_or_default();
+                    messages.push(ChatMessage::assistant(&format!("[{}]", action_json)));
+                    messages.push(ChatMessage::user(&format!(
+                        "The action failed with error:\n{}\n\n\
+                         Please provide a corrected action as a JSON array with a single action.",
+                        err_msg
+                    )));
+
+                    match self.llm.call_with_history(&assembled.system_prompt, &messages).await {
+                        Ok(corrected_response) => match parse_actions(&corrected_response, &self.ctx.log) {
+                            Ok(corrected_actions) => {
+                                // Execute corrected action(s)
+                                let mut corrected_result = ActionResult::ActionError(err_msg.clone());
+                                for ca in &corrected_actions {
+                                    corrected_result =
+                                        match execute_action(ca, &self.ctx, &self.worktree_path, Some(&self.work_id))
+                                            .await
+                                        {
+                                            Ok(r) => r,
+                                            Err(ce) => ActionResult::ActionError(ce.to_string()),
+                                        };
+                                }
+                                corrected_result
+                            }
+                            Err(_) => {
+                                // Correction parse failed — record original error
+                                ActionResult::ActionError(err_msg)
+                            }
+                        },
+                        Err(_) => ActionResult::ActionError(err_msg),
+                    }
+                }
                 Err(e) => {
                     let err_msg = e.to_string();
                     self.ctx.warn(&format!("action failed (non-fatal): {err_msg}"));
@@ -1585,6 +1642,32 @@ mod tests {
 
         let result2 = agent2.run().await;
         assert!(result2.is_ok(), "done action should return Ok without force-propose");
+    }
+
+    // --- is_correctable_error tests ---
+
+    #[test]
+    fn test_is_correctable_error_schema_errors() {
+        assert!(is_correctable_error("missing field `summary`"));
+        assert!(is_correctable_error("unknown field `files`"));
+        assert!(is_correctable_error("invalid type: found object, expected array"));
+        assert!(is_correctable_error("expected array of actions"));
+    }
+
+    #[test]
+    fn test_is_correctable_error_path_errors() {
+        assert!(is_correctable_error("path escapes sandbox: ../../../etc/passwd"));
+        assert!(is_correctable_error("unknown tool: cargo_test"));
+        assert!(is_correctable_error("path traversal detected"));
+    }
+
+    #[test]
+    fn test_is_correctable_error_non_correctable() {
+        assert!(!is_correctable_error("cargo test failed with exit code 1"));
+        assert!(!is_correctable_error("compilation error: expected `;`"));
+        assert!(!is_correctable_error("network error: connection refused"));
+        assert!(!is_correctable_error("permission denied"));
+        assert!(!is_correctable_error("file not found: src/main.rs"));
     }
 
     // --- Self-correction loop tests (Phase 1: parse failure correction) ---
