@@ -15,7 +15,7 @@ const DEFAULT_VALIDATOR_PHASE: &str = include_str!("../prompts/validator-phase.p
 const DEFAULT_GENERATION_PLAN: &str = include_str!("../prompts/generation-plan.pmt");
 const DEFAULT_GENERATION_SPEC: &str = include_str!("../prompts/generation-spec.pmt");
 const DEFAULT_GENERATION_PHASE: &str = include_str!("../prompts/generation-phase.pmt");
-const DEFAULT_GENERATION_WORKITEM: &str = include_str!("../prompts/generation-work.pmt");
+const DEFAULT_GENERATION_WORK: &str = include_str!("../prompts/generation-work.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -71,7 +71,7 @@ pub fn init() {
         generation_plan: load("generation-plan.pmt", DEFAULT_GENERATION_PLAN),
         generation_spec: load("generation-spec.pmt", DEFAULT_GENERATION_SPEC),
         generation_phase: load("generation-phase.pmt", DEFAULT_GENERATION_PHASE),
-        generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORKITEM),
+        generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORK),
     });
 }
 
@@ -89,7 +89,7 @@ pub fn init_defaults() {
         generation_plan: DEFAULT_GENERATION_PLAN.to_string(),
         generation_spec: DEFAULT_GENERATION_SPEC.to_string(),
         generation_phase: DEFAULT_GENERATION_PHASE.to_string(),
-        generation_work: DEFAULT_GENERATION_WORKITEM.to_string(),
+        generation_work: DEFAULT_GENERATION_WORK.to_string(),
     });
 }
 
@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(s.generation_plan, DEFAULT_GENERATION_PLAN);
         assert_eq!(s.generation_spec, DEFAULT_GENERATION_SPEC);
         assert_eq!(s.generation_phase, DEFAULT_GENERATION_PHASE);
-        assert_eq!(s.generation_work, DEFAULT_GENERATION_WORKITEM);
+        assert_eq!(s.generation_work, DEFAULT_GENERATION_WORK);
     }
 
     #[test]
