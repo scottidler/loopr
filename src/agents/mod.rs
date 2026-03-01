@@ -10,12 +10,83 @@ pub mod llm_client;
 pub mod researcher;
 pub mod reviewer;
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use taskstore::record::{IndexValue, Record};
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use eyre::Result;
+use serde::{Deserialize, Serialize};
+use taskstore::record::{IndexValue, Record};
+use tokio::sync::broadcast;
+
+use crate::agents::agent_logger::AgentLogger;
+use crate::agents::bridge::AgentIpcBridge;
+use crate::daemon::context::Stores;
 use crate::id;
+use crate::ipc::protocol::DaemonEvent;
+use crate::tools::ToolRunner;
+
+/// Common trait for all agent implementations.
+#[async_trait]
+pub trait Agent: Send {
+    /// Run the agent's main loop to completion.
+    async fn run(&mut self) -> Result<()>;
+
+    /// Agent type for dispatch and logging.
+    fn agent_type(&self) -> AgentType;
+}
+
+/// Shared cross-cutting fields for all agents.
+pub struct AgentContext {
+    pub session: AgentSession,
+    pub stores: Arc<Stores>,
+    pub bridge: AgentIpcBridge,
+    pub event_tx: broadcast::Sender<DaemonEvent>,
+    pub tool_runner: Arc<ToolRunner>,
+    pub log: AgentLogger,
+}
+
+impl AgentContext {
+    pub fn info(&self, msg: &str) {
+        self.log.info(msg)
+    }
+    pub fn warn(&self, msg: &str) {
+        self.log.warn(msg)
+    }
+    pub fn debug(&self, msg: &str) {
+        self.log.debug(msg)
+    }
+    pub fn error(&self, msg: &str) {
+        self.log.error(msg)
+    }
+
+    /// Check if this agent's session has been cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        let sessions = self.stores.agent_sessions.read().unwrap();
+        sessions
+            .get(&self.session.id)
+            .map(|s| s.status == AgentStatus::Cancelled)
+            .unwrap_or(true)
+    }
+
+    /// Persist current iteration count to stores.
+    pub fn persist_iteration(&self) {
+        let mut sessions = self.stores.agent_sessions.write().unwrap();
+        if let Some(s) = sessions.get_mut(&self.session.id) {
+            s.iteration = self.session.iteration;
+        }
+    }
+
+    /// Emit an iteration-completed event.
+    pub fn emit_iteration_completed(&self, iteration: u32, summary: &str) {
+        let _ = self.event_tx.send(DaemonEvent::agent_iteration_completed(
+            &self.session.id,
+            iteration,
+            summary,
+        ));
+    }
+}
 
 /// The type of agent — determines behavior and prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

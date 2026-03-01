@@ -17,7 +17,7 @@ use crate::agents::integrator;
 use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::researcher;
 use crate::agents::reviewer;
-use crate::agents::{AgentAction, AgentSession, AgentStatus, AgentType};
+use crate::agents::{Agent, AgentAction, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
 use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
@@ -444,7 +444,7 @@ async fn run_agent_loop(
         AgentType::Integrator => {
             let config = stores.config.integrator.clone();
 
-            let mut session = {
+            let session = {
                 let sessions = stores.agent_sessions.read().unwrap();
                 sessions
                     .get(session_id)
@@ -452,13 +452,34 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result = integrator::run_integrator(&mut session, stores, bridge, &config, event_tx, agent_log).await;
+            // Integrator uses AgentContext which owns its bridge and logger.
+            // Create a fresh bridge (cheap — just wiring references) and logger for the agent.
+            let intg_bridge = AgentIpcBridge::new(
+                stores.clone(),
+                event_tx.clone(),
+                WorktreeManager::new(
+                    stores.config.project.repo_path.clone(),
+                    stores.config.project.repo_path.join(".worktrees"),
+                ),
+                stores.config.clone(),
+            );
+            let intg_log = AgentLogger::new(AgentType::Integrator, session_id)?;
+            let ctx = crate::agents::AgentContext {
+                session,
+                stores: stores.clone(),
+                bridge: intg_bridge,
+                event_tx: event_tx.clone(),
+                tool_runner: stores.tool_runner.clone(),
+                log: intg_log,
+            };
+            let mut agent = integrator::IntegratorAgent::new(ctx, config);
+            let result = agent.run().await;
 
             // Write back updated session iteration count
             {
                 let mut sessions = stores.agent_sessions.write().unwrap();
                 if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = session.iteration;
+                    s.iteration = agent.ctx.session.iteration;
                 }
             }
 
