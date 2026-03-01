@@ -107,25 +107,29 @@ pub async fn run_agent_task(
     if let Some(ref key) = worktree_key {
         let base_ref = resolve_worktree_base(&stores);
         info!("Agent {} using worktree base: {}", session_id, base_ref);
-        let worktree_path = match worktree_mgr.create(key, &base_ref) {
-            Ok(path) => Some(path),
-            Err(crate::worktree::manager::WorktreeError::AlreadyExists(_)) => {
-                info!("Agent {} worktree already exists for {}", session_id, key);
-                Some(worktree_mgr.worktree_path(key))
-            }
+        let worktree_path = match worktree_mgr.get_or_create(key, &base_ref) {
+            Ok(path) => path,
             Err(e) => {
-                warn!("Agent {} failed to create worktree: {}", session_id, e);
-                None
+                error!("Agent {} worktree creation failed: {}", session_id, e);
+                // Fail the session immediately — don't proceed without a worktree
+                let mut sessions = stores.agent_sessions.write().unwrap();
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    let _ = session.transition_to(AgentStatus::Failed);
+                    session.error_message = Some(format!("worktree creation failed: {}", e));
+                    persist_session(&stores, session);
+                }
+                let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Failed));
+                return;
             }
         };
 
-        if let Some(ref path) = worktree_path {
+        {
             let mut sessions = stores.agent_sessions.write().unwrap();
             if let Some(session) = sessions.get_mut(&session_id) {
-                session.worktree_path = Some(path.to_string_lossy().to_string());
+                session.worktree_path = Some(worktree_path.to_string_lossy().to_string());
                 persist_session(&stores, session);
             }
-            info!("Agent {} worktree created at {}", session_id, path.display());
+            info!("Agent {} worktree created at {}", session_id, worktree_path.display());
         }
     }
 
@@ -530,15 +534,12 @@ pub async fn execute_action(
             Ok(ActionResult::Committed(message.clone()))
         }
         AgentAction::ProposeBundle { description, claims } => {
-            // Get the current branch name from the worktree
-            let mut branch_cmd = tokio::process::Command::new("git");
-            branch_cmd
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .current_dir(worktree_path);
-            let branch_out = branch_cmd.output().await?;
-            let branch_name = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
-
+            // F2: Derive branch name deterministically from work_id — matches
+            // WorktreeManager::create() which uses format!("agent/{}", work_id).
+            // This avoids relying on `git rev-parse` which can return "main" when
+            // HEAD is detached or the worktree checkout didn't switch properly.
             let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
+            let branch_name = format!("agent/{}", wi_id);
 
             // Fix #1: Resolve base_tick_id from latest Published Tick
             let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
@@ -3472,6 +3473,77 @@ mod tests {
             matches!(result, ActionResult::BundleProposed(ref d) if d == "Bundle with base tick"),
             "expected BundleProposed, got: {:?}",
             result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_propose_bundle_uses_deterministic_branch_name() {
+        // F2: ProposeBundle should use format!("agent/{}", work_id) not git rev-parse
+        let dir = std::env::temp_dir().join(format!("loopr-exec-f2branch-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let runner = ToolRunner::new(&[]);
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.clone(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+        // Create hierarchy so bundle.create has a valid work_id
+        let (_, _, _, wi_id) = create_test_hierarchy(&bridge);
+        // Transition work to InProgress
+        bridge.request(
+            "work.transition",
+            serde_json::json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+        );
+
+        // Initialize a git repo in the dir so commit works
+        let _ = tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        std::fs::write(dir.join("impl.txt"), "implementation").unwrap();
+        let _ = tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&dir)
+            .output()
+            .await;
+
+        let action = AgentAction::ProposeBundle {
+            description: "Test bundle".to_string(),
+            claims: vec!["implemented feature".to_string()],
+        };
+        let result = execute_action(&action, &runner, &bridge, &dir, Some(&wi_id), AgentType::Implementer)
+            .await
+            .unwrap();
+        // The bundle should be created with branch_name "agent/<wi_id>"
+        assert!(
+            matches!(result, ActionResult::BundleProposed(_)),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+        // Verify the bundle's branch name in stores
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.values().next().expect("should have one bundle");
+        assert_eq!(
+            bundle.branch_name,
+            format!("agent/{}", wi_id),
+            "bundle branch should be deterministic agent/<work_id>"
         );
     }
 }
