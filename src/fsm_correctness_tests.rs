@@ -843,6 +843,17 @@ mod tests {
         }
 
         #[test]
+        fn valid_open_to_failed() {
+            let r = validate_transition(
+                TickStatus::Open,
+                TickStatus::Failed,
+                Role::Integrator,
+                &tick_transitions(),
+            );
+            assert_valid("Open", "Failed", &r);
+        }
+
+        #[test]
         fn valid_validating_to_failed() {
             let r = validate_transition(
                 TickStatus::Validating,
@@ -860,6 +871,7 @@ mod tests {
             let rules = tick_transitions();
             let valid_pairs = [
                 (TickStatus::Open, TickStatus::Sealing),
+                (TickStatus::Open, TickStatus::Failed),
                 (TickStatus::Sealing, TickStatus::Validating),
                 (TickStatus::Sealing, TickStatus::Failed),
                 (TickStatus::Validating, TickStatus::Published),
@@ -911,7 +923,7 @@ mod tests {
             let skip_pairs = [
                 (TickStatus::Open, TickStatus::Validating),
                 (TickStatus::Open, TickStatus::Published),
-                (TickStatus::Open, TickStatus::Failed),
+                // Open→Failed is now valid (crash recovery path), removed from skip list
                 (TickStatus::Sealing, TickStatus::Published),
                 // B3: Sealing→Failed is now valid (merge failure path), removed from skip list
             ];

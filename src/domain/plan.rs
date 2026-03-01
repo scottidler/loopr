@@ -154,6 +154,20 @@ mod tests {
     }
 
     #[test]
+    fn test_hierarchy_status_pascal_case_aliases() {
+        for (json, expected) in [
+            ("\"Draft\"", HierarchyStatus::Draft),
+            ("\"Active\"", HierarchyStatus::Active),
+            ("\"Complete\"", HierarchyStatus::Complete),
+            ("\"Abandoned\"", HierarchyStatus::Abandoned),
+        ] {
+            let deserialized: HierarchyStatus = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("PascalCase '{}' should deserialize: {}", json, e));
+            assert_eq!(deserialized, expected);
+        }
+    }
+
+    #[test]
     fn test_hierarchy_status_display_matches_serde() {
         // Regression: Display must produce values that serde can deserialize.
         // CLI dispatch uses to_string() but handlers use serde_json::from_value().

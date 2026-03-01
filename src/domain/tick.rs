@@ -59,6 +59,12 @@ pub fn tick_transitions() -> Vec<TransitionRule<TickStatus>> {
             to: Failed,
             role: Some(Role::Integrator),
         },
+        // Crash recovery: Open Tick with no bundles can be failed directly
+        TransitionRule {
+            from: Open,
+            to: Failed,
+            role: Some(Role::Integrator),
+        },
     ]
 }
 
@@ -342,6 +348,20 @@ mod tests {
     fn test_invalid_sealing_to_failed_wrong_role() {
         let rules = tick_transitions();
         assert!(validate_transition(TickStatus::Sealing, TickStatus::Failed, Role::Coordinator, &rules).is_err());
+    }
+
+    // --- Crash recovery: Open → Failed ---
+
+    #[test]
+    fn test_valid_open_to_failed() {
+        let rules = tick_transitions();
+        assert!(validate_transition(TickStatus::Open, TickStatus::Failed, Role::Integrator, &rules).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_open_to_failed_wrong_role() {
+        let rules = tick_transitions();
+        assert!(validate_transition(TickStatus::Open, TickStatus::Failed, Role::Coordinator, &rules).is_err());
     }
 
     // --- Record trait tests ---

@@ -7,7 +7,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use tokio::task::JoinHandle;
 
-use crate::agents::{AgentEvent, AgentSession};
+use crate::agents::{AgentEvent, AgentSession, AgentStatus};
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_goal::CoordinatorGoal;
@@ -296,12 +296,15 @@ impl DaemonContext {
             }
         }
 
-        // Recover stuck Ticks (Sealing/Validating) → Failed
+        // Recover stuck Ticks (Open/Sealing/Validating) → Failed
         {
             let mut ticks = self.stores.ticks.write().unwrap();
             let store_lock = self.stores.store.as_ref();
             for (id, tick) in ticks.iter_mut() {
-                if tick.status == TickStatus::Sealing || tick.status == TickStatus::Validating {
+                if tick.status == TickStatus::Open
+                    || tick.status == TickStatus::Sealing
+                    || tick.status == TickStatus::Validating
+                {
                     warn!("Recovering stuck Tick in {:?} state: {}", tick.status, id);
                     tick.status = TickStatus::Failed;
                     tick.updated_at = crate::id::now_millis();
@@ -310,6 +313,28 @@ impl DaemonContext {
                         && let Err(e) = store_arc.lock().unwrap().update(tick.clone())
                     {
                         warn!("Failed to persist Tick recovery to TaskStore: {}", e);
+                    }
+                    recovered += 1;
+                }
+            }
+        }
+
+        // Recover stuck AgentSessions (non-terminal) → Failed
+        {
+            let mut sessions = self.stores.agent_sessions.write().unwrap();
+            let store_lock = self.stores.store.as_ref();
+            for (id, session) in sessions.iter_mut() {
+                if !session.status.is_terminal() {
+                    warn!("Recovering stuck AgentSession in {:?} state: {}", session.status, id);
+                    // Use direct mutation — transition_to may fail for some paths
+                    // (e.g., Starting → Failed is valid, but we want to force recovery)
+                    session.status = AgentStatus::Failed;
+                    session.error_message = Some("Recovered after daemon crash".to_string());
+                    session.updated_at = crate::id::now_millis();
+                    if let Some(store_arc) = store_lock
+                        && let Err(e) = store_arc.lock().unwrap().update(session.clone())
+                    {
+                        warn!("Failed to persist AgentSession recovery to TaskStore: {}", e);
                     }
                     recovered += 1;
                 }
@@ -355,6 +380,7 @@ impl DaemonContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentType;
     use crate::config::ProjectConfig;
 
     /// Create a test Config with repo_path pointing to a unique temp directory
@@ -749,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn test_recover_open_tick_not_recovered() {
+    fn test_recover_open_tick_recovered() {
         let config = test_config();
         let (tx, _rx) = broadcast::channel(16);
         let ctx = DaemonContext::new(config, tx).unwrap();
@@ -759,10 +785,10 @@ mod tests {
         ctx.stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
 
         let recovered = ctx.recover_orphaned_records();
-        assert_eq!(recovered, 0);
+        assert_eq!(recovered, 1);
 
         let ticks = ctx.stores.ticks.read().unwrap();
-        assert_eq!(ticks[&tick_id].status, TickStatus::Open);
+        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
     }
 
     #[test]
@@ -793,6 +819,74 @@ mod tests {
 
         let recovered = ctx.recover_orphaned_records();
         assert_eq!(recovered, 3);
+    }
+
+    #[test]
+    fn test_recover_stuck_session_running() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.status = AgentStatus::Running;
+        let session_id = session.id.clone();
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert!(recovered >= 1);
+
+        let sessions = ctx.stores.agent_sessions.read().unwrap();
+        assert_eq!(sessions[&session_id].status, AgentStatus::Failed);
+        assert!(sessions[&session_id].error_message.as_ref().unwrap().contains("crash"));
+    }
+
+    #[test]
+    fn test_recover_stuck_session_waiting_for_llm() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        session.status = AgentStatus::Running;
+        session.transition_to(AgentStatus::WaitingForLlm).unwrap();
+        let session_id = session.id.clone();
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert!(recovered >= 1);
+
+        let sessions = ctx.stores.agent_sessions.read().unwrap();
+        assert_eq!(sessions[&session_id].status, AgentStatus::Failed);
+    }
+
+    #[test]
+    fn test_recover_completed_session_not_touched() {
+        let config = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx).unwrap();
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.status = AgentStatus::Completed;
+        let session_id = session.id.clone();
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let recovered = ctx.recover_orphaned_records();
+        assert_eq!(recovered, 0);
+
+        let sessions = ctx.stores.agent_sessions.read().unwrap();
+        assert_eq!(sessions[&session_id].status, AgentStatus::Completed);
     }
 
     #[test]

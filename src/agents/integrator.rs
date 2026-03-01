@@ -55,14 +55,16 @@ fn has_tick_in_progress(stores: &Stores) -> bool {
     })
 }
 
-/// Recover stuck Ticks (Sealing/Validating) from a previous crash.
+/// Recover stuck Ticks (Open/Sealing/Validating) from a previous crash.
 /// Returns the number of ticks recovered.
 fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
     let stuck_tick_ids: Vec<String> = {
         let ticks = stores.ticks.read().unwrap();
         ticks
             .values()
-            .filter(|t| t.status == TickStatus::Sealing || t.status == TickStatus::Validating)
+            .filter(|t| {
+                t.status == TickStatus::Open || t.status == TickStatus::Sealing || t.status == TickStatus::Validating
+            })
             .map(|t| t.id.clone())
             .collect()
     };
@@ -80,28 +82,13 @@ fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
         };
 
         // Transition through the valid FSM path to reach Failed:
+        // Open → Failed (direct)
         // Sealing → Validating → Failed
         // Validating → Failed
         let mut ok = true;
-        if status == TickStatus::Sealing {
-            let resp = bridge.request(
-                "tick.transition",
-                serde_json::json!({
-                    "id": tick_id,
-                    "target_status": "Validating",
-                    "role": "integrator",
-                }),
-            );
-            if resp.is_error() {
-                warn!(
-                    "Integrator: failed to recover stuck tick {} (Sealing→Validating): {:?}",
-                    tick_id, resp.error
-                );
-                ok = false;
-            }
-        }
 
-        if ok {
+        if status == TickStatus::Open {
+            // Open → Failed (direct FSM rule)
             let resp = bridge.request(
                 "tick.transition",
                 serde_json::json!({
@@ -112,10 +99,46 @@ fn recover_stuck_ticks(stores: &Stores, bridge: &AgentIpcBridge) -> u32 {
             );
             if resp.is_error() {
                 warn!(
-                    "Integrator: failed to recover stuck tick {} (→Failed): {:?}",
+                    "Integrator: failed to recover stuck tick {} (Open→Failed): {:?}",
                     tick_id, resp.error
                 );
                 ok = false;
+            }
+        } else {
+            if status == TickStatus::Sealing {
+                let resp = bridge.request(
+                    "tick.transition",
+                    serde_json::json!({
+                        "id": tick_id,
+                        "target_status": "Validating",
+                        "role": "integrator",
+                    }),
+                );
+                if resp.is_error() {
+                    warn!(
+                        "Integrator: failed to recover stuck tick {} (Sealing→Validating): {:?}",
+                        tick_id, resp.error
+                    );
+                    ok = false;
+                }
+            }
+
+            if ok {
+                let resp = bridge.request(
+                    "tick.transition",
+                    serde_json::json!({
+                        "id": tick_id,
+                        "target_status": "Failed",
+                        "role": "integrator",
+                    }),
+                );
+                if resp.is_error() {
+                    warn!(
+                        "Integrator: failed to recover stuck tick {} (→Failed): {:?}",
+                        tick_id, resp.error
+                    );
+                    ok = false;
+                }
             }
         }
 
@@ -1059,25 +1082,30 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_idle_tick_in_progress() {
+    fn test_cycle_recovers_open_tick() {
         let dir = std::env::temp_dir().join(format!("loopr-intg-cycle2-{}", crate::id::generate_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
         let (bridge, _) = test_bridge(stores.clone(), &dir);
         let config = test_config();
 
-        // Add a tick in progress
+        // Add a stuck Open tick (simulates crash between create and seal)
         let tick = Tick::new(1);
-        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+        let tick_id = tick.id.clone();
+        stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
 
         // Add an accepted bundle
-        let bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-        let mut bundle = bundle;
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
         bundle.status = BundleStatus::Accepted;
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
+        // Open tick is recovered first, then next cycle can proceed
         let result = run_integrator_cycle(&stores, &bridge, &config).unwrap();
-        assert_eq!(result, IntegratorCycleResult::Idle);
+        assert_eq!(result, IntegratorCycleResult::Recovered { count: 1 });
+
+        // Verify the tick was transitioned to Failed
+        let ticks = stores.ticks.read().unwrap();
+        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
     }
 
     #[test]

@@ -452,6 +452,17 @@ fn handle_plan_create(
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
     }
 
+    // Reject if a Draft Plan already exists — Coordinator must abandon the old one first
+    {
+        let plans = stores.plans.read().unwrap();
+        if plans.values().any(|p| p.status == HierarchyStatus::Draft) {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("A Draft Plan already exists; abandon it before creating a new one"),
+            );
+        }
+    }
+
     let plan = Plan::new(title, description, acceptance_criteria);
     let plan_json = match serde_json::to_value(&plan) {
         Ok(v) => v,
@@ -669,6 +680,22 @@ fn handle_spec_create(
 
     if title.is_empty() {
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
+    }
+
+    // Reject if a Draft Spec already exists under this Plan
+    {
+        let specs = stores.specs.read().unwrap();
+        if specs
+            .values()
+            .any(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
+        {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(
+                    "A Draft Spec already exists under this Plan; abandon it before creating a new one",
+                ),
+            );
+        }
     }
 
     let spec = Spec::new(plan_id, title, description);
@@ -904,6 +931,22 @@ fn handle_phase_create(
 
     if title.is_empty() {
         return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
+    }
+
+    // Reject if a Draft Phase already exists under this Spec
+    {
+        let phases = stores.phases.read().unwrap();
+        if phases
+            .values()
+            .any(|p| p.spec_id == spec_id && p.status == HierarchyStatus::Draft)
+        {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(
+                    "A Draft Phase already exists under this Spec; abandon it before creating a new one",
+                ),
+            );
+        }
     }
 
     let phase = Phase::new(spec_id, title, description, order);
@@ -4202,6 +4245,23 @@ mod tests {
         assert_eq!(retrieved.unwrap().title, "Persisted Plan");
     }
 
+    #[test]
+    fn test_plan_create_rejects_duplicate_draft() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // Create first Draft Plan — succeeds
+        let req1 = DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"}));
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        assert!(!resp1.is_error());
+
+        // Create second Draft Plan — rejected
+        let req2 = DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"}));
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(resp2.is_error());
+        assert_eq!(resp2.error.unwrap().code, -32005); // precondition_failed
+    }
+
     // --- plan.get tests ---
 
     #[test]
@@ -4289,13 +4349,25 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        // Create two plans
-        dispatch(
+        // Create first plan and abandon it so a second Draft can be created
+        let resp1 = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})),
+        );
+        let plan_a_id = resp1.result.unwrap()["id"].as_str().unwrap().to_string();
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                10,
+                "plan.transition",
+                json!({"id": plan_a_id, "target_status": "abandoned", "role": "coordinator"}),
+            ),
         );
         dispatch(
             &stores,
@@ -4318,13 +4390,25 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        // Create two plans (writes to both TaskStore and HashMap)
-        dispatch(
+        // Create first plan and abandon it so a second Draft can be created
+        let resp1 = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})),
+        );
+        let plan_a_id = resp1.result.unwrap()["id"].as_str().unwrap().to_string();
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                10,
+                "plan.transition",
+                json!({"id": plan_a_id, "target_status": "abandoned", "role": "coordinator"}),
+            ),
         );
         dispatch(
             &stores,
@@ -4733,6 +4817,50 @@ mod tests {
     }
 
     #[test]
+    fn test_spec_create_rejects_duplicate_draft() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let plan_id = create_test_plan(&stores, &tx, &wm);
+        // Create first Draft Spec — succeeds
+        let req1 = DaemonRequest::new(1, "spec.create", json!({"plan_id": plan_id, "title": "Spec A"}));
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        assert!(!resp1.is_error());
+
+        // Create second Draft Spec under same Plan — rejected
+        let req2 = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec B"}));
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(resp2.is_error());
+        assert_eq!(resp2.error.unwrap().code, -32005);
+    }
+
+    #[test]
+    fn test_phase_create_rejects_duplicate_draft() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_plan_id, spec_id) = create_test_spec(&stores, &tx, &wm);
+        // Create first Draft Phase — succeeds
+        let req1 = DaemonRequest::new(
+            1,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Phase A", "order": 1}),
+        );
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        assert!(!resp1.is_error());
+
+        // Create second Draft Phase under same Spec — rejected
+        let req2 = DaemonRequest::new(
+            2,
+            "phase.create",
+            json!({"spec_id": spec_id, "title": "Phase B", "order": 2}),
+        );
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(resp2.is_error());
+        assert_eq!(resp2.error.unwrap().code, -32005);
+    }
+
+    #[test]
     fn test_phase_create_rejects_complete_spec() {
         let stores = test_stores();
         let tx = test_event_tx();
@@ -5011,6 +5139,19 @@ mod tests {
         let wm = test_worktree_mgr();
         let plan_id_1 = create_test_plan(&stores, &tx, &wm);
 
+        // Activate first plan so we can create a second Draft Plan
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                9,
+                "plan.transition",
+                json!({"id": plan_id_1, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+
         // Create a second plan
         let resp2 = dispatch(
             &stores,
@@ -5077,13 +5218,25 @@ mod tests {
         );
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        // Create two specs under that plan (writes to both TaskStore and HashMap)
-        dispatch(
+        // Create first spec, abandon it, then create second
+        let spec_a_resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec A"})),
+        );
+        let spec_a_id = spec_a_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                20,
+                "spec.transition",
+                json!({"id": spec_a_id, "target_status": "abandoned", "role": "coordinator"}),
+            ),
         );
         dispatch(
             &stores,
@@ -5486,10 +5639,22 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+        let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+
+        // Activate first spec so we can create a second Draft Spec (and phases under both)
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                10,
+                "spec.transition",
+                json!({"id": spec_id_1, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
 
         // Create a second spec under the same plan
-        let plan_id = _plan_id;
         let resp2 = dispatch(
             &stores,
             &tx,
@@ -5552,10 +5717,22 @@ mod tests {
         let stores = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+        let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+
+        // Activate first spec so we can create a second Draft Spec
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                10,
+                "spec.transition",
+                json!({"id": spec_id_1, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
 
         // Create a second spec under the same plan
-        let plan_id = _plan_id;
         let resp2 = dispatch(
             &stores,
             &tx,
@@ -6004,6 +6181,19 @@ mod tests {
         let wm = test_worktree_mgr();
         let (_plan_id, spec_id, phase_id_1) = create_test_phase(&stores, &tx, &wm);
 
+        // Activate first phase so we can create a second Draft Phase
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                15,
+                "phase.transition",
+                json!({"id": phase_id_1, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
+
         // Create a second phase under the same spec
         let resp2 = dispatch(
             &stores,
@@ -6072,6 +6262,19 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_plan_id, _spec_id, phase_id_1) = create_test_phase(&stores, &tx, &wm);
+
+        // Activate first phase so we can create a second Draft Phase
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                15,
+                "phase.transition",
+                json!({"id": phase_id_1, "target_status": "active", "role": "coordinator"}),
+            ),
+        );
 
         // Create a second phase under the same spec
         let resp2 = dispatch(
