@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -428,6 +429,51 @@ fn resolve_batch_dependencies(
         })
     } else {
         None
+    }
+}
+
+/// Fix #6: Prune dependencies between batch-created works whose resource_tags don't overlap.
+/// Safety net for when the LLM creates linear chains between independent works.
+fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], agent_log: &AgentLogger) {
+    let batch_set: HashSet<&str> = batch_created_ids.iter().map(|s| s.as_str()).collect();
+
+    // Build resource_tags lookup for batch works
+    let tag_map: HashMap<String, HashSet<String>> = {
+        let works = stores.works.read().unwrap();
+        batch_created_ids
+            .iter()
+            .filter_map(|id| {
+                works
+                    .get(id)
+                    .map(|w| (id.clone(), w.resource_tags.iter().cloned().collect()))
+            })
+            .collect()
+    };
+
+    // Prune deps between batch works with disjoint resource_tags
+    let mut works = stores.works.write().unwrap();
+    for wi_id in batch_created_ids {
+        if let Some(wi) = works.get_mut(wi_id) {
+            let my_tags = match tag_map.get(wi_id) {
+                Some(tags) => tags,
+                None => continue,
+            };
+            let before = wi.dependencies.len();
+            wi.dependencies.retain(|dep_id| {
+                // Only prune deps within this batch — keep deps on external works
+                if !batch_set.contains(dep_id.as_str()) {
+                    return true;
+                }
+                match tag_map.get(dep_id) {
+                    Some(dep_tags) => !my_tags.is_disjoint(dep_tags),
+                    None => true,
+                }
+            });
+            let pruned = before - wi.dependencies.len();
+            if pruned > 0 {
+                agent_log.info(&format!("pruned {} independent dep(s) from '{}'", pruned, wi.title));
+            }
+        }
     }
 }
 
@@ -1280,6 +1326,11 @@ impl CoordinatorAgent {
                 _ => {}
             }
             last_summary = summary;
+        }
+
+        // Fix #6: Prune independent deps after batch Work creation
+        if !batch_created_ids.is_empty() {
+            prune_independent_deps(stores, &batch_created_ids, &self.ctx.log);
         }
 
         // Persist state after each iteration
@@ -3110,6 +3161,101 @@ mod tests {
         let action = AgentAction::Done { summary: "done".into() };
         let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
         assert!(resolved.is_none(), "non-CreateWork should return None");
+    }
+
+    // --- Fix #6: prune_independent_deps tests ---
+
+    #[test]
+    fn test_prune_independent_deps_removes_disjoint() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-prune1-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let agent_log = test_agent_logger(&dir);
+
+        // Create two works with non-overlapping resource_tags — dep should be pruned
+        let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
+        wi_a.resource_tags = vec!["src/a.rs".into()];
+        let a_id = wi_a.id.clone();
+
+        let mut wi_b = Work::new("phase-1".into(), "Work B".into(), "d".into());
+        wi_b.resource_tags = vec!["src/b.rs".into()];
+        wi_b.dependencies = vec![a_id.clone()];
+        let b_id = wi_b.id.clone();
+
+        stores.works.write().unwrap().insert(a_id.clone(), wi_a);
+        stores.works.write().unwrap().insert(b_id.clone(), wi_b);
+
+        prune_independent_deps(&stores, &[a_id.clone(), b_id.clone()], &agent_log);
+
+        let works = stores.works.read().unwrap();
+        assert!(works[&b_id].dependencies.is_empty(), "disjoint dep should be pruned");
+    }
+
+    #[test]
+    fn test_prune_independent_deps_keeps_overlapping() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-prune2-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let agent_log = test_agent_logger(&dir);
+
+        // Both works touch src/main.rs — dep should be kept
+        let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
+        wi_a.resource_tags = vec!["src/main.rs".into(), "src/a.rs".into()];
+        let a_id = wi_a.id.clone();
+
+        let mut wi_b = Work::new("phase-1".into(), "Work B".into(), "d".into());
+        wi_b.resource_tags = vec!["src/main.rs".into(), "src/b.rs".into()];
+        wi_b.dependencies = vec![a_id.clone()];
+        let b_id = wi_b.id.clone();
+
+        stores.works.write().unwrap().insert(a_id.clone(), wi_a);
+        stores.works.write().unwrap().insert(b_id.clone(), wi_b);
+
+        prune_independent_deps(&stores, &[a_id.clone(), b_id.clone()], &agent_log);
+
+        let works = stores.works.read().unwrap();
+        assert_eq!(works[&b_id].dependencies, vec![a_id], "overlapping dep should be kept");
+    }
+
+    #[test]
+    fn test_prune_independent_deps_keeps_external() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-prune3-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let agent_log = test_agent_logger(&dir);
+
+        // wi_b depends on an external work (not in batch) — should be kept regardless
+        let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
+        wi_a.resource_tags = vec!["src/a.rs".into()];
+        let a_id = wi_a.id.clone();
+
+        let mut wi_b = Work::new("phase-1".into(), "Work B".into(), "d".into());
+        wi_b.resource_tags = vec!["src/b.rs".into()];
+        wi_b.dependencies = vec!["wi-external".to_string()];
+        let b_id = wi_b.id.clone();
+
+        stores.works.write().unwrap().insert(a_id.clone(), wi_a);
+        stores.works.write().unwrap().insert(b_id.clone(), wi_b);
+
+        prune_independent_deps(&stores, &[a_id, b_id.clone()], &agent_log);
+
+        let works = stores.works.read().unwrap();
+        assert_eq!(
+            works[&b_id].dependencies,
+            vec!["wi-external".to_string()],
+            "external dep should be kept"
+        );
+    }
+
+    #[test]
+    fn test_prune_independent_deps_empty_batch() {
+        let dir = std::env::temp_dir().join(format!("loopr-coord-prune4-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let agent_log = test_agent_logger(&dir);
+
+        // Empty batch — no-op
+        prune_independent_deps(&stores, &[], &agent_log);
     }
 
     // --- Fix #5: build_phase_status dependency info tests ---
