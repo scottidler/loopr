@@ -18,6 +18,7 @@ use crate::agents::researcher;
 use crate::agents::reviewer;
 use crate::agents::{Agent, AgentAction, AgentContext, AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
+use crate::domain::bundle::BundleStatus;
 use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolResult;
@@ -74,6 +75,45 @@ fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String> {
         .filter(|t| t.status == TickStatus::Published)
         .max_by_key(|t| t.number)
         .map(|t| t.id.clone())
+}
+
+/// Determine the Work transition after an Implementer's agent loop exits.
+///
+/// Returns `Some(target_status)` to transition, or `None` to skip (sibling still active).
+///
+/// Decision table:
+/// | Agent result | Sibling active? | Bundle state         | Work transition |
+/// |---|---|---|---|
+/// | Ok           | —               | —                    | "InReview"      |
+/// | Err          | Yes             | —                    | (skip)          |
+/// | Err          | No              | active Bundle exists | "InReview"      |
+/// | Err          | No              | all Rejected/none    | "Blocked"       |
+fn determine_work_handback(stores: &Stores, work_id: &str, session_id: &str, succeeded: bool) -> Option<&'static str> {
+    if succeeded {
+        return Some("InReview");
+    }
+
+    // If a sibling implementer is still active, don't touch the Work.
+    let sessions = stores.agent_sessions.read().unwrap();
+    let sibling_active = sessions.values().any(|s| {
+        s.id != session_id
+            && s.agent_type == AgentType::Implementer
+            && s.work_id.as_deref() == Some(work_id)
+            && !s.status.is_terminal()
+    });
+    drop(sessions);
+
+    if sibling_active {
+        return None; // let the sibling finish
+    }
+
+    // Did the agent produce a usable Bundle?
+    let bundles = stores.bundles.read().unwrap();
+    let has_active_bundle = bundles
+        .values()
+        .any(|b| b.work_id == work_id && !matches!(b.status, BundleStatus::Rejected | BundleStatus::Superseded));
+
+    Some(if has_active_bundle { "InReview" } else { "Blocked" })
 }
 
 /// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
@@ -174,26 +214,28 @@ pub async fn run_agent_task(
 
     let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
 
-    // Transition work based on agent result (implementer only)
+    // Bundle-aware work handback (implementer only)
     if agent_type == AgentType::Implementer
         && let Some(ref wi_id) = worktree_key
     {
-        let (wi_method, wi_status) = if result.is_ok() {
-            ("work.transition", "InReview")
+        if let Some(target_status) = determine_work_handback(&stores, wi_id, &session_id, result.is_ok()) {
+            let resp = bridge.request(
+                "work.transition",
+                serde_json::json!({ "id": wi_id, "target_status": target_status, "role": "implementer" }),
+            );
+            if resp.is_error() {
+                agent_log.warn(&format!(
+                    "failed to transition work {} → {}: {:?}",
+                    wi_id, target_status, resp.error
+                ));
+            } else {
+                agent_log.info(&format!("transitioned work {} → {}", wi_id, target_status));
+            }
         } else {
-            ("work.transition", "Blocked")
-        };
-        let resp = bridge.request(
-            wi_method,
-            serde_json::json!({ "id": wi_id, "target_status": wi_status, "role": "implementer" }),
-        );
-        if resp.is_error() {
-            agent_log.warn(&format!(
-                "failed to transition work {} → {}: {:?}",
-                wi_id, wi_status, resp.error
+            agent_log.info(&format!(
+                "skipping work handback for {} — sibling implementer still active",
+                wi_id
             ));
-        } else {
-            agent_log.info(&format!("transitioned work {} → {}", wi_id, wi_status));
         }
     }
 
@@ -3232,5 +3274,107 @@ mod tests {
             format!("agent/{}", wi_id),
             "bundle branch should be deterministic agent/<work_id>"
         );
+    }
+
+    // --- determine_work_handback tests ---
+
+    #[test]
+    fn test_handback_succeeded_returns_in_review() {
+        let dir = std::env::temp_dir().join(format!("loopr-handback-ok-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", true);
+        assert_eq!(result, Some("InReview"));
+    }
+
+    #[test]
+    fn test_handback_failed_no_bundles_returns_blocked() {
+        let dir = std::env::temp_dir().join(format!("loopr-handback-nobd-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("Blocked"));
+    }
+
+    #[test]
+    fn test_handback_failed_with_active_bundle_returns_in_review() {
+        let dir = std::env::temp_dir().join(format!("loopr-handback-actbd-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Insert an Accepted bundle for the work
+        let mut bundle = crate::domain::bundle::Bundle::new(
+            "wi-1".to_string(),
+            None,
+            "agent/wi-1".to_string(),
+            vec!["claim".into()],
+        );
+        bundle.status = BundleStatus::Accepted;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("InReview"));
+    }
+
+    #[test]
+    fn test_handback_failed_all_rejected_bundles_returns_blocked() {
+        let dir = std::env::temp_dir().join(format!("loopr-handback-rejbd-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Insert a Rejected bundle for the work
+        let mut bundle = crate::domain::bundle::Bundle::new(
+            "wi-1".to_string(),
+            None,
+            "agent/wi-1".to_string(),
+            vec!["claim".into()],
+        );
+        bundle.status = BundleStatus::Rejected;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("Blocked"));
+    }
+
+    #[test]
+    fn test_handback_failed_sibling_active_returns_none() {
+        let dir = std::env::temp_dir().join(format!("loopr-handback-sib-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Insert a non-terminal sibling implementer session for the same work_id
+        let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
+        sibling.work_id = Some("wi-1".to_string());
+        sibling.transition_to(AgentStatus::Running).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(sibling.id.clone(), sibling);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_handback_failed_sibling_terminal_checks_bundles() {
+        let dir = std::env::temp_dir().join(format!("loopr-handback-sibterm-{}", crate::id::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stores = test_stores(&dir);
+
+        // Insert a terminal sibling implementer session — should NOT count as active
+        let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
+        sibling.work_id = Some("wi-1".to_string());
+        sibling.transition_to(AgentStatus::Running).unwrap();
+        sibling.transition_to(AgentStatus::Completed).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(sibling.id.clone(), sibling);
+
+        // No bundles → Blocked
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("Blocked"));
     }
 }

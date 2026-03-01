@@ -3418,6 +3418,24 @@ fn handle_agent_start(
                 );
             }
         }
+
+        // Implementer dedup by work_id (mirrors Gap #26 Researcher dedup by target_id)
+        if agent_type == AgentType::Implementer
+            && let Some(ref wi_id) = work_id
+        {
+            let has_existing = sessions.values().any(|s| {
+                s.agent_type == AgentType::Implementer && !s.status.is_terminal() && s.work_id.as_deref() == Some(wi_id)
+            });
+            if has_existing {
+                return DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "non-terminal Implementer session already exists for work_id '{}'",
+                        wi_id
+                    )),
+                );
+            }
+        }
     }
 
     // Create agent session with model from config
@@ -11030,5 +11048,114 @@ mod tests {
         }
         // Coordinator should specifically be Opus
         assert_eq!(config.agents.coordinator.role.model, "claude-opus-4-6");
+    }
+
+    // --- Implementer dedup tests ---
+
+    #[test]
+    fn test_implementer_dedup_rejects_second_on_same_work() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Insert a non-terminal Implementer session for work_id "wi-1"
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.transition_to(AgentStatus::Running).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        // Try to start another implementer for the same work_id
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({"agent_type": "implementer", "work_id": "wi-1"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+
+        assert!(resp.is_error(), "should reject duplicate implementer");
+        let err_msg = resp.error.unwrap().message;
+        assert!(
+            err_msg.contains("non-terminal Implementer session already exists"),
+            "unexpected error: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_implementer_dedup_allows_after_terminal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Insert a terminal (Completed) Implementer session for work_id "wi-1"
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.transition_to(AgentStatus::Running).unwrap();
+        session.transition_to(AgentStatus::Completed).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        // Start a new implementer for the same work_id — should pass dedup (but may fail on spawn)
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({"agent_type": "implementer", "work_id": "wi-1"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+
+        // Should NOT be a precondition_failed error (it may error for other reasons like no LLM key)
+        if resp.is_error() {
+            let err_msg = &resp.error.as_ref().unwrap().message;
+            assert!(
+                !err_msg.contains("non-terminal Implementer session already exists"),
+                "should not reject after terminal session: {}",
+                err_msg
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_implementer_dedup_allows_different_work_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Insert a non-terminal Implementer session for work_id "wi-1"
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.transition_to(AgentStatus::Running).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        // Start an implementer for a DIFFERENT work_id — should pass dedup
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({"agent_type": "implementer", "work_id": "wi-2"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+
+        // Should NOT be a precondition_failed error
+        if resp.is_error() {
+            let err_msg = &resp.error.as_ref().unwrap().message;
+            assert!(
+                !err_msg.contains("non-terminal Implementer session already exists"),
+                "should not reject different work_id: {}",
+                err_msg
+            );
+        }
     }
 }
