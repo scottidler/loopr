@@ -77,6 +77,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 /// Truncate text at the last sentence boundary within the token budget.
+/// Keeps the **head** (oldest content) and drops the tail.
 /// Appends `[truncated]` if truncation occurs.
 fn truncate_prose(text: &str, max_tokens: usize) -> String {
     let max_chars = max_tokens * 4;
@@ -90,6 +91,23 @@ fn truncate_prose(text: &str, max_tokens: usize) -> String {
         format!("{}\n[truncated]", &slice[..pos])
     } else {
         format!("{} [truncated]", slice)
+    }
+}
+
+/// Truncate text from the **head** (oldest content), keeping the **tail** (newest).
+/// Used for accumulated iteration history where recent context is most relevant.
+/// Prepends `[earlier iterations truncated]` if truncation occurs.
+fn truncate_from_head(text: &str, max_tokens: usize) -> String {
+    let max_chars = max_tokens * 4;
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    let start = text.len() - max_chars;
+    // Find a clean break point (newline) after the cut point
+    if let Some(pos) = text[start..].find('\n') {
+        format!("[earlier iterations truncated]\n{}", &text[start + pos + 1..])
+    } else {
+        format!("[earlier iterations truncated] {}", &text[start..])
     }
 }
 
@@ -595,8 +613,8 @@ impl<'a> ContextBuilder<'a> {
         {
             msg.push_str("## Previous Iteration Summary\n\n");
             if estimate_tokens(summary) > self.budget.previous_summary {
-                warn!("Previous summary exceeds token budget, truncating");
-                msg.push_str(&truncate_prose(summary, self.budget.previous_summary));
+                warn!("Previous summary exceeds token budget, truncating from head");
+                msg.push_str(&truncate_from_head(summary, self.budget.previous_summary));
             } else {
                 msg.push_str(summary);
             }
@@ -1012,6 +1030,48 @@ mod tests {
         // No ". " found, rfind('\n') at position 8
         assert!(result.contains("Line one\n"));
         assert!(result.contains("[truncated]"));
+    }
+
+    #[test]
+    fn test_truncate_from_head_no_truncation() {
+        let text = "Short text.";
+        assert_eq!(truncate_from_head(text, 100), "Short text.");
+    }
+
+    #[test]
+    fn test_truncate_from_head_keeps_tail() {
+        // Build text where oldest iterations should be dropped
+        let text = "--- Iteration 1 ---\nread Cargo.toml\n--- Iteration 2 ---\nwrote src/main.rs\n--- Iteration 3 ---\nran tests (pass)";
+        // 5 tokens = 20 chars. Text is 107 chars. Should keep last 20 chars.
+        let result = truncate_from_head(text, 5);
+        assert!(result.contains("[earlier iterations truncated]"));
+        // Should keep the newest content (tail)
+        assert!(result.contains("ran tests (pass)"));
+        // Should NOT contain oldest content
+        assert!(!result.contains("Iteration 1"));
+    }
+
+    #[test]
+    fn test_truncate_from_head_at_newline() {
+        let text = "old content\nnew content that is very important";
+        // 5 tokens = 20 chars. Text is 47 chars. start = 47-20 = 27.
+        // text[27..] = "s very important". No newline found.
+        // So it falls back to "[earlier iterations truncated] s very important"
+        let result = truncate_from_head(text, 5);
+        assert!(result.starts_with("[earlier iterations truncated]"));
+    }
+
+    #[test]
+    fn test_truncate_from_head_clean_break() {
+        // Ensure it finds a newline boundary when available
+        let text = "aaaa\nbbbb\ncccc\ndddd\neeee\nffff\ngggg";
+        // 5 tokens = 20 chars. text.len() = 34. start = 14.
+        // text[14..] = "\ndddd\neeee\nffff\ngggg". find('\n') at 0.
+        // Result: "[earlier iterations truncated]\ndddd\neeee\nffff\ngggg"
+        let result = truncate_from_head(text, 5);
+        assert!(result.contains("[earlier iterations truncated]"));
+        assert!(result.contains("gggg"));
+        assert!(!result.contains("aaaa"));
     }
 
     #[test]
