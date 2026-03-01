@@ -22,6 +22,7 @@ use crate::domain::spec::Spec;
 use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
 use crate::domain::work::{Work, WorkStatus};
+use crate::guidance::AgentGuidance;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::ToolRunner;
 use crate::validator::DocValidator;
@@ -113,6 +114,8 @@ pub struct DaemonContext {
     pub config: Config,
     pub stores: Arc<Stores>,
     pub worktree_manager: WorktreeManager,
+    /// Assembled guidance (schema docs + LOOPR.md files), loaded at startup.
+    pub guidance: AgentGuidance,
 }
 
 impl DaemonContext {
@@ -237,11 +240,15 @@ impl DaemonContext {
             info!("Doc Validator disabled");
         }
 
+        // Load guidance: schema docs from transition rules + LOOPR.md files from disk
+        let guidance = crate::guidance::load_guidance(&repo_path);
+
         Ok(Self {
             config,
             event_tx,
             stores: Arc::new(stores),
             worktree_manager,
+            guidance,
         })
     }
 

@@ -42,9 +42,7 @@ Respond with a JSON array of actions:
 
 ## Status Transitions
 
-- Plans/Specs/Phases: Draft → Active → Complete (or Abandoned)
-- Works are auto-promoted to Ready when acceptance_criteria are provided.
-- Works: Ready → InProgress → InReview → Integrated → Done (or Blocked, Abandoned)
+See the System Rules section in your context for valid transitions and which role can execute each one.
 
 ## Error Handling & Timeouts
 

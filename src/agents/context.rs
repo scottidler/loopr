@@ -7,6 +7,7 @@ use log::{debug, warn};
 use crate::daemon::context::Stores;
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::role::Role;
+use crate::guidance::AgentGuidance;
 use crate::tools::ToolRunner;
 
 // =====================================================
@@ -122,10 +123,11 @@ pub struct TokenBudget {
     pub state_summary: usize,
     pub tools_or_actions: usize,
     pub previous_summary: usize,
+    pub guidance: usize,
 }
 
 impl TokenBudget {
-    /// Default budget allocation per role (from MVP4 design doc).
+    /// Default budget allocation per role (from MVP4 design doc + guidance system).
     pub fn for_role(role: Role) -> Self {
         match role {
             Role::Coordinator => Self {
@@ -136,6 +138,7 @@ impl TokenBudget {
                 state_summary: 3000,
                 tools_or_actions: 500,
                 previous_summary: 700,
+                guidance: 1500,
             },
             Role::Researcher => Self {
                 system_prompt: 500,
@@ -145,6 +148,7 @@ impl TokenBudget {
                 state_summary: 0,
                 tools_or_actions: 300,
                 previous_summary: 700,
+                guidance: 500,
             },
             Role::Implementer => Self {
                 system_prompt: 500,
@@ -154,6 +158,7 @@ impl TokenBudget {
                 state_summary: 2000,
                 tools_or_actions: 500,
                 previous_summary: 4000,
+                guidance: 800,
             },
             Role::Reviewer => Self {
                 system_prompt: 500,
@@ -163,6 +168,7 @@ impl TokenBudget {
                 state_summary: 1000,
                 tools_or_actions: 0,
                 previous_summary: 0,
+                guidance: 500,
             },
             Role::Integrator => Self {
                 system_prompt: 600,
@@ -172,6 +178,7 @@ impl TokenBudget {
                 state_summary: 1500,
                 tools_or_actions: 400,
                 previous_summary: 500,
+                guidance: 800,
             },
         }
     }
@@ -219,6 +226,7 @@ pub struct ContextBuilder<'a> {
     staleness_note: Option<String>,
     state_summary: Option<String>,
     coordinator_goal: Option<String>,
+    guidance_text: Option<String>,
     iteration: Option<u32>,
     footer: Option<String>,
 }
@@ -254,6 +262,7 @@ impl<'a> ContextBuilder<'a> {
             staleness_note: None,
             state_summary: None,
             coordinator_goal: None,
+            guidance_text: None,
             iteration: None,
             footer: None,
         }
@@ -357,6 +366,17 @@ impl<'a> ContextBuilder<'a> {
         self.load_work_hierarchy(&work_id)
     }
 
+    /// Inject assembled guidance (schema + global + project LOOPR.md).
+    pub fn with_guidance(mut self, guidance: &AgentGuidance) -> Self {
+        debug!("ContextBuilder::with_guidance()");
+        self.guidance_text = Some(crate::guidance::assemble_guidance(
+            guidance,
+            self.role,
+            self.budget.guidance,
+        ));
+        self
+    }
+
     pub fn with_tools(mut self, tool_runner: &ToolRunner) -> Self {
         debug!("ContextBuilder::with_tools()");
         self.tools = tool_runner.available_tools().into_iter().map(String::from).collect();
@@ -423,6 +443,11 @@ impl<'a> ContextBuilder<'a> {
             msg.push_str("## Project Goal\n\n");
             msg.push_str(goal);
             msg.push_str("\n\n");
+        }
+
+        // --- Guidance section (schema + global + project LOOPR.md) ---
+        if let Some(ref guidance) = self.guidance_text {
+            msg.push_str(guidance);
         }
 
         // --- Hierarchy section ---

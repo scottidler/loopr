@@ -252,25 +252,30 @@ fn is_session_cancelled(stores: &Stores, session_id: &str) -> bool {
 /// 3. **Validation cap reached** — Draft has exceeded max_validation_attempts → NeedHelp signal.
 ///
 /// Returns None when no generation/re-generation is needed (normal iteration).
-fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts: u32) -> Option<String> {
+fn build_generation_footer(
+    stores: &Stores,
+    goal: &str,
+    max_validation_attempts: u32,
+    guidance_section: Option<&str>,
+) -> Option<String> {
     // Case 1: Check if generation is needed at any level (no document exists)
     if let Some(level) = generation::determine_generation_level(stores) {
         let prompt = match level {
-            GenerationLevel::Plan => build_plan_prompt(goal, &[], &[]),
+            GenerationLevel::Plan => build_plan_prompt(goal, &[], &[], guidance_section),
             GenerationLevel::Spec => {
                 let plan = generation::find_active_plan(stores)?;
-                build_spec_prompt(&plan, &[], &[], &[])
+                build_spec_prompt(&plan, &[], &[], &[], guidance_section)
             }
             GenerationLevel::Phase => {
                 let plan = generation::find_active_plan(stores)?;
                 let specs = generation::find_active_specs_for_plan(stores, &plan.id);
                 let spec = specs.into_iter().next()?;
-                build_phase_prompt(&spec, &[], &[])
+                build_phase_prompt(&spec, &[], &[], guidance_section)
             }
             GenerationLevel::Work => {
                 let phase = generation::find_phase_needing_works(stores)?;
                 let existing = generation::find_works_for_phase(stores, &phase.id);
-                build_work_prompt(&phase, &existing, &[], &[])
+                build_work_prompt(&phase, &existing, &[], &[], guidance_section)
             }
         };
 
@@ -305,16 +310,16 @@ fn build_generation_footer(stores: &Stores, goal: &str, max_validation_attempts:
             max_validation_attempts
         );
         let prompt = match regen.level {
-            GenerationLevel::Plan => build_plan_prompt(goal, &[], &regen.accumulated_failures),
+            GenerationLevel::Plan => build_plan_prompt(goal, &[], &regen.accumulated_failures, guidance_section),
             GenerationLevel::Spec => {
                 let plan = generation::find_active_plan(stores)?;
-                build_spec_prompt(&plan, &[], &[], &regen.accumulated_failures)
+                build_spec_prompt(&plan, &[], &[], &regen.accumulated_failures, guidance_section)
             }
             GenerationLevel::Phase => {
                 let plan = generation::find_active_plan(stores)?;
                 let specs = generation::find_active_specs_for_plan(stores, &plan.id);
                 let spec = specs.into_iter().next()?;
-                build_phase_prompt(&spec, &[], &regen.accumulated_failures)
+                build_phase_prompt(&spec, &[], &regen.accumulated_failures, guidance_section)
             }
             // Works don't go through Draft→Active validation cycle
             GenerationLevel::Work => return None,
@@ -556,7 +561,7 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
     match coord_state.fsm_state {
         CoordinatorFsmState::Planning => {
             // Use existing generation footer logic for Plan→Spec→Phase hierarchy
-            if let Some(gen_footer) = build_generation_footer(stores, goal, config.max_validation_attempts) {
+            if let Some(gen_footer) = build_generation_footer(stores, goal, config.max_validation_attempts, None) {
                 gen_footer
             } else {
                 // All hierarchy levels exist — ready to transition to ActivatePhase
@@ -577,7 +582,7 @@ fn build_fsm_footer(stores: &Stores, coord_state: &CoordinatorState, goal: &str,
                     if let Some(phase) = phase {
                         let existing = generation::find_works_for_phase(stores, &phase.id);
                         if existing.is_empty() {
-                            let prompt = build_work_prompt(&phase, &existing, &[], &[]);
+                            let prompt = build_work_prompt(&phase, &existing, &[], &[], None);
                             format!(
                                 "## Activating Phase: {} (id: {})\n\n\
                                  Generate Works for this phase. Each Work should have clear \
@@ -1959,7 +1964,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let stores = test_stores(&dir);
 
-        let footer = build_generation_footer(&stores, "Build an auth system", 3);
+        let footer = build_generation_footer(&stores, "Build an auth system", 3, None);
         assert!(footer.is_some(), "should return generation footer when no plan exists");
         let text = footer.unwrap();
         // The Plan-level generation prompt should mention creating a plan
@@ -2000,7 +2005,7 @@ mod tests {
             }
         }
 
-        let footer = build_generation_footer(&stores, "Build auth", 3);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None);
         assert!(footer.is_some(), "should return footer when validation cap is reached");
         let text = footer.unwrap();
         assert!(text.contains("need_help"), "should signal need_help when cap reached");
@@ -2034,7 +2039,7 @@ mod tests {
             store.create(report).unwrap();
         }
 
-        let footer = build_generation_footer(&stores, "Build auth", 3);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None);
         assert!(
             footer.is_some(),
             "should return regen footer when draft has failures below cap"
@@ -2909,7 +2914,7 @@ mod tests {
         let spec = Spec::new(plan_id, "Draft Spec".into(), "desc".into());
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-        let footer = build_generation_footer(&stores, "Build a todo app", 3);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None);
         assert!(footer.is_some(), "should emit footer for Draft validation");
         let footer_text = footer.unwrap();
         assert!(

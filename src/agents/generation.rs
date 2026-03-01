@@ -54,7 +54,12 @@ pub struct GenerationPrompt {
 /// - User-provided goal/objective
 /// - Relevant learnings (global scope)
 /// - Accumulated validation failures from previous attempts
-pub fn build_plan_prompt(goal: &str, learnings: &[String], validation_failures: &[String]) -> GenerationPrompt {
+pub fn build_plan_prompt(
+    goal: &str,
+    learnings: &[String],
+    validation_failures: &[String],
+    guidance_section: Option<&str>,
+) -> GenerationPrompt {
     log::debug!(
         "build_plan_prompt(goal_len={}, learnings={}, failures={})",
         goal.len(),
@@ -71,6 +76,10 @@ pub fn build_plan_prompt(goal: &str, learnings: &[String], validation_failures: 
     msg.push_str("### User Intent\n");
     msg.push_str(goal);
     msg.push_str("\n\n");
+
+    if let Some(guidance) = guidance_section {
+        msg.push_str(guidance);
+    }
 
     if !learnings.is_empty() {
         msg.push_str("### Relevant Learnings\n");
@@ -111,6 +120,7 @@ pub fn build_spec_prompt(
     learnings: &[String],
     findings: &[String],
     validation_failures: &[String],
+    guidance_section: Option<&str>,
 ) -> GenerationPrompt {
     log::debug!(
         "build_spec_prompt(plan_id={}, learnings={}, findings={}, failures={})",
@@ -128,6 +138,10 @@ pub fn build_spec_prompt(
     msg.push_str(&format!("- **Title:** {}\n", plan.title));
     msg.push_str(&format!("- **Description:** {}\n", plan.description));
     msg.push_str(&format!("- **Acceptance Criteria:** {}\n\n", plan.acceptance_criteria));
+
+    if let Some(guidance) = guidance_section {
+        msg.push_str(guidance);
+    }
 
     if !learnings.is_empty() {
         msg.push_str("### Relevant Learnings\n");
@@ -172,7 +186,12 @@ pub fn build_spec_prompt(
 /// - Active Spec (title, ID, plan reference, description)
 /// - Relevant learnings (scoped to Spec + Plan + Global)
 /// - Accumulated validation failures
-pub fn build_phase_prompt(spec: &Spec, learnings: &[String], validation_failures: &[String]) -> GenerationPrompt {
+pub fn build_phase_prompt(
+    spec: &Spec,
+    learnings: &[String],
+    validation_failures: &[String],
+    guidance_section: Option<&str>,
+) -> GenerationPrompt {
     log::debug!(
         "build_phase_prompt(spec_id={}, learnings={}, failures={})",
         spec.id,
@@ -188,6 +207,10 @@ pub fn build_phase_prompt(spec: &Spec, learnings: &[String], validation_failures
     msg.push_str(&format!("- **Plan ID:** {}\n", spec.plan_id));
     msg.push_str(&format!("- **Title:** {}\n", spec.title));
     msg.push_str(&format!("- **Description:** {}\n\n", spec.description));
+
+    if let Some(guidance) = guidance_section {
+        msg.push_str(guidance);
+    }
 
     if !learnings.is_empty() {
         msg.push_str("### Relevant Learnings\n");
@@ -228,6 +251,7 @@ pub fn build_work_prompt(
     existing_works: &[Work],
     learnings: &[String],
     findings: &[String],
+    guidance_section: Option<&str>,
 ) -> GenerationPrompt {
     log::debug!(
         "build_work_prompt(phase_id={}, existing_works={}, learnings={}, findings={})",
@@ -246,6 +270,10 @@ pub fn build_work_prompt(
     msg.push_str(&format!("- **Title:** {}\n", phase.title));
     msg.push_str(&format!("- **Order:** {}\n", phase.order));
     msg.push_str(&format!("- **Description:** {}\n\n", phase.description));
+
+    if let Some(guidance) = guidance_section {
+        msg.push_str(guidance);
+    }
 
     msg.push_str("### Existing Works in this Phase\n");
     if existing_works.is_empty() {
@@ -733,7 +761,7 @@ mod tests {
     #[test]
     fn test_plan_prompt_includes_goal() {
         init();
-        let prompt = build_plan_prompt("Build a REST API", &[], &[]);
+        let prompt = build_plan_prompt("Build a REST API", &[], &[], None);
         assert!(prompt.user_message.contains("Build a REST API"));
         assert_eq!(prompt.level, GenerationLevel::Plan);
     }
@@ -742,7 +770,7 @@ mod tests {
     fn test_plan_prompt_includes_learnings() {
         init();
         let learnings = vec!["Use async handlers".to_string(), "Prefer JSON responses".to_string()];
-        let prompt = build_plan_prompt("Build API", &learnings, &[]);
+        let prompt = build_plan_prompt("Build API", &learnings, &[], None);
         assert!(prompt.user_message.contains("Use async handlers"));
         assert!(prompt.user_message.contains("Prefer JSON responses"));
         assert!(prompt.user_message.contains("Relevant Learnings"));
@@ -752,7 +780,7 @@ mod tests {
     fn test_plan_prompt_includes_accumulated_failures() {
         init();
         let failures = vec!["Missing acceptance criteria".to_string(), "Title too vague".to_string()];
-        let prompt = build_plan_prompt("Build API", &[], &failures);
+        let prompt = build_plan_prompt("Build API", &[], &failures, None);
         assert!(prompt.user_message.contains("Previous Validation Failures"));
         assert!(prompt.user_message.contains("1. Missing acceptance criteria"));
         assert!(prompt.user_message.contains("2. Title too vague"));
@@ -762,7 +790,7 @@ mod tests {
     #[test]
     fn test_plan_prompt_no_optional_sections_when_empty() {
         init();
-        let prompt = build_plan_prompt("Build API", &[], &[]);
+        let prompt = build_plan_prompt("Build API", &[], &[], None);
         assert!(!prompt.user_message.contains("Relevant Learnings"));
         assert!(!prompt.user_message.contains("Validation Failures"));
     }
@@ -770,7 +798,7 @@ mod tests {
     #[test]
     fn test_plan_prompt_instructions_present() {
         init();
-        let prompt = build_plan_prompt("Build API", &[], &[]);
+        let prompt = build_plan_prompt("Build API", &[], &[], None);
         assert!(prompt.user_message.contains("create_plan"));
         assert!(prompt.user_message.contains("acceptance criteria"));
     }
@@ -781,7 +809,7 @@ mod tests {
     fn test_spec_prompt_includes_plan_context() {
         init();
         let plan = Plan::new("Auth Plan".into(), "Implement auth".into(), "Tests pass".into());
-        let prompt = build_spec_prompt(&plan, &[], &[], &[]);
+        let prompt = build_spec_prompt(&plan, &[], &[], &[], None);
         assert!(prompt.user_message.contains(&plan.id));
         assert!(prompt.user_message.contains("Auth Plan"));
         assert!(prompt.user_message.contains("Implement auth"));
@@ -794,7 +822,7 @@ mod tests {
         init();
         let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
         let findings = vec!["src/auth.rs has existing login logic".to_string()];
-        let prompt = build_spec_prompt(&plan, &[], &findings, &[]);
+        let prompt = build_spec_prompt(&plan, &[], &findings, &[], None);
         assert!(prompt.user_message.contains("Codebase Findings"));
         assert!(prompt.user_message.contains("src/auth.rs has existing login logic"));
     }
@@ -804,7 +832,7 @@ mod tests {
         init();
         let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
         let failures = vec!["Missing testability strategy".to_string()];
-        let prompt = build_spec_prompt(&plan, &[], &[], &failures);
+        let prompt = build_spec_prompt(&plan, &[], &[], &failures, None);
         assert!(prompt.user_message.contains("Previous Validation Failures"));
         assert!(prompt.user_message.contains("Missing testability strategy"));
     }
@@ -813,7 +841,7 @@ mod tests {
     fn test_spec_prompt_instructions_reference_plan_id() {
         init();
         let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-        let prompt = build_spec_prompt(&plan, &[], &[], &[]);
+        let prompt = build_spec_prompt(&plan, &[], &[], &[], None);
         assert!(prompt.user_message.contains("create_spec"));
         assert!(prompt.user_message.contains("plan_id"));
     }
@@ -824,7 +852,7 @@ mod tests {
     fn test_phase_prompt_includes_spec_context() {
         init();
         let spec = Spec::new("plan-1".into(), "JWT Auth".into(), "Implement JWT".into());
-        let prompt = build_phase_prompt(&spec, &[], &[]);
+        let prompt = build_phase_prompt(&spec, &[], &[], None);
         assert!(prompt.user_message.contains(&spec.id));
         assert!(prompt.user_message.contains("plan-1"));
         assert!(prompt.user_message.contains("JWT Auth"));
@@ -840,7 +868,7 @@ mod tests {
             "Phase 2 depends on Phase 1 but order is wrong".to_string(),
             "Missing deliverables in Phase 3".to_string(),
         ];
-        let prompt = build_phase_prompt(&spec, &[], &failures);
+        let prompt = build_phase_prompt(&spec, &[], &failures, None);
         assert!(prompt.user_message.contains("Previous Validation Failures"));
         assert!(prompt.user_message.contains("Phase 2 depends on Phase 1"));
         assert!(prompt.user_message.contains("Missing deliverables"));
@@ -850,7 +878,7 @@ mod tests {
     fn test_phase_prompt_instructions() {
         init();
         let spec = Spec::new("plan-1".into(), "Spec".into(), "desc".into());
-        let prompt = build_phase_prompt(&spec, &[], &[]);
+        let prompt = build_phase_prompt(&spec, &[], &[], None);
         assert!(prompt.user_message.contains("create_phase"));
         assert!(prompt.user_message.contains("spec_id"));
         assert!(prompt.user_message.contains("order"));
@@ -862,7 +890,7 @@ mod tests {
     fn test_work_prompt_includes_phase_context() {
         init();
         let phase = Phase::new("spec-1".into(), "Foundation".into(), "Set up base".into(), 1);
-        let prompt = build_work_prompt(&phase, &[], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[], &[], &[], None);
         assert!(prompt.user_message.contains(&phase.id));
         assert!(prompt.user_message.contains("spec-1"));
         assert!(prompt.user_message.contains("Foundation"));
@@ -875,7 +903,7 @@ mod tests {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let wi = Work::new(phase.id.clone(), "Add login".into(), "Login endpoint".into());
-        let prompt = build_work_prompt(&phase, &[wi], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[wi], &[], &[], None);
         assert!(prompt.user_message.contains("Add login"));
         assert!(prompt.user_message.contains("Login endpoint"));
         assert!(!prompt.user_message.contains("None yet"));
@@ -885,7 +913,7 @@ mod tests {
     fn test_work_prompt_shows_none_when_no_existing() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let prompt = build_work_prompt(&phase, &[], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[], &[], &[], None);
         assert!(prompt.user_message.contains("None yet"));
     }
 
@@ -893,7 +921,7 @@ mod tests {
     fn test_work_prompt_includes_dependency_instructions() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let prompt = build_work_prompt(&phase, &[], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[], &[], &[], None);
         // Prompt should include batch dependency instructions
         assert!(
             prompt.user_message.contains("batch:0"),
@@ -911,7 +939,7 @@ mod tests {
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let mut wi = Work::new(phase.id.clone(), "WI 1".into(), "desc".into());
         wi.dependencies = vec!["dep-1".to_string()];
-        let prompt = build_work_prompt(&phase, &[wi], &[], &[]);
+        let prompt = build_work_prompt(&phase, &[wi], &[], &[], None);
         assert!(prompt.user_message.contains("deps: dep-1"));
         assert!(prompt.user_message.contains("use the exact IDs above"));
     }
@@ -921,7 +949,7 @@ mod tests {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let findings = vec!["src/auth/ directory has 5 modules".to_string()];
-        let prompt = build_work_prompt(&phase, &[], &[], &findings);
+        let prompt = build_work_prompt(&phase, &[], &[], &findings, None);
         assert!(prompt.user_message.contains("Codebase Context"));
         assert!(prompt.user_message.contains("src/auth/ directory has 5 modules"));
     }
@@ -1797,7 +1825,7 @@ mod tests {
         let findings = vec!["Found auth.rs".to_string()];
         let failures = vec!["Missing edge case".to_string()];
 
-        let prompt = build_spec_prompt(&plan, &learnings, &findings, &failures);
+        let prompt = build_spec_prompt(&plan, &learnings, &findings, &failures, None);
         assert_eq!(prompt.level, GenerationLevel::Spec);
         assert!(prompt.user_message.contains("### Relevant Learnings"));
         assert!(prompt.user_message.contains("Use bcrypt"));
@@ -1817,7 +1845,7 @@ mod tests {
         let learnings = vec!["Always test edge cases".to_string()];
         let failures: Vec<String> = vec![];
 
-        let prompt = build_phase_prompt(&spec, &learnings, &failures);
+        let prompt = build_phase_prompt(&spec, &learnings, &failures, None);
         assert_eq!(prompt.level, GenerationLevel::Phase);
         assert!(prompt.user_message.contains("### Relevant Learnings"));
         assert!(prompt.user_message.contains("Always test edge cases"));
@@ -1831,7 +1859,7 @@ mod tests {
         let learnings = vec!["Use generics".to_string()];
         let findings = vec!["Module at src/lib.rs".to_string()];
 
-        let prompt = build_work_prompt(&phase, &[], &learnings, &findings);
+        let prompt = build_work_prompt(&phase, &[], &learnings, &findings, None);
         assert_eq!(prompt.level, GenerationLevel::Work);
         assert!(prompt.user_message.contains("### Relevant Learnings"));
         assert!(prompt.user_message.contains("Use generics"));

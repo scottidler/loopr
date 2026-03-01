@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn test_generation_plan_prompt_contains_pmt_instructions() {
         init_defaults();
-        let prompt = crate::agents::generation::build_plan_prompt("Test goal", &[], &[]);
+        let prompt = crate::agents::generation::build_plan_prompt("Test goal", &[], &[], None);
         let pmt = &store().generation_plan;
         // The .pmt content should appear in the assembled user_message
         assert!(
@@ -481,7 +481,7 @@ mod tests {
     fn test_generation_spec_prompt_contains_pmt_instructions() {
         init_defaults();
         let plan = crate::domain::plan::Plan::new("P".into(), "d".into(), "c".into());
-        let prompt = crate::agents::generation::build_spec_prompt(&plan, &[], &[], &[]);
+        let prompt = crate::agents::generation::build_spec_prompt(&plan, &[], &[], &[], None);
         let pmt = &store().generation_spec;
         assert!(
             prompt.user_message.contains(pmt.trim()),
@@ -493,7 +493,7 @@ mod tests {
     fn test_generation_phase_prompt_contains_pmt_instructions() {
         init_defaults();
         let spec = crate::domain::spec::Spec::new("p1".into(), "S".into(), "d".into());
-        let prompt = crate::agents::generation::build_phase_prompt(&spec, &[], &[]);
+        let prompt = crate::agents::generation::build_phase_prompt(&spec, &[], &[], None);
         let pmt = &store().generation_phase;
         assert!(
             prompt.user_message.contains(pmt.trim()),
@@ -505,7 +505,7 @@ mod tests {
     fn test_generation_work_prompt_contains_pmt_instructions() {
         init_defaults();
         let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), "d".into(), 1);
-        let prompt = crate::agents::generation::build_work_prompt(&phase, &[], &[], &[]);
+        let prompt = crate::agents::generation::build_work_prompt(&phase, &[], &[], &[], None);
         let pmt = &store().generation_work;
         assert!(
             prompt.user_message.contains(pmt.trim()),
