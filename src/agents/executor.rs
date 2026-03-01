@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use eyre::{Result, eyre};
 use log::{debug, error, info, warn};
@@ -173,35 +172,7 @@ pub async fn run_agent_task(
     }
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
 
-    let result = if agent_type == AgentType::Coordinator {
-        let max_restarts = 3u32;
-        let restart_delay = stores.config.agents.coordinator.idle_interval_secs * 2;
-        let mut attempt = 0u32;
-        let mut result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
-
-        while result.is_err() && attempt < max_restarts {
-            attempt += 1;
-            agent_log.warn(&format!(
-                "Coordinator failed (attempt {}/{}), restarting in {}s",
-                attempt, max_restarts, restart_delay
-            ));
-            tokio::time::sleep(Duration::from_secs(restart_delay)).await;
-            // Check cancellation during sleep
-            let cancelled = stores
-                .agent_sessions
-                .read()
-                .unwrap()
-                .get(&session_id)
-                .is_some_and(|s| s.status == AgentStatus::Cancelled);
-            if cancelled {
-                break;
-            }
-            result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
-        }
-        result
-    } else {
-        run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await
-    };
+    let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
 
     // Transition work based on agent result (implementer only)
     if agent_type == AgentType::Implementer
@@ -425,7 +396,7 @@ async fn run_agent_loop(
             let config = stores.config.agents.coordinator.clone();
             let llm = create_llm_client(&config.role, session_id, event_tx)?;
 
-            let mut session = {
+            let session = {
                 let sessions = stores.agent_sessions.read().unwrap();
                 sessions
                     .get(session_id)
@@ -433,15 +404,32 @@ async fn run_agent_loop(
                     .clone()
             };
 
-            let result =
-                coordinator::run_coordinator(llm.as_ref(), &mut session, stores, bridge, &config, event_tx, agent_log)
-                    .await;
+            let coord_bridge = AgentIpcBridge::new(
+                stores.clone(),
+                event_tx.clone(),
+                WorktreeManager::new(
+                    stores.config.project.repo_path.clone(),
+                    stores.config.project.repo_path.join(".worktrees"),
+                ),
+                stores.config.clone(),
+            );
+            let coord_log = AgentLogger::new(AgentType::Coordinator, session_id)?;
+            let ctx = crate::agents::AgentContext {
+                session,
+                stores: stores.clone(),
+                bridge: coord_bridge,
+                event_tx: event_tx.clone(),
+                tool_runner: stores.tool_runner.clone(),
+                log: coord_log,
+            };
+            let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
+            let result = agent.run().await;
 
             // Write back updated session iteration count
             {
                 let mut sessions = stores.agent_sessions.write().unwrap();
                 if let Some(s) = sessions.get_mut(session_id) {
-                    s.iteration = session.iteration;
+                    s.iteration = agent.ctx.session.iteration;
                 }
             }
 
@@ -1285,6 +1273,7 @@ mod tests {
     use super::*;
     use crate::config::{Config, ProjectConfig, ToolEntry};
     use std::sync::Mutex as StdMutex;
+    use std::time::Duration;
     use taskstore::Store;
 
     fn test_agent_logger(dir: &Path) -> AgentLogger {
