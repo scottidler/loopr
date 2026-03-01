@@ -41,7 +41,16 @@ fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
 /// Uses lock-snapshot pattern: acquires each lock briefly, clones/summarizes, releases.
 /// The summary is designed to fit within the Coordinator's state_summary token budget (3000 tokens).
 pub fn build_state_summary(stores: &Stores, agent_log: &AgentLogger) -> String {
-    agent_log.debug("build_state_summary()");
+    build_state_summary_with_sla(stores, agent_log, None, None)
+}
+
+pub fn build_state_summary_with_sla(
+    stores: &Stores,
+    agent_log: &AgentLogger,
+    coord_state: Option<&CoordinatorState>,
+    sla_config: Option<&crate::config::WorkSlaConfig>,
+) -> String {
+    agent_log.debug("build_state_summary_with_sla()");
     let mut summary = String::with_capacity(4096);
 
     // --- Plans ---
@@ -110,11 +119,32 @@ pub fn build_state_summary(stores: &Stores, agent_log: &AgentLogger) -> String {
             .collect();
         non_terminal.sort_by_key(|w| w.created_at);
         if !non_terminal.is_empty() {
+            let now = crate::id::now_millis();
             summary.push_str("### Works\n");
             for w in &non_terminal {
+                let sla_annotation = match (coord_state, sla_config) {
+                    (Some(cs), Some(sla)) => {
+                        let attempts = cs.attempts(&w.id);
+                        let age_minutes = cs.work_age_minutes(&w.id, now).unwrap_or(0);
+                        let attempt_breach = attempts >= sla.max_attempts;
+                        let time_breach = age_minutes >= sla.max_wall_clock_minutes as i64;
+                        if attempt_breach || time_breach {
+                            format!(
+                                " **SLA BREACHED** — attempts: {}/{}, age: {}min/{}min",
+                                attempts, sla.max_attempts, age_minutes, sla.max_wall_clock_minutes
+                            )
+                        } else {
+                            format!(
+                                " attempts: {}/{}, age: {}min/{}min",
+                                attempts, sla.max_attempts, age_minutes, sla.max_wall_clock_minutes
+                            )
+                        }
+                    }
+                    _ => String::new(),
+                };
                 summary.push_str(&format!(
-                    "- [{}] {} ({}, phase: {})\n",
-                    w.id, w.title, w.status, w.phase_id
+                    "- [{}] {} ({}, phase: {}){}\n",
+                    w.id, w.title, w.status, w.phase_id, sla_annotation
                 ));
             }
             summary.push('\n');
@@ -1135,7 +1165,12 @@ impl CoordinatorAgent {
             self.ctx.info(&format!("detected: {}", cp));
         }
 
-        let state_summary = build_state_summary(stores, &self.ctx.log);
+        let state_summary = build_state_summary_with_sla(
+            stores,
+            &self.ctx.log,
+            Some(coord_state),
+            Some(&stores.config.strategy.work_sla),
+        );
 
         let goal = {
             let goals = stores.coordinator_goals.read().unwrap();
@@ -1320,6 +1355,8 @@ impl CoordinatorAgent {
                 match &result {
                     ActionResult::AgentSpawned { .. } => {
                         // Successful spawn — attempt counts (already incremented above)
+                        // Track SLA: record first assignment time
+                        coord_state.record_first_assignment(target_id);
                     }
                     ActionResult::DependencyNotMet { work_id, .. } => {
                         if let Some(count) = coord_state.work_attempts.get_mut(work_id) {

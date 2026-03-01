@@ -36,6 +36,10 @@ pub struct CoordinatorState {
     pub fsm_state: CoordinatorFsmState,
     pub current_phase_id: Option<String>,
     pub work_attempts: HashMap<String, u32>,
+    /// Wall-clock timestamp (millis since epoch) when each Work was first assigned.
+    /// Used for SLA breach detection. NOT overwritten on re-assignment.
+    #[serde(default)]
+    pub work_first_assigned_at: HashMap<String, i64>,
     pub phase_activated_at: Option<i64>,
     pub goal_started_at: i64,
     pub phases_completed: Vec<String>,
@@ -53,6 +57,7 @@ impl CoordinatorState {
             fsm_state: CoordinatorFsmState::Planning,
             current_phase_id: None,
             work_attempts: HashMap::new(),
+            work_first_assigned_at: HashMap::new(),
             phase_activated_at: None,
             goal_started_at: now,
             phases_completed: Vec::new(),
@@ -97,6 +102,22 @@ impl CoordinatorState {
     /// Get the attempt count for a work.
     pub fn attempts(&self, work_id: &str) -> u32 {
         self.work_attempts.get(work_id).copied().unwrap_or(0)
+    }
+
+    /// Record the first assignment time for a Work. Only sets the timestamp
+    /// if no entry exists — preserves the original SLA start across re-assignments.
+    pub fn record_first_assignment(&mut self, work_id: &str) {
+        self.work_first_assigned_at
+            .entry(work_id.to_string())
+            .or_insert_with(id::now_millis);
+        self.updated_at = id::now_millis();
+    }
+
+    /// Get the wall-clock age in minutes since first assignment, or None if never assigned.
+    pub fn work_age_minutes(&self, work_id: &str, now: i64) -> Option<i64> {
+        self.work_first_assigned_at
+            .get(work_id)
+            .map(|&started| (now - started) / 60_000)
     }
 }
 
@@ -234,5 +255,95 @@ mod tests {
             fields.get("fsm_state"),
             Some(&IndexValue::String("Planning".to_string()))
         );
+    }
+
+    // --- SLA tracking tests ---
+
+    #[test]
+    fn test_work_first_assigned_at_empty_on_new() {
+        let state = CoordinatorState::new("goal-1".to_string());
+        assert!(state.work_first_assigned_at.is_empty());
+    }
+
+    #[test]
+    fn test_record_first_assignment() {
+        let mut state = CoordinatorState::new("goal-1".to_string());
+        state.record_first_assignment("wi-1");
+        assert!(state.work_first_assigned_at.contains_key("wi-1"));
+        assert!(*state.work_first_assigned_at.get("wi-1").unwrap() > 0);
+    }
+
+    #[test]
+    fn test_record_first_assignment_not_overwritten() {
+        let mut state = CoordinatorState::new("goal-1".to_string());
+        state.record_first_assignment("wi-1");
+        let first_time = *state.work_first_assigned_at.get("wi-1").unwrap();
+        // Simulate time passing
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        state.record_first_assignment("wi-1");
+        let second_time = *state.work_first_assigned_at.get("wi-1").unwrap();
+        assert_eq!(first_time, second_time, "first assignment time must not be overwritten");
+    }
+
+    #[test]
+    fn test_work_age_minutes_none_for_unassigned() {
+        let state = CoordinatorState::new("goal-1".to_string());
+        let now = crate::id::now_millis();
+        assert!(state.work_age_minutes("wi-1", now).is_none());
+    }
+
+    #[test]
+    fn test_work_age_minutes_zero_for_just_assigned() {
+        let mut state = CoordinatorState::new("goal-1".to_string());
+        state.record_first_assignment("wi-1");
+        let now = crate::id::now_millis();
+        let age = state.work_age_minutes("wi-1", now).unwrap();
+        assert!(
+            (0..=1).contains(&age),
+            "just-assigned work should be ~0 min old, got {}",
+            age
+        );
+    }
+
+    #[test]
+    fn test_work_age_minutes_synthetic() {
+        let mut state = CoordinatorState::new("goal-1".to_string());
+        // Manually set assigned_at to 45 minutes ago
+        let now = crate::id::now_millis();
+        state
+            .work_first_assigned_at
+            .insert("wi-1".to_string(), now - 45 * 60_000);
+        let age = state.work_age_minutes("wi-1", now).unwrap();
+        assert_eq!(age, 45);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_with_first_assigned() {
+        let mut state = CoordinatorState::new("goal-1".to_string());
+        state.record_first_assignment("wi-1");
+        state.record_first_assignment("wi-2");
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: CoordinatorState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state.work_first_assigned_at, deserialized.work_first_assigned_at);
+    }
+
+    #[test]
+    fn test_serde_backward_compat_without_first_assigned() {
+        // Old JSON without work_first_assigned_at should deserialize with empty HashMap
+        let json = serde_json::json!({
+            "id": "test-id",
+            "goal_id": "goal-1",
+            "fsm_state": "Planning",
+            "current_phase_id": null,
+            "work_attempts": {},
+            "phase_activated_at": null,
+            "goal_started_at": 1000,
+            "phases_completed": [],
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let state: CoordinatorState = serde_json::from_value(json).unwrap();
+        assert!(state.work_first_assigned_at.is_empty());
     }
 }

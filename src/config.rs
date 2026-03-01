@@ -89,6 +89,23 @@ impl Default for PromotionPolicy {
     }
 }
 
+/// SLA thresholds for detecting stuck Work items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkSlaConfig {
+    pub max_attempts: u32,
+    pub max_wall_clock_minutes: u64,
+}
+
+impl Default for WorkSlaConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            max_wall_clock_minutes: 30,
+        }
+    }
+}
+
 /// Strategy knobs controlling system behavior.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,6 +117,7 @@ pub struct StrategyConfig {
     pub validator_strictness: ValidatorStrictness,
     pub promotion: PromotionPolicy,
     pub max_lock_ttl_minutes: u64,
+    pub work_sla: WorkSlaConfig,
 }
 
 impl Default for StrategyConfig {
@@ -112,6 +130,7 @@ impl Default for StrategyConfig {
             validator_strictness: ValidatorStrictness::default(),
             promotion: PromotionPolicy::default(),
             max_lock_ttl_minutes: 60,
+            work_sla: WorkSlaConfig::default(),
         }
     }
 }
@@ -704,6 +723,35 @@ tools:
     }
 
     #[test]
+    fn test_work_sla_config_default() {
+        let sla = WorkSlaConfig::default();
+        assert_eq!(sla.max_attempts, 3);
+        assert_eq!(sla.max_wall_clock_minutes, 30);
+    }
+
+    #[test]
+    fn test_work_sla_config_serde_roundtrip() {
+        let sla = WorkSlaConfig {
+            max_attempts: 5,
+            max_wall_clock_minutes: 60,
+        };
+        let json = serde_json::to_string(&sla).unwrap();
+        let deserialized: WorkSlaConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(sla, deserialized);
+    }
+
+    #[test]
+    fn test_work_sla_config_yaml_default_omitted() {
+        // When not specified in YAML, should use defaults
+        let yaml = r#"
+stale_policy: replan_at_safe_point
+"#;
+        let sc: StrategyConfig = serde_yaml::from_str(yaml).expect("should parse with default work_sla");
+        assert_eq!(sc.work_sla.max_attempts, 3);
+        assert_eq!(sc.work_sla.max_wall_clock_minutes, 30);
+    }
+
+    #[test]
     fn test_strategy_config_default() {
         let sc = StrategyConfig::default();
         assert_eq!(sc.stale_policy, StalePolicy::ReplanAtSafePoint);
@@ -713,6 +761,8 @@ tools:
         assert_eq!(sc.validator_strictness, ValidatorStrictness::HardFailOnAnyAmbiguity);
         assert!(sc.promotion.auto_promote);
         assert_eq!(sc.max_lock_ttl_minutes, 60);
+        assert_eq!(sc.work_sla.max_attempts, 3);
+        assert_eq!(sc.work_sla.max_wall_clock_minutes, 30);
     }
 
     #[test]
