@@ -629,7 +629,8 @@ impl IntegratorAgent {
 
         // 11. Publish or Fail
         if passed {
-            let sha = get_git_head_sha().unwrap_or_else(|| "unknown".to_string());
+            let sha =
+                get_git_head_sha(&self.ctx.stores.config.project.repo_path).unwrap_or_else(|| "unknown".to_string());
 
             let pub_resp = self.ctx.bridge.request(
                 "tick.transition",
@@ -889,10 +890,11 @@ fn run_validation_commands(commands: &[String]) -> (bool, String) {
     (true, log)
 }
 
-/// Get the current git HEAD SHA.
-fn get_git_head_sha() -> Option<String> {
+/// Get the current git HEAD SHA in the given repo path.
+fn get_git_head_sha(repo_path: &std::path::Path) -> Option<String> {
     std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
+        .current_dir(repo_path)
         .output()
         .ok()
         .and_then(|out| {

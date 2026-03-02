@@ -2837,10 +2837,11 @@ fn run_validation_commands(commands: &[String]) -> (bool, String) {
     (true, log)
 }
 
-/// Get the current git HEAD SHA.
-fn get_git_head_sha() -> Option<String> {
+/// Get the current git HEAD SHA in the given repo path.
+fn get_git_head_sha(repo_path: &std::path::Path) -> Option<String> {
     Command::new("git")
         .args(["rev-parse", "HEAD"])
+        .current_dir(repo_path)
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -2919,7 +2920,7 @@ fn handle_integrator_validate(
         tick.updated_at = crate::id::now_millis();
 
         if all_passed {
-            tick.integration_sha = get_git_head_sha();
+            tick.integration_sha = get_git_head_sha(&stores.config.project.repo_path);
         }
 
         // Persist to TaskStore if available
