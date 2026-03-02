@@ -53,62 +53,8 @@ pub fn build_state_summary_with_sla(
     agent_log.debug("build_state_summary_with_sla()");
     let mut summary = String::with_capacity(4096);
 
-    // --- Plans ---
-    {
-        let plans = stores.plans.read().unwrap();
-        let mut non_terminal: Vec<_> = plans
-            .values()
-            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
-            .collect();
-        non_terminal.sort_by_key(|p| p.created_at);
-        if !non_terminal.is_empty() {
-            summary.push_str("### Plans\n");
-            for p in &non_terminal {
-                summary.push_str(&format!("- [{}] {} ({})\n", p.id, p.title, p.status));
-            }
-            summary.push('\n');
-        }
-    }
-
-    // --- Specs ---
-    {
-        let specs = stores.specs.read().unwrap();
-        let mut non_terminal: Vec<_> = specs
-            .values()
-            .filter(|s| !matches!(s.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
-            .collect();
-        non_terminal.sort_by_key(|s| s.created_at);
-        if !non_terminal.is_empty() {
-            summary.push_str("### Specs\n");
-            for s in &non_terminal {
-                summary.push_str(&format!(
-                    "- [{}] {} ({}, plan: {})\n",
-                    s.id, s.title, s.status, s.plan_id
-                ));
-            }
-            summary.push('\n');
-        }
-    }
-
-    // --- Phases ---
-    {
-        let phases = stores.phases.read().unwrap();
-        let mut non_terminal: Vec<_> = phases
-            .values()
-            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
-            .collect();
-        non_terminal.sort_by(|a, b| a.order.cmp(&b.order).then(a.created_at.cmp(&b.created_at)));
-        if !non_terminal.is_empty() {
-            summary.push_str("### Phases\n");
-            for p in &non_terminal {
-                summary.push_str(&format!(
-                    "- [{}] {} ({}, spec: {}, order: {})\n",
-                    p.id, p.title, p.status, p.spec_id, p.order
-                ));
-            }
-            summary.push('\n');
-        }
-    }
+    // Sections ordered most-actionable-first so truncation drops static info (Plans/Specs)
+    // rather than dynamic info (Works/Bundles/Agents) the coordinator needs most.
 
     // --- Works ---
     {
@@ -204,23 +150,6 @@ pub fn build_state_summary_with_sla(
         }
     }
 
-    // --- Ticks (non-terminal) ---
-    {
-        let ticks = stores.ticks.read().unwrap();
-        let mut active: Vec<_> = ticks
-            .values()
-            .filter(|t| !matches!(t.status, TickStatus::Published | TickStatus::Failed))
-            .collect();
-        active.sort_by_key(|t| t.created_at);
-        if !active.is_empty() {
-            summary.push_str("### Ticks\n");
-            for t in &active {
-                summary.push_str(&format!("- [{}] {}\n", t.id, t.status));
-            }
-            summary.push('\n');
-        }
-    }
-
     // --- Active Agent Sessions ---
     {
         let sessions = stores.agent_sessions.read().unwrap();
@@ -244,6 +173,23 @@ pub fn build_state_summary_with_sla(
         }
     }
 
+    // --- Ticks (non-terminal) ---
+    {
+        let ticks = stores.ticks.read().unwrap();
+        let mut active: Vec<_> = ticks
+            .values()
+            .filter(|t| !matches!(t.status, TickStatus::Published | TickStatus::Failed))
+            .collect();
+        active.sort_by_key(|t| t.created_at);
+        if !active.is_empty() {
+            summary.push_str("### Ticks\n");
+            for t in &active {
+                summary.push_str(&format!("- [{}] {}\n", t.id, t.status));
+            }
+            summary.push('\n');
+        }
+    }
+
     // --- Active Locks ---
     {
         let locks = stores.locks.read().unwrap();
@@ -252,6 +198,63 @@ pub fn build_state_summary_with_sla(
             summary.push_str("### Active Locks\n");
             for l in &active {
                 summary.push_str(&format!("- [{}] {} (holder: {})\n", l.id, l.resource, l.holder_id));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Phases ---
+    {
+        let phases = stores.phases.read().unwrap();
+        let mut non_terminal: Vec<_> = phases
+            .values()
+            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by(|a, b| a.order.cmp(&b.order).then(a.created_at.cmp(&b.created_at)));
+        if !non_terminal.is_empty() {
+            summary.push_str("### Phases\n");
+            for p in &non_terminal {
+                summary.push_str(&format!(
+                    "- [{}] {} ({}, spec: {}, order: {})\n",
+                    p.id, p.title, p.status, p.spec_id, p.order
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Specs ---
+    {
+        let specs = stores.specs.read().unwrap();
+        let mut non_terminal: Vec<_> = specs
+            .values()
+            .filter(|s| !matches!(s.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by_key(|s| s.created_at);
+        if !non_terminal.is_empty() {
+            summary.push_str("### Specs\n");
+            for s in &non_terminal {
+                summary.push_str(&format!(
+                    "- [{}] {} ({}, plan: {})\n",
+                    s.id, s.title, s.status, s.plan_id
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Plans ---
+    {
+        let plans = stores.plans.read().unwrap();
+        let mut non_terminal: Vec<_> = plans
+            .values()
+            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .collect();
+        non_terminal.sort_by_key(|p| p.created_at);
+        if !non_terminal.is_empty() {
+            summary.push_str("### Plans\n");
+            for p in &non_terminal {
+                summary.push_str(&format!("- [{}] {} ({})\n", p.id, p.title, p.status));
             }
             summary.push('\n');
         }
@@ -1749,6 +1752,59 @@ mod tests {
         let agent_log = test_agent_logger(&dir);
         let summary = build_state_summary(&stores, &agent_log);
         assert!(!summary.contains("### Active Agents"));
+    }
+
+    #[test]
+    fn test_build_state_summary_works_before_plans() {
+        let dir = TestDir::new("loopr-coord-order");
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Test Plan".into(), "desc".into(), "crit".into());
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+
+        let works_pos = summary.find("### Works").expect("Works section missing");
+        let plans_pos = summary.find("### Plans").expect("Plans section missing");
+        assert!(
+            works_pos < plans_pos,
+            "Works ({}) should appear before Plans ({}) in summary",
+            works_pos,
+            plans_pos
+        );
+    }
+
+    #[test]
+    fn test_build_state_summary_excludes_done_works() {
+        let dir = TestDir::new("loopr-coord-donewi");
+        let stores = test_stores(&dir);
+
+        let mut wi = Work::new("ph-1".into(), "Done Work".into(), "desc".into());
+        wi.status = WorkStatus::Done;
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        assert!(!summary.contains("Done Work"));
+    }
+
+    #[test]
+    fn test_build_state_summary_excludes_merged_bundles_from_active() {
+        let dir = TestDir::new("loopr-coord-mergedbun");
+        let stores = test_stores(&dir);
+
+        let mut bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
+        bundle.status = BundleStatus::Merged;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        // Merged bundles should NOT appear in the "### Bundles" section (non-terminal only)
+        assert!(!summary.contains("### Bundles\n"));
     }
 
     // --- is_cancelled tests (via AgentContext) ---
