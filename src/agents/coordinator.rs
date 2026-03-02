@@ -655,6 +655,104 @@ fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
     }
 }
 
+/// Apply an FSM state transition. Returns `Some(IterationOutcome)` if the caller
+/// should return early (GoalComplete), or `None` to continue the iteration.
+fn apply_fsm_transition(
+    new_state: CoordinatorFsmState,
+    coord_state: &mut CoordinatorState,
+    stores: &Stores,
+    log: &AgentLogger,
+) -> Option<IterationOutcome> {
+    // Handle ActivatePhase: complete previous phase, find and set the next phase
+    if new_state == CoordinatorFsmState::ActivatePhase {
+        // If transitioning from PhaseGate, complete the previous phase
+        if coord_state.current_phase_id.is_some() {
+            mark_phase_record_complete(stores, coord_state, log);
+            coord_state.complete_phase();
+        }
+        let next_phase = find_next_phase_to_activate(stores, coord_state);
+        if let Some((phase_id, phase_title)) = next_phase {
+            log.info(&format!("activating phase: {} ({})", phase_title, phase_id));
+            coord_state.current_phase_id = Some(phase_id);
+            coord_state.phase_activated_at = Some(crate::id::now_millis());
+            coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
+            coord_state.updated_at = crate::id::now_millis();
+        } else {
+            coord_state.transition_to(CoordinatorFsmState::GoalComplete);
+        }
+    } else if new_state == CoordinatorFsmState::PhaseGate {
+        // Transition to PhaseGate but DON'T complete_phase() yet —
+        // keep current_phase_id so build_phase_status can show context to the LLM.
+        // complete_phase() is called on the NEXT transition out of PhaseGate.
+        coord_state.transition_to(CoordinatorFsmState::PhaseGate);
+    } else if new_state == CoordinatorFsmState::GoalComplete {
+        // Complete current phase if transitioning from PhaseGate
+        if coord_state.current_phase_id.is_some() {
+            mark_phase_record_complete(stores, coord_state, log);
+            coord_state.complete_phase();
+        }
+        coord_state.transition_to(CoordinatorFsmState::GoalComplete);
+        // Deactivate the goal
+        let mut goals = stores.coordinator_goals.write().unwrap();
+        if let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id) {
+            goal.deactivate();
+        }
+        persist_coordinator_state(stores, coord_state);
+        return Some(IterationOutcome::Done(format!(
+            "Goal complete: {} phases completed",
+            coord_state.phases_completed.len()
+        )));
+    } else {
+        coord_state.transition_to(new_state);
+    }
+    persist_coordinator_state(stores, coord_state);
+    None
+}
+
+/// Deterministic sweep: transition all `Integrated` Works in the current phase to `Done`.
+/// The integrator parks Work at `Integrated` after merge+validation; the coordinator
+/// acknowledges completion. Runs every iteration during `Executing` state.
+fn sweep_integrated_to_done(
+    stores: &Stores,
+    coord_state: &CoordinatorState,
+    bridge: &crate::agents::bridge::AgentIpcBridge,
+    log: &AgentLogger,
+) {
+    if coord_state.fsm_state != CoordinatorFsmState::Executing {
+        return;
+    }
+    let phase_id = match &coord_state.current_phase_id {
+        Some(id) => id,
+        None => return,
+    };
+    let integrated_ids: Vec<String> = {
+        let works = stores.works.read().unwrap();
+        works
+            .values()
+            .filter(|w| w.phase_id == *phase_id && w.status == WorkStatus::Integrated)
+            .map(|w| w.id.clone())
+            .collect()
+    };
+    for wi_id in &integrated_ids {
+        let resp = bridge.request(
+            "work.transition",
+            serde_json::json!({
+                "id": wi_id,
+                "target_status": "Done",
+                "role": "coordinator",
+            }),
+        );
+        if resp.is_error() {
+            log.warn(&format!(
+                "failed to transition WI {} Integrated→Done: {:?}",
+                wi_id, resp.error
+            ));
+        } else {
+            log.info(&format!("Work {} transitioned Integrated → Done", wi_id));
+        }
+    }
+}
+
 /// Determine the FSM state footer — state-specific instructions for the LLM.
 fn build_fsm_footer(
     stores: &Stores,
@@ -721,7 +819,7 @@ fn build_fsm_footer(
             format!(
                 "## Executing Phase\n\n{}\n\n\
                  Monitor Work statuses. Assign implementers to Ready Works whose dependencies are all Done. \
-                 Triage proposed Bundles. Accept reviewed Bundles. Transition Integrated Works to Done. \
+                 Triage proposed Bundles. Accept reviewed Bundles. \
                  If a Work is Blocked or has failed, consider retrying.\n\n\
                  Respond with a JSON array of actions.",
                 phase_status
@@ -1109,54 +1207,23 @@ impl CoordinatorAgent {
         if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
             self.ctx
                 .info(&format!("FSM transition: {} → {}", coord_state.fsm_state, new_state));
-
-            // Handle ActivatePhase: complete previous phase, find and set the next phase
-            if new_state == CoordinatorFsmState::ActivatePhase {
-                // If transitioning from PhaseGate, complete the previous phase
-                if coord_state.current_phase_id.is_some() {
-                    // Fix #12: Mark Phase record Complete atomically
-                    mark_phase_record_complete(stores, coord_state, &self.ctx.log);
-                    coord_state.complete_phase();
-                }
-                let next_phase = find_next_phase_to_activate(stores, coord_state);
-                if let Some((phase_id, phase_title)) = next_phase {
-                    self.ctx
-                        .info(&format!("activating phase: {} ({})", phase_title, phase_id));
-                    // Set phase context without changing FSM state to Executing
-                    coord_state.current_phase_id = Some(phase_id);
-                    coord_state.phase_activated_at = Some(crate::id::now_millis());
-                    coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
-                    coord_state.updated_at = crate::id::now_millis();
-                } else {
-                    coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-                }
-            } else if new_state == CoordinatorFsmState::PhaseGate {
-                // Transition to PhaseGate but DON'T complete_phase() yet —
-                // keep current_phase_id so build_phase_status can show context to the LLM.
-                // complete_phase() is called on the NEXT transition out of PhaseGate.
-                coord_state.transition_to(CoordinatorFsmState::PhaseGate);
-            } else if new_state == CoordinatorFsmState::GoalComplete {
-                // Complete current phase if transitioning from PhaseGate
-                if coord_state.current_phase_id.is_some() {
-                    // Fix #12: Mark Phase record Complete atomically
-                    mark_phase_record_complete(stores, coord_state, &self.ctx.log);
-                    coord_state.complete_phase();
-                }
-                coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-                // Deactivate the goal
-                let mut goals = stores.coordinator_goals.write().unwrap();
-                if let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id) {
-                    goal.deactivate();
-                }
-                persist_coordinator_state(stores, coord_state);
-                return Ok(IterationOutcome::Done(format!(
-                    "Goal complete: {} phases completed",
-                    coord_state.phases_completed.len()
-                )));
-            } else {
-                coord_state.transition_to(new_state);
+            if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &self.ctx.log) {
+                return Ok(outcome);
             }
-            persist_coordinator_state(stores, coord_state);
+        }
+
+        // Deterministic: transition Integrated Works to Done before consulting the LLM.
+        sweep_integrated_to_done(stores, coord_state, bridge, &self.ctx.log);
+
+        // Re-check FSM after sweep — if all Works are now Done, advance immediately.
+        if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
+            self.ctx.info(&format!(
+                "FSM transition (post-sweep): {} → {}",
+                coord_state.fsm_state, new_state
+            ));
+            if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &self.ctx.log) {
+                return Ok(outcome);
+            }
         }
 
         // Check if any phases have completed (all Works Done) — legacy helper
@@ -3731,6 +3798,117 @@ mod tests {
         assert!(
             result.unwrap_err().to_string().contains("failed to parse"),
             "error should be a parse error"
+        );
+    }
+
+    // --- sweep_integrated_to_done tests ---
+
+    #[test]
+    fn test_sweep_integrated_to_done_transitions_works() {
+        let dir = TestDir::new("loopr-coord-sweep-basic");
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // Insert a Work directly at Integrated status
+        let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi.status = WorkStatus::Integrated;
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
+
+        sweep_integrated_to_done(&stores, &coord_state, &bridge, &agent_log);
+
+        // Verify the Work is now Done
+        let works = stores.works.read().unwrap();
+        let updated = works.get(&wi_id).unwrap();
+        assert_eq!(updated.status, WorkStatus::Done);
+    }
+
+    #[test]
+    fn test_sweep_noop_when_no_integrated_works() {
+        let dir = TestDir::new("loopr-coord-sweep-noop");
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // Insert a Work at Ready (not Integrated)
+        let wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
+
+        sweep_integrated_to_done(&stores, &coord_state, &bridge, &agent_log);
+
+        // Work should still be Draft (unchanged by sweep)
+        let works = stores.works.read().unwrap();
+        let unchanged = works.get(&wi_id).unwrap();
+        assert_eq!(unchanged.status, WorkStatus::Draft);
+    }
+
+    #[test]
+    fn test_sweep_then_fsm_advances_to_phase_gate() {
+        let dir = TestDir::new("loopr-coord-sweep-fsmadv");
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // All Works in phase are Integrated — sweep should transition them to Done
+        let mut wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi1.status = WorkStatus::Integrated;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
+        wi2.status = WorkStatus::Integrated;
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Executing;
+        coord_state.current_phase_id = Some(phase_id);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
+
+        // Before sweep: FSM should NOT advance (Works are Integrated, not terminal)
+        let config = CoordinatorConfig::default();
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            None,
+            "FSM should not advance while Works are Integrated"
+        );
+
+        // Run sweep
+        sweep_integrated_to_done(&stores, &coord_state, &bridge, &agent_log);
+
+        // After sweep: FSM should advance to PhaseGate (all Works now Done)
+        assert_eq!(
+            check_fsm_transition(&stores, &coord_state, &config),
+            Some(CoordinatorFsmState::PhaseGate),
+            "FSM should advance to PhaseGate after sweep transitions all Works to Done"
         );
     }
 }
