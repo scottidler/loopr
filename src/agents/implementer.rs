@@ -57,6 +57,21 @@ pub trait LlmClient: Send + Sync {
     }
 }
 
+/// Strip markdown code fences from LLM responses.
+/// Handles ```json, ```, and variants with language tags.
+fn strip_markdown_fences(response: &str) -> String {
+    let trimmed = response.trim();
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        // Skip the language tag line (e.g., "json\n")
+        let after_tag = rest.find('\n').map(|i| &rest[i + 1..]).unwrap_or(rest);
+        // Strip closing fence
+        let content = after_tag.trim_end().strip_suffix("```").unwrap_or(after_tag);
+        content.trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Normalize common LLM key deviations: "type" → "action".
 /// LLMs sometimes use "type" instead of "action" as the discriminant key.
 fn normalize_action_keys(response: &str) -> String {
@@ -67,8 +82,10 @@ fn normalize_action_keys(response: &str) -> String {
 /// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
 pub fn parse_actions(response: &str, agent_log: &AgentLogger) -> Result<Vec<AgentAction>> {
     agent_log.debug(&format!("parse_actions(response_len={})", response.len()));
+    // Strip markdown fences before any parsing attempts
+    let stripped = strip_markdown_fences(response);
     // Normalize "type" → "action" before any parsing attempts
-    let normalized = normalize_action_keys(response);
+    let normalized = normalize_action_keys(&stripped);
     let response = &normalized;
 
     // Try direct parse first
@@ -815,6 +832,60 @@ mod tests {
         let json = "[]";
         let actions = parse_actions(json, &agent_log).unwrap();
         assert!(actions.is_empty());
+    }
+
+    // --- strip_markdown_fences tests ---
+
+    #[test]
+    fn test_strip_markdown_fences_json_block() {
+        let input = "```json\n[]\n```";
+        assert_eq!(strip_markdown_fences(input), "[]");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_bare_input() {
+        let input = "[]";
+        assert_eq!(strip_markdown_fences(input), "[]");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_with_content() {
+        let input = "```json\n[{\"action\": \"done\", \"summary\": \"ok\"}]\n```";
+        assert_eq!(
+            strip_markdown_fences(input),
+            "[{\"action\": \"done\", \"summary\": \"ok\"}]"
+        );
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_no_language_tag() {
+        let input = "```\n[]\n```";
+        assert_eq!(strip_markdown_fences(input), "[]");
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_prose_not_fenced() {
+        let input = "Here is the result: []";
+        assert_eq!(strip_markdown_fences(input), "Here is the result: []");
+    }
+
+    #[test]
+    fn test_parse_actions_fenced_empty_array() {
+        let dir = TestDir::new("loopr-impl-parse-fenced-empty");
+        let agent_log = test_agent_logger(&dir);
+        let response = "```json\n[]\n```";
+        let actions = parse_actions(response, &agent_log).unwrap();
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_actions_fenced_non_empty_array() {
+        let dir = TestDir::new("loopr-impl-parse-fenced-nonempty");
+        let agent_log = test_agent_logger(&dir);
+        let response = "```json\n[{\"action\": \"done\", \"summary\": \"All done\"}]\n```";
+        let actions = parse_actions(response, &agent_log).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AgentAction::Done { .. }));
     }
 
     // --- context builder integration tests ---
