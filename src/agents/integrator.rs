@@ -312,6 +312,16 @@ impl IntegratorAgent {
                             .warn(&format!("failed to reject stale bundle {}: {:?}", stale_id, resp.error));
                     } else {
                         self.ctx.info(&format!("rejected stale bundle {}", stale_id));
+                        let wi_id = self
+                            .ctx
+                            .stores
+                            .bundles
+                            .read()
+                            .unwrap()
+                            .get(stale_id.as_str())
+                            .map(|b| b.work_id.clone())
+                            .unwrap_or_default();
+                        self.reset_work_after_bundle_rejection(&wi_id, "stale base tick");
                     }
                 }
                 crate::config::StalePolicy::ReplanAtSafePoint => {
@@ -337,6 +347,7 @@ impl IntegratorAgent {
                             "bundle.stale_replan_needed",
                             serde_json::json!({"bundle_id": stale_id, "work_id": wi_id, "reason": "stale_base_tick"}),
                         ));
+                        self.reset_work_after_bundle_rejection(&wi_id, "stale base tick");
                         self.ctx
                             .info(&format!("rejected stale bundle {} (replan at safe point)", stale_id));
                     }
@@ -371,6 +382,7 @@ impl IntegratorAgent {
                             "bundle.transition",
                             serde_json::json!({"id": stale_id, "target_status": "Rejected", "role": "integrator"}),
                         );
+                        self.reset_work_after_bundle_rejection(&wi_id, "auto-replay failed");
                         self.ctx
                             .warn(&format!("auto-replay failed for bundle {}, rejected", stale_id));
                     } else {
@@ -545,6 +557,17 @@ impl IntegratorAgent {
                                 "failed to reject bundle {} after merge failure: {:?}",
                                 bundle_id, resp.error
                             ));
+                        } else {
+                            let wi_id = self
+                                .ctx
+                                .stores
+                                .bundles
+                                .read()
+                                .unwrap()
+                                .get(bundle_id.as_str())
+                                .map(|b| b.work_id.clone())
+                                .unwrap_or_default();
+                            self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
                         }
                     }
 
@@ -725,6 +748,17 @@ impl IntegratorAgent {
                         "failed to reject bundle {} after validation failure: {:?}",
                         bundle_id, resp.error
                     ));
+                } else {
+                    let wi_id = self
+                        .ctx
+                        .stores
+                        .bundles
+                        .read()
+                        .unwrap()
+                        .get(bundle_id.as_str())
+                        .map(|b| b.work_id.clone())
+                        .unwrap_or_default();
+                    self.reset_work_after_bundle_rejection(&wi_id, "validation failure");
                 }
             }
 
@@ -743,6 +777,41 @@ impl IntegratorAgent {
                 log: validation_log,
             })
         }
+    }
+
+    /// After rejecting a bundle, reset the parent Work to Ready so it can be re-assigned.
+    fn reset_work_after_bundle_rejection(&self, work_id: &str, reason: &str) {
+        if work_id.is_empty() {
+            return;
+        }
+        let resp = self.ctx.bridge.request(
+            "work.transition",
+            serde_json::json!({
+                "id": work_id,
+                "target_status": "Ready",
+                "role": "coordinator",
+                "override": true,
+            }),
+        );
+        if resp.is_error() {
+            self.ctx.warn(&format!(
+                "failed to reset Work {} to Ready after bundle rejection: {:?}",
+                work_id, resp.error
+            ));
+        } else {
+            self.ctx.info(&format!(
+                "Work {} reset to Ready after bundle rejection ({})",
+                work_id, reason
+            ));
+        }
+        let _ = self.ctx.bridge.request(
+            "learning.create",
+            serde_json::json!({
+                "content": format!("Bundle rejected ({}). Work reset to Ready for retry with updated main branch.", reason),
+                "scope": "phase",
+                "source_id": work_id,
+            }),
+        );
     }
 }
 
@@ -845,6 +914,7 @@ mod tests {
     use crate::daemon::context::Stores;
     use crate::domain::bundle::Bundle;
     use crate::domain::tick::Tick;
+    use crate::domain::work::{Work, WorkStatus};
     use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
@@ -1379,6 +1449,117 @@ mod tests {
             }
         }
         assert!(found_replan, "expected bundle.stale_replan_needed event");
+    }
+
+    #[test]
+    fn test_stale_rejection_resets_work_to_ready() {
+        let dir = TestDir::new("loopr-intg-stale-reset");
+        let stores = test_stores(&dir);
+
+        let mut tick = Tick::new(1);
+        tick.status = TickStatus::Published;
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        // Create a Work in InReview status (with acceptance_criteria for Ready precondition)
+        let mut wi = Work::new("ph-1".into(), "Task A".into(), "desc".into());
+        wi.status = WorkStatus::InReview;
+        wi.acceptance_criteria = vec!["tests pass".into()];
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        // Create a stale bundle referencing the work
+        let mut bundle = Bundle::new(
+            wi_id.clone(),
+            Some("wrong-tick-id".into()),
+            "feature/x".into(),
+            vec!["claims".into()],
+        );
+        bundle.status = BundleStatus::Accepted;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent = test_integrator(&dir, stores.clone(), test_config());
+        let result = agent.run_cycle().unwrap();
+        assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
+
+        // Work should be reset to Ready
+        let works = stores.works.read().unwrap();
+        assert_eq!(
+            works[&wi_id].status,
+            WorkStatus::Ready,
+            "Work should be reset to Ready after stale bundle rejection"
+        );
+    }
+
+    #[test]
+    fn test_stale_rejection_creates_learning() {
+        let dir = TestDir::new("loopr-intg-stale-learn");
+        let stores = test_stores(&dir);
+
+        let mut tick = Tick::new(1);
+        tick.status = TickStatus::Published;
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        let mut wi = Work::new("ph-1".into(), "Task B".into(), "desc".into());
+        wi.status = WorkStatus::InReview;
+        wi.acceptance_criteria = vec!["tests pass".into()];
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut bundle = Bundle::new(
+            wi_id.clone(),
+            Some("wrong-tick-id".into()),
+            "feature/y".into(),
+            vec!["claims".into()],
+        );
+        bundle.status = BundleStatus::Accepted;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent = test_integrator(&dir, stores.clone(), test_config());
+        let _ = agent.run_cycle().unwrap();
+
+        // A learning should be created about the rejection
+        let learnings = stores.learnings.read().unwrap();
+        assert!(
+            learnings
+                .values()
+                .any(|l| l.content.contains("Bundle rejected") && l.content.contains("stale")),
+            "expected a learning about bundle rejection, found: {:?}",
+            learnings.values().map(|l| &l.content).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_stale_rejection_handles_terminal_work() {
+        let dir = TestDir::new("loopr-intg-stale-term");
+        let stores = test_stores(&dir);
+
+        let mut tick = Tick::new(1);
+        tick.status = TickStatus::Published;
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        // Create a Work that's already Done (terminal)
+        let mut wi = Work::new("ph-1".into(), "Task C".into(), "desc".into());
+        wi.status = WorkStatus::Done;
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        let mut bundle = Bundle::new(
+            wi_id.clone(),
+            Some("wrong-tick-id".into()),
+            "feature/z".into(),
+            vec!["claims".into()],
+        );
+        bundle.status = BundleStatus::Accepted;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent = test_integrator(&dir, stores.clone(), test_config());
+        // Should not panic even if work transition fails
+        let result = agent.run_cycle().unwrap();
+        assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
+
+        // Work stays in Done (terminal state, transition should fail gracefully)
+        let works = stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].status, WorkStatus::Done);
     }
 
     #[test]
