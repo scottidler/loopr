@@ -1124,74 +1124,6 @@ impl CoordinatorAgent {
         }
     }
 
-    /// Legacy coordinator loop for when no goal is active.
-    /// Keeps the original behavior: call LLM, execute actions, sleep.
-    async fn run_legacy_loop(&mut self) -> Result<()> {
-        // Create a dummy coord_state for the legacy path
-        let mut coord_state = CoordinatorState::new("legacy".to_string());
-        let mut guard = Lifeguard::new();
-
-        loop {
-            if self.ctx.is_cancelled() {
-                self.ctx.info("cancelled, exiting loop");
-                return Ok(());
-            }
-
-            // Check if a goal has been set since we started
-            let has_goal = {
-                let goals = self.ctx.stores.coordinator_goals.read().unwrap();
-                goals.values().any(|g| g.active)
-            };
-            if has_goal && let Some(state) = load_or_create_coordinator_state(&self.ctx.stores) {
-                coord_state = state;
-            }
-
-            self.iteration = self.iteration.saturating_add(1);
-            self.ctx.session.iteration = self.iteration;
-            self.ctx.persist_iteration();
-            self.ctx.info(&format!("iteration {}", self.iteration));
-
-            let outcome = self.run_iteration(&mut coord_state, &mut guard).await;
-
-            let interval = match &outcome {
-                Ok(IterationOutcome::Done(summary)) => {
-                    self.ctx.emit_iteration_completed(self.iteration, summary);
-                    self.previous_summary = Some(summary.clone());
-                    self.config.idle_interval_secs
-                }
-                Ok(IterationOutcome::Continue(summary)) => {
-                    self.ctx.emit_iteration_completed(self.iteration, summary);
-                    self.previous_summary = Some(summary.clone());
-                    self.config.active_interval_secs
-                }
-                Ok(IterationOutcome::NeedHelp(reason)) => {
-                    self.ctx.emit_iteration_completed(self.iteration, reason);
-                    self.ctx.warn(&format!("needs help: {}", reason));
-                    return Err(eyre!("coordinator needs help: {}", reason));
-                }
-                Err(e) => {
-                    // Lifeguard: track parse failures
-                    if let Verdict::Escalate(reason) = guard.record_parse_failure() {
-                        self.ctx.warn(&format!("lifeguard: {}", reason));
-                        return Err(eyre!("lifeguard: {}", reason));
-                    }
-                    self.ctx
-                        .warn(&format!("iteration {} failed (will retry): {}", self.iteration, e));
-                    self.previous_summary = Some(format!(
-                        "ERROR: Your previous response could not be parsed. \
-                         You MUST respond with ONLY a JSON array of action objects. \
-                         No prose, no markdown, no explanation.\n\
-                         Parse error: {}",
-                        e
-                    ));
-                    self.config.active_interval_secs
-                }
-            };
-
-            tokio::time::sleep(Duration::from_secs(interval)).await;
-        }
-    }
-
     /// Run a single coordinator iteration: load context -> call LLM -> parse -> execute actions.
     /// Now dispatches based on FSM state.
     async fn run_iteration(
@@ -1495,8 +1427,15 @@ impl Agent for CoordinatorAgent {
                     self.run_fsm_loop(state).await
                 }
                 None => {
-                    self.ctx.info("No active goal, waiting");
-                    self.run_legacy_loop().await
+                    // No active goal yet — sleep and retry instead of calling the LLM.
+                    // This avoids a race where the coordinator starts before set-goal
+                    // runs, causing the LLM to hallucinate a plan from "No goal set."
+                    self.ctx.info("No active goal, waiting for goal to be set");
+                    tokio::time::sleep(Duration::from_secs(self.config.idle_interval_secs)).await;
+                    if self.ctx.is_cancelled() {
+                        return Ok(());
+                    }
+                    continue;
                 }
             };
 
@@ -1682,6 +1621,13 @@ mod tests {
         };
         let llm = Box::new(MockLlm::new(responses));
         CoordinatorAgent::new(ctx, llm, config)
+    }
+
+    /// Insert an active goal so `load_or_create_coordinator_state` returns `Some`.
+    fn insert_test_goal(stores: &Arc<Stores>) {
+        use crate::domain::coordinator_goal::CoordinatorGoal;
+        let goal = CoordinatorGoal::new("test goal".to_string());
+        stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
     }
 
     // --- build_state_summary tests ---
@@ -1952,6 +1898,7 @@ mod tests {
     async fn test_coordinator_exits_on_need_help() {
         let dir = TestDir::new("loopr-coord-runhelp");
         let stores = test_stores(&dir);
+        insert_test_goal(&stores);
 
         let mut agent = test_coordinator(
             &dir,
@@ -1978,6 +1925,7 @@ mod tests {
     async fn test_coordinator_exits_on_cancellation() {
         let dir = TestDir::new("loopr-coord-runcanc");
         let stores = test_stores(&dir);
+        insert_test_goal(&stores);
 
         let mut agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
 
@@ -2120,6 +2068,7 @@ mod tests {
     async fn test_coordinator_iteration_persists() {
         let dir = TestDir::new("loopr-coord-itpersist");
         let stores = test_stores(&dir);
+        insert_test_goal(&stores);
 
         let config = CoordinatorConfig {
             active_interval_secs: 0,

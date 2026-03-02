@@ -250,6 +250,22 @@ log "Setting coordinator goal..."
 ok "Goal set: ${TODO_LANG} todo app"
 
 ###############################################################################
+# Print key paths for this run
+###############################################################################
+
+echo ""
+echo -e "${BOLD}${CYAN}=== Loopr Trial Paths ===${NC}"
+echo -e "  ${BOLD}Run directory:${NC}   ${RUN_DIR}"
+echo -e "  ${BOLD}Symlink:${NC}         ${LATEST_LINK}"
+echo -e "  ${BOLD}Config:${NC}          ${CONFIG_FILE}"
+echo -e "  ${BOLD}TaskStore:${NC}       ${RUN_DIR}/.taskstore/"
+echo -e "  ${BOLD}Daemon log:${NC}      ${LOGS_DIR}/loopr.log"
+echo -e "  ${BOLD}Agent logs:${NC}      ${AGENT_LOGS_DIR}/"
+echo -e "  ${BOLD}Results:${NC}         ${MONITOR_DIR}/results.md"
+echo -e "${CYAN}=========================${NC}"
+echo ""
+
+###############################################################################
 # Background monitors (single tail + periodic snapshots — no per-file tails)
 ###############################################################################
 
