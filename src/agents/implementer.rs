@@ -101,9 +101,8 @@ pub fn parse_actions(response: &str, agent_log: &AgentLogger) -> Result<Vec<Agen
         // Try every `]` from nearest to farthest
         for (offset, _) in rest.match_indices(']') {
             let candidate = &rest[..=offset];
-            if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(candidate)
-                && !actions.is_empty()
-            {
+            if let Ok(actions) = serde_json::from_str::<Vec<AgentAction>>(candidate) {
+                // Accept empty arrays (valid "no actions" response) and non-empty arrays
                 return Ok(actions);
             }
             // Also try element-by-element
@@ -886,6 +885,15 @@ mod tests {
         let actions = parse_actions(response, &agent_log).unwrap();
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], AgentAction::Done { .. }));
+    }
+
+    #[test]
+    fn test_parse_actions_prose_then_fenced_empty_array() {
+        let dir = TestDir::new("loopr-impl-parse-prose-fenced");
+        let agent_log = test_agent_logger(&dir);
+        let response = "Nothing to do right now. The workers are handling it.\n\n```json\n[]\n```";
+        let actions = parse_actions(response, &agent_log).unwrap();
+        assert!(actions.is_empty());
     }
 
     // --- context builder integration tests ---
