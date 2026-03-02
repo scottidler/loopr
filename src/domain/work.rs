@@ -183,7 +183,7 @@ impl Work {
         log::debug!("Work::new(phase_id={}, title={})", phase_id, title);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("wk"),
             phase_id,
             title,
             description,

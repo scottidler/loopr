@@ -130,7 +130,7 @@ mod tests {
     fn temp_socket_path() -> PathBuf {
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        dir.join(format!("client-{}.sock", crate::id::generate_id()))
+        dir.join(format!("client-{}.sock", crate::id::generate_id("xx")))
     }
 
     /// Helper: start a server that echoes the method back.

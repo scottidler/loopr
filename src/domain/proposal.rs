@@ -35,7 +35,7 @@ impl Proposal {
     pub fn new(title: String, description: String, author_id: String) -> Self {
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("pr"),
             title,
             description,
             author_id,

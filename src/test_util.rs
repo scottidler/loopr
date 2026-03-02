@@ -11,7 +11,7 @@ impl TestDir {
     /// Create a new temp directory with the given prefix.
     /// Directory is created immediately; removed when this guard is dropped.
     pub fn new(prefix: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("{}-{}", prefix, crate::id::generate_id()));
+        let dir = std::env::temp_dir().join(format!("{}-{}", prefix, crate::id::generate_id("xx")));
         std::fs::create_dir_all(&dir).expect("failed to create test dir");
         Self(dir)
     }

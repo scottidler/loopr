@@ -46,7 +46,7 @@ impl Lock {
         log::debug!("Lock::new(resource={}, holder_id={})", resource, holder_id);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("lk"),
             resource,
             holder_id,
             granted_by,

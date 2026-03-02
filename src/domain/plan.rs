@@ -80,7 +80,7 @@ impl Plan {
         log::debug!("Plan::new(title={})", title);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("pl"),
             title,
             description,
             acceptance_criteria,

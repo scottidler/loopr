@@ -73,7 +73,7 @@ impl Learning {
         log::debug!("Learning::new(source_id={}, scope={})", source_id, scope);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("ln"),
             source_id,
             scope,
             content,

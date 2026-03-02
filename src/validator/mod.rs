@@ -186,7 +186,7 @@ mod tests {
     /// Generate a unique env var name, set it, and return (config, env_var_name).
     /// Caller must clean up the env var after use.
     fn mock_config_with_key() -> (ValidatorConfig, String) {
-        let env_var = format!("TEST_VALIDATOR_KEY_{}", crate::id::generate_id());
+        let env_var = format!("TEST_VALIDATOR_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_var, "test-key") };
         let config = ValidatorConfig {
             enabled: true,

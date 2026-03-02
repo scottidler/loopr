@@ -189,7 +189,7 @@ impl Bundle {
         log::debug!("Bundle::new(work_id={}, branch_name={})", work_id, branch_name);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("bd"),
             work_id,
             base_tick_id,
             branch_name,

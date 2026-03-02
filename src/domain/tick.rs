@@ -88,7 +88,7 @@ impl Tick {
         log::debug!("Tick::new(number={})", number);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("tk"),
             number,
             integration_sha: None,
             bundle_ids: Vec::new(),

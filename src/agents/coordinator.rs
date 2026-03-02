@@ -3589,7 +3589,7 @@ mod tests {
 
         // Insert a failure Learning scoped to this WI's phase
         let learning = crate::domain::learning::Learning {
-            id: crate::id::generate_id(),
+            id: crate::id::generate_id("ln"),
             source_id: wi1_id,
             scope: crate::domain::learning::LearningScope::Phase,
             content: "Build failed due to missing dependency".to_string(),

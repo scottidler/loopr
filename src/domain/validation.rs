@@ -75,7 +75,7 @@ impl ValidationReport {
         model_used: String,
     ) -> Self {
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("vr"),
             target_collection,
             target_id,
             verdict,

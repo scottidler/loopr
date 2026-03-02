@@ -532,7 +532,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("reconnect-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("reconnect-{}.sock", crate::id::generate_id("xx")));
 
         let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
@@ -571,7 +571,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("reconnect2-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("reconnect2-{}.sock", crate::id::generate_id("xx")));
 
         // Start disconnected, then start a daemon
         let mut app = App::new();
@@ -658,7 +658,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-{}.sock", crate::id::generate_id("xx")));
 
         // Create a mock plan to return
         let mock_plan = Plan::new("Test Plan".into(), "A test plan".into(), "Criteria".into());
@@ -715,7 +715,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-wi-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-wi-{}.sock", crate::id::generate_id("xx")));
 
         let mock_wi = Work::new("ph1".into(), "Task 1".into(), "desc".into());
         let wis_json = serde_json::to_value(vec![mock_wi.clone()]).unwrap();
@@ -771,7 +771,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-unk-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-unk-{}.sock", crate::id::generate_id("xx")));
 
         let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
@@ -939,7 +939,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-bundle-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-bundle-{}.sock", crate::id::generate_id("xx")));
 
         let mock_bundle = Bundle::new("wi-1".into(), None, "feature/test".into(), vec!["Test bundle".into()]);
         let bundles_json = serde_json::to_value(vec![mock_bundle]).unwrap();
@@ -993,7 +993,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-tick-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-tick-{}.sock", crate::id::generate_id("xx")));
 
         let mock_tick = Tick::new(1);
         let ticks_json = serde_json::to_value(vec![mock_tick]).unwrap();
@@ -1053,7 +1053,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("dispatch-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("dispatch-{}.sock", crate::id::generate_id("xx")));
 
         let captured: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(Mutex::new(Vec::new()));
         let captured_clone = captured.clone();
@@ -1237,7 +1237,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-parse-err-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-parse-err-{}.sock", crate::id::generate_id("xx")));
 
         let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();
@@ -1357,7 +1357,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id("xx")));
 
         let mock_spec = Spec::new("plan-1".into(), "Test Spec".into(), "Desc".into());
         let specs_json = serde_json::to_value(vec![mock_spec]).unwrap();
@@ -1409,7 +1409,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-phase-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-phase-{}.sock", crate::id::generate_id("xx")));
 
         let mock_phase = Phase::new("spec-1".into(), "Phase 1".into(), "Desc".into(), 1);
         let phases_json = serde_json::to_value(vec![mock_phase]).unwrap();
@@ -1461,7 +1461,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-learning-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-learning-{}.sock", crate::id::generate_id("xx")));
 
         let mock_learning = Learning::new(
             "wi-1".into(),
@@ -1517,7 +1517,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-lock-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-lock-{}.sock", crate::id::generate_id("xx")));
 
         let mock_lock = Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into());
         let locks_json = serde_json::to_value(vec![mock_lock]).unwrap();
@@ -1569,7 +1569,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-agent-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-agent-{}.sock", crate::id::generate_id("xx")));
 
         let mock_session = AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
         let sessions_json = serde_json::to_value(vec![mock_session]).unwrap();
@@ -1620,7 +1620,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("refresh-badjson-{}.sock", crate::id::generate_id()));
+        let path = dir.join(format!("refresh-badjson-{}.sock", crate::id::generate_id("xx")));
 
         let server = IpcServer::new(&path);
         let listener = server.bind().await.unwrap();

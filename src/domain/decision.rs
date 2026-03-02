@@ -34,7 +34,7 @@ impl Decision {
     pub fn new(title: String, rationale: String, decided_by: String) -> Self {
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("dc"),
             proposal_id: None,
             title,
             rationale,

@@ -22,7 +22,7 @@ impl CoordinatorGoal {
         log::debug!("CoordinatorGoal::new(goal={})", goal);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("cg"),
             goal,
             active: true,
             created_at: now,

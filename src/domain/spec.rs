@@ -25,7 +25,7 @@ impl Spec {
         log::debug!("Spec::new(plan_id={}, title={})", plan_id, title);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("sp"),
             plan_id,
             title,
             description,

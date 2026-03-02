@@ -214,7 +214,7 @@ mod tests {
     /// Generate a unique env var name and set it, returning a config that uses it.
     /// Returns (config, env_var_name) — caller must clean up the env var.
     fn test_config_with_key(key_value: &str) -> (ValidatorConfig, String) {
-        let env_var = format!("TEST_ANTHROPIC_API_KEY_{}", crate::id::generate_id());
+        let env_var = format!("TEST_ANTHROPIC_API_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_var, key_value) };
         let config = ValidatorConfig {
             enabled: true,
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_llm_client_missing_api_key() {
-        let missing_var = format!("TEST_ANTHROPIC_MISSING_{}", crate::id::generate_id());
+        let missing_var = format!("TEST_ANTHROPIC_MISSING_{}", crate::id::generate_id("xx"));
         unsafe { std::env::remove_var(&missing_var) };
         let config = ValidatorConfig {
             enabled: true,

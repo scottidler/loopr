@@ -52,7 +52,7 @@ impl CoordinatorState {
         log::debug!("CoordinatorState::new(goal_id={})", goal_id);
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("cs"),
             goal_id,
             fsm_state: CoordinatorFsmState::Planning,
             current_phase_id: None,

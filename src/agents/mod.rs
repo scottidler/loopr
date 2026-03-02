@@ -302,7 +302,7 @@ impl AgentSession {
     pub fn new(agent_type: AgentType, model: String) -> Self {
         let now = id::now_millis();
         Self {
-            id: id::generate_id(),
+            id: id::generate_id("ag"),
             agent_type,
             work_id: None,
             bundle_id: None,
