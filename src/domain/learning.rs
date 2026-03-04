@@ -163,6 +163,7 @@ impl Record for Learning {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

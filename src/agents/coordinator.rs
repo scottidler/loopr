@@ -58,7 +58,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Works ---
     {
-        let works = stores.works.read().unwrap();
+        let Ok(works) = stores.read_works() else {
+            return summary;
+        };
         let mut non_terminal: Vec<_> = works
             .values()
             .filter(|w| !matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
@@ -99,7 +101,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Bundles (non-terminal) ---
     {
-        let bundles = stores.bundles.read().unwrap();
+        let Ok(bundles) = stores.read_bundles() else {
+            return summary;
+        };
         let mut pending: Vec<_> = bundles
             .values()
             .filter(|b| {
@@ -121,8 +125,12 @@ pub fn build_state_summary_with_sla(
 
     // C2: Recently Merged Bundles whose parent WI still needs advancing
     {
-        let bundles = stores.bundles.read().unwrap();
-        let works = stores.works.read().unwrap();
+        let Ok(bundles) = stores.read_bundles() else {
+            return summary;
+        };
+        let Ok(works) = stores.read_works() else {
+            return summary;
+        };
         let mut actionable_merged: Vec<_> = bundles
             .values()
             .filter(|b| b.status == BundleStatus::Merged)
@@ -152,7 +160,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Active Agent Sessions ---
     {
-        let sessions = stores.agent_sessions.read().unwrap();
+        let Ok(sessions) = stores.read_agent_sessions() else {
+            return summary;
+        };
         let mut active: Vec<_> = sessions.values().filter(|s| !s.status.is_terminal()).collect();
         active.sort_by_key(|s| s.created_at);
         if !active.is_empty() {
@@ -175,7 +185,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Ticks (non-terminal) ---
     {
-        let ticks = stores.ticks.read().unwrap();
+        let Ok(ticks) = stores.read_ticks() else {
+            return summary;
+        };
         let mut active: Vec<_> = ticks
             .values()
             .filter(|t| !matches!(t.status, TickStatus::Published | TickStatus::Failed))
@@ -192,7 +204,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Active Locks ---
     {
-        let locks = stores.locks.read().unwrap();
+        let Ok(locks) = stores.read_locks() else {
+            return summary;
+        };
         let active: Vec<_> = locks.values().filter(|l| l.status == LockStatus::Active).collect();
         if !active.is_empty() {
             summary.push_str("### Active Locks\n");
@@ -205,7 +219,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Phases ---
     {
-        let phases = stores.phases.read().unwrap();
+        let Ok(phases) = stores.read_phases() else {
+            return summary;
+        };
         let mut non_terminal: Vec<_> = phases
             .values()
             .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
@@ -225,7 +241,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Specs ---
     {
-        let specs = stores.specs.read().unwrap();
+        let Ok(specs) = stores.read_specs() else {
+            return summary;
+        };
         let mut non_terminal: Vec<_> = specs
             .values()
             .filter(|s| !matches!(s.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
@@ -245,7 +263,9 @@ pub fn build_state_summary_with_sla(
 
     // --- Plans ---
     {
-        let plans = stores.plans.read().unwrap();
+        let Ok(plans) = stores.read_plans() else {
+            return summary;
+        };
         let mut non_terminal: Vec<_> = plans
             .values()
             .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
@@ -472,7 +492,10 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], agent_l
 
     // Build resource_tags lookup for batch works
     let tag_map: HashMap<String, HashSet<String>> = {
-        let works = stores.works.read().unwrap();
+        let Ok(works) = stores.read_works() else {
+            log::error!("works lock poisoned");
+            return;
+        };
         batch_created_ids
             .iter()
             .filter_map(|id| {
@@ -484,7 +507,10 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], agent_l
     };
 
     // Prune deps between batch works with disjoint resource_tags
-    let mut works = stores.works.write().unwrap();
+    let Ok(mut works) = stores.write_works() else {
+        log::error!("works lock poisoned");
+        return;
+    };
     for wi_id in batch_created_ids {
         if let Some(wi) = works.get_mut(wi_id) {
             let my_tags = match tag_map.get(wi_id) {
@@ -516,7 +542,10 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
     if let Some(ref phase_id) = coord_state.current_phase_id {
         // L1: Clone-then-drop-then-persist to avoid deadlock and ensure TaskStore persistence
         let phase_to_persist = {
-            let mut phases = stores.phases.write().unwrap();
+            let Ok(mut phases) = stores.write_phases() else {
+                log::error!("phases lock poisoned");
+                return;
+            };
             if let Some(phase) = phases.get_mut(phase_id) {
                 phase.status = HierarchyStatus::Complete;
                 phase.updated_at = crate::id::now_millis();
@@ -528,7 +557,8 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
         };
         if let Some(phase) = phase_to_persist
             && let Some(ref store) = stores.store
-            && let Err(e) = store.lock().unwrap().update(phase)
+            && let Ok(mut s) = store.lock().map_err(|_| eyre!("lock poisoned"))
+            && let Err(e) = s.update(phase)
         {
             agent_log.warn(&format!("Failed to persist Phase complete status: {}", e));
         }
@@ -540,7 +570,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
 fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, String, String)> {
     // Find active Plan (if any)
     let active_plan_id = {
-        let plans = stores.plans.read().unwrap();
+        let plans = stores.read_plans().ok()?;
         plans
             .values()
             .find(|p| p.status == HierarchyStatus::Active)
@@ -549,7 +579,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
 
     // Check for Draft Plan (only if no Active Plan exists)
     if active_plan_id.is_none() {
-        let plans = stores.plans.read().unwrap();
+        let plans = stores.read_plans().ok()?;
         if let Some(draft) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
             return Some(("Plan", draft.id.clone(), draft.title.clone()));
         }
@@ -558,7 +588,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
 
     // Find active Spec for the active Plan
     let active_spec_id = {
-        let specs = stores.specs.read().unwrap();
+        let specs = stores.read_specs().ok()?;
         specs
             .values()
             .find(|s| s.status == HierarchyStatus::Active && Some(&s.plan_id) == active_plan_id.as_ref())
@@ -567,7 +597,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
 
     // Check for Draft Spec (only children of the active Plan)
     if active_spec_id.is_none() {
-        let specs = stores.specs.read().unwrap();
+        let specs = stores.read_specs().ok()?;
         if let Some(draft) = specs
             .values()
             .find(|s| s.status == HierarchyStatus::Draft && Some(&s.plan_id) == active_plan_id.as_ref())
@@ -578,7 +608,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
     }
 
     // Check for Draft Phase (only children of the active Spec)
-    let phases = stores.phases.read().unwrap();
+    let phases = stores.read_phases().ok()?;
     if let Some(draft) = phases
         .values()
         .find(|p| p.status == HierarchyStatus::Draft && Some(&p.spec_id) == active_spec_id.as_ref())
@@ -617,13 +647,13 @@ pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
 fn load_or_create_coordinator_state(stores: &Stores) -> Option<CoordinatorState> {
     // Find active goal
     let goal_id = {
-        let goals = stores.coordinator_goals.read().unwrap();
+        let goals = stores.read_coordinator_goals().ok()?;
         goals.values().find(|g| g.active).map(|g| g.id.clone())?
     };
 
     // Check if we already have a non-terminal state for this goal
     {
-        let states = stores.coordinator_states.read().unwrap();
+        let states = stores.read_coordinator_states().ok()?;
         if let Some(existing) = states
             .values()
             .find(|s| s.goal_id == goal_id && !s.fsm_state.is_terminal())
@@ -636,25 +666,29 @@ fn load_or_create_coordinator_state(stores: &Stores) -> Option<CoordinatorState>
     let state = CoordinatorState::new(goal_id);
     let id = state.id.clone();
     stores
-        .coordinator_states
-        .write()
-        .unwrap()
+        .write_coordinator_states()
+        .ok()?
         .insert(id.clone(), state.clone());
-    if let Some(store_arc) = &stores.store {
-        let _ = store_arc.lock().unwrap().create(state.clone());
+    if let Some(store_arc) = &stores.store
+        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("lock poisoned"))
+    {
+        let _ = s.create(state.clone());
     }
     Some(state)
 }
 
 /// Persist the CoordinatorState to both in-memory and TaskStore.
 fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
-    stores
-        .coordinator_states
-        .write()
-        .unwrap()
-        .insert(state.id.clone(), state.clone());
-    if let Some(store_arc) = &stores.store {
-        let _ = store_arc.lock().unwrap().update(state.clone());
+    let Ok(mut states) = stores.write_coordinator_states() else {
+        log::error!("coordinator_states lock poisoned");
+        return;
+    };
+    states.insert(state.id.clone(), state.clone());
+    drop(states);
+    if let Some(store_arc) = &stores.store
+        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("lock poisoned"))
+    {
+        let _ = s.update(state.clone());
     }
 }
 
@@ -696,8 +730,9 @@ fn apply_fsm_transition(
         }
         coord_state.transition_to(CoordinatorFsmState::GoalComplete);
         // Deactivate the goal
-        let mut goals = stores.coordinator_goals.write().unwrap();
-        if let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id) {
+        if let Ok(mut goals) = stores.write_coordinator_goals()
+            && let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id)
+        {
             goal.deactivate();
         }
         persist_coordinator_state(stores, coord_state);
@@ -729,7 +764,10 @@ fn sweep_integrated_to_done(
         None => return,
     };
     let integrated_ids: Vec<String> = {
-        let works = stores.works.read().unwrap();
+        let Ok(works) = stores.read_works() else {
+            log::error!("works lock poisoned");
+            return;
+        };
         works
             .values()
             .filter(|w| w.phase_id == *phase_id && w.status == WorkStatus::Integrated)
@@ -795,7 +833,9 @@ fn build_fsm_footer(
             match phase_info {
                 Some((phase_id, phase_title)) => {
                     let phase = {
-                        let phases = stores.phases.read().unwrap();
+                        let Ok(phases) = stores.read_phases() else {
+                            return "phases lock poisoned".to_string();
+                        };
                         phases.get(&phase_id).cloned()
                     };
                     if let Some(phase) = phase {
@@ -874,7 +914,7 @@ fn find_next_phase_to_activate(stores: &Stores, coord_state: &CoordinatorState) 
     }
 
     // Also check for phases that are still in Draft/Active status
-    let phases = stores.phases.read().unwrap();
+    let phases = stores.read_phases().ok()?;
     let mut ordered: Vec<_> = phases
         .values()
         .filter(|p| !coord_state.phases_completed.contains(&p.id))
@@ -892,11 +932,15 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
     };
 
     let phase_title = {
-        let phases = stores.phases.read().unwrap();
+        let Ok(phases) = stores.read_phases() else {
+            return "phases lock poisoned".to_string();
+        };
         phases.get(phase_id).map(|p| p.title.clone()).unwrap_or_default()
     };
 
-    let works = stores.works.read().unwrap();
+    let Ok(works) = stores.read_works() else {
+        return "works lock poisoned".to_string();
+    };
     let phase_wis: Vec<_> = works.values().filter(|w| &w.phase_id == phase_id).collect();
 
     let mut status_counts = std::collections::HashMap::new();
@@ -956,7 +1000,9 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
 
     // Surface phase-specific failure Learnings
     {
-        let learnings = stores.learnings.read().unwrap();
+        let Ok(learnings) = stores.read_learnings() else {
+            return summary;
+        };
         let phase_failures: Vec<_> = learnings
             .values()
             .filter(|l| l.scope == crate::domain::learning::LearningScope::Phase && wi_ids.contains(&l.source_id))
@@ -1194,7 +1240,7 @@ impl CoordinatorAgent {
         );
 
         let goal = {
-            let goals = stores.coordinator_goals.read().unwrap();
+            let goals = stores.read_coordinator_goals()?;
             goals
                 .values()
                 .find(|g| g.active)
@@ -1530,6 +1576,7 @@ fn format_action_summary(result: &ActionResult) -> String {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -41,7 +41,11 @@ pub async fn run_worker(
 
         // Get current phase from CoordinatorState
         let current_phase_id = {
-            let states = stores.coordinator_states.read().unwrap();
+            let Ok(states) = stores.read_coordinator_states() else {
+                warn!("Worker {} failed to read coordinator states", config.worker_id);
+                tokio::time::sleep(Duration::from_secs(config.idle_interval_secs)).await;
+                continue;
+            };
             states
                 .values()
                 .find(|s| !s.fsm_state.is_terminal())
@@ -86,6 +90,7 @@ pub async fn run_worker(
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

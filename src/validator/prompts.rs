@@ -34,6 +34,7 @@ pub fn phase_prompt(title: &str, description: &str, order: u32, spec_title: &str
         .replace("{schema}", &crate::prompts::store().validator_schema)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

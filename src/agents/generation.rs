@@ -333,7 +333,7 @@ pub fn build_work_prompt(
 /// 4. Active Phases, no Works for them? → Work
 /// 5. Otherwise → None (generation not needed)
 pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
-    let plans = stores.plans.read().unwrap();
+    let plans = stores.read_plans().ok()?;
 
     // Check for active Plan
     let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active);
@@ -347,7 +347,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
     let active_plan = active_plan?;
 
     // Check for Specs under the active Plan
-    let specs = stores.specs.read().unwrap();
+    let specs = stores.read_specs().ok()?;
     let plan_specs: Vec<_> = specs.values().filter(|s| s.plan_id == active_plan.id).collect();
     let has_active_spec = plan_specs.iter().any(|s| s.status == HierarchyStatus::Active);
     let has_draft_spec = plan_specs.iter().any(|s| s.status == HierarchyStatus::Draft);
@@ -361,7 +361,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
     }
 
     // Check for Phases under active Specs
-    let phases = stores.phases.read().unwrap();
+    let phases = stores.read_phases().ok()?;
     let active_spec_ids: Vec<_> = plan_specs
         .iter()
         .filter(|s| s.status == HierarchyStatus::Active)
@@ -384,7 +384,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
     }
 
     // Check for Works under active Phases
-    let works = stores.works.read().unwrap();
+    let works = stores.read_works().ok()?;
     let active_phase_ids: Vec<_> = spec_phases
         .iter()
         .filter(|p| p.status == HierarchyStatus::Active)
@@ -402,13 +402,13 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
 
 /// Find the active Plan from stores. Returns None if no active Plan.
 pub fn find_active_plan(stores: &Stores) -> Option<Plan> {
-    let plans = stores.plans.read().unwrap();
+    let plans = stores.read_plans().ok()?;
     plans.values().find(|p| p.status == HierarchyStatus::Active).cloned()
 }
 
 /// Find active Specs for a given Plan.
 pub fn find_active_specs_for_plan(stores: &Stores, plan_id: &str) -> Vec<Spec> {
-    let specs = stores.specs.read().unwrap();
+    let Ok(specs) = stores.read_specs() else { return vec![] };
     specs
         .values()
         .filter(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Active)
@@ -418,7 +418,9 @@ pub fn find_active_specs_for_plan(stores: &Stores, plan_id: &str) -> Vec<Spec> {
 
 /// Find active Phases for a given Spec.
 pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase> {
-    let phases = stores.phases.read().unwrap();
+    let Ok(phases) = stores.read_phases() else {
+        return vec![];
+    };
     let mut result: Vec<_> = phases
         .values()
         .filter(|p| p.spec_id == spec_id && p.status == HierarchyStatus::Active)
@@ -430,18 +432,18 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
 
 /// Find existing Works for a given Phase.
 pub fn find_works_for_phase(stores: &Stores, phase_id: &str) -> Vec<Work> {
-    let works = stores.works.read().unwrap();
+    let Ok(works) = stores.read_works() else { return vec![] };
     works.values().filter(|w| w.phase_id == phase_id).cloned().collect()
 }
 
 /// Find the first active Phase that still needs Works.
 pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
-    let plans = stores.plans.read().unwrap();
+    let plans = stores.read_plans().ok()?;
     let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active)?;
     let plan_id = active_plan.id.clone();
     drop(plans);
 
-    let specs = stores.specs.read().unwrap();
+    let specs = stores.read_specs().ok()?;
     let active_spec_ids: Vec<String> = specs
         .values()
         .filter(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Active)
@@ -449,7 +451,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
         .collect();
     drop(specs);
 
-    let phases = stores.phases.read().unwrap();
+    let phases = stores.read_phases().ok()?;
     let mut active_phases: Vec<_> = phases
         .values()
         .filter(|p| active_spec_ids.contains(&p.spec_id) && p.status == HierarchyStatus::Active)
@@ -458,7 +460,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
     active_phases.sort_by_key(|p| p.order);
     drop(phases);
 
-    let works = stores.works.read().unwrap();
+    let works = stores.read_works().ok()?;
     for phase in active_phases {
         let has_wi = works.values().any(|w| w.phase_id == phase.id);
         if !has_wi {
@@ -472,7 +474,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
 /// Check if all Works in a Phase are in a terminal state (Done or Abandoned).
 /// This matches the FSM's check_fsm_transition() predicate exactly.
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
-    let works = stores.works.read().unwrap();
+    let Ok(works) = stores.read_works() else { return false };
     let phase_wis: Vec<_> = works.values().filter(|w| w.phase_id == phase_id).collect();
     !phase_wis.is_empty()
         && phase_wis
@@ -506,7 +508,10 @@ pub fn find_failed_validations(stores: &Stores, collection: &str, target_id: &st
             value: IndexValue::String("fail".to_string()),
         },
     ];
-    let mut reports: Vec<ValidationReport> = store.lock().unwrap().list(&filters).unwrap_or_default();
+    let Ok(store_guard) = store.lock().map_err(|_| eyre::eyre!("taskstore lock poisoned")) else {
+        return vec![];
+    };
+    let mut reports: Vec<ValidationReport> = store_guard.list(&filters).unwrap_or_default();
     reports.sort_by_key(|r| r.created_at);
     reports
 }
@@ -558,7 +563,7 @@ pub struct RegenerationInfo {
 pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts: u32) -> Option<RegenerationInfo> {
     // Check for Draft Plan
     {
-        let plans = stores.plans.read().unwrap();
+        let plans = stores.read_plans().ok()?;
         if let Some(draft_plan) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
             let target_id = draft_plan.id.clone();
             drop(plans);
@@ -580,12 +585,12 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
 
     // Check for Draft Specs under an active Plan
     {
-        let plans = stores.plans.read().unwrap();
+        let plans = stores.read_plans().ok()?;
         let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active);
         if let Some(plan) = active_plan {
             let plan_id = plan.id.clone();
             drop(plans);
-            let specs = stores.specs.read().unwrap();
+            let specs = stores.read_specs().ok()?;
             if let Some(draft_spec) = specs
                 .values()
                 .find(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
@@ -610,13 +615,13 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
 
     // Check for Draft Phases under active Specs
     {
-        let plans = stores.plans.read().unwrap();
+        let plans = stores.read_plans().ok()?;
         let active_plan = plans.values().find(|p| p.status == HierarchyStatus::Active);
         if let Some(plan) = active_plan {
             let plan_id = plan.id.clone();
             drop(plans);
 
-            let specs = stores.specs.read().unwrap();
+            let specs = stores.read_specs().ok()?;
             let active_spec_ids: Vec<String> = specs
                 .values()
                 .filter(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Active)
@@ -624,7 +629,7 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
                 .collect();
             drop(specs);
 
-            let phases = stores.phases.read().unwrap();
+            let phases = stores.read_phases().ok()?;
             if let Some(draft_phase) = phases
                 .values()
                 .find(|p| active_spec_ids.contains(&p.spec_id) && p.status == HierarchyStatus::Draft)
@@ -656,7 +661,7 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
 pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) -> bool {
     // Check Draft Plan
     {
-        let plans = stores.plans.read().unwrap();
+        let Ok(plans) = stores.read_plans() else { return false };
         if let Some(draft_plan) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
             let target_id = draft_plan.id.clone();
             drop(plans);
@@ -669,11 +674,11 @@ pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) 
 
     // Check Draft Specs
     {
-        let plans = stores.plans.read().unwrap();
+        let Ok(plans) = stores.read_plans() else { return false };
         if let Some(plan) = plans.values().find(|p| p.status == HierarchyStatus::Active) {
             let plan_id = plan.id.clone();
             drop(plans);
-            let specs = stores.specs.read().unwrap();
+            let Ok(specs) = stores.read_specs() else { return false };
             if let Some(spec) = specs
                 .values()
                 .find(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
@@ -690,18 +695,18 @@ pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) 
 
     // Check Draft Phases
     {
-        let plans = stores.plans.read().unwrap();
+        let Ok(plans) = stores.read_plans() else { return false };
         if let Some(plan) = plans.values().find(|p| p.status == HierarchyStatus::Active) {
             let plan_id = plan.id.clone();
             drop(plans);
-            let specs = stores.specs.read().unwrap();
+            let Ok(specs) = stores.read_specs() else { return false };
             let active_spec_ids: Vec<String> = specs
                 .values()
                 .filter(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Active)
                 .map(|s| s.id.clone())
                 .collect();
             drop(specs);
-            let phases = stores.phases.read().unwrap();
+            let Ok(phases) = stores.read_phases() else { return false };
             if let Some(phase) = phases
                 .values()
                 .find(|p| active_spec_ids.contains(&p.spec_id) && p.status == HierarchyStatus::Draft)
@@ -719,6 +724,7 @@ pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) 
     false
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

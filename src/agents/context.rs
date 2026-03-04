@@ -290,13 +290,13 @@ impl<'a> ContextBuilder<'a> {
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_work_hierarchy(work_id={})", work_id);
         let (wi_title, wi_desc, phase_id) = {
-            let guard = self.stores.works.read().unwrap();
+            let guard = self.stores.read_works()?;
             let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
             (wi.title.clone(), wi.description.clone(), wi.phase_id.clone())
         };
 
         let (ph_title, ph_desc, spec_id, phase_id_owned) = {
-            let guard = self.stores.phases.read().unwrap();
+            let guard = self.stores.read_phases()?;
             let phase = guard
                 .get(&phase_id)
                 .ok_or_else(|| eyre!("phase not found: {}", phase_id))?;
@@ -309,7 +309,7 @@ impl<'a> ContextBuilder<'a> {
         };
 
         let (spec_title, spec_desc, plan_id, spec_id_owned) = {
-            let guard = self.stores.specs.read().unwrap();
+            let guard = self.stores.read_specs()?;
             let spec = guard
                 .get(&spec_id)
                 .ok_or_else(|| eyre!("spec not found: {}", spec_id))?;
@@ -322,7 +322,7 @@ impl<'a> ContextBuilder<'a> {
         };
 
         let (plan_title, plan_desc, plan_id_owned) = {
-            let guard = self.stores.plans.read().unwrap();
+            let guard = self.stores.read_plans()?;
             let plan = guard
                 .get(&plan_id)
                 .ok_or_else(|| eyre!("plan not found: {}", plan_id))?;
@@ -349,7 +349,7 @@ impl<'a> ContextBuilder<'a> {
     pub fn load_bundle_hierarchy(mut self, bundle_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_bundle_hierarchy(bundle_id={})", bundle_id);
         let (bid, claims, touched_paths, work_id) = {
-            let guard = self.stores.bundles.read().unwrap();
+            let guard = self.stores.read_bundles()?;
             let bundle = guard
                 .get(bundle_id)
                 .ok_or_else(|| eyre!("bundle not found: {}", bundle_id))?;
@@ -438,7 +438,9 @@ impl<'a> ContextBuilder<'a> {
     pub fn with_coordinator_goal(mut self) -> Self {
         debug!("ContextBuilder::with_coordinator_goal()");
         let goal = {
-            let goals = self.stores.coordinator_goals.read().unwrap();
+            let Ok(goals) = self.stores.read_coordinator_goals() else {
+                return self;
+            };
             goals.values().find(|g| g.active).map(|g| g.goal.clone())
         };
         self.coordinator_goal = goal;
@@ -495,8 +497,9 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- Sibling Works section (after hierarchy) ---
-        if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_id) {
-            let works = self.stores.works.read().unwrap();
+        if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_id)
+            && let Ok(works) = self.stores.read_works()
+        {
             let siblings: Vec<String> = works
                 .values()
                 .filter(|wi| wi.phase_id == *phase_id && wi.id != *current_wi_id)
@@ -548,8 +551,7 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- Learnings section ---
-        {
-            let learnings_map = self.stores.learnings.read().unwrap();
+        if let Ok(learnings_map) = self.stores.read_learnings() {
             let scope_refs: Vec<(&str, LearningScope)> =
                 self.scope_ids.iter().map(|(id, scope)| (id.as_str(), *scope)).collect();
             let min_confidence = match self.role {
@@ -648,6 +650,7 @@ impl<'a> ContextBuilder<'a> {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

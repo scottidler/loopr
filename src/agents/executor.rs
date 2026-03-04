@@ -56,7 +56,10 @@ fn create_llm_client(
 /// or "HEAD" if no Ticks have been published yet.
 pub fn resolve_worktree_base(stores: &Stores) -> String {
     debug!("resolve_worktree_base()");
-    let ticks = stores.ticks.read().unwrap();
+    let Ok(ticks) = stores.read_ticks() else {
+        error!("ticks lock poisoned");
+        return "HEAD".to_string();
+    };
     ticks
         .values()
         .filter(|t| t.status == TickStatus::Published)
@@ -69,7 +72,7 @@ pub fn resolve_worktree_base(stores: &Stores) -> String {
 /// Returns None if no Published Tick exists (bootstrap case).
 fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String> {
     debug!("resolve_latest_published_tick_id()");
-    let ticks = stores.ticks.read().unwrap();
+    let ticks = stores.read_ticks().ok()?;
     ticks
         .values()
         .filter(|t| t.status == TickStatus::Published)
@@ -94,7 +97,7 @@ fn determine_work_handback(stores: &Stores, work_id: &str, session_id: &str, suc
     }
 
     // If a sibling implementer is still active, don't touch the Work.
-    let sessions = stores.agent_sessions.read().unwrap();
+    let sessions = stores.read_agent_sessions().ok()?;
     let sibling_active = sessions.values().any(|s| {
         s.id != session_id
             && s.agent_type == AgentType::Implementer
@@ -108,7 +111,7 @@ fn determine_work_handback(stores: &Stores, work_id: &str, session_id: &str, suc
     }
 
     // Did the agent produce a usable Bundle?
-    let bundles = stores.bundles.read().unwrap();
+    let bundles = stores.read_bundles().ok()?;
     let has_active_bundle = bundles
         .values()
         .any(|b| b.work_id == work_id && !matches!(b.status, BundleStatus::Rejected | BundleStatus::Superseded));
@@ -136,7 +139,10 @@ pub async fn run_agent_task(
     let worktree_key = if agent_type.is_thinking_plane() {
         None
     } else {
-        let sessions = stores.agent_sessions.read().unwrap();
+        let Ok(sessions) = stores.read_agent_sessions() else {
+            error!("agent_sessions lock poisoned");
+            return;
+        };
         let session = match sessions.get(&session_id) {
             Some(s) => s,
             None => {
@@ -160,7 +166,10 @@ pub async fn run_agent_task(
             Err(e) => {
                 error!("Agent {} worktree creation failed: {}", session_id, e);
                 // Fail the session immediately — don't proceed without a worktree
-                let mut sessions = stores.agent_sessions.write().unwrap();
+                let Ok(mut sessions) = stores.write_agent_sessions() else {
+                    error!("agent_sessions lock poisoned");
+                    return;
+                };
                 if let Some(session) = sessions.get_mut(&session_id) {
                     let _ = session.transition_to(AgentStatus::Failed);
                     session.error_message = Some(format!("worktree creation failed: {}", e));
@@ -172,7 +181,10 @@ pub async fn run_agent_task(
         };
 
         {
-            let mut sessions = stores.agent_sessions.write().unwrap();
+            let Ok(mut sessions) = stores.write_agent_sessions() else {
+                error!("agent_sessions lock poisoned");
+                return;
+            };
             if let Some(session) = sessions.get_mut(&session_id) {
                 session.worktree_path = Some(worktree_path.to_string_lossy().to_string());
                 persist_session(&stores, session);
@@ -201,7 +213,10 @@ pub async fn run_agent_task(
 
     // Transition to Running
     {
-        let mut sessions = stores.agent_sessions.write().unwrap();
+        let Ok(mut sessions) = stores.write_agent_sessions() else {
+            error!("agent_sessions lock poisoned");
+            return;
+        };
         if let Some(session) = sessions.get_mut(&session_id) {
             if let Err(e) = session.transition_to(AgentStatus::Running) {
                 agent_log.error(&format!("failed to start: {}", e));
@@ -258,7 +273,10 @@ pub async fn run_agent_task(
     };
 
     {
-        let mut sessions = stores.agent_sessions.write().unwrap();
+        let Ok(mut sessions) = stores.write_agent_sessions() else {
+            error!("agent_sessions lock poisoned");
+            return;
+        };
         if let Some(session) = sessions.get_mut(&session_id) {
             if let Err(e) = session.transition_to(terminal_status) {
                 agent_log.error(&format!("failed to transition to {:?}: {}", terminal_status, e));
@@ -273,17 +291,18 @@ pub async fn run_agent_task(
     // Create a Learning from implementer failures so the Coordinator can adapt
     if terminal_status == AgentStatus::Failed && agent_type == AgentType::Implementer {
         let (wi_title, wi_id, iteration_count) = {
-            let sessions = stores.agent_sessions.read().unwrap();
+            let Ok(sessions) = stores.read_agent_sessions() else {
+                error!("agent_sessions lock poisoned");
+                return;
+            };
             let session = sessions.get(&session_id);
             let wi_id = session.and_then(|s| s.work_id.clone()).unwrap_or_default();
             let iteration = session.map(|s| s.iteration).unwrap_or(0);
             let title = if !wi_id.is_empty() {
                 stores
-                    .works
-                    .read()
-                    .unwrap()
-                    .get(&wi_id)
-                    .map(|w| w.title.clone())
+                    .read_works()
+                    .ok()
+                    .and_then(|works| works.get(&wi_id).map(|w| w.title.clone()))
                     .unwrap_or_default()
             } else {
                 String::new()
@@ -303,13 +322,13 @@ pub async fn run_agent_task(
             ),
         );
         let learning_id = learning.id.clone();
-        stores
-            .learnings
-            .write()
-            .unwrap()
-            .insert(learning_id.clone(), learning.clone());
-        if let Some(store_arc) = &stores.store {
-            let _ = store_arc.lock().unwrap().create(learning);
+        if let Ok(mut learnings) = stores.write_learnings() {
+            learnings.insert(learning_id.clone(), learning.clone());
+        } else {
+            error!("learnings lock poisoned");
+        }
+        if let Ok(Some(mut store_guard)) = stores.lock_store() {
+            let _ = store_guard.create(learning);
         }
         agent_log.info(&format!("created failure learning {} on '{}'", learning_id, wi_title));
     }
@@ -406,7 +425,7 @@ async fn run_agent_loop(
 
     // Unified iteration writeback
     {
-        let mut sessions = stores.agent_sessions.write().unwrap();
+        let mut sessions = stores.write_agent_sessions()?;
         if let Some(s) = sessions.get_mut(session_id) {
             s.iteration = iteration;
         }
@@ -1244,7 +1263,7 @@ pub async fn execute_action(
         } => {
             // Kill any active agent sessions on this Work
             {
-                let sessions = bridge.stores().agent_sessions.read().unwrap();
+                let sessions = bridge.stores().read_agent_sessions()?;
                 let active_sessions: Vec<String> = sessions
                     .values()
                     .filter(|s| s.work_id.as_deref() == Some(work_id) && !s.status.is_terminal())
@@ -1291,7 +1310,7 @@ pub async fn execute_action(
 
             // Release any active locks held by this Work
             {
-                let locks = bridge.stores().locks.read().unwrap();
+                let locks = bridge.stores().read_locks()?;
                 let work_locks: Vec<String> = locks
                     .values()
                     .filter(|l| l.holder_id == *work_id && matches!(l.status, crate::domain::lock::LockStatus::Active))
@@ -1457,7 +1476,7 @@ pub async fn run_single_work(
 
     // Step 2: Check pool capacity and dedup before creating session
     {
-        let sessions = stores.agent_sessions.read().unwrap();
+        let sessions = stores.read_agent_sessions()?;
         let active_count = sessions
             .values()
             .filter(|s| s.agent_type == AgentType::Implementer && !s.status.is_terminal())
@@ -1491,16 +1510,13 @@ pub async fn run_single_work(
 
     // Persist session
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(session.clone())
+        && let Ok(mut s) = store.lock().map_err(|_| eyre!("store lock poisoned"))
+        && let Err(e) = s.create(session.clone())
     {
         warn!("Worker {} failed to persist session: {}", worker_id, e);
         return Err(eyre!("failed to create agent session: {}", e));
     }
-    stores
-        .agent_sessions
-        .write()
-        .unwrap()
-        .insert(session_id.clone(), session);
+    stores.write_agent_sessions()?.insert(session_id.clone(), session);
     let _ = event_tx.send(DaemonEvent::record_created("agent_session", &session_id));
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Starting));
 
@@ -1525,12 +1541,14 @@ pub async fn run_single_work(
 fn persist_session(stores: &Stores, session: &AgentSession) {
     debug!("persist_session(session_id={})", session.id);
     if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(session.clone())
+        && let Ok(mut s) = store.lock().map_err(|_| eyre!("store lock poisoned"))
+        && let Err(e) = s.update(session.clone())
     {
         warn!("Failed to persist agent session {} to TaskStore: {}", session.id, e);
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

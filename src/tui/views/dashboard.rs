@@ -59,6 +59,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(counts_block, chunks[1]);
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

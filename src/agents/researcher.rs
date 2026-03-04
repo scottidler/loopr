@@ -435,6 +435,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

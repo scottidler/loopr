@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 pub mod agents;
 pub mod cli;
 pub mod config;
@@ -14,10 +16,13 @@ pub mod tui;
 pub mod validator;
 pub mod worktree;
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod fsm_correctness_tests;
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod integration_tests;
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 pub mod test_util;
 
@@ -128,6 +133,7 @@ pub fn setup_logging(config: &Config, cli_log_level: Option<&str>) -> eyre::Resu
     Ok(())
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod log_level_tests {
     use super::*;

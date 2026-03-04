@@ -246,6 +246,7 @@ fn parse_worktree_list(output: &str, worktree_dir: &Path) -> Vec<WorktreeInfo> {
     result
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

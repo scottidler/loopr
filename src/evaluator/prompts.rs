@@ -45,6 +45,7 @@ pub fn phase_works_prompt(
         .replace("{schema}", &crate::prompts::store().coverage_schema)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

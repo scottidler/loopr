@@ -220,6 +220,7 @@ pub fn assemble_guidance(guidance: &AgentGuidance, role: Role, guidance_budget: 
     text
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -148,6 +148,7 @@ impl DocValidator {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 impl DocValidator {
     /// Create a DocValidator with a mock HTTP client (for tests).
@@ -160,6 +161,7 @@ impl DocValidator {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

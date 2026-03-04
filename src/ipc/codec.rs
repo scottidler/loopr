@@ -37,6 +37,7 @@ pub fn decode_client_message(line: &str) -> Result<IpcMessage, serde_json::Error
     IpcMessage::from_json(line)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

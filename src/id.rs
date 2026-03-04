@@ -22,6 +22,7 @@ pub fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

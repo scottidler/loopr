@@ -193,6 +193,7 @@ impl CoverageEvaluator {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 impl CoverageEvaluator {
     /// Create a CoverageEvaluator with a mock HTTP client (for tests).
@@ -208,6 +209,7 @@ impl CoverageEvaluator {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

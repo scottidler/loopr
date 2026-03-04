@@ -50,6 +50,7 @@ impl AgentLlmClient {
     }
 
     /// Create with an explicit API key (used in tests).
+    #[allow(clippy::unwrap_used)]
     #[cfg(test)]
     pub fn with_api_key(
         config: AgentRoleConfig,
@@ -243,6 +244,7 @@ fn parse_sse_text_delta(line: &str) -> Option<String> {
     Some(text)
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

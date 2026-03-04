@@ -96,6 +96,7 @@ fn canonicalize_nonexistent(path: &Path) -> PathBuf {
     canonical_ancestor.join(tail_parts.iter().collect::<PathBuf>())
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

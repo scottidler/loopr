@@ -41,6 +41,7 @@ impl FromStr for Role {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

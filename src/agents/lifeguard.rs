@@ -170,6 +170,7 @@ fn truncate(s: &str, max: usize) -> &str {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

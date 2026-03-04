@@ -9,6 +9,7 @@
 //!
 //! Organized by FSM, with N×N matrix coverage for each.
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use crate::agents::AgentStatus;

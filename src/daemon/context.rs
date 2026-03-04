@@ -115,13 +115,14 @@ impl Stores {
     }
 
     pub fn lock_store_required(&self) -> Result<MutexGuard<'_, Store>> {
-        let store = self.store.as_ref()
-            .ok_or_else(|| eyre!("TaskStore not initialized"))?;
+        let store = self.store.as_ref().ok_or_else(|| eyre!("TaskStore not initialized"))?;
         store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
     }
 
     pub fn lock_agent_handles(&self) -> Result<MutexGuard<'_, HashMap<String, JoinHandle<()>>>> {
-        self.agent_handles.lock().map_err(|_| eyre!("agent_handles lock poisoned"))
+        self.agent_handles
+            .lock()
+            .map_err(|_| eyre!("agent_handles lock poisoned"))
     }
 
     pub fn lock_git(&self) -> Result<MutexGuard<'_, ()>> {
@@ -230,65 +231,61 @@ impl DaemonContext {
         // (parent validation, crash recovery, transitions) work after restart.
         {
             for plan in store.list::<Plan>(&[])? {
-                stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+                stores.write_plans()?.insert(plan.id.clone(), plan);
             }
             for spec in store.list::<Spec>(&[])? {
-                stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+                stores.write_specs()?.insert(spec.id.clone(), spec);
             }
             for phase in store.list::<Phase>(&[])? {
-                stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+                stores.write_phases()?.insert(phase.id.clone(), phase);
             }
             for wi in store.list::<Work>(&[])? {
-                stores.works.write().unwrap().insert(wi.id.clone(), wi);
+                stores.write_works()?.insert(wi.id.clone(), wi);
             }
             for bundle in store.list::<Bundle>(&[])? {
-                stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+                stores.write_bundles()?.insert(bundle.id.clone(), bundle);
             }
             for tick in store.list::<Tick>(&[])? {
-                stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+                stores.write_ticks()?.insert(tick.id.clone(), tick);
             }
             for learning in store.list::<Learning>(&[])? {
-                stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
+                stores.write_learnings()?.insert(learning.id.clone(), learning);
             }
             for lock in store.list::<Lock>(&[])? {
-                stores.locks.write().unwrap().insert(lock.id.clone(), lock);
+                stores.write_locks()?.insert(lock.id.clone(), lock);
             }
             for goal in store.list::<CoordinatorGoal>(&[])? {
-                stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
+                stores.write_coordinator_goals()?.insert(goal.id.clone(), goal);
             }
             for cs in store.list::<CoordinatorState>(&[])? {
-                stores.coordinator_states.write().unwrap().insert(cs.id.clone(), cs);
+                stores.write_coordinator_states()?.insert(cs.id.clone(), cs);
             }
             for proposal in store.list::<Proposal>(&[])? {
-                stores.proposals.write().unwrap().insert(proposal.id.clone(), proposal);
+                stores.write_proposals()?.insert(proposal.id.clone(), proposal);
             }
             for decision in store.list::<Decision>(&[])? {
-                stores.decisions.write().unwrap().insert(decision.id.clone(), decision);
+                stores.write_decisions()?.insert(decision.id.clone(), decision);
             }
             for cr in store.list::<CoverageReport>(&[])? {
-                stores.coverage_reports.write().unwrap().insert(cr.id.clone(), cr);
+                stores.write_coverage_reports()?.insert(cr.id.clone(), cr);
             }
             for session in store.list::<AgentSession>(&[])? {
-                stores
-                    .agent_sessions
-                    .write()
-                    .unwrap()
-                    .insert(session.id.clone(), session);
+                stores.write_agent_sessions()?.insert(session.id.clone(), session);
             }
-            let hydrated: usize = stores.plans.read().unwrap().len()
-                + stores.specs.read().unwrap().len()
-                + stores.phases.read().unwrap().len()
-                + stores.works.read().unwrap().len()
-                + stores.bundles.read().unwrap().len()
-                + stores.ticks.read().unwrap().len()
-                + stores.learnings.read().unwrap().len()
-                + stores.locks.read().unwrap().len()
-                + stores.coordinator_goals.read().unwrap().len()
-                + stores.coordinator_states.read().unwrap().len()
-                + stores.proposals.read().unwrap().len()
-                + stores.decisions.read().unwrap().len()
-                + stores.coverage_reports.read().unwrap().len()
-                + stores.agent_sessions.read().unwrap().len();
+            let hydrated: usize = stores.read_plans()?.len()
+                + stores.read_specs()?.len()
+                + stores.read_phases()?.len()
+                + stores.read_works()?.len()
+                + stores.read_bundles()?.len()
+                + stores.read_ticks()?.len()
+                + stores.read_learnings()?.len()
+                + stores.read_locks()?.len()
+                + stores.read_coordinator_goals()?.len()
+                + stores.read_coordinator_states()?.len()
+                + stores.read_proposals()?.len()
+                + stores.read_decisions()?.len()
+                + stores.read_coverage_reports()?.len()
+                + stores.read_agent_sessions()?.len();
             if hydrated > 0 {
                 info!("Hydrated {} records from TaskStore into memory", hydrated);
             }
@@ -360,16 +357,18 @@ impl DaemonContext {
 
         // Recover InProgress Works → Blocked
         {
-            let mut works = self.stores.works.write().unwrap();
+            let Ok(mut works) = self.stores.write_works() else {
+                return 0;
+            };
             let store_lock = self.stores.store.as_ref();
             for (id, wi) in works.iter_mut() {
                 if wi.status == WorkStatus::InProgress {
                     warn!("Recovering orphaned InProgress Work: {}", id);
                     wi.status = WorkStatus::Blocked;
                     wi.updated_at = crate::id::now_millis();
-                    // Persist recovery to TaskStore
                     if let Some(store_arc) = store_lock
-                        && let Err(e) = store_arc.lock().unwrap().update(wi.clone())
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(wi.clone())
                     {
                         warn!("Failed to persist Work recovery to TaskStore: {}", e);
                     }
@@ -380,16 +379,18 @@ impl DaemonContext {
 
         // Recover Integrating Bundles → Accepted
         {
-            let mut bundles = self.stores.bundles.write().unwrap();
+            let Ok(mut bundles) = self.stores.write_bundles() else {
+                return 0;
+            };
             let store_lock = self.stores.store.as_ref();
             for (id, bundle) in bundles.iter_mut() {
                 if bundle.status == BundleStatus::Integrating {
                     warn!("Recovering orphaned Integrating Bundle: {}", id);
                     bundle.status = BundleStatus::Accepted;
                     bundle.updated_at = crate::id::now_millis();
-                    // Persist recovery to TaskStore
                     if let Some(store_arc) = store_lock
-                        && let Err(e) = store_arc.lock().unwrap().update(bundle.clone())
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(bundle.clone())
                     {
                         warn!("Failed to persist Bundle recovery to TaskStore: {}", e);
                     }
@@ -400,7 +401,9 @@ impl DaemonContext {
 
         // Recover stuck Ticks (Open/Sealing/Validating) → Failed
         {
-            let mut ticks = self.stores.ticks.write().unwrap();
+            let Ok(mut ticks) = self.stores.write_ticks() else {
+                return 0;
+            };
             let store_lock = self.stores.store.as_ref();
             for (id, tick) in ticks.iter_mut() {
                 if tick.status == TickStatus::Open
@@ -410,9 +413,9 @@ impl DaemonContext {
                     warn!("Recovering stuck Tick in {:?} state: {}", tick.status, id);
                     tick.status = TickStatus::Failed;
                     tick.updated_at = crate::id::now_millis();
-                    // Persist recovery to TaskStore
                     if let Some(store_arc) = store_lock
-                        && let Err(e) = store_arc.lock().unwrap().update(tick.clone())
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(tick.clone())
                     {
                         warn!("Failed to persist Tick recovery to TaskStore: {}", e);
                     }
@@ -423,18 +426,19 @@ impl DaemonContext {
 
         // Recover stuck AgentSessions (non-terminal) → Failed
         {
-            let mut sessions = self.stores.agent_sessions.write().unwrap();
+            let Ok(mut sessions) = self.stores.write_agent_sessions() else {
+                return 0;
+            };
             let store_lock = self.stores.store.as_ref();
             for (id, session) in sessions.iter_mut() {
                 if !session.status.is_terminal() {
                     warn!("Recovering stuck AgentSession in {:?} state: {}", session.status, id);
-                    // Use direct mutation — transition_to may fail for some paths
-                    // (e.g., Starting → Failed is valid, but we want to force recovery)
                     session.status = AgentStatus::Failed;
                     session.error_message = Some("Recovered after daemon crash".to_string());
                     session.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = store_lock
-                        && let Err(e) = store_arc.lock().unwrap().update(session.clone())
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(session.clone())
                     {
                         warn!("Failed to persist AgentSession recovery to TaskStore: {}", e);
                     }
@@ -445,14 +449,17 @@ impl DaemonContext {
 
         // Gap #30: Expire stale locks
         {
-            let mut locks = self.stores.locks.write().unwrap();
+            let Ok(mut locks) = self.stores.write_locks() else {
+                return 0;
+            };
             let store_lock = self.stores.store.as_ref();
             for (id, lock) in locks.iter_mut() {
                 if lock.is_active() && lock.is_expired() {
                     warn!("Recovering expired Lock: {} (resource={})", id, lock.resource);
                     lock.expire();
                     if let Some(store_arc) = store_lock
-                        && let Err(e) = store_arc.lock().unwrap().update(lock.clone())
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(lock.clone())
                     {
                         warn!("Failed to persist Lock recovery to TaskStore: {}", e);
                     }
@@ -480,6 +487,7 @@ impl DaemonContext {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

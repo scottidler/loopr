@@ -67,7 +67,9 @@ pub async fn run_supervisor(
 
         // Check if this session was a coordinator
         let is_coordinator = {
-            let sessions = stores.agent_sessions.read().unwrap();
+            let Ok(sessions) = stores.read_agent_sessions() else {
+                continue;
+            };
             sessions
                 .get(&session_id)
                 .map(|s| s.agent_type == AgentType::Coordinator)
@@ -91,7 +93,9 @@ pub async fn run_supervisor(
 
         // Check if another coordinator is already running
         let has_active_coordinator = {
-            let sessions = stores.agent_sessions.read().unwrap();
+            let Ok(sessions) = stores.read_agent_sessions() else {
+                continue;
+            };
             sessions
                 .values()
                 .any(|s| s.agent_type == AgentType::Coordinator && !s.status.is_terminal())
@@ -130,6 +134,7 @@ pub async fn run_supervisor(
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

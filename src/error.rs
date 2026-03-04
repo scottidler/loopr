@@ -14,6 +14,7 @@ pub enum LooprError {
 
 pub type Result<T> = std::result::Result<T, LooprError>;
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Context, eyre};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
@@ -267,7 +267,10 @@ async fn graceful_shutdown(stores: &Arc<Stores>, event_tx: &tokio::sync::broadca
 
     // 2. Cancel all non-terminal agent sessions
     {
-        let mut sessions = stores.agent_sessions.write().unwrap();
+        let Ok(mut sessions) = stores.write_agent_sessions() else {
+            error!("agent_sessions lock poisoned during shutdown");
+            return;
+        };
         for session in sessions.values_mut() {
             if !session.status.is_terminal() {
                 let _ = session.transition_to(AgentStatus::Cancelled);
@@ -277,7 +280,10 @@ async fn graceful_shutdown(stores: &Arc<Stores>, event_tx: &tokio::sync::broadca
 
     // 3. Drain handles and wait with timeout
     let handles: Vec<_> = {
-        let mut handle_map = stores.agent_handles.lock().unwrap();
+        let Ok(mut handle_map) = stores.lock_agent_handles() else {
+            error!("agent_handles lock poisoned during shutdown");
+            return;
+        };
         handle_map.drain().collect()
     };
 
@@ -374,6 +380,7 @@ async fn accept_loop(
     Ok(())
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

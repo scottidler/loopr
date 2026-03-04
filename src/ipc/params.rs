@@ -46,6 +46,7 @@ fn default_base_ref() -> String {
     "HEAD".to_string()
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -43,8 +43,7 @@ pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()
 
     let (resp, _events) = client.request(&method, params).await.context("IPC request failed")?;
 
-    if resp.is_error() {
-        let err = resp.error.unwrap();
+    if let Some(err) = resp.error {
         bail!("error ({}): {}", err.code, err.message);
     }
 
@@ -361,6 +360,7 @@ fn lock_to_ipc(cmd: &LockCmd) -> (String, serde_json::Value) {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

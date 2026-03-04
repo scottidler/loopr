@@ -147,7 +147,7 @@ pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &Age
 
     // Active locks on resources
     {
-        let locks = stores.locks.read().unwrap();
+        let Ok(locks) = stores.read_locks() else { return summary };
         let active: Vec<_> = locks.values().filter(|l| l.status == LockStatus::Active).collect();
         if !active.is_empty() {
             summary.push_str("### Active Locks\n");
@@ -160,7 +160,9 @@ pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &Age
 
     // Active agents working on sibling works
     {
-        let sessions = stores.agent_sessions.read().unwrap();
+        let Ok(sessions) = stores.read_agent_sessions() else {
+            return summary;
+        };
         let siblings: Vec<_> = sessions
             .values()
             .filter(|s| !s.status.is_terminal() && s.work_id.as_deref() != Some(work_id) && s.work_id.is_some())
@@ -634,6 +636,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

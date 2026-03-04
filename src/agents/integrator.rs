@@ -101,7 +101,7 @@ impl IntegratorAgent {
     /// Find the latest published Tick number from the stores.
     fn latest_published_tick_id(&self) -> Option<String> {
         self.ctx.debug("latest_published_tick_id()");
-        let ticks = self.ctx.stores.ticks.read().unwrap();
+        let ticks = self.ctx.stores.read_ticks().ok()?;
         ticks
             .values()
             .filter(|t| t.status == TickStatus::Published)
@@ -110,30 +110,30 @@ impl IntegratorAgent {
     }
 
     /// Get the next tick number (max existing + 1, or 1 if none).
-    fn next_tick_number(&self) -> u32 {
+    fn next_tick_number(&self) -> Result<u32> {
         self.ctx.debug("next_tick_number()");
-        let ticks = self.ctx.stores.ticks.read().unwrap();
-        ticks.values().map(|t| t.number).max().unwrap_or(0) + 1
+        let ticks = self.ctx.stores.read_ticks()?;
+        Ok(ticks.values().map(|t| t.number).max().unwrap_or(0) + 1)
     }
 
     /// Check if there's already a Tick in a non-terminal state (Open, Sealing, Validating).
-    fn has_tick_in_progress(&self) -> bool {
+    fn has_tick_in_progress(&self) -> Result<bool> {
         self.ctx.debug("has_tick_in_progress()");
-        let ticks = self.ctx.stores.ticks.read().unwrap();
-        ticks.values().any(|t| {
+        let ticks = self.ctx.stores.read_ticks()?;
+        Ok(ticks.values().any(|t| {
             matches!(
                 t.status,
                 TickStatus::Open | TickStatus::Sealing | TickStatus::Validating
             )
-        })
+        }))
     }
 
     /// Recover stuck Ticks (Open/Sealing/Validating) from a previous crash.
     /// Returns the number of ticks recovered.
-    fn recover_stuck_ticks(&self) -> u32 {
+    fn recover_stuck_ticks(&self) -> Result<u32> {
         self.ctx.debug("recover_stuck_ticks()");
         let stuck_tick_ids: Vec<String> = {
-            let ticks = self.ctx.stores.ticks.read().unwrap();
+            let ticks = self.ctx.stores.read_ticks()?;
             ticks
                 .values()
                 .filter(|t| {
@@ -148,7 +148,7 @@ impl IntegratorAgent {
         let mut recovered = 0;
         for tick_id in &stuck_tick_ids {
             let current_status = {
-                let ticks = self.ctx.stores.ticks.read().unwrap();
+                let ticks = self.ctx.stores.read_ticks()?;
                 ticks.get(tick_id.as_str()).map(|t| t.status)
             };
 
@@ -226,7 +226,7 @@ impl IntegratorAgent {
                 );
             }
         }
-        recovered
+        Ok(recovered)
     }
 }
 
@@ -256,19 +256,19 @@ impl IntegratorAgent {
     pub fn run_cycle(&self) -> Result<IntegratorCycleResult> {
         self.ctx.debug("run_cycle()");
         // 1. Recover stuck ticks from crash
-        let recovered = self.recover_stuck_ticks();
+        let recovered = self.recover_stuck_ticks()?;
         if recovered > 0 {
             return Ok(IntegratorCycleResult::Recovered { count: recovered });
         }
 
         // 2. Check for in-progress ticks — don't create a new one if one exists
-        if self.has_tick_in_progress() {
+        if self.has_tick_in_progress()? {
             return Ok(IntegratorCycleResult::Idle);
         }
 
         // 3. Find all Accepted bundles
         let accepted_bundles: Vec<(String, Option<String>)> = {
-            let bundles = self.ctx.stores.bundles.read().unwrap();
+            let bundles = self.ctx.stores.read_bundles()?;
             bundles
                 .values()
                 .filter(|b| b.status == BundleStatus::Accepted)
@@ -315,9 +315,7 @@ impl IntegratorAgent {
                         let wi_id = self
                             .ctx
                             .stores
-                            .bundles
-                            .read()
-                            .unwrap()
+                            .read_bundles()?
                             .get(stale_id.as_str())
                             .map(|b| b.work_id.clone())
                             .unwrap_or_default();
@@ -337,9 +335,7 @@ impl IntegratorAgent {
                         let wi_id = self
                             .ctx
                             .stores
-                            .bundles
-                            .read()
-                            .unwrap()
+                            .read_bundles()?
                             .get(stale_id.as_str())
                             .map(|b| b.work_id.clone())
                             .unwrap_or_default();
@@ -354,7 +350,7 @@ impl IntegratorAgent {
                 }
                 crate::config::StalePolicy::AutoReplayAndVerify => {
                     let wi_id = {
-                        let bundles = self.ctx.stores.bundles.read().unwrap();
+                        let bundles = self.ctx.stores.read_bundles()?;
                         bundles
                             .get(stale_id.as_str())
                             .map(|b| b.work_id.clone())
@@ -363,7 +359,7 @@ impl IntegratorAgent {
                     let new_base_ref = latest_tick_id
                         .as_ref()
                         .and_then(|tid| {
-                            let ticks = self.ctx.stores.ticks.read().unwrap();
+                            let ticks = self.ctx.stores.read_ticks().ok()?;
                             ticks
                                 .values()
                                 .find(|t| t.id == *tid)
@@ -418,7 +414,7 @@ impl IntegratorAgent {
             } => {
                 if (valid_bundle_ids.len() as u32) < *min_bundles {
                     let earliest = {
-                        let bundles = self.ctx.stores.bundles.read().unwrap();
+                        let bundles = self.ctx.stores.read_bundles()?;
                         valid_bundle_ids
                             .iter()
                             .filter_map(|id| bundles.get(id.as_str()).map(|b| b.updated_at))
@@ -434,7 +430,7 @@ impl IntegratorAgent {
         }
 
         // 6. Create Tick
-        let tick_number = self.next_tick_number();
+        let tick_number = self.next_tick_number()?;
         let create_resp = self
             .ctx
             .bridge
@@ -490,7 +486,7 @@ impl IntegratorAgent {
 
         // Update tick with bundle IDs and attempted bundle IDs.
         let tick_to_persist = {
-            let mut ticks = self.ctx.stores.ticks.write().unwrap();
+            let mut ticks = self.ctx.stores.write_ticks()?;
             if let Some(tick) = ticks.get_mut(&tick_id) {
                 tick.bundle_ids = valid_bundle_ids.clone();
                 tick.attempted_bundle_ids = valid_bundle_ids.clone();
@@ -502,14 +498,15 @@ impl IntegratorAgent {
 
         if let Some(tick) = tick_to_persist
             && let Some(ref store) = self.ctx.stores.store
-            && let Err(e) = store.lock().unwrap().update(tick)
+            && let Ok(mut s) = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+            && let Err(e) = s.update(tick)
         {
             self.ctx.warn(&format!("Failed to persist tick bundle_ids: {}", e));
         }
 
         // Gap #14: Merge bundle branches into integration branch
         let branches: Vec<String> = {
-            let bundles = self.ctx.stores.bundles.read().unwrap();
+            let bundles = self.ctx.stores.read_bundles()?;
             valid_bundle_ids
                 .iter()
                 .filter_map(|id| bundles.get(id.as_str()))
@@ -520,10 +517,10 @@ impl IntegratorAgent {
         let repo_path = &self.ctx.stores.config.project.repo_path;
         let is_git_repo = repo_path.join(".git").exists();
         if !branches.is_empty() && is_git_repo {
-            let _git_guard = self.ctx.stores.git_lock.lock().unwrap();
+            let _git_guard = self.ctx.stores.lock_git()?;
             match merge_bundle_branches(repo_path, &branches) {
                 Ok(sha) => {
-                    let mut ticks = self.ctx.stores.ticks.write().unwrap();
+                    let mut ticks = self.ctx.stores.write_ticks()?;
                     if let Some(tick) = ticks.get_mut(&tick_id) {
                         tick.integration_sha = Some(sha);
                     }
@@ -561,9 +558,7 @@ impl IntegratorAgent {
                             let wi_id = self
                                 .ctx
                                 .stores
-                                .bundles
-                                .read()
-                                .unwrap()
+                                .read_bundles()?
                                 .get(bundle_id.as_str())
                                 .map(|b| b.work_id.clone())
                                 .unwrap_or_default();
@@ -611,7 +606,7 @@ impl IntegratorAgent {
 
         // Update tick with validation log
         let tick_to_persist = {
-            let mut ticks = self.ctx.stores.ticks.write().unwrap();
+            let mut ticks = self.ctx.stores.write_ticks()?;
             if let Some(tick) = ticks.get_mut(&tick_id) {
                 tick.validation_log = validation_log.clone();
                 Some(tick.clone())
@@ -622,7 +617,8 @@ impl IntegratorAgent {
 
         if let Some(tick) = tick_to_persist
             && let Some(ref store) = self.ctx.stores.store
-            && let Err(e) = store.lock().unwrap().update(tick)
+            && let Ok(mut s) = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+            && let Err(e) = s.update(tick)
         {
             self.ctx.warn(&format!("Failed to persist tick validation_log: {}", e));
         }
@@ -645,7 +641,7 @@ impl IntegratorAgent {
             }
 
             let tick_to_persist = {
-                let mut ticks = self.ctx.stores.ticks.write().unwrap();
+                let mut ticks = self.ctx.stores.write_ticks()?;
                 if let Some(tick) = ticks.get_mut(&tick_id) {
                     tick.integration_sha = Some(sha);
                     Some(tick.clone())
@@ -656,7 +652,8 @@ impl IntegratorAgent {
 
             if let Some(tick) = tick_to_persist
                 && let Some(ref store) = self.ctx.stores.store
-                && let Err(e) = store.lock().unwrap().update(tick)
+                && let Ok(mut s) = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                && let Err(e) = s.update(tick)
             {
                 self.ctx.warn(&format!("Failed to persist tick integration_sha: {}", e));
             }
@@ -680,7 +677,7 @@ impl IntegratorAgent {
 
             // C1: Transition parent Works InReview → Integrated
             let merged_wi_ids: Vec<String> = {
-                let bundles = self.ctx.stores.bundles.read().unwrap();
+                let bundles = self.ctx.stores.read_bundles()?;
                 valid_bundle_ids
                     .iter()
                     .filter_map(|id| bundles.get(id.as_str()))
@@ -692,7 +689,7 @@ impl IntegratorAgent {
 
             for wi_id in &merged_wi_ids {
                 let should_transition = {
-                    let wis = self.ctx.stores.works.read().unwrap();
+                    let wis = self.ctx.stores.read_works()?;
                     wis.get(wi_id)
                         .map(|w| w.status == crate::domain::work::WorkStatus::InReview)
                         .unwrap_or(false)
@@ -753,9 +750,7 @@ impl IntegratorAgent {
                     let wi_id = self
                         .ctx
                         .stores
-                        .bundles
-                        .read()
-                        .unwrap()
+                        .read_bundles()?
                         .get(bundle_id.as_str())
                         .map(|b| b.work_id.clone())
                         .unwrap_or_default();
@@ -906,6 +901,7 @@ fn get_git_head_sha(repo_path: &std::path::Path) -> Option<String> {
         })
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1105,7 +1101,7 @@ mod tests {
         let dir = TestDir::new("loopr-intg-next1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores, test_config());
-        assert_eq!(agent.next_tick_number(), 1);
+        assert_eq!(agent.next_tick_number().unwrap(), 1);
     }
 
     #[test]
@@ -1117,7 +1113,7 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let agent = test_integrator(&dir, stores, test_config());
-        assert_eq!(agent.next_tick_number(), 6);
+        assert_eq!(agent.next_tick_number().unwrap(), 6);
     }
 
     #[test]
@@ -1125,12 +1121,12 @@ mod tests {
         let dir = TestDir::new("loopr-intg-tip1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores.clone(), test_config());
-        assert!(!agent.has_tick_in_progress());
+        assert!(!agent.has_tick_in_progress().unwrap());
 
         let mut tick = Tick::new(1);
         tick.status = TickStatus::Published;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
-        assert!(!agent.has_tick_in_progress());
+        assert!(!agent.has_tick_in_progress().unwrap());
     }
 
     #[test]
@@ -1142,7 +1138,7 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let agent = test_integrator(&dir, stores, test_config());
-        assert!(agent.has_tick_in_progress());
+        assert!(agent.has_tick_in_progress().unwrap());
     }
 
     // --- recover_stuck_ticks tests ---
@@ -1152,7 +1148,7 @@ mod tests {
         let dir = TestDir::new("loopr-intg-recov1");
         let stores = test_stores(&dir);
         let agent = test_integrator(&dir, stores, test_config());
-        assert_eq!(agent.recover_stuck_ticks(), 0);
+        assert_eq!(agent.recover_stuck_ticks().unwrap(), 0);
     }
 
     #[test]
@@ -1166,7 +1162,7 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let agent = test_integrator(&dir, stores.clone(), test_config());
-        assert_eq!(agent.recover_stuck_ticks(), 1);
+        assert_eq!(agent.recover_stuck_ticks().unwrap(), 1);
 
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
@@ -1183,7 +1179,7 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let agent = test_integrator(&dir, stores.clone(), test_config());
-        assert_eq!(agent.recover_stuck_ticks(), 1);
+        assert_eq!(agent.recover_stuck_ticks().unwrap(), 1);
 
         let ticks = stores.ticks.read().unwrap();
         assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
@@ -1381,28 +1377,28 @@ mod tests {
         tick.status = TickStatus::Sealing;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
         let agent = test_integrator(&dir, stores, test_config());
-        assert!(agent.has_tick_in_progress());
+        assert!(agent.has_tick_in_progress().unwrap());
 
         let stores = test_stores(&dir);
         let mut tick = Tick::new(2);
         tick.status = TickStatus::Validating;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
         let agent = test_integrator(&dir, stores, test_config());
-        assert!(agent.has_tick_in_progress());
+        assert!(agent.has_tick_in_progress().unwrap());
 
         let stores = test_stores(&dir);
         let mut tick = Tick::new(3);
         tick.status = TickStatus::Published;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
         let agent = test_integrator(&dir, stores, test_config());
-        assert!(!agent.has_tick_in_progress());
+        assert!(!agent.has_tick_in_progress().unwrap());
 
         let stores = test_stores(&dir);
         let mut tick = Tick::new(4);
         tick.status = TickStatus::Failed;
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
         let agent = test_integrator(&dir, stores, test_config());
-        assert!(!agent.has_tick_in_progress());
+        assert!(!agent.has_tick_in_progress().unwrap());
     }
 
     // --- Stale policy tests ---
@@ -1641,7 +1637,7 @@ mod tests {
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let agent = test_integrator(&dir, stores.clone(), test_config());
-        let recovered = agent.recover_stuck_ticks();
+        let recovered = agent.recover_stuck_ticks().unwrap();
         assert_eq!(recovered, 1);
 
         let ticks = stores.ticks.read().unwrap();

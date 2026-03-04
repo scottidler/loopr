@@ -136,6 +136,7 @@ pub fn apply_action(app: &mut App, action: Action) {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

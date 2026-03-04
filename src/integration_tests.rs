@@ -3,6 +3,7 @@
 //! These tests exercise multi-step IPC flows through `dispatch()`, verifying
 //! that components work correctly together across module boundaries.
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

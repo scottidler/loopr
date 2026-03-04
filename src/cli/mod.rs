@@ -449,6 +449,7 @@ pub enum Command {
     Shutdown,
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -107,7 +107,7 @@ async fn event_loop(
                     }
                 }
             }
-            ipc_msg = async { client.as_mut().unwrap().recv().await }, if client.is_some() => {
+            ipc_msg = async { client.as_mut().expect("guarded by is_some").recv().await }, if client.is_some() => {
                 match ipc_msg {
                     Ok(Some(IpcMessage::Event(event))) => {
                         if let Some(collection) = event_collection(&event) {
@@ -385,6 +385,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(help, popup_area);
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

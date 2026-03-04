@@ -100,7 +100,7 @@ impl AgentContext {
         event_tx: broadcast::Sender<DaemonEvent>,
     ) -> eyre::Result<Self> {
         let session = {
-            let sessions = stores.agent_sessions.read().unwrap();
+            let sessions = stores.read_agent_sessions()?;
             sessions
                 .get(session_id)
                 .ok_or_else(|| eyre::eyre!("session not found: {}", session_id))?
@@ -143,7 +143,9 @@ impl AgentContext {
 
     /// Check if this agent's session has been cancelled.
     pub fn is_cancelled(&self) -> bool {
-        let sessions = self.stores.agent_sessions.read().unwrap();
+        let Ok(sessions) = self.stores.read_agent_sessions() else {
+            return true;
+        };
         sessions
             .get(&self.session.id)
             .map(|s| s.status == AgentStatus::Cancelled)
@@ -152,8 +154,9 @@ impl AgentContext {
 
     /// Persist current iteration count to stores.
     pub fn persist_iteration(&self) {
-        let mut sessions = self.stores.agent_sessions.write().unwrap();
-        if let Some(s) = sessions.get_mut(&self.session.id) {
+        if let Ok(mut sessions) = self.stores.write_agent_sessions()
+            && let Some(s) = sessions.get_mut(&self.session.id)
+        {
             s.iteration = self.session.iteration;
         }
     }
@@ -550,6 +553,7 @@ pub enum AgentEvent {
     },
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -25,9 +25,9 @@ struct WorkPriority {
 /// - +100 if no active locks contend with the Work's resource_tags
 /// - +(10 - min(deps, 10)) * 10 for fewer dependencies
 pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>) -> Option<String> {
-    let works = stores.works.read().unwrap();
-    let locks = stores.locks.read().unwrap();
-    let sessions = stores.agent_sessions.read().unwrap();
+    let works = stores.read_works().ok()?;
+    let locks = stores.read_locks().ok()?;
+    let sessions = stores.read_agent_sessions().ok()?;
 
     let mut candidates: Vec<WorkPriority> = works
         .values()
@@ -87,6 +87,7 @@ fn compute_priority(
     score
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

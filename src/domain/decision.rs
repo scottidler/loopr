@@ -66,6 +66,7 @@ impl Record for Decision {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

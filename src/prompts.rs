@@ -120,6 +120,7 @@ pub fn store() -> &'static PromptStore {
         .expect("prompts::init() must be called before prompts::store()")
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
