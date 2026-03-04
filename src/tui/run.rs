@@ -106,9 +106,12 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     )
     .await;
 
-    // Restore terminal
+    // Restore terminal — disable mouse capture first to stop mouse event
+    // tracking before leaving the alternate screen, preventing raw escape
+    // sequences from leaking into the main terminal buffer.
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     result
 }
@@ -214,8 +217,16 @@ async fn event_loop(
             if let Some(ref llm) = llm_client {
                 let is_draft_request = submit_text == "/draft";
                 let client_clone = Arc::clone(llm);
-                let messages = chat_history_as_llm_messages(&app.chat_history);
+                let mut messages = chat_history_as_llm_messages(&app.chat_history);
                 let system_prompt = system_prompt_for_state(app.funnel_state, is_draft_request);
+
+                // Ensure messages end with a user message (API requirement).
+                // Slash commands like /draft don't add a user message to history,
+                // so the last message may be an assistant response.
+                if messages.last().map(|m| m.role.as_str()) != Some("user") {
+                    let synthetic = if is_draft_request { DRAFT_PROMPT } else { submit_text.as_str() };
+                    messages.push(LlmChatMessage::user(synthetic));
+                }
                 app.chat_streaming = true;
                 app.chat_response_buffer.clear();
 
@@ -585,8 +596,6 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
                     ],
                     FunnelState::PlanDraft => vec![
                         kb("/accept"),
-                        Span::raw(" Accept Plan  "),
-                        kb("[Ctrl+a]"),
                         Span::raw(" Accept Plan  "),
                         kb("/chat"),
                         Span::raw(" Chat"),
@@ -2023,5 +2032,47 @@ mod tests {
         let prompt = system_prompt_for_state(FunnelState::Executing, false);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(!prompt.contains("clarifying questions"));
+    }
+
+    #[test]
+    fn test_chat_history_as_llm_messages_filters_system() {
+        let history = vec![
+            ChatMessage::user("hello".into()),
+            ChatMessage::assistant("hi there".into()),
+            ChatMessage::system("Entering Plan mode.".into()),
+        ];
+        let messages = chat_history_as_llm_messages(&history);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
+    }
+
+    #[test]
+    fn test_draft_request_appends_user_message_when_last_is_assistant() {
+        // Simulates the /draft flow: user chats, assistant responds,
+        // system messages from /plan and /draft are filtered out,
+        // leaving the conversation ending with an assistant message.
+        // The fix ensures a synthetic user message is appended.
+        let history = vec![
+            ChatMessage::user("I want to build a todo app".into()),
+            ChatMessage::assistant("Great idea! What framework?".into()),
+            ChatMessage::system("Entering Plan mode.".into()),
+            ChatMessage::system("Building draft plan...".into()),
+        ];
+        let mut messages = chat_history_as_llm_messages(&history);
+
+        // Before fix: messages ends with assistant — API would reject
+        assert_eq!(messages.last().unwrap().role, "assistant");
+
+        // Apply the same logic as the event loop
+        let is_draft_request = true;
+        if messages.last().map(|m| m.role.as_str()) != Some("user") {
+            let synthetic = if is_draft_request { DRAFT_PROMPT } else { "fallback" };
+            messages.push(LlmChatMessage::user(synthetic));
+        }
+
+        // After fix: messages ends with user
+        assert_eq!(messages.last().unwrap().role, "user");
+        assert!(messages.last().unwrap().content.contains("plan draft"));
     }
 }
