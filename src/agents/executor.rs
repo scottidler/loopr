@@ -1035,6 +1035,59 @@ pub async fn execute_action(
             ));
             Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
         }
+        AgentAction::ReviseParent {
+            collection,
+            id,
+            reason,
+            diagnostic,
+        } => {
+            // Transition parent back to Draft
+            let transition_resp = bridge.request(
+                "record.transition",
+                serde_json::json!({
+                    "collection": collection,
+                    "id": id,
+                    "target_status": "draft",
+                    "role": "coordinator",
+                    "skip_validation": true,
+                    "skip_reason": "bubble-up revision: parent needs refinement"
+                }),
+            );
+            if transition_resp.is_error() {
+                let msg = transition_resp
+                    .error
+                    .as_ref()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_else(|| "unknown transition error".to_string());
+                return Ok(ActionResult::ActionError(format!(
+                    "revise_parent {}/{} transition failed: {}",
+                    collection, id, msg
+                )));
+            }
+
+            // Create a diagnostic Learning
+            let learning_content = format!(
+                "Bubble-up revision for {}/{}: {}\nDiagnostic: {}",
+                collection, id, reason, diagnostic
+            );
+            let _learning_resp = bridge.request(
+                "learning.create",
+                serde_json::json!({
+                    "content": learning_content,
+                    "scope": "plan",
+                    "source_id": id,
+                }),
+            );
+
+            agent_log.info(&format!(
+                "ReviseParent {}/{}: reason={}, diagnostic={}",
+                collection, id, reason, diagnostic
+            ));
+            Ok(ActionResult::Transitioned(format!(
+                "{}/{} → draft (bubble-up: {})",
+                collection, id, reason
+            )))
+        }
         AgentAction::AcquireLock { resource, holder_id } => {
             // Check if there's already an active lock on this resource
             let check_resp = bridge.request(

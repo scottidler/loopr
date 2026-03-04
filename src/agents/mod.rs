@@ -478,6 +478,12 @@ pub enum AgentAction {
         parent_collection: String,
         parent_id: String,
     },
+    ReviseParent {
+        collection: String,
+        id: String,
+        reason: String,
+        diagnostic: String,
+    },
 
     // === Researcher-only actions ===
     SearchCode {
