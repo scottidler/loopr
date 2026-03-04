@@ -195,6 +195,7 @@ async fn event_loop(
             }
         }
 
+        app.frame_count = app.frame_count.wrapping_add(1);
         terminal.draw(|frame| draw(app, frame))?;
 
         if app.should_quit {

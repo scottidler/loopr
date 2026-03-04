@@ -204,6 +204,7 @@ pub struct App {
     pub chat_scroll: Option<usize>,
     pub pending_chat_submit: Option<String>,
     pub pending_plan_id: Option<String>,
+    pub frame_count: u64,
 }
 
 impl Default for App {
@@ -234,6 +235,7 @@ impl App {
             chat_scroll: None,
             pending_chat_submit: None,
             pending_plan_id: None,
+            frame_count: 0,
         }
     }
 

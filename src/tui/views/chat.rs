@@ -87,10 +87,12 @@ fn render_history(app: &App, frame: &mut Frame, area: Rect) {
             lines.push(Line::from("")); // blank after streaming
         }
 
-        // Show thinking indicator while streaming
+        // Show animated thinking indicator while streaming
         if app.chat_streaming {
+            let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let spinner = spinner_chars[(app.frame_count as usize / 3) % spinner_chars.len()];
             lines.push(Line::from(Span::styled(
-                "  * Thinking...",
+                format!("  {spinner} Thinking..."),
                 Style::default().fg(colors::DIM).add_modifier(Modifier::ITALIC),
             )));
         }
