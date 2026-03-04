@@ -1,8 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard, RwLock as StdRwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use eyre::{Result, eyre};
 use log::{debug, info, warn};
+use paste::paste;
 use taskstore::Store;
 use tokio::sync::{RwLock, broadcast};
 
@@ -71,6 +73,62 @@ pub struct Stores {
     pub shutting_down: AtomicBool,
 }
 
+macro_rules! store_accessors {
+    ($($field:ident : $value_type:ty),* $(,)?) => {
+        $(
+            paste! {
+                pub fn [<read_ $field>](&self) -> Result<RwLockReadGuard<'_, HashMap<String, $value_type>>> {
+                    self.$field.read().map_err(|_| eyre!(concat!(stringify!($field), " lock poisoned")))
+                }
+                pub fn [<write_ $field>](&self) -> Result<RwLockWriteGuard<'_, HashMap<String, $value_type>>> {
+                    self.$field.write().map_err(|_| eyre!(concat!(stringify!($field), " lock poisoned")))
+                }
+            }
+        )*
+    };
+}
+
+impl Stores {
+    store_accessors! {
+        plans: Plan,
+        specs: Spec,
+        phases: Phase,
+        works: Work,
+        bundles: Bundle,
+        ticks: Tick,
+        learnings: Learning,
+        locks: Lock,
+        coordinator_goals: CoordinatorGoal,
+        coordinator_states: CoordinatorState,
+        proposals: Proposal,
+        decisions: Decision,
+        agent_sessions: AgentSession,
+        coverage_reports: CoverageReport,
+        agent_events: VecDeque<AgentEvent>,
+    }
+
+    pub fn lock_store(&self) -> Result<Option<MutexGuard<'_, Store>>> {
+        match &self.store {
+            Some(s) => Ok(Some(s.lock().map_err(|_| eyre!("taskstore lock poisoned"))?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn lock_store_required(&self) -> Result<MutexGuard<'_, Store>> {
+        let store = self.store.as_ref()
+            .ok_or_else(|| eyre!("TaskStore not initialized"))?;
+        store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+    }
+
+    pub fn lock_agent_handles(&self) -> Result<MutexGuard<'_, HashMap<String, JoinHandle<()>>>> {
+        self.agent_handles.lock().map_err(|_| eyre!("agent_handles lock poisoned"))
+    }
+
+    pub fn lock_git(&self) -> Result<MutexGuard<'_, ()>> {
+        self.git_lock.lock().map_err(|_| eyre!("git_lock poisoned"))
+    }
+}
+
 impl Stores {
     pub fn new() -> Self {
         Self {
@@ -104,7 +162,10 @@ impl Stores {
 
 /// Record an agent event in the per-session ring buffer.
 pub fn record_agent_event(stores: &Stores, session_id: &str, event: &AgentEvent) {
-    let mut events = stores.agent_events.write().unwrap();
+    let Ok(mut events) = stores.write_agent_events() else {
+        log::error!("agent_events lock poisoned, dropping event for session {session_id}");
+        return;
+    };
     let ring = events
         .entry(session_id.to_string())
         .or_insert_with(|| VecDeque::with_capacity(1000));

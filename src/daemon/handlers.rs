@@ -1,6 +1,7 @@
 use std::process::Command;
 use std::sync::Arc;
 
+use eyre::eyre;
 use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -25,6 +26,17 @@ use crate::worktree::manager::WorktreeManager;
 use taskstore::{Filter, FilterOp, IndexValue, Record};
 
 use super::context::Stores;
+
+/// Convert a handler body that returns Result<DaemonResponse> into a DaemonResponse,
+/// mapping any Err into an RPC internal error response.
+macro_rules! try_handler {
+    ($req_id:expr, $body:expr) => {
+        match (|| -> eyre::Result<DaemonResponse> { $body })() {
+            Ok(resp) => resp,
+            Err(e) => DaemonResponse::err($req_id, RpcError::internal(&e.to_string())),
+        }
+    };
+}
 
 /// Returns the configured max_pool for a given agent type.
 fn max_pool_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
