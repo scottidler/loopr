@@ -30,12 +30,14 @@ use super::context::Stores;
 /// Convert a handler body that returns Result<DaemonResponse> into a DaemonResponse,
 /// mapping any Err into an RPC internal error response.
 macro_rules! try_handler {
-    ($req_id:expr, $body:expr) => {
-        match (|| -> eyre::Result<DaemonResponse> { $body })() {
+    ($req_id:expr, $body:expr) => {{
+        #[allow(clippy::redundant_closure_call)]
+        let __result = (|| -> eyre::Result<DaemonResponse> { $body })();
+        match __result {
             Ok(resp) => resp,
             Err(e) => DaemonResponse::err($req_id, RpcError::internal(&e.to_string())),
         }
-    };
+    }};
 }
 
 /// Returns the configured max_pool for a given agent type.
@@ -87,7 +89,9 @@ fn check_validation_gate(
 
     // Check for a passing ValidationReport in TaskStore
     if let Some(store) = &stores.store {
-        let store = store.lock().unwrap();
+        let Ok(store) = store.lock() else {
+            return Some(RpcError::internal("taskstore lock poisoned"));
+        };
         let reports: Vec<ValidationReport> = store
             .list(&[Filter {
                 field: "target_id".into(),
@@ -266,185 +270,196 @@ fn auto_start_agents(
 }
 
 fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_handshake()");
-    let server_version = env!("CARGO_PKG_VERSION");
-    let client_version = req
-        .params
-        .get("client_version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-    let version_match = client_version == server_version;
-    if !version_match {
-        log::warn!(
-            "Client version mismatch: client={}, server={}",
-            client_version,
-            server_version
-        );
-    }
+    try_handler!(req.id, {
+        debug!("handle_handshake()");
+        let server_version = env!("CARGO_PKG_VERSION");
+        let client_version = req
+            .params
+            .get("client_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let version_match = client_version == server_version;
+        if !version_match {
+            log::warn!(
+                "Client version mismatch: client={}, server={}",
+                client_version,
+                server_version
+            );
+        }
 
-    DaemonResponse::ok(
-        req.id,
-        json!({
-            "server_version": server_version,
-            "client_version": client_version,
-            "version_match": version_match,
-            "protocol": "ndjson/1"
-        }),
-    )
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({
+                "server_version": server_version,
+                "client_version": client_version,
+                "version_match": version_match,
+                "protocol": "ndjson/1"
+            }),
+        ))
+    })
 }
 
 fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_system_init()");
-    let store_arc = match &stores.store {
-        Some(s) => s,
-        None => {
-            return DaemonResponse::err(req.id, RpcError::internal("TaskStore not initialized"));
-        }
-    };
-
-    // Install git merge driver and .gitattributes (best-effort)
-    let git_hooks_ok = {
-        let store = store_arc.lock().unwrap();
-        match store.install_git_hooks() {
-            Ok(()) => true,
-            Err(e) => {
-                log::warn!("Failed to install git hooks (non-fatal): {}", e);
-                false
+    try_handler!(req.id, {
+        debug!("handle_system_init()");
+        let store_arc = match &stores.store {
+            Some(s) => s,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::internal("TaskStore not initialized"),
+                ));
             }
-        }
-    };
+        };
 
-    // Return the list of collection names
-    let collections = vec![
-        Plan::collection_name(),
-        Spec::collection_name(),
-        Phase::collection_name(),
-        Work::collection_name(),
-        Bundle::collection_name(),
-        Tick::collection_name(),
-        Learning::collection_name(),
-        Lock::collection_name(),
-        CoordinatorGoal::collection_name(),
-        AgentSession::collection_name(),
-    ];
+        // Install git merge driver and .gitattributes (best-effort)
+        let git_hooks_ok = {
+            let store = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+            match store.install_git_hooks() {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!("Failed to install git hooks (non-fatal): {}", e);
+                    false
+                }
+            }
+        };
 
-    DaemonResponse::ok(
-        req.id,
-        json!({ "collections": collections, "git_hooks_installed": git_hooks_ok }),
-    )
+        // Return the list of collection names
+        let collections = vec![
+            Plan::collection_name(),
+            Spec::collection_name(),
+            Phase::collection_name(),
+            Work::collection_name(),
+            Bundle::collection_name(),
+            Tick::collection_name(),
+            Learning::collection_name(),
+            Lock::collection_name(),
+            CoordinatorGoal::collection_name(),
+            AgentSession::collection_name(),
+        ];
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({ "collections": collections, "git_hooks_installed": git_hooks_ok }),
+        ))
+    })
 }
 
 fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_status()");
-    let plans = stores.plans.read().unwrap().len();
-    let specs = stores.specs.read().unwrap().len();
-    let phases = stores.phases.read().unwrap().len();
-    let works = stores.works.read().unwrap().len();
-    let bundles = stores.bundles.read().unwrap().len();
-    let ticks = stores.ticks.read().unwrap().len();
-    let learnings = stores.learnings.read().unwrap().len();
-    let locks = stores.locks.read().unwrap().len();
-    let agent_sessions = stores.agent_sessions.read().unwrap().len();
+    try_handler!(req.id, {
+        debug!("handle_status()");
+        let plans = stores.read_plans()?.len();
+        let specs = stores.read_specs()?.len();
+        let phases = stores.read_phases()?.len();
+        let works = stores.read_works()?.len();
+        let bundles = stores.read_bundles()?.len();
+        let ticks = stores.read_ticks()?.len();
+        let learnings = stores.read_learnings()?.len();
+        let locks = stores.read_locks()?.len();
+        let agent_sessions = stores.read_agent_sessions()?.len();
 
-    // TaskStore stats (when available)
-    let taskstore_stats = if let Some(store) = &stores.store {
-        let s = store.lock().unwrap();
-        let ts_plans = s.list::<Plan>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_specs = s.list::<Spec>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_phases = s.list::<Phase>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_works = s.list::<Work>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_bundles = s.list::<Bundle>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_ticks = s.list::<Tick>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_learnings = s.list::<Learning>(&[]).map(|v| v.len()).unwrap_or(0);
-        let ts_locks = s.list::<Lock>(&[]).map(|v| v.len()).unwrap_or(0);
-        json!({
-            "enabled": true,
-            "counts": {
-                "plans": ts_plans,
-                "specs": ts_specs,
-                "phases": ts_phases,
-                "works": ts_works,
-                "bundles": ts_bundles,
-                "ticks": ts_ticks,
-                "learnings": ts_learnings,
-                "locks": ts_locks,
-            }
-        })
-    } else {
-        json!({ "enabled": false })
-    };
-
-    // Gap #33: Current Tick SHA — find the latest Published tick
-    let current_tick_sha: Option<String> = {
-        let ticks_map = stores.ticks.read().unwrap();
-        ticks_map
-            .values()
-            .filter(|t| t.status == TickStatus::Published)
-            .max_by_key(|t| t.number)
-            .and_then(|t| t.integration_sha.clone())
-    };
-
-    // Gap #33: Latest published tick ID for staleness check
-    let latest_tick_id: Option<String> = {
-        let ticks_map = stores.ticks.read().unwrap();
-        ticks_map
-            .values()
-            .filter(|t| t.status == TickStatus::Published)
-            .max_by_key(|t| t.number)
-            .map(|t| t.id.clone())
-    };
-
-    // Gap #33: Stale works count
-    let stale_works: usize = {
-        let wis = stores.works.read().unwrap();
-        let bundles_map = stores.bundles.read().unwrap();
-        if let Some(ref latest_tid) = latest_tick_id {
-            wis.values()
-                .filter(|wi| wi.status == WorkStatus::InProgress)
-                .filter(|wi| {
-                    bundles_map.values().any(|b| {
-                        b.work_id == wi.id
-                            && !matches!(
-                                b.status,
-                                BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
-                            )
-                            && b.base_tick_id.as_ref().is_some_and(|btid| btid != latest_tid)
-                    })
-                })
-                .count()
+        // TaskStore stats (when available)
+        let taskstore_stats = if let Some(store) = &stores.store {
+            let s = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+            let ts_plans = s.list::<Plan>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_specs = s.list::<Spec>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_phases = s.list::<Phase>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_works = s.list::<Work>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_bundles = s.list::<Bundle>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_ticks = s.list::<Tick>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_learnings = s.list::<Learning>(&[]).map(|v| v.len()).unwrap_or(0);
+            let ts_locks = s.list::<Lock>(&[]).map(|v| v.len()).unwrap_or(0);
+            json!({
+                "enabled": true,
+                "counts": {
+                    "plans": ts_plans,
+                    "specs": ts_specs,
+                    "phases": ts_phases,
+                    "works": ts_works,
+                    "bundles": ts_bundles,
+                    "ticks": ts_ticks,
+                    "learnings": ts_learnings,
+                    "locks": ts_locks,
+                }
+            })
         } else {
-            0
-        }
-    };
+            json!({ "enabled": false })
+        };
 
-    DaemonResponse::ok(
-        req.id,
-        json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "pid": std::process::id(),
-            "counts": {
-                "plans": plans,
-                "specs": specs,
-                "phases": phases,
-                "works": works,
-                "bundles": bundles,
-                "ticks": ticks,
-                "learnings": learnings,
-                "locks": locks,
-                "agent_sessions": agent_sessions,
-            },
-            "taskstore": taskstore_stats,
-            "current_tick_sha": current_tick_sha,
-            "stale_works": stale_works,
-        }),
-    )
+        // Gap #33: Current Tick SHA — find the latest Published tick
+        let current_tick_sha: Option<String> = {
+            let ticks_map = stores.read_ticks()?;
+            ticks_map
+                .values()
+                .filter(|t| t.status == TickStatus::Published)
+                .max_by_key(|t| t.number)
+                .and_then(|t| t.integration_sha.clone())
+        };
+
+        // Gap #33: Latest published tick ID for staleness check
+        let latest_tick_id: Option<String> = {
+            let ticks_map = stores.read_ticks()?;
+            ticks_map
+                .values()
+                .filter(|t| t.status == TickStatus::Published)
+                .max_by_key(|t| t.number)
+                .map(|t| t.id.clone())
+        };
+
+        // Gap #33: Stale works count
+        let stale_works: usize = {
+            let wis = stores.read_works()?;
+            let bundles_map = stores.read_bundles()?;
+            if let Some(ref latest_tid) = latest_tick_id {
+                wis.values()
+                    .filter(|wi| wi.status == WorkStatus::InProgress)
+                    .filter(|wi| {
+                        bundles_map.values().any(|b| {
+                            b.work_id == wi.id
+                                && !matches!(
+                                    b.status,
+                                    BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
+                                )
+                                && b.base_tick_id.as_ref().is_some_and(|btid| btid != latest_tid)
+                        })
+                    })
+                    .count()
+            } else {
+                0
+            }
+        };
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "pid": std::process::id(),
+                "counts": {
+                    "plans": plans,
+                    "specs": specs,
+                    "phases": phases,
+                    "works": works,
+                    "bundles": bundles,
+                    "ticks": ticks,
+                    "learnings": learnings,
+                    "locks": locks,
+                    "agent_sessions": agent_sessions,
+                },
+                "taskstore": taskstore_stats,
+                "current_tick_sha": current_tick_sha,
+                "stale_works": stale_works,
+            }),
+        ))
+    })
 }
 
 fn handle_shutdown(event_tx: &broadcast::Sender<DaemonEvent>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_shutdown()");
-    // Broadcast a shutdown event so the accept loop can pick it up
-    let _ = event_tx.send(DaemonEvent::new("system.shutdown", json!({})));
-    DaemonResponse::ok(req.id, json!({ "status": "shutting_down" }))
+    try_handler!(req.id, {
+        debug!("handle_shutdown()");
+        // Broadcast a shutdown event so the accept loop can pick it up
+        let _ = event_tx.send(DaemonEvent::new("system.shutdown", json!({})));
+        Ok(DaemonResponse::ok(req.id, json!({ "status": "shutting_down" })))
+    })
 }
 
 fn handle_plan_create(
@@ -452,118 +467,138 @@ fn handle_plan_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_plan_create()");
-    let title = req
-        .params
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let description = req
-        .params
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let acceptance_criteria = req
-        .params
-        .get("acceptance_criteria")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    try_handler!(req.id, {
+        debug!("handle_plan_create()");
+        let title = req
+            .params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let description = req
+            .params
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let acceptance_criteria = req
+            .params
+            .get("acceptance_criteria")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-    if title.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
-    }
-
-    // Reject if a Draft Plan already exists — Coordinator must abandon the old one first
-    {
-        let plans = stores.plans.read().unwrap();
-        if plans.values().any(|p| p.status == HierarchyStatus::Draft) {
-            return DaemonResponse::err(
+        if title.is_empty() {
+            return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::precondition_failed("A Draft Plan already exists; abandon it before creating a new one"),
-            );
+                RpcError::invalid_params("title is required"),
+            ));
         }
-    }
 
-    let plan = Plan::new(title, description, acceptance_criteria);
-    let plan_json = match serde_json::to_value(&plan) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // Reject if a Draft Plan already exists — Coordinator must abandon the old one first
+        {
+            let plans = stores.read_plans()?;
+            if plans.values().any(|p| p.status == HierarchyStatus::Draft) {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed("A Draft Plan already exists; abandon it before creating a new one"),
+                ));
+            }
+        }
 
-    let id = plan.id.clone();
+        let plan = Plan::new(title, description, acceptance_criteria);
+        let plan_json = match serde_json::to_value(&plan) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(plan.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        let id = plan.id.clone();
 
-    stores.plans.write().unwrap().insert(id.clone(), plan);
-    let _ = event_tx.send(DaemonEvent::record_created("plan", &id));
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(plan.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    DaemonResponse::ok(req.id, plan_json)
+        stores.write_plans()?.insert(id.clone(), plan);
+        let _ = event_tx.send(DaemonEvent::record_created("plan", &id));
+
+        Ok(DaemonResponse::ok(req.id, plan_json))
+    })
 }
 
 fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_plan_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_plan_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Plan>(id) {
-            Ok(Some(plan)) => {
-                return match serde_json::to_value(&plan) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Plan>(id)
+            {
+                Ok(Some(plan)) => {
+                    return match serde_json::to_value(&plan) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let plans = stores.plans.read().unwrap();
-    match plans.get(id) {
-        Some(plan) => match serde_json::to_value(plan) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("plan", id)),
-    }
+        let plans = stores.read_plans()?;
+        match plans.get(id) {
+            Some(plan) => match serde_json::to_value(plan) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", id))),
+        }
+    })
 }
 
 fn handle_plan_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_plan_list()");
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().list::<Plan>(&[]) {
-            Ok(plans) => {
-                return match serde_json::to_value(&plans) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    try_handler!(req.id, {
+        debug!("handle_plan_list()");
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Plan>(&[])
+            {
+                Ok(plans) => {
+                    return match serde_json::to_value(&plans) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let plans = stores.plans.read().unwrap();
-    let plan_list: Vec<&Plan> = plans.values().collect();
-    match serde_json::to_value(&plan_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        let plans = stores.read_plans()?;
+        let plan_list: Vec<&Plan> = plans.values().collect();
+        match serde_json::to_value(&plan_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_plan_transition(
@@ -571,95 +606,113 @@ fn handle_plan_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_plan_transition()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_plan_transition()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let target_status: PlanStatus = match req.params.get("target_status") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
-        },
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
-    };
+        let target_status: PlanStatus = match req.params.get("target_status") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid target_status"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("target_status is required"),
+                ));
+            }
+        };
 
-    let role: Role = match req.params.get("role") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(r) => r,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
-        },
-        None => Role::Coordinator,
-    };
+        let role: Role = match req.params.get("role") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
+            },
+            None => Role::Coordinator,
+        };
 
-    let skip_validation = req
-        .params
-        .get("skip_validation")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        let skip_validation = req
+            .params
+            .get("skip_validation")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-    let mut plans = stores.plans.write().unwrap();
-    let plan = match plans.get_mut(&id) {
-        Some(p) => p,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("plan", &id)),
-    };
+        let mut plans = stores.write_plans()?;
+        let plan = match plans.get_mut(&id) {
+            Some(p) => p,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &id))),
+        };
 
-    let from = plan.status;
-    let rules = hierarchy_transitions();
-    if let Err(e) = validate_transition(from, target_status, role, &rules) {
-        let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "plans",
+        let from = plan.status;
+        let rules = hierarchy_transitions();
+        if let Err(e) = validate_transition(from, target_status, role, &rules) {
+            let _ = event_tx.send(DaemonEvent::transition_rejected(
+                "plans",
+                &id,
+                &format!("{:?}", from),
+                &format!("{:?}", target_status),
+                &role.to_string(),
+                &e.to_string(),
+            ));
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&e.to_string()),
+            ));
+        }
+
+        // Validation gate: Draft → Active requires passing validation report
+        let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+        if let Some(err) = check_validation_gate(
+            stores,
+            event_tx,
+            from,
+            target_status,
+            "plan",
             &id,
-            &format!("{:?}", from),
-            &format!("{:?}", target_status),
+            skip_validation,
+            skip_reason,
+        ) {
+            return Ok(DaemonResponse::err(req.id, err));
+        }
+
+        plan.status = target_status;
+        plan.updated_at = crate::id::now_millis();
+        let plan_clone = plan.clone();
+        drop(plans);
+
+        // Persist transition to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(plan_clone.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        let plan_json = match serde_json::to_value(&plan_clone) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "plan",
+            &id,
+            &from.to_string(),
+            &target_status.to_string(),
             &role.to_string(),
-            &e.to_string(),
         ));
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
-    }
 
-    // Validation gate: Draft → Active requires passing validation report
-    let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
-    if let Some(err) = check_validation_gate(
-        stores,
-        event_tx,
-        from,
-        target_status,
-        "plan",
-        &id,
-        skip_validation,
-        skip_reason,
-    ) {
-        return DaemonResponse::err(req.id, err);
-    }
-
-    plan.status = target_status;
-    plan.updated_at = crate::id::now_millis();
-    let plan_clone = plan.clone();
-    drop(plans);
-
-    // Persist transition to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(plan_clone.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    let plan_json = match serde_json::to_value(&plan_clone) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
-
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "plan",
-        &id,
-        &from.to_string(),
-        &target_status.to_string(),
-        &role.to_string(),
-    ));
-
-    DaemonResponse::ok(req.id, plan_json)
+        Ok(DaemonResponse::ok(req.id, plan_json))
+    })
 }
 
 // --- Spec handlers ---
@@ -669,155 +722,180 @@ fn handle_spec_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_spec_create()");
-    let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("plan_id is required")),
-    };
-
-    // Verify parent plan exists and is not in a terminal state
-    {
-        let plans = stores.plans.read().unwrap();
-        match plans.get(&plan_id) {
-            None => return DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id)),
-            Some(plan) if matches!(plan.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
-                return DaemonResponse::err(
+    try_handler!(req.id, {
+        debug!("handle_spec_create()");
+        let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::precondition_failed(&format!(
-                        "Cannot create spec under {} plan '{}'",
-                        plan.status, plan_id
-                    )),
-                );
+                    RpcError::invalid_params("plan_id is required"),
+                ));
             }
-            _ => {}
-        }
-    }
+        };
 
-    let title = req
-        .params
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let description = req
-        .params
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if title.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
-    }
-
-    // Reject if a Draft Spec already exists under this Plan
-    {
-        let specs = stores.specs.read().unwrap();
-        if specs
-            .values()
-            .any(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
+        // Verify parent plan exists and is not in a terminal state
         {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed(
-                    "A Draft Spec already exists under this Plan; abandon it before creating a new one",
-                ),
-            );
+            let plans = stores.read_plans()?;
+            match plans.get(&plan_id) {
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id))),
+                Some(plan) if matches!(plan.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "Cannot create spec under {} plan '{}'",
+                            plan.status, plan_id
+                        )),
+                    ));
+                }
+                _ => {}
+            }
         }
-    }
 
-    let spec = Spec::new(plan_id, title, description);
-    let spec_json = match serde_json::to_value(&spec) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let title = req
+            .params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let description = req
+            .params
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-    let id = spec.id.clone();
+        if title.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("title is required"),
+            ));
+        }
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(spec.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Reject if a Draft Spec already exists under this Plan
+        {
+            let specs = stores.read_specs()?;
+            if specs
+                .values()
+                .any(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
+            {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(
+                        "A Draft Spec already exists under this Plan; abandon it before creating a new one",
+                    ),
+                ));
+            }
+        }
 
-    stores.specs.write().unwrap().insert(id.clone(), spec);
-    let _ = event_tx.send(DaemonEvent::record_created("spec", &id));
+        let spec = Spec::new(plan_id, title, description);
+        let spec_json = match serde_json::to_value(&spec) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    DaemonResponse::ok(req.id, spec_json)
+        let id = spec.id.clone();
+
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(spec.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        stores.write_specs()?.insert(id.clone(), spec);
+        let _ = event_tx.send(DaemonEvent::record_created("spec", &id));
+
+        Ok(DaemonResponse::ok(req.id, spec_json))
+    })
 }
 
 fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_spec_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_spec_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Spec>(id) {
-            Ok(Some(spec)) => {
-                return match serde_json::to_value(&spec) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Spec>(id)
+            {
+                Ok(Some(spec)) => {
+                    return match serde_json::to_value(&spec) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let specs = stores.specs.read().unwrap();
-    match specs.get(id) {
-        Some(spec) => match serde_json::to_value(spec) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("spec", id)),
-    }
+        let specs = stores.read_specs()?;
+        match specs.get(id) {
+            Some(spec) => match serde_json::to_value(spec) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", id))),
+        }
+    })
 }
 
 fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_spec_list()");
-    let plan_id_filter = req.params.get("plan_id").and_then(|v| v.as_str());
+    try_handler!(req.id, {
+        debug!("handle_spec_list()");
+        let plan_id_filter = req.params.get("plan_id").and_then(|v| v.as_str());
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let filters: Vec<Filter> = if let Some(pid) = plan_id_filter {
-            vec![Filter {
-                field: "plan_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(pid.to_string()),
-            }]
-        } else {
-            vec![]
-        };
-        match store.lock().unwrap().list::<Spec>(&filters) {
-            Ok(specs) => {
-                return match serde_json::to_value(&specs) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let filters: Vec<Filter> = if let Some(pid) = plan_id_filter {
+                vec![Filter {
+                    field: "plan_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(pid.to_string()),
+                }]
+            } else {
+                vec![]
+            };
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Spec>(&filters)
+            {
+                Ok(specs) => {
+                    return match serde_json::to_value(&specs) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let specs = stores.specs.read().unwrap();
-    let spec_list: Vec<&Spec> = specs
-        .values()
-        .filter(|s| plan_id_filter.is_none() || Some(s.plan_id.as_str()) == plan_id_filter)
-        .collect();
+        let specs = stores.read_specs()?;
+        let spec_list: Vec<&Spec> = specs
+            .values()
+            .filter(|s| plan_id_filter.is_none() || Some(s.plan_id.as_str()) == plan_id_filter)
+            .collect();
 
-    match serde_json::to_value(&spec_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&spec_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_spec_transition(
@@ -825,95 +903,113 @@ fn handle_spec_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_spec_transition()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_spec_transition()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let target_status: SpecStatus = match req.params.get("target_status") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
-        },
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
-    };
+        let target_status: SpecStatus = match req.params.get("target_status") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid target_status"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("target_status is required"),
+                ));
+            }
+        };
 
-    let role: Role = match req.params.get("role") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(r) => r,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
-        },
-        None => Role::Coordinator,
-    };
+        let role: Role = match req.params.get("role") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
+            },
+            None => Role::Coordinator,
+        };
 
-    let skip_validation = req
-        .params
-        .get("skip_validation")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        let skip_validation = req
+            .params
+            .get("skip_validation")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-    let mut specs = stores.specs.write().unwrap();
-    let spec = match specs.get_mut(&id) {
-        Some(s) => s,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("spec", &id)),
-    };
+        let mut specs = stores.write_specs()?;
+        let spec = match specs.get_mut(&id) {
+            Some(s) => s,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &id))),
+        };
 
-    let from = spec.status;
-    let rules = hierarchy_transitions();
-    if let Err(e) = validate_transition(from, target_status, role, &rules) {
-        let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "specs",
+        let from = spec.status;
+        let rules = hierarchy_transitions();
+        if let Err(e) = validate_transition(from, target_status, role, &rules) {
+            let _ = event_tx.send(DaemonEvent::transition_rejected(
+                "specs",
+                &id,
+                &format!("{:?}", from),
+                &format!("{:?}", target_status),
+                &role.to_string(),
+                &e.to_string(),
+            ));
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&e.to_string()),
+            ));
+        }
+
+        // Validation gate: Draft → Active requires passing validation report
+        let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+        if let Some(err) = check_validation_gate(
+            stores,
+            event_tx,
+            from,
+            target_status,
+            "spec",
             &id,
-            &format!("{:?}", from),
-            &format!("{:?}", target_status),
+            skip_validation,
+            skip_reason,
+        ) {
+            return Ok(DaemonResponse::err(req.id, err));
+        }
+
+        spec.status = target_status;
+        spec.updated_at = crate::id::now_millis();
+        let spec_clone = spec.clone();
+        drop(specs);
+
+        // Persist transition to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(spec_clone.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        let spec_json = match serde_json::to_value(&spec_clone) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "spec",
+            &id,
+            &from.to_string(),
+            &target_status.to_string(),
             &role.to_string(),
-            &e.to_string(),
         ));
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
-    }
 
-    // Validation gate: Draft → Active requires passing validation report
-    let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
-    if let Some(err) = check_validation_gate(
-        stores,
-        event_tx,
-        from,
-        target_status,
-        "spec",
-        &id,
-        skip_validation,
-        skip_reason,
-    ) {
-        return DaemonResponse::err(req.id, err);
-    }
-
-    spec.status = target_status;
-    spec.updated_at = crate::id::now_millis();
-    let spec_clone = spec.clone();
-    drop(specs);
-
-    // Persist transition to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(spec_clone.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    let spec_json = match serde_json::to_value(&spec_clone) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
-
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "spec",
-        &id,
-        &from.to_string(),
-        &target_status.to_string(),
-        &role.to_string(),
-    ));
-
-    DaemonResponse::ok(req.id, spec_json)
+        Ok(DaemonResponse::ok(req.id, spec_json))
+    })
 }
 
 // --- Phase handlers ---
@@ -923,156 +1019,181 @@ fn handle_phase_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_phase_create()");
-    let spec_id = match req.params.get("spec_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("spec_id is required")),
-    };
-
-    // Verify parent spec exists and is not in a terminal state
-    {
-        let specs = stores.specs.read().unwrap();
-        match specs.get(&spec_id) {
-            None => return DaemonResponse::err(req.id, RpcError::not_found("spec", &spec_id)),
-            Some(spec) if matches!(spec.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
-                return DaemonResponse::err(
+    try_handler!(req.id, {
+        debug!("handle_phase_create()");
+        let spec_id = match req.params.get("spec_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::precondition_failed(&format!(
-                        "Cannot create phase under {} spec '{}'",
-                        spec.status, spec_id
-                    )),
-                );
+                    RpcError::invalid_params("spec_id is required"),
+                ));
             }
-            _ => {}
-        }
-    }
+        };
 
-    let title = req
-        .params
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let description = req
-        .params
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let order = req.params.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
-    if title.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
-    }
-
-    // Reject if a Draft Phase already exists under this Spec
-    {
-        let phases = stores.phases.read().unwrap();
-        if phases
-            .values()
-            .any(|p| p.spec_id == spec_id && p.status == HierarchyStatus::Draft)
+        // Verify parent spec exists and is not in a terminal state
         {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed(
-                    "A Draft Phase already exists under this Spec; abandon it before creating a new one",
-                ),
-            );
+            let specs = stores.read_specs()?;
+            match specs.get(&spec_id) {
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &spec_id))),
+                Some(spec) if matches!(spec.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "Cannot create phase under {} spec '{}'",
+                            spec.status, spec_id
+                        )),
+                    ));
+                }
+                _ => {}
+            }
         }
-    }
 
-    let phase = Phase::new(spec_id, title, description, order);
-    let phase_json = match serde_json::to_value(&phase) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let title = req
+            .params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let description = req
+            .params
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let order = req.params.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
-    let id = phase.id.clone();
+        if title.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("title is required"),
+            ));
+        }
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(phase.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Reject if a Draft Phase already exists under this Spec
+        {
+            let phases = stores.read_phases()?;
+            if phases
+                .values()
+                .any(|p| p.spec_id == spec_id && p.status == HierarchyStatus::Draft)
+            {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(
+                        "A Draft Phase already exists under this Spec; abandon it before creating a new one",
+                    ),
+                ));
+            }
+        }
 
-    stores.phases.write().unwrap().insert(id.clone(), phase);
-    let _ = event_tx.send(DaemonEvent::record_created("phase", &id));
+        let phase = Phase::new(spec_id, title, description, order);
+        let phase_json = match serde_json::to_value(&phase) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    DaemonResponse::ok(req.id, phase_json)
+        let id = phase.id.clone();
+
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(phase.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        stores.write_phases()?.insert(id.clone(), phase);
+        let _ = event_tx.send(DaemonEvent::record_created("phase", &id));
+
+        Ok(DaemonResponse::ok(req.id, phase_json))
+    })
 }
 
 fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_phase_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_phase_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Phase>(id) {
-            Ok(Some(phase)) => {
-                return match serde_json::to_value(&phase) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Phase>(id)
+            {
+                Ok(Some(phase)) => {
+                    return match serde_json::to_value(&phase) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let phases = stores.phases.read().unwrap();
-    match phases.get(id) {
-        Some(phase) => match serde_json::to_value(phase) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("phase", id)),
-    }
+        let phases = stores.read_phases()?;
+        match phases.get(id) {
+            Some(phase) => match serde_json::to_value(phase) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", id))),
+        }
+    })
 }
 
 fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_phase_list()");
-    let spec_id_filter = req.params.get("spec_id").and_then(|v| v.as_str());
+    try_handler!(req.id, {
+        debug!("handle_phase_list()");
+        let spec_id_filter = req.params.get("spec_id").and_then(|v| v.as_str());
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let filters: Vec<Filter> = if let Some(sid) = spec_id_filter {
-            vec![Filter {
-                field: "spec_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(sid.to_string()),
-            }]
-        } else {
-            vec![]
-        };
-        match store.lock().unwrap().list::<Phase>(&filters) {
-            Ok(phases) => {
-                return match serde_json::to_value(&phases) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let filters: Vec<Filter> = if let Some(sid) = spec_id_filter {
+                vec![Filter {
+                    field: "spec_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(sid.to_string()),
+                }]
+            } else {
+                vec![]
+            };
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Phase>(&filters)
+            {
+                Ok(phases) => {
+                    return match serde_json::to_value(&phases) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let phases = stores.phases.read().unwrap();
-    let phase_list: Vec<&Phase> = phases
-        .values()
-        .filter(|p| spec_id_filter.is_none() || Some(p.spec_id.as_str()) == spec_id_filter)
-        .collect();
+        let phases = stores.read_phases()?;
+        let phase_list: Vec<&Phase> = phases
+            .values()
+            .filter(|p| spec_id_filter.is_none() || Some(p.spec_id.as_str()) == spec_id_filter)
+            .collect();
 
-    match serde_json::to_value(&phase_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&phase_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_phase_transition(
@@ -1080,95 +1201,113 @@ fn handle_phase_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_phase_transition()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_phase_transition()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let target_status: PhaseStatus = match req.params.get("target_status") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
-        },
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
-    };
+        let target_status: PhaseStatus = match req.params.get("target_status") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid target_status"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("target_status is required"),
+                ));
+            }
+        };
 
-    let role: Role = match req.params.get("role") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(r) => r,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
-        },
-        None => Role::Coordinator,
-    };
+        let role: Role = match req.params.get("role") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
+            },
+            None => Role::Coordinator,
+        };
 
-    let skip_validation = req
-        .params
-        .get("skip_validation")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        let skip_validation = req
+            .params
+            .get("skip_validation")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-    let mut phases = stores.phases.write().unwrap();
-    let phase = match phases.get_mut(&id) {
-        Some(p) => p,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("phase", &id)),
-    };
+        let mut phases = stores.write_phases()?;
+        let phase = match phases.get_mut(&id) {
+            Some(p) => p,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &id))),
+        };
 
-    let from = phase.status;
-    let rules = hierarchy_transitions();
-    if let Err(e) = validate_transition(from, target_status, role, &rules) {
-        let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "phases",
+        let from = phase.status;
+        let rules = hierarchy_transitions();
+        if let Err(e) = validate_transition(from, target_status, role, &rules) {
+            let _ = event_tx.send(DaemonEvent::transition_rejected(
+                "phases",
+                &id,
+                &format!("{:?}", from),
+                &format!("{:?}", target_status),
+                &role.to_string(),
+                &e.to_string(),
+            ));
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&e.to_string()),
+            ));
+        }
+
+        // Validation gate: Draft → Active requires passing validation report
+        let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
+        if let Some(err) = check_validation_gate(
+            stores,
+            event_tx,
+            from,
+            target_status,
+            "phase",
             &id,
-            &format!("{:?}", from),
-            &format!("{:?}", target_status),
+            skip_validation,
+            skip_reason,
+        ) {
+            return Ok(DaemonResponse::err(req.id, err));
+        }
+
+        phase.status = target_status;
+        phase.updated_at = crate::id::now_millis();
+        let phase_clone = phase.clone();
+        drop(phases);
+
+        // Persist transition to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(phase_clone.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        let phase_json = match serde_json::to_value(&phase_clone) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "phase",
+            &id,
+            &from.to_string(),
+            &target_status.to_string(),
             &role.to_string(),
-            &e.to_string(),
         ));
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
-    }
 
-    // Validation gate: Draft → Active requires passing validation report
-    let skip_reason = req.params.get("skip_reason").and_then(|v| v.as_str());
-    if let Some(err) = check_validation_gate(
-        stores,
-        event_tx,
-        from,
-        target_status,
-        "phase",
-        &id,
-        skip_validation,
-        skip_reason,
-    ) {
-        return DaemonResponse::err(req.id, err);
-    }
-
-    phase.status = target_status;
-    phase.updated_at = crate::id::now_millis();
-    let phase_clone = phase.clone();
-    drop(phases);
-
-    // Persist transition to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(phase_clone.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    let phase_json = match serde_json::to_value(&phase_clone) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
-
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "phase",
-        &id,
-        &from.to_string(),
-        &target_status.to_string(),
-        &role.to_string(),
-    ));
-
-    DaemonResponse::ok(req.id, phase_json)
+        Ok(DaemonResponse::ok(req.id, phase_json))
+    })
 }
 
 // --- Work handlers ---
@@ -1178,217 +1317,242 @@ fn handle_work_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_work_create()");
-    let phase_id = match req.params.get("phase_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("phase_id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_work_create()");
+        let phase_id = match req.params.get("phase_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("phase_id is required"),
+                ));
+            }
+        };
 
-    // Verify parent phase exists and is not in a terminal state
-    {
-        let phases = stores.phases.read().unwrap();
-        match phases.get(&phase_id) {
-            None => return DaemonResponse::err(req.id, RpcError::not_found("phase", &phase_id)),
-            Some(phase) if matches!(phase.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
-                return DaemonResponse::err(
+        // Verify parent phase exists and is not in a terminal state
+        {
+            let phases = stores.read_phases()?;
+            match phases.get(&phase_id) {
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &phase_id))),
+                Some(phase) if matches!(phase.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "Cannot create work under {} phase '{}'",
+                            phase.status, phase_id
+                        )),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let title = req
+            .params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let description = req
+            .params
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if title.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("title is required"),
+            ));
+        }
+
+        // Duplicate detection: reject work with same title in same phase (unless Abandoned)
+        {
+            let works = stores.read_works()?;
+            let duplicate = works.values().find(|wi| {
+                wi.phase_id == phase_id
+                    && wi.title.to_lowercase() == title.to_lowercase()
+                    && !matches!(wi.status, WorkStatus::Abandoned)
+            });
+            if let Some(dup) = duplicate {
+                return Ok(DaemonResponse::err(
                     req.id,
                     RpcError::precondition_failed(&format!(
-                        "Cannot create work under {} phase '{}'",
-                        phase.status, phase_id
+                        "Duplicate work '{}' already exists in phase {} with status {} (ID: {})",
+                        title, phase_id, dup.status, dup.id
                     )),
-                );
+                ));
             }
-            _ => {}
         }
-    }
 
-    let title = req
-        .params
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let description = req
-        .params
-        .get("description")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        let resource_tags: Vec<String> = req
+            .params
+            .get("resource_tags")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
 
-    if title.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("title is required"));
-    }
-
-    // Duplicate detection: reject work with same title in same phase (unless Abandoned)
-    {
-        let works = stores.works.read().unwrap();
-        let duplicate = works.values().find(|wi| {
-            wi.phase_id == phase_id
-                && wi.title.to_lowercase() == title.to_lowercase()
-                && !matches!(wi.status, WorkStatus::Abandoned)
-        });
-        if let Some(dup) = duplicate {
-            return DaemonResponse::err(
+        // #17: Work must have at least one resource_tag
+        if resource_tags.is_empty() {
+            return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::precondition_failed(&format!(
-                    "Duplicate work '{}' already exists in phase {} with status {} (ID: {})",
-                    title, phase_id, dup.status, dup.id
-                )),
-            );
+                RpcError::precondition_failed("Work must have at least one resource_tag"),
+            ));
         }
-    }
 
-    let resource_tags: Vec<String> = req
-        .params
-        .get("resource_tags")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+        let acceptance_criteria: Vec<String> = req
+            .params
+            .get("acceptance_criteria")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
 
-    // #17: Work must have at least one resource_tag
-    if resource_tags.is_empty() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::precondition_failed("Work must have at least one resource_tag"),
-        );
-    }
+        let dependencies: Vec<String> = req
+            .params
+            .get("dependencies")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
 
-    let acceptance_criteria: Vec<String> = req
-        .params
-        .get("acceptance_criteria")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-
-    let dependencies: Vec<String> = req
-        .params
-        .get("dependencies")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-
-    // #16: Validate dependencies — skip unknown IDs with warning instead of rejecting
-    let dependencies = if !dependencies.is_empty() {
-        let works = stores.works.read().unwrap();
-        let mut valid_deps = Vec::new();
-        for dep_id in &dependencies {
-            if dep_id.starts_with("batch:") {
-                // Batch references (e.g., "batch:0") can't be resolved here — skip with warning
-                log::warn!(
-                    "Work creation: batch dependency '{}' cannot be resolved at handler level, skipping",
-                    dep_id
-                );
-            } else if works.contains_key(dep_id) {
-                valid_deps.push(dep_id.clone());
-            } else {
-                log::warn!("Work creation: dependency '{}' not found, skipping", dep_id);
+        // #16: Validate dependencies — skip unknown IDs with warning instead of rejecting
+        let dependencies = if !dependencies.is_empty() {
+            let works = stores.read_works()?;
+            let mut valid_deps = Vec::new();
+            for dep_id in &dependencies {
+                if dep_id.starts_with("batch:") {
+                    // Batch references (e.g., "batch:0") can't be resolved here — skip with warning
+                    log::warn!(
+                        "Work creation: batch dependency '{}' cannot be resolved at handler level, skipping",
+                        dep_id
+                    );
+                } else if works.contains_key(dep_id) {
+                    valid_deps.push(dep_id.clone());
+                } else {
+                    log::warn!("Work creation: dependency '{}' not found, skipping", dep_id);
+                }
             }
+            valid_deps
+        } else {
+            dependencies
+        };
+
+        let mut work = Work::new(phase_id, title, description);
+        work.resource_tags = resource_tags;
+        work.acceptance_criteria = acceptance_criteria.clone();
+        work.dependencies = dependencies;
+
+        let id = work.id.clone();
+
+        // Auto-promote to Ready if acceptance_criteria are provided.
+        // Draft→Ready is always valid for Coordinator role.
+        if !acceptance_criteria.is_empty() {
+            work.status = WorkStatus::Ready;
+            work.updated_at = crate::id::now_millis();
         }
-        valid_deps
-    } else {
-        dependencies
-    };
 
-    let mut work = Work::new(phase_id, title, description);
-    work.resource_tags = resource_tags;
-    work.acceptance_criteria = acceptance_criteria.clone();
-    work.dependencies = dependencies;
+        // Persist to TaskStore
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(work.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let id = work.id.clone();
+        let wi_json = match serde_json::to_value(&work) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    // Auto-promote to Ready if acceptance_criteria are provided.
-    // Draft→Ready is always valid for Coordinator role.
-    if !acceptance_criteria.is_empty() {
-        work.status = WorkStatus::Ready;
-        work.updated_at = crate::id::now_millis();
-    }
+        stores.write_works()?.insert(id.clone(), work);
+        let _ = event_tx.send(DaemonEvent::record_created("work", &id));
 
-    // Persist to TaskStore
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(work.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    let wi_json = match serde_json::to_value(&work) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
-
-    stores.works.write().unwrap().insert(id.clone(), work);
-    let _ = event_tx.send(DaemonEvent::record_created("work", &id));
-
-    DaemonResponse::ok(req.id, wi_json)
+        Ok(DaemonResponse::ok(req.id, wi_json))
+    })
 }
 
 fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_work_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_work_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Work>(id) {
-            Ok(Some(wi)) => {
-                return match serde_json::to_value(&wi) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Work>(id)
+            {
+                Ok(Some(wi)) => {
+                    return match serde_json::to_value(&wi) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let works = stores.works.read().unwrap();
-    match works.get(id) {
-        Some(wi) => match serde_json::to_value(wi) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("work", id)),
-    }
+        let works = stores.read_works()?;
+        match works.get(id) {
+            Some(wi) => match serde_json::to_value(wi) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("work", id))),
+        }
+    })
 }
 
 fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_work_list()");
-    let phase_id_filter = req.params.get("phase_id").and_then(|v| v.as_str());
+    try_handler!(req.id, {
+        debug!("handle_work_list()");
+        let phase_id_filter = req.params.get("phase_id").and_then(|v| v.as_str());
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let filters: Vec<Filter> = if let Some(pid) = phase_id_filter {
-            vec![Filter {
-                field: "phase_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(pid.to_string()),
-            }]
-        } else {
-            vec![]
-        };
-        match store.lock().unwrap().list::<Work>(&filters) {
-            Ok(works) => {
-                return match serde_json::to_value(&works) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let filters: Vec<Filter> = if let Some(pid) = phase_id_filter {
+                vec![Filter {
+                    field: "phase_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(pid.to_string()),
+                }]
+            } else {
+                vec![]
+            };
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Work>(&filters)
+            {
+                Ok(works) => {
+                    return match serde_json::to_value(&works) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let works = stores.works.read().unwrap();
-    let wi_list: Vec<&Work> = works
-        .values()
-        .filter(|wi| phase_id_filter.is_none() || Some(wi.phase_id.as_str()) == phase_id_filter)
-        .collect();
+        let works = stores.read_works()?;
+        let wi_list: Vec<&Work> = works
+            .values()
+            .filter(|wi| phase_id_filter.is_none() || Some(wi.phase_id.as_str()) == phase_id_filter)
+            .collect();
 
-    match serde_json::to_value(&wi_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&wi_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_work_transition(
@@ -1396,140 +1560,158 @@ fn handle_work_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_work_transition()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_work_transition()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let target_status: WorkStatus = match req.params.get("target_status") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
-        },
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
-    };
+        let target_status: WorkStatus = match req.params.get("target_status") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid target_status"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("target_status is required"),
+                ));
+            }
+        };
 
-    let role: Role = match req.params.get("role") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(r) => r,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
-        },
-        None => Role::Coordinator,
-    };
+        let role: Role = match req.params.get("role") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
+            },
+            None => Role::Coordinator,
+        };
 
-    let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
-    let override_reason = req
-        .params
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .unwrap_or("no reason provided")
-        .to_string();
+        let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
+        let override_reason = req
+            .params
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("no reason provided")
+            .to_string();
 
-    let mut works = stores.works.write().unwrap();
-    let wi = match works.get_mut(&id) {
-        Some(w) => w,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("work", &id)),
-    };
+        let mut works = stores.write_works()?;
+        let wi = match works.get_mut(&id) {
+            Some(w) => w,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("work", &id))),
+        };
 
-    let from = wi.status;
-    let rules = if is_override { override_transitions() } else { work_transitions() };
-    if let Err(e) = validate_transition(from, target_status, role, &rules) {
-        let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "works",
-            &id,
-            &format!("{:?}", from),
-            &format!("{:?}", target_status),
-            &role.to_string(),
-            &e.to_string(),
-        ));
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
-    }
-
-    // Allow setting assignee via transition params
-    if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
-        wi.assignee = Some(assignee.to_string());
-    }
-
-    // #13: Assignee required for InProgress/InReview
-    if matches!(target_status, WorkStatus::InProgress | WorkStatus::InReview) && wi.assignee.is_none() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::precondition_failed("Work must have an assignee before transitioning to InProgress/InReview"),
-        );
-    }
-
-    // #14: acceptance_criteria required for Ready
-    if target_status == WorkStatus::Ready && wi.acceptance_criteria.is_empty() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::precondition_failed("Work must have acceptance_criteria before transitioning to Ready"),
-        );
-    }
-
-    // #15: InReview requires active Bundle (not Rejected/Merged/Superseded)
-    if target_status == WorkStatus::InReview {
-        let bundles = stores.bundles.read().unwrap();
-        let has_active_bundle = bundles.values().any(|b| {
-            b.work_id == wi.id
-                && !matches!(
-                    b.status,
-                    BundleStatus::Rejected | BundleStatus::Merged | BundleStatus::Superseded
-                )
-        });
-        if !has_active_bundle {
-            return DaemonResponse::err(
+        let from = wi.status;
+        let rules = if is_override { override_transitions() } else { work_transitions() };
+        if let Err(e) = validate_transition(from, target_status, role, &rules) {
+            let _ = event_tx.send(DaemonEvent::transition_rejected(
+                "works",
+                &id,
+                &format!("{:?}", from),
+                &format!("{:?}", target_status),
+                &role.to_string(),
+                &e.to_string(),
+            ));
+            return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::precondition_failed("Work cannot move to InReview without an active Bundle"),
-            );
+                RpcError::transition_rejected(&e.to_string()),
+            ));
         }
-    }
 
-    wi.status = target_status;
-    wi.updated_at = crate::id::now_millis();
-    let wi_clone = wi.clone();
-    drop(works);
+        // Allow setting assignee via transition params
+        if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
+            wi.assignee = Some(assignee.to_string());
+        }
 
-    // Persist transition to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(wi_clone.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // #13: Assignee required for InProgress/InReview
+        if matches!(target_status, WorkStatus::InProgress | WorkStatus::InReview) && wi.assignee.is_none() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("Work must have an assignee before transitioning to InProgress/InReview"),
+            ));
+        }
 
-    let wi_json = match serde_json::to_value(&wi_clone) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // #14: acceptance_criteria required for Ready
+        if target_status == WorkStatus::Ready && wi.acceptance_criteria.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("Work must have acceptance_criteria before transitioning to Ready"),
+            ));
+        }
 
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "work",
-        &id,
-        &from.to_string(),
-        &target_status.to_string(),
-        &role.to_string(),
-    ));
+        // #15: InReview requires active Bundle (not Rejected/Merged/Superseded)
+        if target_status == WorkStatus::InReview {
+            let bundles = stores.read_bundles()?;
+            let has_active_bundle = bundles.values().any(|b| {
+                b.work_id == wi.id
+                    && !matches!(
+                        b.status,
+                        BundleStatus::Rejected | BundleStatus::Merged | BundleStatus::Superseded
+                    )
+            });
+            if !has_active_bundle {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed("Work cannot move to InReview without an active Bundle"),
+                ));
+            }
+        }
 
-    if is_override {
-        log::warn!(
-            "OVERRIDE: Work {} transitioned {:?} → {:?} by Coordinator (reason: {})",
-            id,
-            from,
-            target_status,
-            override_reason
-        );
-        let _ = event_tx.send(DaemonEvent::new(
-            "work.override_transition",
-            serde_json::json!({
-                "work_id": id,
-                "from": format!("{:?}", from),
-                "to": format!("{:?}", target_status),
-                "reason": override_reason,
-            }),
+        wi.status = target_status;
+        wi.updated_at = crate::id::now_millis();
+        let wi_clone = wi.clone();
+        drop(works);
+
+        // Persist transition to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(wi_clone.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        let wi_json = match serde_json::to_value(&wi_clone) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "work",
+            &id,
+            &from.to_string(),
+            &target_status.to_string(),
+            &role.to_string(),
         ));
-    }
 
-    DaemonResponse::ok(req.id, wi_json)
+        if is_override {
+            log::warn!(
+                "OVERRIDE: Work {} transitioned {:?} → {:?} by Coordinator (reason: {})",
+                id,
+                from,
+                target_status,
+                override_reason
+            );
+            let _ = event_tx.send(DaemonEvent::new(
+                "work.override_transition",
+                serde_json::json!({
+                    "work_id": id,
+                    "from": format!("{:?}", from),
+                    "to": format!("{:?}", target_status),
+                    "reason": override_reason,
+                }),
+            ));
+        }
+
+        Ok(DaemonResponse::ok(req.id, wi_json))
+    })
 }
 
 // --- Bundle handlers ---
@@ -1539,202 +1721,230 @@ fn handle_bundle_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_bundle_create()");
-    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
-    };
-
-    // Verify parent work exists and is not in a terminal state
-    {
-        let works = stores.works.read().unwrap();
-        match works.get(&work_id) {
-            None => return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id)),
-            Some(work) if matches!(work.status, WorkStatus::Done | WorkStatus::Abandoned) => {
-                return DaemonResponse::err(
+    try_handler!(req.id, {
+        debug!("handle_bundle_create()");
+        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::precondition_failed(&format!(
-                        "Cannot create bundle under {} work '{}'",
-                        work.status, work_id
-                    )),
-                );
+                    RpcError::invalid_params("work_id is required"),
+                ));
             }
+        };
+
+        // Verify parent work exists and is not in a terminal state
+        {
+            let works = stores.read_works()?;
+            match works.get(&work_id) {
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("work", &work_id))),
+                Some(work) if matches!(work.status, WorkStatus::Done | WorkStatus::Abandoned) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "Cannot create bundle under {} work '{}'",
+                            work.status, work_id
+                        )),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let branch_name = req
+            .params
+            .get("branch_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if branch_name.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("branch_name is required"),
+            ));
+        }
+
+        let base_tick_id = req
+            .params
+            .get("base_tick_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Staleness guard: reject if base_tick_id is behind the latest Published Tick
+        let latest_published = find_latest_published_tick(stores);
+        match (&base_tick_id, &latest_published) {
+            // Published tick exists but bundle has no base_tick_id
+            (None, Some(latest)) => {
+                let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_id, "(none)", &latest.id));
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::stale_bundle("(none)", &latest.id),
+                ));
+            }
+            // Published tick exists and bundle's base_tick_id doesn't match it
+            (Some(base_id), Some(latest)) if base_id != &latest.id => {
+                let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_id, base_id, &latest.id));
+                return Ok(DaemonResponse::err(req.id, RpcError::stale_bundle(base_id, &latest.id)));
+            }
+            // No published tick and no base_tick_id: bootstrap case, OK
+            // base_tick_id matches latest published: OK
             _ => {}
         }
-    }
 
-    let branch_name = req
-        .params
-        .get("branch_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        // M1: Parse claims as array (backward-compat: also accepts string)
+        let claims: Vec<String> = match req.params.get("claims") {
+            Some(serde_json::Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            Some(serde_json::Value::String(s)) => {
+                if s.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![s.clone()]
+                }
+            }
+            _ => Vec::new(),
+        };
 
-    if branch_name.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("branch_name is required"));
-    }
+        let description = req
+            .params
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-    let base_tick_id = req
-        .params
-        .get("base_tick_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        let mut bundle = Bundle::new(work_id, base_tick_id, branch_name, claims);
+        bundle.description = description;
 
-    // Staleness guard: reject if base_tick_id is behind the latest Published Tick
-    let latest_published = find_latest_published_tick(stores);
-    match (&base_tick_id, &latest_published) {
-        // Published tick exists but bundle has no base_tick_id
-        (None, Some(latest)) => {
-            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_id, "(none)", &latest.id));
-            return DaemonResponse::err(req.id, RpcError::stale_bundle("(none)", &latest.id));
+        // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
+        let touched_paths_val = req
+            .params
+            .get("touched_paths")
+            .or_else(|| req.params.get("files_changed"));
+        if let Some(files) = touched_paths_val.and_then(|v| v.as_array()) {
+            bundle.touched_paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
-        // Published tick exists and bundle's base_tick_id doesn't match it
-        (Some(base_id), Some(latest)) if base_id != &latest.id => {
-            let _ = event_tx.send(DaemonEvent::bundle_rejected_stale(&work_id, base_id, &latest.id));
-            return DaemonResponse::err(req.id, RpcError::stale_bundle(base_id, &latest.id));
-        }
-        // No published tick and no base_tick_id: bootstrap case, OK
-        // base_tick_id matches latest published: OK
-        _ => {}
-    }
 
-    // M1: Parse claims as array (backward-compat: also accepts string)
-    let claims: Vec<String> = match req.params.get("claims") {
-        Some(serde_json::Value::Array(arr)) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-        Some(serde_json::Value::String(s)) => {
-            if s.is_empty() {
-                Vec::new()
-            } else {
-                vec![s.clone()]
+        // Gap #22: BundleSizePolicy enforcement on create
+        if !bundle.touched_paths.is_empty() {
+            let policy = &stores.config.strategy.bundle_size;
+            if bundle.touched_paths.len() as u32 > policy.max_files_touched {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Bundle touches {} files, exceeds max_files_touched={}",
+                        bundle.touched_paths.len(),
+                        policy.max_files_touched
+                    )),
+                ));
             }
         }
-        _ => Vec::new(),
-    };
 
-    let description = req
-        .params
-        .get("description")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        let bundle_json = match serde_json::to_value(&bundle) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let mut bundle = Bundle::new(work_id, base_tick_id, branch_name, claims);
-    bundle.description = description;
+        let id = bundle.id.clone();
 
-    // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
-    let touched_paths_val = req
-        .params
-        .get("touched_paths")
-        .or_else(|| req.params.get("files_changed"));
-    if let Some(files) = touched_paths_val.and_then(|v| v.as_array()) {
-        bundle.touched_paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-
-    // Gap #22: BundleSizePolicy enforcement on create
-    if !bundle.touched_paths.is_empty() {
-        let policy = &stores.config.strategy.bundle_size;
-        if bundle.touched_paths.len() as u32 > policy.max_files_touched {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed(&format!(
-                    "Bundle touches {} files, exceeds max_files_touched={}",
-                    bundle.touched_paths.len(),
-                    policy.max_files_touched
-                )),
-            );
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(bundle.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
-    }
 
-    let bundle_json = match serde_json::to_value(&bundle) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        stores.write_bundles()?.insert(id.clone(), bundle);
+        let _ = event_tx.send(DaemonEvent::record_created("bundle", &id));
 
-    let id = bundle.id.clone();
-
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(bundle.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    stores.bundles.write().unwrap().insert(id.clone(), bundle);
-    let _ = event_tx.send(DaemonEvent::record_created("bundle", &id));
-
-    DaemonResponse::ok(req.id, bundle_json)
+        Ok(DaemonResponse::ok(req.id, bundle_json))
+    })
 }
 
 fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_bundle_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_bundle_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Bundle>(id) {
-            Ok(Some(bundle)) => {
-                return match serde_json::to_value(&bundle) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Bundle>(id)
+            {
+                Ok(Some(bundle)) => {
+                    return match serde_json::to_value(&bundle) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let bundles = stores.bundles.read().unwrap();
-    match bundles.get(id) {
-        Some(bundle) => match serde_json::to_value(bundle) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("bundle", id)),
-    }
+        let bundles = stores.read_bundles()?;
+        match bundles.get(id) {
+            Some(bundle) => match serde_json::to_value(bundle) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("bundle", id))),
+        }
+    })
 }
 
 fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_bundle_list()");
-    let wi_filter = req.params.get("work_id").and_then(|v| v.as_str());
+    try_handler!(req.id, {
+        debug!("handle_bundle_list()");
+        let wi_filter = req.params.get("work_id").and_then(|v| v.as_str());
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let filters: Vec<Filter> = if let Some(wid) = wi_filter {
-            vec![Filter {
-                field: "work_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(wid.to_string()),
-            }]
-        } else {
-            vec![]
-        };
-        match store.lock().unwrap().list::<Bundle>(&filters) {
-            Ok(bundles) => {
-                return match serde_json::to_value(&bundles) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let filters: Vec<Filter> = if let Some(wid) = wi_filter {
+                vec![Filter {
+                    field: "work_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(wid.to_string()),
+                }]
+            } else {
+                vec![]
+            };
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Bundle>(&filters)
+            {
+                Ok(bundles) => {
+                    return match serde_json::to_value(&bundles) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let bundles = stores.bundles.read().unwrap();
-    let bundle_list: Vec<&Bundle> = bundles
-        .values()
-        .filter(|b| wi_filter.is_none() || Some(b.work_id.as_str()) == wi_filter)
-        .collect();
+        let bundles = stores.read_bundles()?;
+        let bundle_list: Vec<&Bundle> = bundles
+            .values()
+            .filter(|b| wi_filter.is_none() || Some(b.work_id.as_str()) == wi_filter)
+            .collect();
 
-    match serde_json::to_value(&bundle_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&bundle_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_bundle_transition(
@@ -1742,137 +1952,155 @@ fn handle_bundle_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_bundle_transition()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_bundle_transition()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let target_status: BundleStatus = match req.params.get("target_status") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
-        },
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
-    };
-
-    let role: Role = match req.params.get("role") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(r) => r,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
-        },
-        None => Role::Coordinator,
-    };
-
-    let mut bundles = stores.bundles.write().unwrap();
-
-    // Read bundle info first for validation
-    let (from, bundle_wi_id, touched_paths, mut verification) = match bundles.get(&id) {
-        Some(b) => (
-            b.status,
-            b.work_id.clone(),
-            b.touched_paths.clone(),
-            b.verification.clone(),
-        ),
-        None => return DaemonResponse::err(req.id, RpcError::not_found("bundle", &id)),
-    };
-
-    // Allow setting verification during transition (e.g., Reviewer sets it when transitioning to Reviewed)
-    if let Some(v) = req.params.get("verification").and_then(|v| v.as_str()) {
-        verification = v.to_string();
-    }
-
-    let rules = bundle_transitions();
-    if let Err(e) = validate_transition(from, target_status, role, &rules) {
-        let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "bundles",
-            &id,
-            &format!("{:?}", from),
-            &format!("{:?}", target_status),
-            &role.to_string(),
-            &e.to_string(),
-        ));
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
-    }
-
-    // #18: At most one Accepted Bundle per Work
-    if target_status == BundleStatus::Accepted {
-        let has_accepted = bundles
-            .values()
-            .any(|b| b.work_id == bundle_wi_id && b.id != id && b.status == BundleStatus::Accepted);
-        if has_accepted {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed("Work already has an Accepted Bundle"),
-            );
-        }
-    }
-
-    // Gap #17: Bundle cannot touch locked resources it doesn't own
-    if target_status == BundleStatus::Integrating {
-        let locks = stores.locks.read().unwrap();
-        for path in &touched_paths {
-            if let Some(lock) = locks.values().find(|l| l.resource == *path && l.is_active())
-                && lock.holder_id != bundle_wi_id
-            {
-                return DaemonResponse::err(
+        let target_status: BundleStatus = match req.params.get("target_status") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid target_status"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::precondition_failed(&format!(
-                        "Bundle touches locked resource '{}' owned by '{}'",
-                        path, lock.holder_id
-                    )),
-                );
+                    RpcError::invalid_params("target_status is required"),
+                ));
+            }
+        };
+
+        let role: Role = match req.params.get("role") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
+            },
+            None => Role::Coordinator,
+        };
+
+        let mut bundles = stores.write_bundles()?;
+
+        // Read bundle info first for validation
+        let (from, bundle_wi_id, touched_paths, mut verification) = match bundles.get(&id) {
+            Some(b) => (
+                b.status,
+                b.work_id.clone(),
+                b.touched_paths.clone(),
+                b.verification.clone(),
+            ),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("bundle", &id))),
+        };
+
+        // Allow setting verification during transition (e.g., Reviewer sets it when transitioning to Reviewed)
+        if let Some(v) = req.params.get("verification").and_then(|v| v.as_str()) {
+            verification = v.to_string();
+        }
+
+        let rules = bundle_transitions();
+        if let Err(e) = validate_transition(from, target_status, role, &rules) {
+            let _ = event_tx.send(DaemonEvent::transition_rejected(
+                "bundles",
+                &id,
+                &format!("{:?}", from),
+                &format!("{:?}", target_status),
+                &role.to_string(),
+                &e.to_string(),
+            ));
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&e.to_string()),
+            ));
+        }
+
+        // #18: At most one Accepted Bundle per Work
+        if target_status == BundleStatus::Accepted {
+            let has_accepted = bundles
+                .values()
+                .any(|b| b.work_id == bundle_wi_id && b.id != id && b.status == BundleStatus::Accepted);
+            if has_accepted {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed("Work already has an Accepted Bundle"),
+                ));
             }
         }
-    }
 
-    // Gap #18: Verification metadata required for Reviewed+
-    if matches!(
-        target_status,
-        BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating | BundleStatus::Merged
-    ) && !matches!(
-        from,
-        BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating
-    ) && verification.is_empty()
-    {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::precondition_failed("Bundle must have verification metadata before Reviewed+"),
-        );
-    }
+        // Gap #17: Bundle cannot touch locked resources it doesn't own
+        if target_status == BundleStatus::Integrating {
+            let locks = stores.read_locks()?;
+            for path in &touched_paths {
+                if let Some(lock) = locks.values().find(|l| l.resource == *path && l.is_active())
+                    && lock.holder_id != bundle_wi_id
+                {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "Bundle touches locked resource '{}' owned by '{}'",
+                            path, lock.holder_id
+                        )),
+                    ));
+                }
+            }
+        }
 
-    // Now get mutable reference and apply the transition
-    let bundle = bundles.get_mut(&id).unwrap();
-    bundle.status = target_status;
-    bundle.updated_at = crate::id::now_millis();
-    // Apply verification from transition params if provided
-    if !verification.is_empty() && bundle.verification.is_empty() {
-        bundle.verification = verification;
-    }
-    let bundle_clone = bundle.clone();
-    drop(bundles);
+        // Gap #18: Verification metadata required for Reviewed+
+        if matches!(
+            target_status,
+            BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating | BundleStatus::Merged
+        ) && !matches!(
+            from,
+            BundleStatus::Reviewed | BundleStatus::Accepted | BundleStatus::Integrating
+        ) && verification.is_empty()
+        {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed("Bundle must have verification metadata before Reviewed+"),
+            ));
+        }
 
-    // Persist transition to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(bundle_clone.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Now get mutable reference and apply the transition
+        let bundle = bundles.get_mut(&id).ok_or_else(|| eyre!("record not found: {id}"))?;
+        bundle.status = target_status;
+        bundle.updated_at = crate::id::now_millis();
+        // Apply verification from transition params if provided
+        if !verification.is_empty() && bundle.verification.is_empty() {
+            bundle.verification = verification;
+        }
+        let bundle_clone = bundle.clone();
+        drop(bundles);
 
-    let bundle_json = match serde_json::to_value(&bundle_clone) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // Persist transition to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(bundle_clone.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "bundle",
-        &id,
-        &from.to_string(),
-        &target_status.to_string(),
-        &role.to_string(),
-    ));
+        let bundle_json = match serde_json::to_value(&bundle_clone) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    DaemonResponse::ok(req.id, bundle_json)
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "bundle",
+            &id,
+            &from.to_string(),
+            &target_status.to_string(),
+            &role.to_string(),
+        ));
+
+        Ok(DaemonResponse::ok(req.id, bundle_json))
+    })
 }
 
 // --- Tick handlers ---
@@ -1882,125 +2110,142 @@ fn handle_tick_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_tick_create()");
-    // Singleton guard: at most one non-terminal Tick at a time
-    {
-        let ticks = stores.ticks.read().unwrap();
-        let active = ticks.values().any(|t| !t.status.is_terminal());
-        if active {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed("A non-terminal Tick already exists"),
-            );
+    try_handler!(req.id, {
+        debug!("handle_tick_create()");
+        // Singleton guard: at most one non-terminal Tick at a time
+        {
+            let ticks = stores.read_ticks()?;
+            let active = ticks.values().any(|t| !t.status.is_terminal());
+            if active {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed("A non-terminal Tick already exists"),
+                ));
+            }
         }
-    }
 
-    let number = match req.params.get("number").and_then(|v| v.as_u64()) {
-        Some(n) => n as u32,
-        None => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params("number is required (positive integer)"),
-            );
+        let number = match req.params.get("number").and_then(|v| v.as_u64()) {
+            Some(n) => n as u32,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("number is required (positive integer)"),
+                ));
+            }
+        };
+
+        let tick = Tick::new(number);
+        let tick_json = match serde_json::to_value(&tick) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let id = tick.id.clone();
+
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(tick.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
-    };
 
-    let tick = Tick::new(number);
-    let tick_json = match serde_json::to_value(&tick) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        stores.write_ticks()?.insert(id.clone(), tick);
+        let _ = event_tx.send(DaemonEvent::record_created("tick", &id));
 
-    let id = tick.id.clone();
-
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(tick.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    stores.ticks.write().unwrap().insert(id.clone(), tick);
-    let _ = event_tx.send(DaemonEvent::record_created("tick", &id));
-
-    DaemonResponse::ok(req.id, tick_json)
+        Ok(DaemonResponse::ok(req.id, tick_json))
+    })
 }
 
 fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_tick_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_tick_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Tick>(id) {
-            Ok(Some(tick)) => {
-                return match serde_json::to_value(&tick) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Tick>(id)
+            {
+                Ok(Some(tick)) => {
+                    return match serde_json::to_value(&tick) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let ticks = stores.ticks.read().unwrap();
-    match ticks.get(id) {
-        Some(tick) => match serde_json::to_value(tick) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("tick", id)),
-    }
+        let ticks = stores.read_ticks()?;
+        match ticks.get(id) {
+            Some(tick) => match serde_json::to_value(tick) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", id))),
+        }
+    })
 }
 
 fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_tick_list()");
-    // Optionally filter by status
-    let status_filter: Option<TickStatus> = req
-        .params
-        .get("status")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    try_handler!(req.id, {
+        debug!("handle_tick_list()");
+        // Optionally filter by status
+        let status_filter: Option<TickStatus> = req
+            .params
+            .get("status")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let filters: Vec<Filter> = if let Some(status) = &status_filter {
-            vec![Filter {
-                field: "status".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(status.to_string()),
-            }]
-        } else {
-            vec![]
-        };
-        match store.lock().unwrap().list::<Tick>(&filters) {
-            Ok(ticks) => {
-                return match serde_json::to_value(&ticks) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let filters: Vec<Filter> = if let Some(status) = &status_filter {
+                vec![Filter {
+                    field: "status".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(status.to_string()),
+                }]
+            } else {
+                vec![]
+            };
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Tick>(&filters)
+            {
+                Ok(ticks) => {
+                    return match serde_json::to_value(&ticks) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let ticks = stores.ticks.read().unwrap();
-    let tick_list: Vec<&Tick> = ticks
-        .values()
-        .filter(|t| status_filter.is_none() || Some(t.status) == status_filter)
-        .collect();
+        let ticks = stores.read_ticks()?;
+        let tick_list: Vec<&Tick> = ticks
+            .values()
+            .filter(|t| status_filter.is_none() || Some(t.status) == status_filter)
+            .collect();
 
-    match serde_json::to_value(&tick_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&tick_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_tick_transition(
@@ -2008,90 +2253,108 @@ fn handle_tick_transition(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_tick_transition()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_tick_transition()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let target_status: TickStatus = match req.params.get("target_status") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid target_status")),
-        },
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("target_status is required")),
-    };
+        let target_status: TickStatus = match req.params.get("target_status") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid target_status"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("target_status is required"),
+                ));
+            }
+        };
 
-    let role: Role = match req.params.get("role") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(r) => r,
-            Err(_) => return DaemonResponse::err(req.id, RpcError::invalid_params("invalid role")),
-        },
-        None => Role::Integrator,
-    };
+        let role: Role = match req.params.get("role") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(r) => r,
+                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
+            },
+            None => Role::Integrator,
+        };
 
-    let mut ticks = stores.ticks.write().unwrap();
+        let mut ticks = stores.write_ticks()?;
 
-    // Read current status immutably first for validation
-    let from = match ticks.get(&id) {
-        Some(t) => t.status,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("tick", &id)),
-    };
+        // Read current status immutably first for validation
+        let from = match ticks.get(&id) {
+            Some(t) => t.status,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &id))),
+        };
 
-    let rules = tick_transitions();
-    if let Err(e) = validate_transition(from, target_status, role, &rules) {
-        let _ = event_tx.send(DaemonEvent::transition_rejected(
-            "ticks",
-            &id,
-            &format!("{:?}", from),
-            &format!("{:?}", target_status),
-            &role.to_string(),
-            &e.to_string(),
-        ));
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e.to_string()));
-    }
-
-    // Gap #16: Only one Tick in Sealing/Validating at a time
-    if matches!(target_status, TickStatus::Sealing | TickStatus::Validating) {
-        let has_active = ticks
-            .values()
-            .any(|t| t.id != id && matches!(t.status, TickStatus::Sealing | TickStatus::Validating));
-        if has_active {
-            return DaemonResponse::err(
+        let rules = tick_transitions();
+        if let Err(e) = validate_transition(from, target_status, role, &rules) {
+            let _ = event_tx.send(DaemonEvent::transition_rejected(
+                "ticks",
+                &id,
+                &format!("{:?}", from),
+                &format!("{:?}", target_status),
+                &role.to_string(),
+                &e.to_string(),
+            ));
+            return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::precondition_failed("Another Tick is already in Sealing/Validating"),
-            );
+                RpcError::transition_rejected(&e.to_string()),
+            ));
         }
-    }
 
-    // Now get mutable reference and apply the transition
-    let tick = ticks.get_mut(&id).unwrap();
-    tick.status = target_status;
-    tick.updated_at = crate::id::now_millis();
-    let tick_clone = tick.clone();
-    drop(ticks);
+        // Gap #16: Only one Tick in Sealing/Validating at a time
+        if matches!(target_status, TickStatus::Sealing | TickStatus::Validating) {
+            let has_active = ticks
+                .values()
+                .any(|t| t.id != id && matches!(t.status, TickStatus::Sealing | TickStatus::Validating));
+            if has_active {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed("Another Tick is already in Sealing/Validating"),
+                ));
+            }
+        }
 
-    // Persist transition to TaskStore if available (matches work_transition pattern)
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(tick_clone.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Now get mutable reference and apply the transition
+        let tick = ticks.get_mut(&id).ok_or_else(|| eyre!("record not found: {id}"))?;
+        tick.status = target_status;
+        tick.updated_at = crate::id::now_millis();
+        let tick_clone = tick.clone();
+        drop(ticks);
 
-    let tick_json = match serde_json::to_value(&tick_clone) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // Persist transition to TaskStore if available (matches work_transition pattern)
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(tick_clone.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "tick",
-        &id,
-        &from.to_string(),
-        &target_status.to_string(),
-        &role.to_string(),
-    ));
+        let tick_json = match serde_json::to_value(&tick_clone) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    DaemonResponse::ok(req.id, tick_json)
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "tick",
+            &id,
+            &from.to_string(),
+            &target_status.to_string(),
+            &role.to_string(),
+        ));
+
+        Ok(DaemonResponse::ok(req.id, tick_json))
+    })
 }
 
 // --- Learning handlers ---
@@ -2101,166 +2364,192 @@ fn handle_learning_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_learning_create()");
-    let source_id = req
-        .params
-        .get("source_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let scope: LearningScope = match req.params.get("scope") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(s) => s,
-            Err(_) => {
-                return DaemonResponse::err(
+    try_handler!(req.id, {
+        debug!("handle_learning_create()");
+        let source_id = req
+            .params
+            .get("source_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let scope: LearningScope = match req.params.get("scope") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("invalid scope (work|phase|spec|plan|global)"),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("invalid scope (work|phase|spec|plan|global)"),
-                );
+                    RpcError::invalid_params("scope is required"),
+                ));
             }
-        },
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("scope is required"));
+        };
+        let content = req
+            .params
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if source_id.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("source_id is required"),
+            ));
         }
-    };
-    let content = req
-        .params
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        if content.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("content is required"),
+            ));
+        }
 
-    if source_id.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("source_id is required"));
-    }
-    if content.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("content is required"));
-    }
+        let mut learning = Learning::new(source_id, scope, content);
 
-    let mut learning = Learning::new(source_id, scope, content);
+        // M3: Parse applicable_roles
+        if let Some(roles_val) = req.params.get("applicable_roles")
+            && let Ok(roles) = serde_json::from_value::<Vec<Role>>(roles_val.clone())
+        {
+            learning.applicable_roles = Some(roles);
+        }
 
-    // M3: Parse applicable_roles
-    if let Some(roles_val) = req.params.get("applicable_roles")
-        && let Ok(roles) = serde_json::from_value::<Vec<Role>>(roles_val.clone())
-    {
-        learning.applicable_roles = Some(roles);
-    }
+        // M4: Parse resource_tags
+        if let Some(tags_val) = req.params.get("resource_tags")
+            && let Ok(tags) = serde_json::from_value::<Vec<String>>(tags_val.clone())
+        {
+            learning.resource_tags = tags;
+        }
 
-    // M4: Parse resource_tags
-    if let Some(tags_val) = req.params.get("resource_tags")
-        && let Ok(tags) = serde_json::from_value::<Vec<String>>(tags_val.clone())
-    {
-        learning.resource_tags = tags;
-    }
+        let learning_json = match serde_json::to_value(&learning) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let learning_json = match serde_json::to_value(&learning) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let id = learning.id.clone();
 
-    let id = learning.id.clone();
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(learning.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(learning.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        stores.write_learnings()?.insert(id.clone(), learning);
+        let _ = event_tx.send(DaemonEvent::record_created("learning", &id));
 
-    stores.learnings.write().unwrap().insert(id.clone(), learning);
-    let _ = event_tx.send(DaemonEvent::record_created("learning", &id));
-
-    DaemonResponse::ok(req.id, learning_json)
+        Ok(DaemonResponse::ok(req.id, learning_json))
+    })
 }
 
 fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_learning_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_learning_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Learning>(id) {
-            Ok(Some(learning)) => {
-                return match serde_json::to_value(&learning) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Learning>(id)
+            {
+                Ok(Some(learning)) => {
+                    return match serde_json::to_value(&learning) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let learnings = stores.learnings.read().unwrap();
-    match learnings.get(id) {
-        Some(learning) => match serde_json::to_value(learning) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("learning", id)),
-    }
+        let learnings = stores.read_learnings()?;
+        match learnings.get(id) {
+            Some(learning) => match serde_json::to_value(learning) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("learning", id))),
+        }
+    })
 }
 
 fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_learning_list()");
-    // Optionally filter by scope
-    let scope_filter: Option<LearningScope> = req
-        .params
-        .get("scope")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    try_handler!(req.id, {
+        debug!("handle_learning_list()");
+        // Optionally filter by scope
+        let scope_filter: Option<LearningScope> = req
+            .params
+            .get("scope")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    // Optionally filter by source_id
-    let source_id_filter = req
-        .params
-        .get("source_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        // Optionally filter by source_id
+        let source_id_filter = req
+            .params
+            .get("source_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let mut filters: Vec<Filter> = vec![];
-        if let Some(scope) = &scope_filter {
-            filters.push(Filter {
-                field: "scope".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(scope.to_string()),
-            });
-        }
-        if let Some(source_id) = &source_id_filter {
-            filters.push(Filter {
-                field: "source_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(source_id.clone()),
-            });
-        }
-        match store.lock().unwrap().list::<Learning>(&filters) {
-            Ok(learnings) => {
-                return match serde_json::to_value(&learnings) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let mut filters: Vec<Filter> = vec![];
+            if let Some(scope) = &scope_filter {
+                filters.push(Filter {
+                    field: "scope".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(scope.to_string()),
+                });
             }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            if let Some(source_id) = &source_id_filter {
+                filters.push(Filter {
+                    field: "source_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(source_id.clone()),
+                });
+            }
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Learning>(&filters)
+            {
+                Ok(learnings) => {
+                    return match serde_json::to_value(&learnings) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let learnings = stores.learnings.read().unwrap();
-    let learning_list: Vec<&Learning> = learnings
-        .values()
-        .filter(|l| scope_filter.is_none() || Some(l.scope) == scope_filter)
-        .filter(|l| source_id_filter.is_none() || Some(l.source_id.as_str()) == source_id_filter.as_deref())
-        .collect();
+        let learnings = stores.read_learnings()?;
+        let learning_list: Vec<&Learning> = learnings
+            .values()
+            .filter(|l| scope_filter.is_none() || Some(l.scope) == scope_filter)
+            .filter(|l| source_id_filter.is_none() || Some(l.source_id.as_str()) == source_id_filter.as_deref())
+            .collect();
 
-    match serde_json::to_value(&learning_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&learning_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_learning_reinforce(
@@ -2268,36 +2557,41 @@ fn handle_learning_reinforce(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_learning_reinforce()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_learning_reinforce()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut learnings = stores.learnings.write().unwrap();
-    let learning = match learnings.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
-    };
+        let mut learnings = stores.write_learnings()?;
+        let learning = match learnings.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("learning", &id))),
+        };
 
-    let promotion = stores.config.strategy.promotion;
-    learning.reinforce(&promotion);
+        let promotion = stores.config.strategy.promotion;
+        learning.reinforce(&promotion);
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(learning.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(learning.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let learning_json = match serde_json::to_value(&*learning) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let learning_json = match serde_json::to_value(&*learning) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+        let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
 
-    DaemonResponse::ok(req.id, learning_json)
+        Ok(DaemonResponse::ok(req.id, learning_json))
+    })
 }
 
 fn handle_learning_contradict(
@@ -2305,39 +2599,44 @@ fn handle_learning_contradict(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_learning_contradict()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_learning_contradict()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut learnings = stores.learnings.write().unwrap();
-    let learning = match learnings.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
-    };
+        let mut learnings = stores.write_learnings()?;
+        let learning = match learnings.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("learning", &id))),
+        };
 
-    let was_promoted = learning.promoted;
-    learning.contradict();
+        let was_promoted = learning.promoted;
+        learning.contradict();
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(learning.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(learning.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let learning_json = match serde_json::to_value(&*learning) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let learning_json = match serde_json::to_value(&*learning) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
-    if was_promoted {
-        let _ = event_tx.send(DaemonEvent::learning_policy_contradicted(&id));
-    }
+        let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+        if was_promoted {
+            let _ = event_tx.send(DaemonEvent::learning_policy_contradicted(&id));
+        }
 
-    DaemonResponse::ok(req.id, learning_json)
+        Ok(DaemonResponse::ok(req.id, learning_json))
+    })
 }
 
 fn handle_learning_promote(
@@ -2345,36 +2644,41 @@ fn handle_learning_promote(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_learning_promote()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_learning_promote()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut learnings = stores.learnings.write().unwrap();
-    let learning = match learnings.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
-    };
+        let mut learnings = stores.write_learnings()?;
+        let learning = match learnings.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("learning", &id))),
+        };
 
-    learning.promote();
-    learning.updated_at = crate::id::now_millis();
+        learning.promote();
+        learning.updated_at = crate::id::now_millis();
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(learning.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(learning.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let learning_json = match serde_json::to_value(&*learning) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let learning_json = match serde_json::to_value(&*learning) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+        let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
 
-    DaemonResponse::ok(req.id, learning_json)
+        Ok(DaemonResponse::ok(req.id, learning_json))
+    })
 }
 
 fn handle_learning_demote(
@@ -2382,36 +2686,41 @@ fn handle_learning_demote(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_learning_demote()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_learning_demote()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut learnings = stores.learnings.write().unwrap();
-    let learning = match learnings.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("learning", &id)),
-    };
+        let mut learnings = stores.write_learnings()?;
+        let learning = match learnings.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("learning", &id))),
+        };
 
-    learning.demote();
-    learning.updated_at = crate::id::now_millis();
+        learning.demote();
+        learning.updated_at = crate::id::now_millis();
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(learning.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(learning.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let learning_json = match serde_json::to_value(&*learning) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let learning_json = match serde_json::to_value(&*learning) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
+        let _ = event_tx.send(DaemonEvent::record_updated("learning", &id));
 
-    DaemonResponse::ok(req.id, learning_json)
+        Ok(DaemonResponse::ok(req.id, learning_json))
+    })
 }
 
 // --- Lock handlers ---
@@ -2421,185 +2730,211 @@ fn handle_lock_create(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_lock_create()");
-    let resource = req
-        .params
-        .get("resource")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let holder_id = req
-        .params
-        .get("holder_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let granted_by = req
-        .params
-        .get("granted_by")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    try_handler!(req.id, {
+        debug!("handle_lock_create()");
+        let resource = req
+            .params
+            .get("resource")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let holder_id = req
+            .params
+            .get("holder_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let granted_by = req
+            .params
+            .get("granted_by")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-    if resource.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("resource is required"));
-    }
-    if holder_id.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("holder_id is required"));
-    }
-    if granted_by.is_empty() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("granted_by is required"));
-    }
-
-    let mut lock = Lock::new(resource, holder_id, granted_by);
-
-    // #11: Accept optional ttl_secs param; compute expires_at
-    if let Some(ttl_secs) = req.params.get("ttl_secs").and_then(|v| v.as_u64()) {
-        lock.expires_at = Some(crate::id::now_millis() + (ttl_secs as i64 * 1000));
-    }
-
-    // Gap #25: If no explicit TTL, apply max_lock_ttl_minutes from config
-    if lock.expires_at.is_none() {
-        let ttl_minutes = stores.config.strategy.max_lock_ttl_minutes;
-        if ttl_minutes > 0 {
-            lock.expires_at = Some(crate::id::now_millis() + (ttl_minutes as i64 * 60 * 1000));
+        if resource.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("resource is required"),
+            ));
         }
-    }
-    if let Some(renewable) = req.params.get("renewable").and_then(|v| v.as_bool()) {
-        lock.renewable = renewable;
-    }
+        if holder_id.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("holder_id is required"),
+            ));
+        }
+        if granted_by.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("granted_by is required"),
+            ));
+        }
 
-    // Auto-expire any locks that have passed their TTL
-    {
-        let mut locks = stores.locks.write().unwrap();
-        for existing_lock in locks.values_mut() {
-            if existing_lock.is_active() && existing_lock.is_expired() {
-                existing_lock.expire();
+        let mut lock = Lock::new(resource, holder_id, granted_by);
+
+        // #11: Accept optional ttl_secs param; compute expires_at
+        if let Some(ttl_secs) = req.params.get("ttl_secs").and_then(|v| v.as_u64()) {
+            lock.expires_at = Some(crate::id::now_millis() + (ttl_secs as i64 * 1000));
+        }
+
+        // Gap #25: If no explicit TTL, apply max_lock_ttl_minutes from config
+        if lock.expires_at.is_none() {
+            let ttl_minutes = stores.config.strategy.max_lock_ttl_minutes;
+            if ttl_minutes > 0 {
+                lock.expires_at = Some(crate::id::now_millis() + (ttl_minutes as i64 * 60 * 1000));
             }
         }
-    }
+        if let Some(renewable) = req.params.get("renewable").and_then(|v| v.as_bool()) {
+            lock.renewable = renewable;
+        }
 
-    let lock_json = match serde_json::to_value(&lock) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // Auto-expire any locks that have passed their TTL
+        {
+            let mut locks = stores.write_locks()?;
+            for existing_lock in locks.values_mut() {
+                if existing_lock.is_active() && existing_lock.is_expired() {
+                    existing_lock.expire();
+                }
+            }
+        }
 
-    let id = lock.id.clone();
+        let lock_json = match serde_json::to_value(&lock) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(lock.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        let id = lock.id.clone();
 
-    stores.locks.write().unwrap().insert(id.clone(), lock);
-    let _ = event_tx.send(DaemonEvent::record_created("lock", &id));
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(lock.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    DaemonResponse::ok(req.id, lock_json)
+        stores.write_locks()?.insert(id.clone(), lock);
+        let _ = event_tx.send(DaemonEvent::record_created("lock", &id));
+
+        Ok(DaemonResponse::ok(req.id, lock_json))
+    })
 }
 
 fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_lock_get()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_lock_get()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<Lock>(id) {
-            Ok(Some(lock)) => {
-                return match serde_json::to_value(&lock) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
-            }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<Lock>(id)
+            {
+                Ok(Some(lock)) => {
+                    return match serde_json::to_value(&lock) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let locks = stores.locks.read().unwrap();
-    match locks.get(id) {
-        Some(lock) => match serde_json::to_value(lock) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("lock", id)),
-    }
+        let locks = stores.read_locks()?;
+        match locks.get(id) {
+            Some(lock) => match serde_json::to_value(lock) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(req.id, RpcError::not_found("lock", id))),
+        }
+    })
 }
 
 fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_lock_list()");
-    // Optionally filter by resource
-    let resource_filter = req
-        .params
-        .get("resource")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    try_handler!(req.id, {
+        debug!("handle_lock_list()");
+        // Optionally filter by resource
+        let resource_filter = req
+            .params
+            .get("resource")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-    // Optionally filter by holder_id
-    let holder_filter = req
-        .params
-        .get("holder_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        // Optionally filter by holder_id
+        let holder_filter = req
+            .params
+            .get("holder_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-    // Optionally filter by active-only
-    let active_only = req.params.get("active_only").and_then(|v| v.as_bool()).unwrap_or(false);
+        // Optionally filter by active-only
+        let active_only = req.params.get("active_only").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        let mut filters: Vec<Filter> = vec![];
-        if let Some(resource) = &resource_filter {
-            filters.push(Filter {
-                field: "resource".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(resource.clone()),
-            });
-        }
-        if let Some(holder_id) = &holder_filter {
-            filters.push(Filter {
-                field: "holder_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(holder_id.clone()),
-            });
-        }
-        if active_only {
-            filters.push(Filter {
-                field: "status".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String("Active".to_string()),
-            });
-        }
-        match store.lock().unwrap().list::<Lock>(&filters) {
-            Ok(locks) => {
-                return match serde_json::to_value(&locks) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            let mut filters: Vec<Filter> = vec![];
+            if let Some(resource) = &resource_filter {
+                filters.push(Filter {
+                    field: "resource".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(resource.clone()),
+                });
             }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            if let Some(holder_id) = &holder_filter {
+                filters.push(Filter {
+                    field: "holder_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(holder_id.clone()),
+                });
+            }
+            if active_only {
+                filters.push(Filter {
+                    field: "status".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String("Active".to_string()),
+                });
+            }
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<Lock>(&filters)
+            {
+                Ok(locks) => {
+                    return match serde_json::to_value(&locks) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let locks = stores.locks.read().unwrap();
-    let lock_list: Vec<&Lock> = locks
-        .values()
-        .filter(|l| resource_filter.is_none() || Some(l.resource.as_str()) == resource_filter.as_deref())
-        .filter(|l| holder_filter.is_none() || Some(l.holder_id.as_str()) == holder_filter.as_deref())
-        .filter(|l| !active_only || l.is_active())
-        .collect();
+        let locks = stores.read_locks()?;
+        let lock_list: Vec<&Lock> = locks
+            .values()
+            .filter(|l| resource_filter.is_none() || Some(l.resource.as_str()) == resource_filter.as_deref())
+            .filter(|l| holder_filter.is_none() || Some(l.holder_id.as_str()) == holder_filter.as_deref())
+            .filter(|l| !active_only || l.is_active())
+            .collect();
 
-    match serde_json::to_value(&lock_list) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&lock_list) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_lock_release(
@@ -2607,40 +2942,48 @@ fn handle_lock_release(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_lock_release()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_lock_release()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut locks = stores.locks.write().unwrap();
-    let lock = match locks.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("lock", &id)),
-    };
+        let mut locks = stores.write_locks()?;
+        let lock = match locks.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("lock", &id))),
+        };
 
-    if !lock.is_active() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("lock is not active"));
-    }
+        if !lock.is_active() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("lock is not active"),
+            ));
+        }
 
-    lock.release();
-    lock.updated_at = crate::id::now_millis();
+        lock.release();
+        lock.updated_at = crate::id::now_millis();
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(lock.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(lock.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let lock_json = match serde_json::to_value(&*lock) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let lock_json = match serde_json::to_value(&*lock) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("lock", &id));
+        let _ = event_tx.send(DaemonEvent::record_updated("lock", &id));
 
-    DaemonResponse::ok(req.id, lock_json)
+        Ok(DaemonResponse::ok(req.id, lock_json))
+    })
 }
 
 fn handle_lock_expire(
@@ -2648,40 +2991,48 @@ fn handle_lock_expire(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_lock_expire()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_lock_expire()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut locks = stores.locks.write().unwrap();
-    let lock = match locks.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("lock", &id)),
-    };
+        let mut locks = stores.write_locks()?;
+        let lock = match locks.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("lock", &id))),
+        };
 
-    if !lock.is_active() {
-        return DaemonResponse::err(req.id, RpcError::invalid_params("lock is not active"));
-    }
+        if !lock.is_active() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("lock is not active"),
+            ));
+        }
 
-    lock.expire();
-    lock.updated_at = crate::id::now_millis();
+        lock.expire();
+        lock.updated_at = crate::id::now_millis();
 
-    // Persist to TaskStore if available
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(lock.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore if available
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(lock.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let lock_json = match serde_json::to_value(&*lock) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let lock_json = match serde_json::to_value(&*lock) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("lock", &id));
+        let _ = event_tx.send(DaemonEvent::record_updated("lock", &id));
 
-    DaemonResponse::ok(req.id, lock_json)
+        Ok(DaemonResponse::ok(req.id, lock_json))
+    })
 }
 
 // --- Worktree handlers ---
@@ -2692,63 +3043,80 @@ fn handle_worktree_create(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_worktree_create()");
-    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
-    };
-
-    let base_ref = req
-        .params
-        .get("base_ref")
-        .and_then(|v| v.as_str())
-        .unwrap_or("HEAD")
-        .to_string();
-
-    // Validate the work exists (TaskStore first, fallback to HashMap)
-    {
-        let found = if let Some(store) = &stores.store {
-            store.lock().unwrap().get::<Work>(&work_id).ok().is_some()
-        } else {
-            false
+    try_handler!(req.id, {
+        debug!("handle_worktree_create()");
+        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("work_id is required"),
+                ));
+            }
         };
-        if !found {
-            let works = stores.works.read().unwrap();
-            if !works.contains_key(&work_id) {
-                return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id));
+
+        let base_ref = req
+            .params
+            .get("base_ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("HEAD")
+            .to_string();
+
+        // Validate the work exists (TaskStore first, fallback to HashMap)
+        {
+            let found = if let Some(store) = &stores.store {
+                store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .get::<Work>(&work_id)
+                    .ok()
+                    .is_some()
+            } else {
+                false
+            };
+            if !found {
+                let works = stores.read_works()?;
+                if !works.contains_key(&work_id) {
+                    return Ok(DaemonResponse::err(req.id, RpcError::not_found("work", &work_id)));
+                }
             }
         }
-    }
 
-    // Check if worktree already exists before attempting git operations
-    if worktree_mgr.exists(&work_id) {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::invalid_params(&format!("worktree already exists for work {work_id}")),
-        );
-    }
-
-    match worktree_mgr.create(&work_id, &base_ref) {
-        Ok(path) => {
-            let _ = event_tx.send(DaemonEvent::new(
-                "worktree.created",
-                json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+        // Check if worktree already exists before attempting git operations
+        if worktree_mgr.exists(&work_id) {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params(&format!("worktree already exists for work {work_id}")),
             ));
-            DaemonResponse::ok(req.id, json!({ "work_id": work_id, "path": path.to_string_lossy() }))
         }
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+
+        match worktree_mgr.create(&work_id, &base_ref) {
+            Ok(path) => {
+                let _ = event_tx.send(DaemonEvent::new(
+                    "worktree.created",
+                    json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+                ));
+                Ok(DaemonResponse::ok(
+                    req.id,
+                    json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+                ))
+            }
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_worktree_list(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_worktree_list()");
-    match worktree_mgr.list() {
-        Ok(worktrees) => match serde_json::to_value(&worktrees) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+    try_handler!(req.id, {
+        debug!("handle_worktree_list()");
+        match worktree_mgr.list() {
+            Ok(worktrees) => match serde_json::to_value(&worktrees) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 fn handle_worktree_cleanup(
@@ -2757,61 +3125,83 @@ fn handle_worktree_cleanup(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_worktree_cleanup()");
-    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
-    };
-
-    // Validate the work exists (TaskStore first, fallback to HashMap)
-    {
-        let found = if let Some(store) = &stores.store {
-            store.lock().unwrap().get::<Work>(&work_id).ok().is_some()
-        } else {
-            false
+    try_handler!(req.id, {
+        debug!("handle_worktree_cleanup()");
+        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("work_id is required"),
+                ));
+            }
         };
-        if !found {
-            let works = stores.works.read().unwrap();
-            if !works.contains_key(&work_id) {
-                return DaemonResponse::err(req.id, RpcError::not_found("work", &work_id));
+
+        // Validate the work exists (TaskStore first, fallback to HashMap)
+        {
+            let found = if let Some(store) = &stores.store {
+                store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .get::<Work>(&work_id)
+                    .ok()
+                    .is_some()
+            } else {
+                false
+            };
+            if !found {
+                let works = stores.read_works()?;
+                if !works.contains_key(&work_id) {
+                    return Ok(DaemonResponse::err(req.id, RpcError::not_found("work", &work_id)));
+                }
             }
         }
-    }
 
-    let path = worktree_mgr.worktree_path(&work_id);
-    match worktree_mgr.cleanup(&work_id) {
-        Ok(()) => {
-            let _ = event_tx.send(DaemonEvent::new(
-                "worktree.cleaned",
-                json!({ "work_id": work_id, "path": path.to_string_lossy() }),
-            ));
-            DaemonResponse::ok(
-                req.id,
-                json!({ "work_id": work_id, "path": path.to_string_lossy(), "status": "cleaned" }),
-            )
+        let path = worktree_mgr.worktree_path(&work_id);
+        match worktree_mgr.cleanup(&work_id) {
+            Ok(()) => {
+                let _ = event_tx.send(DaemonEvent::new(
+                    "worktree.cleaned",
+                    json!({ "work_id": work_id, "path": path.to_string_lossy() }),
+                ));
+                Ok(DaemonResponse::ok(
+                    req.id,
+                    json!({ "work_id": work_id, "path": path.to_string_lossy(), "status": "cleaned" }),
+                ))
+            }
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         }
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+    })
 }
 
 fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_worktree_refresh()");
-    let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("work_id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_worktree_refresh()");
+        let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("work_id is required"),
+                ));
+            }
+        };
 
-    let new_base_ref = req
-        .params
-        .get("new_base_ref")
-        .and_then(|v| v.as_str())
-        .unwrap_or("HEAD")
-        .to_string();
+        let new_base_ref = req
+            .params
+            .get("new_base_ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("HEAD")
+            .to_string();
 
-    match worktree_mgr.refresh(&work_id, &new_base_ref) {
-        Ok(()) => DaemonResponse::ok(req.id, json!({ "work_id": work_id, "status": "refreshed" })),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match worktree_mgr.refresh(&work_id, &new_base_ref) {
+            Ok(()) => Ok(DaemonResponse::ok(
+                req.id,
+                json!({ "work_id": work_id, "status": "refreshed" }),
+            )),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 // --- Integrator handlers ---
@@ -2870,102 +3260,119 @@ fn handle_integrator_validate(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_integrator_validate()");
-    let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("tick_id is required")),
-    };
-
-    // Verify tick exists and is in Sealing state
-    {
-        let ticks = stores.ticks.read().unwrap();
-        let tick = match ticks.get(&tick_id) {
-            Some(t) => t,
-            None => return DaemonResponse::err(req.id, RpcError::not_found("tick", &tick_id)),
+    try_handler!(req.id, {
+        debug!("handle_integrator_validate()");
+        let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("tick_id is required"),
+                ));
+            }
         };
-        if tick.status != TickStatus::Sealing {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::transition_rejected(&format!(
-                    "tick must be in Sealing state to validate (currently {:?})",
-                    tick.status
-                )),
-            );
-        }
-    }
 
-    // Transition to Validating
-    {
-        let mut ticks = stores.ticks.write().unwrap();
-        let tick = ticks.get_mut(&tick_id).unwrap();
-        tick.status = TickStatus::Validating;
-        tick.updated_at = crate::id::now_millis();
-
-        // Persist to TaskStore if available
-        if let Some(store) = &stores.store
-            && let Err(e) = store.lock().unwrap().update(tick.clone())
+        // Verify tick exists and is in Sealing state
         {
-            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            let ticks = stores.read_ticks()?;
+            let tick = match ticks.get(&tick_id) {
+                Some(t) => t,
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &tick_id))),
+            };
+            if tick.status != TickStatus::Sealing {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::transition_rejected(&format!(
+                        "tick must be in Sealing state to validate (currently {:?})",
+                        tick.status
+                    )),
+                ));
+            }
         }
-    }
-    let _ = event_tx.send(DaemonEvent::transition_completed(
-        "tick",
-        &tick_id,
-        "Sealing",
-        "Validating",
-        "Integrator",
-    ));
 
-    // Emit validation.started event
-    let _ = event_tx.send(DaemonEvent::validation_started(&tick_id));
+        // Transition to Validating
+        {
+            let mut ticks = stores.write_ticks()?;
+            let tick = ticks
+                .get_mut(&tick_id)
+                .ok_or_else(|| eyre!("record not found: {tick_id}"))?;
+            tick.status = TickStatus::Validating;
+            tick.updated_at = crate::id::now_millis();
 
-    // Run validation commands
-    let (all_passed, validation_log) = run_validation_commands(&integrator_config.validation_commands);
+            // Persist to TaskStore if available
+            if let Some(store) = &stores.store
+                && let Err(e) = store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .update(tick.clone())
+            {
+                return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+            }
+        }
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "tick",
+            &tick_id,
+            "Sealing",
+            "Validating",
+            "Integrator",
+        ));
 
-    // Emit validation.completed event
-    let _ = event_tx.send(DaemonEvent::validation_completed(&tick_id, all_passed, &validation_log));
+        // Emit validation.started event
+        let _ = event_tx.send(DaemonEvent::validation_started(&tick_id));
 
-    // Transition to Published or Failed based on results
-    let final_status = if all_passed { TickStatus::Published } else { TickStatus::Failed };
+        // Run validation commands
+        let (all_passed, validation_log) = run_validation_commands(&integrator_config.validation_commands);
 
-    let tick_json = {
-        let mut ticks = stores.ticks.write().unwrap();
-        let tick = ticks.get_mut(&tick_id).unwrap();
-        tick.status = final_status;
-        tick.validation_log = validation_log;
-        tick.updated_at = crate::id::now_millis();
+        // Emit validation.completed event
+        let _ = event_tx.send(DaemonEvent::validation_completed(&tick_id, all_passed, &validation_log));
+
+        // Transition to Published or Failed based on results
+        let final_status = if all_passed { TickStatus::Published } else { TickStatus::Failed };
+
+        let tick_json = {
+            let mut ticks = stores.write_ticks()?;
+            let tick = ticks
+                .get_mut(&tick_id)
+                .ok_or_else(|| eyre!("record not found: {tick_id}"))?;
+            tick.status = final_status;
+            tick.validation_log = validation_log;
+            tick.updated_at = crate::id::now_millis();
+
+            if all_passed {
+                tick.integration_sha = get_git_head_sha(&stores.config.project.repo_path);
+            }
+
+            // Persist to TaskStore if available
+            if let Some(store) = &stores.store
+                && let Err(e) = store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .update(tick.clone())
+            {
+                return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+            }
+
+            match serde_json::to_value(&*tick) {
+                Ok(v) => v,
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            }
+        };
 
         if all_passed {
-            tick.integration_sha = get_git_head_sha(&stores.config.project.repo_path);
+            let sha = tick_json
+                .get("integration_sha")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let _ = event_tx.send(DaemonEvent::tick_published(&tick_id, sha));
+        } else {
+            let _ = event_tx.send(DaemonEvent::tick_validation_failed(
+                &tick_id,
+                "validation commands failed",
+            ));
         }
 
-        // Persist to TaskStore if available
-        if let Some(store) = &stores.store
-            && let Err(e) = store.lock().unwrap().update(tick.clone())
-        {
-            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-        }
-
-        match serde_json::to_value(&*tick) {
-            Ok(v) => v,
-            Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        }
-    };
-
-    if all_passed {
-        let sha = tick_json
-            .get("integration_sha")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let _ = event_tx.send(DaemonEvent::tick_published(&tick_id, sha));
-    } else {
-        let _ = event_tx.send(DaemonEvent::tick_validation_failed(
-            &tick_id,
-            "validation commands failed",
-        ));
-    }
-
-    DaemonResponse::ok(req.id, tick_json)
+        Ok(DaemonResponse::ok(req.id, tick_json))
+    })
 }
 
 fn handle_integrator_publish(
@@ -2974,60 +3381,77 @@ fn handle_integrator_publish(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_integrator_publish()");
-    let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("tick_id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_integrator_publish()");
+        let tick_id = match req.params.get("tick_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("tick_id is required"),
+                ));
+            }
+        };
 
-    // Verify tick exists and determine current state
-    let current_status = {
-        let ticks = stores.ticks.read().unwrap();
-        match ticks.get(&tick_id) {
-            Some(t) => t.status,
-            None => return DaemonResponse::err(req.id, RpcError::not_found("tick", &tick_id)),
+        // Verify tick exists and determine current state
+        let current_status = {
+            let ticks = stores.read_ticks()?;
+            match ticks.get(&tick_id) {
+                Some(t) => t.status,
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &tick_id))),
+            }
+        };
+
+        // If Open, transition to Sealing first
+        if current_status == TickStatus::Open {
+            let mut ticks = stores.write_ticks()?;
+            let tick = ticks
+                .get_mut(&tick_id)
+                .ok_or_else(|| eyre!("record not found: {tick_id}"))?;
+            tick.status = TickStatus::Sealing;
+            tick.updated_at = crate::id::now_millis();
+
+            // Persist to TaskStore if available
+            if let Some(store) = &stores.store
+                && let Err(e) = store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .update(tick.clone())
+            {
+                return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+            }
+
+            let _ = event_tx.send(DaemonEvent::transition_completed(
+                "tick",
+                &tick_id,
+                "Open",
+                "Sealing",
+                "Integrator",
+            ));
+        } else if current_status != TickStatus::Sealing {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&format!(
+                    "integrator.publish requires tick in Open or Sealing state (currently {:?})",
+                    current_status
+                )),
+            ));
         }
-    };
 
-    // If Open, transition to Sealing first
-    if current_status == TickStatus::Open {
-        let mut ticks = stores.ticks.write().unwrap();
-        let tick = ticks.get_mut(&tick_id).unwrap();
-        tick.status = TickStatus::Sealing;
-        tick.updated_at = crate::id::now_millis();
-
-        // Persist to TaskStore if available
-        if let Some(store) = &stores.store
-            && let Err(e) = store.lock().unwrap().update(tick.clone())
-        {
-            return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-        }
-
-        let _ = event_tx.send(DaemonEvent::transition_completed(
-            "tick",
-            &tick_id,
-            "Open",
-            "Sealing",
-            "Integrator",
-        ));
-    } else if current_status != TickStatus::Sealing {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::transition_rejected(&format!(
-                "integrator.publish requires tick in Open or Sealing state (currently {:?})",
-                current_status
-            )),
-        );
-    }
-
-    // Now delegate to validate (tick is in Sealing state)
-    let validate_req = DaemonRequest::new(req.id, "integrator.validate", json!({ "tick_id": tick_id }));
-    handle_integrator_validate(stores, event_tx, integrator_config, validate_req)
+        // Now delegate to validate (tick is in Sealing state)
+        let validate_req = DaemonRequest::new(req.id, "integrator.validate", json!({ "tick_id": tick_id }));
+        Ok(handle_integrator_validate(
+            stores,
+            event_tx,
+            integrator_config,
+            validate_req,
+        ))
+    })
 }
 
 /// Find the latest Published Tick (by highest tick number).
 fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
-    let ticks = stores.ticks.read().unwrap();
+    let ticks = stores.read_ticks().ok()?;
     ticks
         .values()
         .filter(|t| t.status == TickStatus::Published)
@@ -3038,324 +3462,363 @@ fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
 // --- Validator handlers ---
 
 fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_validator_validate()");
-    let validator = match &stores.validator {
-        Some(v) => v.clone(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::internal("validator is not enabled"));
-        }
-    };
-
-    let collection = match req.params.get("collection").and_then(|v| v.as_str()) {
-        Some(c) => c.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("collection is required"));
-        }
-    };
-
-    let target_id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("id is required"));
-        }
-    };
-
-    let report = match collection.as_str() {
-        "plan" | "plans" => {
-            let plans = stores.plans.read().unwrap();
-            let plan = match plans.get(&target_id) {
-                Some(p) => p.clone(),
-                None => {
-                    return DaemonResponse::err(req.id, RpcError::not_found("plan", &target_id));
-                }
-            };
-            drop(plans);
-            validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
-        }
-        "spec" | "specs" => {
-            let specs = stores.specs.read().unwrap();
-            let spec = match specs.get(&target_id) {
-                Some(s) => s.clone(),
-                None => {
-                    return DaemonResponse::err(req.id, RpcError::not_found("spec", &target_id));
-                }
-            };
-            drop(specs);
-            // Get parent plan title for context
-            let plan_title = stores
-                .plans
-                .read()
-                .unwrap()
-                .get(&spec.plan_id)
-                .map(|p| p.title.clone())
-                .unwrap_or_default();
-            validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
-        }
-        "phase" | "phases" => {
-            let phases = stores.phases.read().unwrap();
-            let phase = match phases.get(&target_id) {
-                Some(p) => p.clone(),
-                None => {
-                    return DaemonResponse::err(req.id, RpcError::not_found("phase", &target_id));
-                }
-            };
-            drop(phases);
-            // Get parent spec title for context
-            let spec_title = stores
-                .specs
-                .read()
-                .unwrap()
-                .get(&phase.spec_id)
-                .map(|s| s.title.clone())
-                .unwrap_or_default();
-            validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
-        }
-        _ => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params(&format!("unsupported collection for validation: {}", collection)),
-            );
-        }
-    };
-
-    match report {
-        Ok(report) => {
-            // Persist to TaskStore
-            if let Some(store) = &stores.store
-                && let Err(e) = store.lock().unwrap().create(report.clone())
-            {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    try_handler!(req.id, {
+        debug!("handle_validator_validate()");
+        let validator = match &stores.validator {
+            Some(v) => v.clone(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::internal("validator is not enabled"),
+                ));
             }
-            DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap())
+        };
+
+        let collection = match req.params.get("collection").and_then(|v| v.as_str()) {
+            Some(c) => c.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("collection is required"),
+                ));
+            }
+        };
+
+        let target_id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required")));
+            }
+        };
+
+        let report = match collection.as_str() {
+            "plan" | "plans" => {
+                let plans = stores.read_plans()?;
+                let plan = match plans.get(&target_id) {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &target_id)));
+                    }
+                };
+                drop(plans);
+                validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
+            }
+            "spec" | "specs" => {
+                let specs = stores.read_specs()?;
+                let spec = match specs.get(&target_id) {
+                    Some(s) => s.clone(),
+                    None => {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &target_id)));
+                    }
+                };
+                drop(specs);
+                // Get parent plan title for context
+                let plan_title = stores
+                    .read_plans()?
+                    .get(&spec.plan_id)
+                    .map(|p| p.title.clone())
+                    .unwrap_or_default();
+                validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
+            }
+            "phase" | "phases" => {
+                let phases = stores.read_phases()?;
+                let phase = match phases.get(&target_id) {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &target_id)));
+                    }
+                };
+                drop(phases);
+                // Get parent spec title for context
+                let spec_title = stores
+                    .read_specs()?
+                    .get(&phase.spec_id)
+                    .map(|s| s.title.clone())
+                    .unwrap_or_default();
+                validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
+            }
+            _ => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params(&format!("unsupported collection for validation: {}", collection)),
+                ));
+            }
+        };
+
+        match report {
+            Ok(report) => {
+                // Persist to TaskStore
+                if let Some(store) = &stores.store
+                    && let Err(e) = store
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .create(report.clone())
+                {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
+                Ok(DaemonResponse::ok(req.id, serde_json::to_value(&report)?))
+            }
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         }
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+    })
 }
 
 // --- Coverage Evaluator handler ---
 
 fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_coverage_evaluate()");
-    let evaluator = match &stores.evaluator {
-        Some(e) => e.clone(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::internal("coverage evaluator not enabled"));
-        }
-    };
-
-    let parent_collection = match req.params.get("parent_collection").and_then(|v| v.as_str()) {
-        Some(c) => c.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("parent_collection is required"));
-        }
-    };
-
-    let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("parent_id is required"));
-        }
-    };
-
-    let report = match parent_collection.as_str() {
-        "plan" | "plans" => {
-            let plans = stores.plans.read().unwrap();
-            let plan = match plans.get(&parent_id) {
-                Some(p) => p.clone(),
-                None => {
-                    return DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id));
-                }
-            };
-            drop(plans);
-            // Gather all Spec children of this Plan
-            let specs = stores.specs.read().unwrap();
-            let child_specs: Vec<_> = specs.values().filter(|s| s.plan_id == parent_id).collect();
-            let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
-            let specs_list = child_specs
-                .iter()
-                .map(|s| format!("- [{}] {}: {}", s.id, s.title, s.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            drop(specs);
-            evaluator.evaluate_plan_specs(
-                &parent_id,
-                &plan.title,
-                &plan.description,
-                &plan.acceptance_criteria,
-                &specs_list,
-                children_ids,
-            )
-        }
-        "spec" | "specs" => {
-            let specs = stores.specs.read().unwrap();
-            let spec = match specs.get(&parent_id) {
-                Some(s) => s.clone(),
-                None => {
-                    return DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id));
-                }
-            };
-            drop(specs);
-            let plan_title = {
-                let plans = stores.plans.read().unwrap();
-                plans.get(&spec.plan_id).map(|p| p.title.clone()).unwrap_or_default()
-            };
-            let phases = stores.phases.read().unwrap();
-            let child_phases: Vec<_> = phases.values().filter(|p| p.spec_id == parent_id).collect();
-            let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
-            let phases_list = child_phases
-                .iter()
-                .map(|p| format!("- [{}] {} (order: {}): {}", p.id, p.title, p.order, p.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            drop(phases);
-            evaluator.evaluate_spec_phases(
-                &parent_id,
-                &spec.title,
-                &spec.description,
-                &plan_title,
-                &phases_list,
-                children_ids,
-            )
-        }
-        "phase" | "phases" => {
-            let phases = stores.phases.read().unwrap();
-            let phase = match phases.get(&parent_id) {
-                Some(p) => p.clone(),
-                None => {
-                    return DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id));
-                }
-            };
-            drop(phases);
-            let spec_title = {
-                let specs = stores.specs.read().unwrap();
-                specs.get(&phase.spec_id).map(|s| s.title.clone()).unwrap_or_default()
-            };
-            let works = stores.works.read().unwrap();
-            let child_works: Vec<_> = works.values().filter(|w| w.phase_id == parent_id).collect();
-            let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
-            let works_list = child_works
-                .iter()
-                .map(|w| format!("- [{}] {}: {}", w.id, w.title, w.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            drop(works);
-            let params = crate::evaluator::PhaseWorksParams {
-                id: parent_id.clone(),
-                title: phase.title,
-                description: phase.description,
-                order: phase.order,
-                spec_title,
-            };
-            evaluator.evaluate_phase_works(&params, &works_list, children_ids)
-        }
-        _ => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params(&format!(
-                    "unsupported parent_collection for coverage: {}",
-                    parent_collection
-                )),
-            );
-        }
-    };
-
-    match report {
-        Ok(report) => {
-            // Persist to TaskStore
-            if let Some(store) = &stores.store
-                && let Err(e) = store.lock().unwrap().create(report.clone())
-            {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    try_handler!(req.id, {
+        debug!("handle_coverage_evaluate()");
+        let evaluator = match &stores.evaluator {
+            Some(e) => e.clone(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::internal("coverage evaluator not enabled"),
+                ));
             }
-            // Also store in memory
-            stores
-                .coverage_reports
-                .write()
-                .unwrap()
-                .insert(report.id.clone(), report.clone());
-            DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap())
+        };
+
+        let parent_collection = match req.params.get("parent_collection").and_then(|v| v.as_str()) {
+            Some(c) => c.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("parent_collection is required"),
+                ));
+            }
+        };
+
+        let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("parent_id is required"),
+                ));
+            }
+        };
+
+        let report = match parent_collection.as_str() {
+            "plan" | "plans" => {
+                let plans = stores.read_plans()?;
+                let plan = match plans.get(&parent_id) {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id)));
+                    }
+                };
+                drop(plans);
+                // Gather all Spec children of this Plan
+                let specs = stores.read_specs()?;
+                let child_specs: Vec<_> = specs.values().filter(|s| s.plan_id == parent_id).collect();
+                let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
+                let specs_list = child_specs
+                    .iter()
+                    .map(|s| format!("- [{}] {}: {}", s.id, s.title, s.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                drop(specs);
+                evaluator.evaluate_plan_specs(
+                    &parent_id,
+                    &plan.title,
+                    &plan.description,
+                    &plan.acceptance_criteria,
+                    &specs_list,
+                    children_ids,
+                )
+            }
+            "spec" | "specs" => {
+                let specs = stores.read_specs()?;
+                let spec = match specs.get(&parent_id) {
+                    Some(s) => s.clone(),
+                    None => {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id)));
+                    }
+                };
+                drop(specs);
+                let plan_title = {
+                    let plans = stores.read_plans()?;
+                    plans.get(&spec.plan_id).map(|p| p.title.clone()).unwrap_or_default()
+                };
+                let phases = stores.read_phases()?;
+                let child_phases: Vec<_> = phases.values().filter(|p| p.spec_id == parent_id).collect();
+                let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
+                let phases_list = child_phases
+                    .iter()
+                    .map(|p| format!("- [{}] {} (order: {}): {}", p.id, p.title, p.order, p.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                drop(phases);
+                evaluator.evaluate_spec_phases(
+                    &parent_id,
+                    &spec.title,
+                    &spec.description,
+                    &plan_title,
+                    &phases_list,
+                    children_ids,
+                )
+            }
+            "phase" | "phases" => {
+                let phases = stores.read_phases()?;
+                let phase = match phases.get(&parent_id) {
+                    Some(p) => p.clone(),
+                    None => {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id)));
+                    }
+                };
+                drop(phases);
+                let spec_title = {
+                    let specs = stores.read_specs()?;
+                    specs.get(&phase.spec_id).map(|s| s.title.clone()).unwrap_or_default()
+                };
+                let works = stores.read_works()?;
+                let child_works: Vec<_> = works.values().filter(|w| w.phase_id == parent_id).collect();
+                let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
+                let works_list = child_works
+                    .iter()
+                    .map(|w| format!("- [{}] {}: {}", w.id, w.title, w.description))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                drop(works);
+                let params = crate::evaluator::PhaseWorksParams {
+                    id: parent_id.clone(),
+                    title: phase.title,
+                    description: phase.description,
+                    order: phase.order,
+                    spec_title,
+                };
+                evaluator.evaluate_phase_works(&params, &works_list, children_ids)
+            }
+            _ => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params(&format!(
+                        "unsupported parent_collection for coverage: {}",
+                        parent_collection
+                    )),
+                ));
+            }
+        };
+
+        match report {
+            Ok(report) => {
+                // Persist to TaskStore
+                if let Some(store) = &stores.store
+                    && let Err(e) = store
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .create(report.clone())
+                {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
+                // Also store in memory
+                stores
+                    .write_coverage_reports()?
+                    .insert(report.id.clone(), report.clone());
+                Ok(DaemonResponse::ok(req.id, serde_json::to_value(&report)?))
+            }
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         }
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+    })
 }
 
 fn handle_validator_report(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_validator_report()");
-    let report_id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("id is required"));
-        }
-    };
+    try_handler!(req.id, {
+        debug!("handle_validator_report()");
+        let report_id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required")));
+            }
+        };
 
-    // Read from TaskStore
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<ValidationReport>(&report_id) {
-            Ok(Some(report)) => {
-                return DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap());
-            }
-            Ok(None) => {
-                return DaemonResponse::err(req.id, RpcError::not_found("validation_report", &report_id));
-            }
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Read from TaskStore
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<ValidationReport>(&report_id)
+            {
+                Ok(Some(report)) => {
+                    return Ok(DaemonResponse::ok(req.id, serde_json::to_value(&report)?));
+                }
+                Ok(None) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::not_found("validation_report", &report_id),
+                    ));
+                }
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    DaemonResponse::err(req.id, RpcError::internal("TaskStore not available"))
+        Ok(DaemonResponse::err(
+            req.id,
+            RpcError::internal("TaskStore not available"),
+        ))
+    })
 }
 
 fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_validator_reports()");
-    if let Some(store) = &stores.store {
-        let mut filters = vec![];
+    try_handler!(req.id, {
+        debug!("handle_validator_reports()");
+        if let Some(store) = &stores.store {
+            let mut filters = vec![];
 
-        if let Some(target_id) = req.params.get("target_id").and_then(|v| v.as_str()) {
-            filters.push(Filter {
-                field: "target_id".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(target_id.to_string()),
-            });
-        }
+            if let Some(target_id) = req.params.get("target_id").and_then(|v| v.as_str()) {
+                filters.push(Filter {
+                    field: "target_id".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(target_id.to_string()),
+                });
+            }
 
-        if let Some(target_collection) = req.params.get("target_collection").and_then(|v| v.as_str()) {
-            filters.push(Filter {
-                field: "target_collection".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(target_collection.to_string()),
-            });
-        }
+            if let Some(target_collection) = req.params.get("target_collection").and_then(|v| v.as_str()) {
+                filters.push(Filter {
+                    field: "target_collection".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(target_collection.to_string()),
+                });
+            }
 
-        match store.lock().unwrap().list::<ValidationReport>(&filters) {
-            Ok(reports) => DaemonResponse::ok(req.id, serde_json::to_value(&reports).unwrap()),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<ValidationReport>(&filters)
+            {
+                Ok(reports) => Ok(DaemonResponse::ok(req.id, serde_json::to_value(&reports)?)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            }
+        } else {
+            Ok(DaemonResponse::ok(req.id, json!([])))
         }
-    } else {
-        DaemonResponse::ok(req.id, json!([]))
-    }
+    })
 }
 
 // --- Tool handlers ---
 
 fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_tool_list()");
-    let tool_runner = &stores.tool_runner;
-    let names = tool_runner.available_tools();
-    let tools: Vec<serde_json::Value> = names
-        .iter()
-        .filter_map(|name| {
-            tool_runner.get_tool(name).map(|entry| {
-                json!({
-                    "name": entry.name,
-                    "command": entry.command,
-                    "timeout_secs": entry.timeout_secs,
-                    "worktree": entry.worktree,
+    try_handler!(req.id, {
+        debug!("handle_tool_list()");
+        let tool_runner = &stores.tool_runner;
+        let names = tool_runner.available_tools();
+        let tools: Vec<serde_json::Value> = names
+            .iter()
+            .filter_map(|name| {
+                tool_runner.get_tool(name).map(|entry| {
+                    json!({
+                        "name": entry.name,
+                        "command": entry.command,
+                        "timeout_secs": entry.timeout_secs,
+                        "worktree": entry.worktree,
+                    })
                 })
             })
-        })
-        .collect();
-    DaemonResponse::ok(req.id, json!({ "tools": tools }))
+            .collect();
+        Ok(DaemonResponse::ok(req.id, json!({ "tools": tools })))
+    })
 }
 
 // --- Coordinator goal handlers ---
@@ -3365,51 +3828,59 @@ fn handle_coordinator_set_goal(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_coordinator_set_goal()");
-    let goal_text = match req.params.get("goal").and_then(|v| v.as_str()) {
-        Some(g) if !g.trim().is_empty() => g.trim().to_string(),
-        _ => {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::invalid_params("goal is required and must be non-empty"),
-            );
-        }
-    };
+    try_handler!(req.id, {
+        debug!("handle_coordinator_set_goal()");
+        let goal_text = match req.params.get("goal").and_then(|v| v.as_str()) {
+            Some(g) if !g.trim().is_empty() => g.trim().to_string(),
+            _ => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("goal is required and must be non-empty"),
+                ));
+            }
+        };
 
-    // Deactivate any existing active goals
-    {
-        let mut goals = stores.coordinator_goals.write().unwrap();
-        for existing in goals.values_mut() {
-            if existing.active {
-                existing.deactivate();
-                // Persist deactivation to TaskStore
-                if let Some(store) = &stores.store {
-                    let _ = store.lock().unwrap().update(existing.clone());
+        // Deactivate any existing active goals
+        {
+            let mut goals = stores.write_coordinator_goals()?;
+            for existing in goals.values_mut() {
+                if existing.active {
+                    existing.deactivate();
+                    // Persist deactivation to TaskStore
+                    if let Some(store) = &stores.store {
+                        let _ = store
+                            .lock()
+                            .map_err(|_| eyre!("taskstore lock poisoned"))?
+                            .update(existing.clone());
+                    }
                 }
             }
         }
-    }
 
-    // Create new active goal
-    let goal = CoordinatorGoal::new(goal_text);
-    let goal_json = match serde_json::to_value(&goal) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // Create new active goal
+        let goal = CoordinatorGoal::new(goal_text);
+        let goal_json = match serde_json::to_value(&goal) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let id = goal.id.clone();
+        let id = goal.id.clone();
 
-    // Persist to TaskStore
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(goal.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(goal.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    stores.coordinator_goals.write().unwrap().insert(id.clone(), goal);
-    let _ = event_tx.send(DaemonEvent::record_created("coordinator_goal", &id));
+        stores.write_coordinator_goals()?.insert(id.clone(), goal);
+        let _ = event_tx.send(DaemonEvent::record_created("coordinator_goal", &id));
 
-    DaemonResponse::ok(req.id, goal_json)
+        Ok(DaemonResponse::ok(req.id, goal_json))
+    })
 }
 
 fn handle_coordinator_clear_goal(
@@ -3417,57 +3888,66 @@ fn handle_coordinator_clear_goal(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_coordinator_clear_goal()");
-    let mut cleared_count = 0;
-    {
-        let mut goals = stores.coordinator_goals.write().unwrap();
-        for existing in goals.values_mut() {
-            if existing.active {
-                existing.deactivate();
-                // Persist deactivation to TaskStore
-                if let Some(store) = &stores.store {
-                    let _ = store.lock().unwrap().update(existing.clone());
+    try_handler!(req.id, {
+        debug!("handle_coordinator_clear_goal()");
+        let mut cleared_count = 0;
+        {
+            let mut goals = stores.write_coordinator_goals()?;
+            for existing in goals.values_mut() {
+                if existing.active {
+                    existing.deactivate();
+                    // Persist deactivation to TaskStore
+                    if let Some(store) = &stores.store {
+                        let _ = store
+                            .lock()
+                            .map_err(|_| eyre!("taskstore lock poisoned"))?
+                            .update(existing.clone());
+                    }
+                    let _ = event_tx.send(DaemonEvent::record_updated("coordinator_goal", &existing.id));
+                    cleared_count += 1;
                 }
-                let _ = event_tx.send(DaemonEvent::record_updated("coordinator_goal", &existing.id));
-                cleared_count += 1;
             }
         }
-    }
 
-    DaemonResponse::ok(req.id, json!({ "cleared": cleared_count }))
+        Ok(DaemonResponse::ok(req.id, json!({ "cleared": cleared_count })))
+    })
 }
 
 fn handle_coordinator_get_goal(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_coordinator_get_goal()");
-    let goals = stores.coordinator_goals.read().unwrap();
-    let active = goals.values().find(|g| g.active);
-    match active {
-        Some(goal) => {
-            let json = match serde_json::to_value(goal) {
-                Ok(v) => v,
-                Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-            };
-            DaemonResponse::ok(req.id, json)
+    try_handler!(req.id, {
+        debug!("handle_coordinator_get_goal()");
+        let goals = stores.read_coordinator_goals()?;
+        let active = goals.values().find(|g| g.active);
+        match active {
+            Some(goal) => {
+                let json = match serde_json::to_value(goal) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                };
+                Ok(DaemonResponse::ok(req.id, json))
+            }
+            None => Ok(DaemonResponse::ok(req.id, json!({ "active": false }))),
         }
-        None => DaemonResponse::ok(req.id, json!({ "active": false })),
-    }
+    })
 }
 
 fn handle_coordinator_get_state(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_coordinator_get_state()");
-    let states = stores.coordinator_states.read().unwrap();
-    // Find the state for the active goal (or any non-terminal state)
-    let active = states.values().find(|s| !s.fsm_state.is_terminal());
-    match active {
-        Some(state) => {
-            let json = match serde_json::to_value(state) {
-                Ok(v) => v,
-                Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-            };
-            DaemonResponse::ok(req.id, json)
+    try_handler!(req.id, {
+        debug!("handle_coordinator_get_state()");
+        let states = stores.read_coordinator_states()?;
+        // Find the state for the active goal (or any non-terminal state)
+        let active = states.values().find(|s| !s.fsm_state.is_terminal());
+        match active {
+            Some(state) => {
+                let json = match serde_json::to_value(state) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                };
+                Ok(DaemonResponse::ok(req.id, json))
+            }
+            None => Ok(DaemonResponse::ok(req.id, json!({ "active": false }))),
         }
-        None => DaemonResponse::ok(req.id, json!({ "active": false })),
-    }
+    })
 }
 
 fn handle_coordinator_reset_state(
@@ -3475,27 +3955,32 @@ fn handle_coordinator_reset_state(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_coordinator_reset_state()");
-    let mut states = stores.coordinator_states.write().unwrap();
-    let removed: Vec<String> = states.keys().cloned().collect();
-    for id in &removed {
-        states.remove(id);
-    }
-    drop(states);
-
-    // Also remove from TaskStore
-    if let Some(store_arc) = &stores.store {
-        let mut store = store_arc.lock().unwrap();
+    try_handler!(req.id, {
+        debug!("handle_coordinator_reset_state()");
+        let mut states = stores.write_coordinator_states()?;
+        let removed: Vec<String> = states.keys().cloned().collect();
         for id in &removed {
-            let _ = store.delete::<crate::domain::coordinator_state::CoordinatorState>(id);
+            states.remove(id);
         }
-    }
+        drop(states);
 
-    let _ = event_tx.send(DaemonEvent::new(
-        "coordinator.state_reset",
-        json!({ "message": "Coordinator state cleared" }),
-    ));
-    DaemonResponse::ok(req.id, json!({ "reset": true, "removed": removed.len() }))
+        // Also remove from TaskStore
+        if let Some(store_arc) = &stores.store {
+            let mut store = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+            for id in &removed {
+                let _ = store.delete::<crate::domain::coordinator_state::CoordinatorState>(id);
+            }
+        }
+
+        let _ = event_tx.send(DaemonEvent::new(
+            "coordinator.state_reset",
+            json!({ "message": "Coordinator state cleared" }),
+        ));
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({ "reset": true, "removed": removed.len() }),
+        ))
+    })
 }
 
 // --- Interview handlers ---
@@ -3505,51 +3990,62 @@ fn handle_coordinator_interview_respond(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_coordinator_interview_respond()");
-    let answer = match req.params.get("answer").and_then(|v| v.as_str()) {
-        Some(a) => a.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("answer is required"));
+    try_handler!(req.id, {
+        debug!("handle_coordinator_interview_respond()");
+        let answer = match req.params.get("answer").and_then(|v| v.as_str()) {
+            Some(a) => a.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("answer is required"),
+                ));
+            }
+        };
+
+        // Find the active CoordinatorState
+        let mut states = stores.write_coordinator_states()?;
+        let state = match states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
+            Some(s) => s,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::internal("no active coordinator state"),
+                ));
+            }
+        };
+
+        // Record the exchange (questions were sent in a previous action)
+        let exchange = crate::domain::coordinator_state::InterviewExchange {
+            questions: vec![], // questions were already sent via InterviewQuestion action
+            answer: answer.clone(),
+            timestamp: crate::id::now_millis(),
+        };
+        state.interview_context.push(exchange);
+        state.updated_at = crate::id::now_millis();
+
+        // Persist
+        if let Some(store_arc) = &stores.store
+            && let Err(e) = store_arc
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(state.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
-    };
 
-    // Find the active CoordinatorState
-    let mut states = stores.coordinator_states.write().unwrap();
-    let state = match states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
-        Some(s) => s,
-        None => {
-            return DaemonResponse::err(req.id, RpcError::internal("no active coordinator state"));
-        }
-    };
+        let _ = event_tx.send(DaemonEvent::new(
+            "coordinator.interview_response",
+            json!({ "answer": answer, "exchange_count": state.interview_context.len() }),
+        ));
 
-    // Record the exchange (questions were sent in a previous action)
-    let exchange = crate::domain::coordinator_state::InterviewExchange {
-        questions: vec![], // questions were already sent via InterviewQuestion action
-        answer: answer.clone(),
-        timestamp: crate::id::now_millis(),
-    };
-    state.interview_context.push(exchange);
-    state.updated_at = crate::id::now_millis();
-
-    // Persist
-    if let Some(store_arc) = &stores.store
-        && let Err(e) = store_arc.lock().unwrap().update(state.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    let _ = event_tx.send(DaemonEvent::new(
-        "coordinator.interview_response",
-        json!({ "answer": answer, "exchange_count": state.interview_context.len() }),
-    ));
-
-    DaemonResponse::ok(
-        req.id,
-        json!({
-            "status": "received",
-            "exchange_count": state.interview_context.len()
-        }),
-    )
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({
+                "status": "received",
+                "exchange_count": state.interview_context.len()
+            }),
+        ))
+    })
 }
 
 fn handle_coordinator_approve_plan(
@@ -3557,54 +4053,68 @@ fn handle_coordinator_approve_plan(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_coordinator_approve_plan()");
-    let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("plan_id is required"));
-        }
-    };
+    try_handler!(req.id, {
+        debug!("handle_coordinator_approve_plan()");
+        let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("plan_id is required"),
+                ));
+            }
+        };
 
-    // Activate the Plan (Draft → Active)
-    {
-        let mut plans = stores.plans.write().unwrap();
-        match plans.get_mut(&plan_id) {
-            Some(plan) => {
-                plan.status = HierarchyStatus::Active;
-                plan.updated_at = crate::id::now_millis();
-                if let Some(store_arc) = &stores.store
-                    && let Err(e) = store_arc.lock().unwrap().update(plan.clone())
-                {
-                    return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        // Activate the Plan (Draft → Active)
+        {
+            let mut plans = stores.write_plans()?;
+            match plans.get_mut(&plan_id) {
+                Some(plan) => {
+                    plan.status = HierarchyStatus::Active;
+                    plan.updated_at = crate::id::now_millis();
+                    if let Some(store_arc) = &stores.store
+                        && let Err(e) = store_arc
+                            .lock()
+                            .map_err(|_| eyre!("taskstore lock poisoned"))?
+                            .update(plan.clone())
+                    {
+                        return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                    }
+                }
+                None => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id)));
                 }
             }
-            None => {
-                return DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id));
+        }
+
+        // Update CoordinatorState: plan_approved = true, transition to Planning
+        {
+            let mut states = stores.write_coordinator_states()?;
+            if let Some(state) = states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
+                state.plan_approved = true;
+                state.fsm_state = crate::domain::coordinator_state::CoordinatorFsmState::Planning;
+                state.updated_at = crate::id::now_millis();
+                if let Some(store_arc) = &stores.store
+                    && let Err(e) = store_arc
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .update(state.clone())
+                {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    // Update CoordinatorState: plan_approved = true, transition to Planning
-    {
-        let mut states = stores.coordinator_states.write().unwrap();
-        if let Some(state) = states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
-            state.plan_approved = true;
-            state.fsm_state = crate::domain::coordinator_state::CoordinatorFsmState::Planning;
-            state.updated_at = crate::id::now_millis();
-            if let Some(store_arc) = &stores.store
-                && let Err(e) = store_arc.lock().unwrap().update(state.clone())
-            {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-            }
-        }
-    }
+        let _ = event_tx.send(DaemonEvent::new(
+            "coordinator.plan_approved",
+            json!({ "plan_id": plan_id }),
+        ));
 
-    let _ = event_tx.send(DaemonEvent::new(
-        "coordinator.plan_approved",
-        json!({ "plan_id": plan_id }),
-    ));
-
-    DaemonResponse::ok(req.id, json!({ "approved": true, "plan_id": plan_id }))
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({ "approved": true, "plan_id": plan_id }),
+        ))
+    })
 }
 
 fn handle_coordinator_interview_question(
@@ -3612,24 +4122,32 @@ fn handle_coordinator_interview_question(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_coordinator_interview_question()");
-    let questions = match req.params.get("questions").and_then(|v| v.as_array()) {
-        Some(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect::<Vec<_>>(),
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("questions array is required"));
-        }
-    };
+    try_handler!(req.id, {
+        debug!("handle_coordinator_interview_question()");
+        let questions = match req.params.get("questions").and_then(|v| v.as_array()) {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("questions array is required"),
+                ));
+            }
+        };
 
-    // Emit event for TUI to display
-    let _ = event_tx.send(DaemonEvent::new(
-        "coordinator.interview_question",
-        json!({ "questions": questions }),
-    ));
+        // Emit event for TUI to display
+        let _ = event_tx.send(DaemonEvent::new(
+            "coordinator.interview_question",
+            json!({ "questions": questions }),
+        ));
 
-    DaemonResponse::ok(req.id, json!({ "status": "questions_sent", "count": questions.len() }))
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({ "status": "questions_sent", "count": questions.len() }),
+        ))
+    })
 }
 
 // --- Agent handlers ---
@@ -3640,176 +4158,188 @@ fn handle_agent_start(
     worktree_mgr: &WorktreeManager,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_agent_start()");
-    let agent_type: AgentType = match req.params.get("agent_type") {
-        Some(v) => match serde_json::from_value(v.clone()) {
-            Ok(t) => t,
-            Err(_) => {
-                return DaemonResponse::err(
+    try_handler!(req.id, {
+        debug!("handle_agent_start()");
+        let agent_type: AgentType = match req.params.get("agent_type") {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(t) => t,
+                Err(_) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params(
+                            "invalid agent_type (implementer|reviewer|coordinator|researcher|integrator)",
+                        ),
+                    ));
+                }
+            },
+            None => {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params(
-                        "invalid agent_type (implementer|reviewer|coordinator|researcher|integrator)",
-                    ),
-                );
+                    RpcError::invalid_params("agent_type is required"),
+                ));
             }
-        },
-        None => {
-            return DaemonResponse::err(req.id, RpcError::invalid_params("agent_type is required"));
-        }
-    };
+        };
 
-    let work_id = req
-        .params
-        .get("work_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let bundle_id = req
-        .params
-        .get("bundle_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        let work_id = req
+            .params
+            .get("work_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let bundle_id = req
+            .params
+            .get("bundle_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-    // Validate: Implementer needs work_id, Reviewer needs bundle_id
-    // Thinking plane agents (Coordinator, Researcher, Integrator) don't require either.
-    match agent_type {
-        AgentType::Implementer => {
-            if work_id.is_none() {
-                return DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("work_id is required for implementer agents"),
-                );
+        // Validate: Implementer needs work_id, Reviewer needs bundle_id
+        // Thinking plane agents (Coordinator, Researcher, Integrator) don't require either.
+        match agent_type {
+            AgentType::Implementer => {
+                if work_id.is_none() {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("work_id is required for implementer agents"),
+                    ));
+                }
             }
-        }
-        AgentType::Reviewer => {
-            if bundle_id.is_none() {
-                return DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("bundle_id is required for reviewer agents"),
-                );
+            AgentType::Reviewer => {
+                if bundle_id.is_none() {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::invalid_params("bundle_id is required for reviewer agents"),
+                    ));
+                }
+            }
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => {
+                // These agents operate without worktrees; no target ID required at start time
             }
         }
-        AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => {
-            // These agents operate without worktrees; no target ID required at start time
-        }
-    }
 
-    let target_id = req
-        .params
-        .get("target_id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let target_id = req
+            .params
+            .get("target_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-    // max_pool enforcement: reject if active sessions of this type >= max_pool
-    {
-        let sessions = stores.agent_sessions.read().unwrap();
-        let active_count = sessions
-            .values()
-            .filter(|s| s.agent_type == agent_type && !s.status.is_terminal())
-            .count();
-        let max_pool = max_pool_for(agent_type, &stores.config) as usize;
-        if active_count >= max_pool {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::pool_exhausted(&format!(
-                    "max_pool exceeded for {}: {active_count}/{max_pool} active",
-                    agent_type
-                )),
-            );
-        }
-
-        // Global agent cap: 20 total active sessions
-        let total_active = sessions.values().filter(|s| !s.status.is_terminal()).count();
-        if total_active >= 20 {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::pool_exhausted(&format!("global agent cap exceeded: {total_active}/20 active sessions")),
-            );
-        }
-
-        // Gap #26: Researcher dedup by target_id
-        if agent_type == AgentType::Researcher
-            && let Some(tid) = req.params.get("target_id").and_then(|v| v.as_str())
+        // max_pool enforcement: reject if active sessions of this type >= max_pool
         {
-            let has_existing = sessions.values().any(|s| {
-                s.agent_type == AgentType::Researcher && !s.status.is_terminal() && s.target_id.as_deref() == Some(tid)
-            });
-            if has_existing {
-                return DaemonResponse::err(
+            let sessions = stores.read_agent_sessions()?;
+            let active_count = sessions
+                .values()
+                .filter(|s| s.agent_type == agent_type && !s.status.is_terminal())
+                .count();
+            let max_pool = max_pool_for(agent_type, &stores.config) as usize;
+            if active_count >= max_pool {
+                return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::precondition_failed(&format!(
-                        "Non-terminal Researcher session already exists for target_id '{}'",
-                        tid
+                    RpcError::pool_exhausted(&format!(
+                        "max_pool exceeded for {}: {active_count}/{max_pool} active",
+                        agent_type
                     )),
-                );
+                ));
+            }
+
+            // Global agent cap: 20 total active sessions
+            let total_active = sessions.values().filter(|s| !s.status.is_terminal()).count();
+            if total_active >= 20 {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::pool_exhausted(&format!("global agent cap exceeded: {total_active}/20 active sessions")),
+                ));
+            }
+
+            // Gap #26: Researcher dedup by target_id
+            if agent_type == AgentType::Researcher
+                && let Some(tid) = req.params.get("target_id").and_then(|v| v.as_str())
+            {
+                let has_existing = sessions.values().any(|s| {
+                    s.agent_type == AgentType::Researcher
+                        && !s.status.is_terminal()
+                        && s.target_id.as_deref() == Some(tid)
+                });
+                if has_existing {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "Non-terminal Researcher session already exists for target_id '{}'",
+                            tid
+                        )),
+                    ));
+                }
+            }
+
+            // Implementer dedup by work_id (mirrors Gap #26 Researcher dedup by target_id)
+            if agent_type == AgentType::Implementer
+                && let Some(ref wi_id) = work_id
+            {
+                let has_existing = sessions.values().any(|s| {
+                    s.agent_type == AgentType::Implementer
+                        && !s.status.is_terminal()
+                        && s.work_id.as_deref() == Some(wi_id)
+                });
+                if has_existing {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "non-terminal Implementer session already exists for work_id '{}'",
+                            wi_id
+                        )),
+                    ));
+                }
             }
         }
 
-        // Implementer dedup by work_id (mirrors Gap #26 Researcher dedup by target_id)
-        if agent_type == AgentType::Implementer
-            && let Some(ref wi_id) = work_id
+        // Create agent session with model from config
+        let model = match agent_type {
+            AgentType::Coordinator => stores.config.agents.coordinator.role.model.clone(),
+            AgentType::Implementer => stores.config.agents.implementer.model.clone(),
+            AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
+            AgentType::Researcher => stores.config.agents.researcher.model.clone(),
+            AgentType::Integrator => "deterministic".to_string(),
+        };
+        let mut session = AgentSession::new(agent_type, model);
+        session.work_id = work_id;
+        session.bundle_id = bundle_id;
+        session.target_id = target_id;
+        session.query = query;
+
+        let session_json = match serde_json::to_value(&session) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let id = session.id.clone();
+
+        // Persist to TaskStore
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(session.clone())
         {
-            let has_existing = sessions.values().any(|s| {
-                s.agent_type == AgentType::Implementer && !s.status.is_terminal() && s.work_id.as_deref() == Some(wi_id)
-            });
-            if has_existing {
-                return DaemonResponse::err(
-                    req.id,
-                    RpcError::precondition_failed(&format!(
-                        "non-terminal Implementer session already exists for work_id '{}'",
-                        wi_id
-                    )),
-                );
-            }
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
-    }
 
-    // Create agent session with model from config
-    let model = match agent_type {
-        AgentType::Coordinator => stores.config.agents.coordinator.role.model.clone(),
-        AgentType::Implementer => stores.config.agents.implementer.model.clone(),
-        AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
-        AgentType::Researcher => stores.config.agents.researcher.model.clone(),
-        AgentType::Integrator => "deterministic".to_string(),
-    };
-    let mut session = AgentSession::new(agent_type, model);
-    session.work_id = work_id;
-    session.bundle_id = bundle_id;
-    session.target_id = target_id;
-    session.query = query;
+        stores.write_agent_sessions()?.insert(id.clone(), session);
+        let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
+        let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));
 
-    let session_json = match serde_json::to_value(&session) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        // Spawn agent task as a Tokio background task
+        let task_stores = stores.clone();
+        let task_event_tx = event_tx.clone();
+        let task_worktree_mgr = worktree_mgr.clone();
+        let task_id = id.clone();
+        let handle = tokio::spawn(async move {
+            crate::agents::executor::run_agent_task(task_id, agent_type, task_stores, task_event_tx, task_worktree_mgr)
+                .await;
+        });
 
-    let id = session.id.clone();
+        // Store JoinHandle for graceful shutdown
+        stores.lock_agent_handles()?.insert(id.clone(), handle);
 
-    // Persist to TaskStore
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().create(session.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
-
-    stores.agent_sessions.write().unwrap().insert(id.clone(), session);
-    let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));
-
-    // Spawn agent task as a Tokio background task
-    let task_stores = stores.clone();
-    let task_event_tx = event_tx.clone();
-    let task_worktree_mgr = worktree_mgr.clone();
-    let task_id = id.clone();
-    let handle = tokio::spawn(async move {
-        crate::agents::executor::run_agent_task(task_id, agent_type, task_stores, task_event_tx, task_worktree_mgr)
-            .await;
-    });
-
-    // Store JoinHandle for graceful shutdown
-    stores.agent_handles.lock().unwrap().insert(id.clone(), handle);
-
-    DaemonResponse::ok(req.id, session_json)
+        Ok(DaemonResponse::ok(req.id, session_json))
+    })
 }
 
 fn handle_agent_stop(
@@ -3817,44 +4347,59 @@ fn handle_agent_stop(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_agent_stop()");
-    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_agent_stop()");
+        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("session_id is required"),
+                ));
+            }
+        };
 
-    let mut sessions = stores.agent_sessions.write().unwrap();
-    let session = match sessions.get_mut(session_id) {
-        Some(s) => s,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
-    };
+        let mut sessions = stores.write_agent_sessions()?;
+        let session = match sessions.get_mut(session_id) {
+            Some(s) => s,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::not_found("agent_session", session_id),
+                ));
+            }
+        };
 
-    if session.status.is_terminal() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
-        );
-    }
+        if session.status.is_terminal() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
+            ));
+        }
 
-    if let Err(e) = session.transition_to(AgentStatus::Cancelled) {
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
-    }
+        if let Err(e) = session.transition_to(AgentStatus::Cancelled) {
+            return Ok(DaemonResponse::err(req.id, RpcError::transition_rejected(&e)));
+        }
 
-    // Persist to TaskStore
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(session.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        // Persist to TaskStore
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(session.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let session_json = match serde_json::to_value(&*session) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let session_json = match serde_json::to_value(&*session) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Cancelled));
-    DaemonResponse::ok(req.id, session_json)
+        let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+        let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Cancelled));
+        Ok(DaemonResponse::ok(req.id, session_json))
+    })
 }
 
 fn handle_agent_pause(
@@ -3862,43 +4407,58 @@ fn handle_agent_pause(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_agent_pause()");
-    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_agent_pause()");
+        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("session_id is required"),
+                ));
+            }
+        };
 
-    let mut sessions = stores.agent_sessions.write().unwrap();
-    let session = match sessions.get_mut(session_id) {
-        Some(s) => s,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
-    };
+        let mut sessions = stores.write_agent_sessions()?;
+        let session = match sessions.get_mut(session_id) {
+            Some(s) => s,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::not_found("agent_session", session_id),
+                ));
+            }
+        };
 
-    if session.status.is_terminal() {
-        return DaemonResponse::err(
-            req.id,
-            RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
-        );
-    }
+        if session.status.is_terminal() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
+            ));
+        }
 
-    if let Err(e) = session.transition_to(AgentStatus::Paused) {
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
-    }
+        if let Err(e) = session.transition_to(AgentStatus::Paused) {
+            return Ok(DaemonResponse::err(req.id, RpcError::transition_rejected(&e)));
+        }
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(session.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(session.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let session_json = match serde_json::to_value(&*session) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let session_json = match serde_json::to_value(&*session) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Paused));
-    DaemonResponse::ok(req.id, session_json)
+        let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+        let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Paused));
+        Ok(DaemonResponse::ok(req.id, session_json))
+    })
 }
 
 fn handle_agent_resume(
@@ -3906,140 +4466,182 @@ fn handle_agent_resume(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_agent_resume()");
-    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_agent_resume()");
+        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("session_id is required"),
+                ));
+            }
+        };
 
-    let mut sessions = stores.agent_sessions.write().unwrap();
-    let session = match sessions.get_mut(session_id) {
-        Some(s) => s,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
-    };
+        let mut sessions = stores.write_agent_sessions()?;
+        let session = match sessions.get_mut(session_id) {
+            Some(s) => s,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::not_found("agent_session", session_id),
+                ));
+            }
+        };
 
-    if let Err(e) = session.transition_to(AgentStatus::Running) {
-        return DaemonResponse::err(req.id, RpcError::transition_rejected(&e));
-    }
+        if let Err(e) = session.transition_to(AgentStatus::Running) {
+            return Ok(DaemonResponse::err(req.id, RpcError::transition_rejected(&e)));
+        }
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(session.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(session.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let session_json = match serde_json::to_value(&*session) {
-        Ok(v) => v,
-        Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    };
+        let session_json = match serde_json::to_value(&*session) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
 
-    let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Running));
-    DaemonResponse::ok(req.id, session_json)
+        let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+        let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Running));
+        Ok(DaemonResponse::ok(req.id, session_json))
+    })
 }
 
 fn handle_agent_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_agent_status()");
-    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
-    };
-
-    // Try TaskStore first, fall back to HashMap
-    if let Some(store) = &stores.store {
-        match store.lock().unwrap().get::<AgentSession>(session_id) {
-            Ok(Some(session)) => {
-                return match serde_json::to_value(&session) {
-                    Ok(v) => DaemonResponse::ok(req.id, v),
-                    Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-                };
+    try_handler!(req.id, {
+        debug!("handle_agent_status()");
+        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+            Some(id) => id,
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("session_id is required"),
+                ));
             }
-            Ok(None) => {}
-            Err(e) => {
-                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+        };
+
+        // Try TaskStore first, fall back to HashMap
+        if let Some(store) = &stores.store {
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .get::<AgentSession>(session_id)
+            {
+                Ok(Some(session)) => {
+                    return match serde_json::to_value(&session) {
+                        Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                        Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                    };
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
             }
         }
-    }
 
-    let sessions = stores.agent_sessions.read().unwrap();
-    match sessions.get(session_id) {
-        Some(session) => match serde_json::to_value(session) {
-            Ok(v) => DaemonResponse::ok(req.id, v),
-            Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-        },
-        None => DaemonResponse::err(req.id, RpcError::not_found("agent_session", session_id)),
-    }
+        let sessions = stores.read_agent_sessions()?;
+        match sessions.get(session_id) {
+            Some(session) => match serde_json::to_value(session) {
+                Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+                Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            },
+            None => Ok(DaemonResponse::err(
+                req.id,
+                RpcError::not_found("agent_session", session_id),
+            )),
+        }
+    })
 }
 
 fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_agent_list()");
-    let status_filter: Option<AgentStatus> = req
-        .params
-        .get("status")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
-    let type_filter: Option<AgentType> = req
-        .params
-        .get("agent_type")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    try_handler!(req.id, {
+        debug!("handle_agent_list()");
+        let status_filter: Option<AgentStatus> = req
+            .params
+            .get("status")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let type_filter: Option<AgentType> = req
+            .params
+            .get("agent_type")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    if let Some(store) = &stores.store {
-        let mut filters: Vec<Filter> = vec![];
-        if let Some(status) = &status_filter {
-            filters.push(Filter {
-                field: "status".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(status.to_string()),
-            });
+        if let Some(store) = &stores.store {
+            let mut filters: Vec<Filter> = vec![];
+            if let Some(status) = &status_filter {
+                filters.push(Filter {
+                    field: "status".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(status.to_string()),
+                });
+            }
+            if let Some(agent_type) = &type_filter {
+                filters.push(Filter {
+                    field: "agent_type".to_string(),
+                    op: FilterOp::Eq,
+                    value: IndexValue::String(agent_type.to_string()),
+                });
+            }
+            match store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .list::<AgentSession>(&filters)
+            {
+                Ok(sessions) => match serde_json::to_value(&sessions) {
+                    Ok(v) => return Ok(DaemonResponse::ok(req.id, v)),
+                    Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+                },
+                Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+            }
         }
-        if let Some(agent_type) = &type_filter {
-            filters.push(Filter {
-                field: "agent_type".to_string(),
-                op: FilterOp::Eq,
-                value: IndexValue::String(agent_type.to_string()),
-            });
+
+        // Fallback to HashMap
+        let sessions = stores.read_agent_sessions()?;
+        let mut result: Vec<&AgentSession> = sessions.values().collect();
+
+        if let Some(status) = status_filter {
+            result.retain(|s| s.status == status);
         }
-        match store.lock().unwrap().list::<AgentSession>(&filters) {
-            Ok(sessions) => match serde_json::to_value(&sessions) {
-                Ok(v) => return DaemonResponse::ok(req.id, v),
-                Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-            },
-            Err(e) => return DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+        if let Some(agent_type) = type_filter {
+            result.retain(|s| s.agent_type == agent_type);
         }
-    }
 
-    // Fallback to HashMap
-    let sessions = stores.agent_sessions.read().unwrap();
-    let mut result: Vec<&AgentSession> = sessions.values().collect();
-
-    if let Some(status) = status_filter {
-        result.retain(|s| s.status == status);
-    }
-    if let Some(agent_type) = type_filter {
-        result.retain(|s| s.agent_type == agent_type);
-    }
-
-    match serde_json::to_value(&result) {
-        Ok(v) => DaemonResponse::ok(req.id, v),
-        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
-    }
+        match serde_json::to_value(&result) {
+            Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
+            Err(e) => Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        }
+    })
 }
 
 // --- Agent output handler (Gap #9) ---
 
 fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    debug!("handle_agent_output()");
-    let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("session_id is required")),
-    };
-    let since = req.params.get("since").and_then(|v| v.as_u64()).unwrap_or(0);
+    try_handler!(req.id, {
+        debug!("handle_agent_output()");
+        let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("session_id is required"),
+                ));
+            }
+        };
+        let since = req.params.get("since").and_then(|v| v.as_u64()).unwrap_or(0);
 
-    let events = stores.agent_events.read().unwrap();
-    let output: Vec<_> = match events.get(&session_id) {
-        Some(ring) => ring.iter().skip(since as usize).collect(),
-        None => Vec::new(),
-    };
-    DaemonResponse::ok(req.id, serde_json::to_value(&output).unwrap())
+        let events = stores.read_agent_events()?;
+        let output: Vec<_> = match events.get(&session_id) {
+            Some(ring) => ring.iter().skip(since as usize).collect(),
+            None => Vec::new(),
+        };
+        Ok(DaemonResponse::ok(req.id, serde_json::to_value(&output)?))
+    })
 }
 
 // --- Update handlers (Gap #1) ---
@@ -4049,38 +4651,43 @@ fn handle_plan_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_plan_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_plan_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut plans = stores.plans.write().unwrap();
-    let plan = match plans.get_mut(&id) {
-        Some(p) => p,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("plans", &id)),
-    };
+        let mut plans = stores.write_plans()?;
+        let plan = match plans.get_mut(&id) {
+            Some(p) => p,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plans", &id))),
+        };
 
-    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-        plan.title = title.to_string();
-    }
-    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-        plan.description = desc.to_string();
-    }
-    if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_str()) {
-        plan.acceptance_criteria = criteria.to_string();
-    }
-    plan.updated_at = crate::id::now_millis();
+        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+            plan.title = title.to_string();
+        }
+        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+            plan.description = desc.to_string();
+        }
+        if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_str()) {
+            plan.acceptance_criteria = criteria.to_string();
+        }
+        plan.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(plan.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(plan.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let plan_json = serde_json::to_value(&*plan).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("plans", &id));
-    DaemonResponse::ok(req.id, plan_json)
+        let plan_json = serde_json::to_value(&*plan)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("plans", &id));
+        Ok(DaemonResponse::ok(req.id, plan_json))
+    })
 }
 
 fn handle_spec_update(
@@ -4088,35 +4695,40 @@ fn handle_spec_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_spec_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_spec_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut specs = stores.specs.write().unwrap();
-    let spec = match specs.get_mut(&id) {
-        Some(s) => s,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("specs", &id)),
-    };
+        let mut specs = stores.write_specs()?;
+        let spec = match specs.get_mut(&id) {
+            Some(s) => s,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("specs", &id))),
+        };
 
-    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-        spec.title = title.to_string();
-    }
-    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-        spec.description = desc.to_string();
-    }
-    spec.updated_at = crate::id::now_millis();
+        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+            spec.title = title.to_string();
+        }
+        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+            spec.description = desc.to_string();
+        }
+        spec.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(spec.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(spec.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let spec_json = serde_json::to_value(&*spec).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("specs", &id));
-    DaemonResponse::ok(req.id, spec_json)
+        let spec_json = serde_json::to_value(&*spec)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("specs", &id));
+        Ok(DaemonResponse::ok(req.id, spec_json))
+    })
 }
 
 fn handle_phase_update(
@@ -4124,38 +4736,43 @@ fn handle_phase_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_phase_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_phase_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut phases = stores.phases.write().unwrap();
-    let phase = match phases.get_mut(&id) {
-        Some(p) => p,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("phases", &id)),
-    };
+        let mut phases = stores.write_phases()?;
+        let phase = match phases.get_mut(&id) {
+            Some(p) => p,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("phases", &id))),
+        };
 
-    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-        phase.title = title.to_string();
-    }
-    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-        phase.description = desc.to_string();
-    }
-    if let Some(order) = req.params.get("order").and_then(|v| v.as_u64()) {
-        phase.order = order as u32;
-    }
-    phase.updated_at = crate::id::now_millis();
+        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+            phase.title = title.to_string();
+        }
+        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+            phase.description = desc.to_string();
+        }
+        if let Some(order) = req.params.get("order").and_then(|v| v.as_u64()) {
+            phase.order = order as u32;
+        }
+        phase.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(phase.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(phase.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let phase_json = serde_json::to_value(&*phase).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("phases", &id));
-    DaemonResponse::ok(req.id, phase_json)
+        let phase_json = serde_json::to_value(&*phase)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("phases", &id));
+        Ok(DaemonResponse::ok(req.id, phase_json))
+    })
 }
 
 fn handle_work_update(
@@ -4163,47 +4780,52 @@ fn handle_work_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_work_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_work_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut works = stores.works.write().unwrap();
-    let wi = match works.get_mut(&id) {
-        Some(w) => w,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("works", &id)),
-    };
+        let mut works = stores.write_works()?;
+        let wi = match works.get_mut(&id) {
+            Some(w) => w,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("works", &id))),
+        };
 
-    if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
-        wi.title = title.to_string();
-    }
-    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-        wi.description = desc.to_string();
-    }
-    if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
-        wi.assignee = Some(assignee.to_string());
-    }
-    if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
-        wi.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_array()) {
-        wi.acceptance_criteria = criteria.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
-        wi.dependencies = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    wi.updated_at = crate::id::now_millis();
+        if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
+            wi.title = title.to_string();
+        }
+        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+            wi.description = desc.to_string();
+        }
+        if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
+            wi.assignee = Some(assignee.to_string());
+        }
+        if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
+            wi.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_array()) {
+            wi.acceptance_criteria = criteria.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
+            wi.dependencies = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        wi.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(wi.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(wi.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let wi_json = serde_json::to_value(&*wi).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("works", &id));
-    DaemonResponse::ok(req.id, wi_json)
+        let wi_json = serde_json::to_value(&*wi)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("works", &id));
+        Ok(DaemonResponse::ok(req.id, wi_json))
+    })
 }
 
 fn handle_bundle_update(
@@ -4211,75 +4833,80 @@ fn handle_bundle_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_bundle_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
-
-    let mut bundles = stores.bundles.write().unwrap();
-    let bundle = match bundles.get_mut(&id) {
-        Some(b) => b,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("bundles", &id)),
-    };
-
-    if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-        bundle.description = Some(desc.to_string());
-    }
-    // M8: Accept both "touched_paths" and "files_changed" in update
-    let paths_val = req
-        .params
-        .get("touched_paths")
-        .or_else(|| req.params.get("files_changed"));
-    if let Some(paths) = paths_val.and_then(|v| v.as_array()) {
-        // Gap #22: BundleSizePolicy enforcement on update
-        let policy = &stores.config.strategy.bundle_size;
-        if paths.len() as u32 > policy.max_files_touched {
-            return DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed(&format!(
-                    "Bundle touches {} files, exceeds max_files_touched={}",
-                    paths.len(),
-                    policy.max_files_touched
-                )),
-            );
-        }
-        bundle.touched_paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    // M1: Parse claims as array (backward-compat: also accepts string)
-    if let Some(claims_val) = req.params.get("claims") {
-        bundle.claims = match claims_val {
-            serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
-            serde_json::Value::String(s) => {
-                if s.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![s.clone()]
-                }
-            }
-            _ => Vec::new(),
+    try_handler!(req.id, {
+        debug!("handle_bundle_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
-    }
-    if let Some(verification) = req.params.get("verification").and_then(|v| v.as_str()) {
-        bundle.verification = verification.to_string();
-    }
-    if let Some(locks) = req.params.get("locks_used").and_then(|v| v.as_array()) {
-        bundle.locks_used = locks.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    if let Some(base_tick_id) = req.params.get("base_tick_id").and_then(|v| v.as_str()) {
-        bundle.base_tick_id = Some(base_tick_id.to_string());
-    }
-    bundle.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(bundle.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        let mut bundles = stores.write_bundles()?;
+        let bundle = match bundles.get_mut(&id) {
+            Some(b) => b,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("bundles", &id))),
+        };
 
-    let bundle_json = serde_json::to_value(&*bundle).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("bundles", &id));
-    DaemonResponse::ok(req.id, bundle_json)
+        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
+            bundle.description = Some(desc.to_string());
+        }
+        // M8: Accept both "touched_paths" and "files_changed" in update
+        let paths_val = req
+            .params
+            .get("touched_paths")
+            .or_else(|| req.params.get("files_changed"));
+        if let Some(paths) = paths_val.and_then(|v| v.as_array()) {
+            // Gap #22: BundleSizePolicy enforcement on update
+            let policy = &stores.config.strategy.bundle_size;
+            if paths.len() as u32 > policy.max_files_touched {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Bundle touches {} files, exceeds max_files_touched={}",
+                        paths.len(),
+                        policy.max_files_touched
+                    )),
+                ));
+            }
+            bundle.touched_paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        // M1: Parse claims as array (backward-compat: also accepts string)
+        if let Some(claims_val) = req.params.get("claims") {
+            bundle.claims = match claims_val {
+                serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+                serde_json::Value::String(s) => {
+                    if s.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![s.clone()]
+                    }
+                }
+                _ => Vec::new(),
+            };
+        }
+        if let Some(verification) = req.params.get("verification").and_then(|v| v.as_str()) {
+            bundle.verification = verification.to_string();
+        }
+        if let Some(locks) = req.params.get("locks_used").and_then(|v| v.as_array()) {
+            bundle.locks_used = locks.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        if let Some(base_tick_id) = req.params.get("base_tick_id").and_then(|v| v.as_str()) {
+            bundle.base_tick_id = Some(base_tick_id.to_string());
+        }
+        bundle.updated_at = crate::id::now_millis();
+
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(bundle.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+
+        let bundle_json = serde_json::to_value(&*bundle)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("bundles", &id));
+        Ok(DaemonResponse::ok(req.id, bundle_json))
+    })
 }
 
 fn handle_tick_update(
@@ -4287,38 +4914,43 @@ fn handle_tick_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_tick_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_tick_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut ticks = stores.ticks.write().unwrap();
-    let tick = match ticks.get_mut(&id) {
-        Some(t) => t,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("ticks", &id)),
-    };
+        let mut ticks = stores.write_ticks()?;
+        let tick = match ticks.get_mut(&id) {
+            Some(t) => t,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("ticks", &id))),
+        };
 
-    if let Some(log) = req.params.get("validation_log").and_then(|v| v.as_str()) {
-        tick.validation_log = log.to_string();
-    }
-    if let Some(bids) = req.params.get("bundle_ids").and_then(|v| v.as_array()) {
-        tick.bundle_ids = bids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    if let Some(abids) = req.params.get("attempted_bundle_ids").and_then(|v| v.as_array()) {
-        tick.attempted_bundle_ids = abids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    tick.updated_at = crate::id::now_millis();
+        if let Some(log) = req.params.get("validation_log").and_then(|v| v.as_str()) {
+            tick.validation_log = log.to_string();
+        }
+        if let Some(bids) = req.params.get("bundle_ids").and_then(|v| v.as_array()) {
+            tick.bundle_ids = bids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        if let Some(abids) = req.params.get("attempted_bundle_ids").and_then(|v| v.as_array()) {
+            tick.attempted_bundle_ids = abids.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        tick.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(tick.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(tick.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let tick_json = serde_json::to_value(&*tick).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("ticks", &id));
-    DaemonResponse::ok(req.id, tick_json)
+        let tick_json = serde_json::to_value(&*tick)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("ticks", &id));
+        Ok(DaemonResponse::ok(req.id, tick_json))
+    })
 }
 
 fn handle_learning_update(
@@ -4326,42 +4958,47 @@ fn handle_learning_update(
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("handle_learning_update()");
-    let id = match req.params.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id.to_string(),
-        None => return DaemonResponse::err(req.id, RpcError::invalid_params("id is required")),
-    };
+    try_handler!(req.id, {
+        debug!("handle_learning_update()");
+        let id = match req.params.get("id").and_then(|v| v.as_str()) {
+            Some(id) => id.to_string(),
+            None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
+        };
 
-    let mut learnings = stores.learnings.write().unwrap();
-    let learning = match learnings.get_mut(&id) {
-        Some(l) => l,
-        None => return DaemonResponse::err(req.id, RpcError::not_found("learnings", &id)),
-    };
+        let mut learnings = stores.write_learnings()?;
+        let learning = match learnings.get_mut(&id) {
+            Some(l) => l,
+            None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("learnings", &id))),
+        };
 
-    if let Some(content) = req.params.get("content").and_then(|v| v.as_str()) {
-        learning.content = content.to_string();
-    }
-    if let Some(roles) = req.params.get("applicable_roles").and_then(|v| v.as_array()) {
-        let parsed: Vec<Role> = roles
-            .iter()
-            .filter_map(|v| serde_json::from_value(v.clone()).ok())
-            .collect();
-        learning.applicable_roles = if parsed.is_empty() { None } else { Some(parsed) };
-    }
-    if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
-        learning.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    learning.updated_at = crate::id::now_millis();
+        if let Some(content) = req.params.get("content").and_then(|v| v.as_str()) {
+            learning.content = content.to_string();
+        }
+        if let Some(roles) = req.params.get("applicable_roles").and_then(|v| v.as_array()) {
+            let parsed: Vec<Role> = roles
+                .iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect();
+            learning.applicable_roles = if parsed.is_empty() { None } else { Some(parsed) };
+        }
+        if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
+            learning.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        learning.updated_at = crate::id::now_millis();
 
-    if let Some(store) = &stores.store
-        && let Err(e) = store.lock().unwrap().update(learning.clone())
-    {
-        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
-    }
+        if let Some(store) = &stores.store
+            && let Err(e) = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .update(learning.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
 
-    let learning_json = serde_json::to_value(&*learning).unwrap();
-    let _ = event_tx.send(DaemonEvent::record_updated("learnings", &id));
-    DaemonResponse::ok(req.id, learning_json)
+        let learning_json = serde_json::to_value(&*learning)?;
+        let _ = event_tx.send(DaemonEvent::record_updated("learnings", &id));
+        Ok(DaemonResponse::ok(req.id, learning_json))
+    })
 }
 
 #[cfg(test)]
