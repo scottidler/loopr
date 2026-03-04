@@ -106,8 +106,6 @@ pub enum IpcAction {
     StopAgent(String),
     NewRecord { collection: String },
     TransitionRecord { collection: String, id: String },
-    SetGoalAndStart(String),
-    InterviewRespond(String),
     ApprovePlan(String),
 }
 

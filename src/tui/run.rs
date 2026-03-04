@@ -278,34 +278,6 @@ async fn event_loop(
             ipc_msg = async { client.as_mut().expect("guarded by is_some").recv().await }, if client.is_some() => {
                 match ipc_msg {
                     Ok(Some(IpcMessage::Event(event))) => {
-                        // Handle coordinator interview questions in Plan mode
-                        if app.chat_mode == ChatMode::Plan
-                            && event.event == "coordinator.interview_question"
-                            && let Some(questions) = event.data.get("questions").and_then(|v| v.as_array())
-                        {
-                            let text = questions
-                                .iter()
-                                .filter_map(|q| q.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            if !text.is_empty() {
-                                app.chat_history.push(ChatMessage::assistant(text));
-                            }
-                        }
-                        // Handle coordinator plan proposal
-                        if event.event == "coordinator.plan_proposed"
-                            && let Some(plan_id) = event.data.get("plan_id").and_then(|v| v.as_str())
-                        {
-                            app.pending_plan_id = Some(plan_id.to_string());
-                            app.funnel_state = super::app::FunnelState::PlanDraft;
-                            let summary = event.data.get("summary")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Plan ready for review.");
-                            app.chat_history.push(ChatMessage::system(
-                                format!("=== Proposed Plan ===\n{summary}\n\nPress Ctrl+a to approve and activate."),
-                            ));
-                        }
-
                         if let Some(collection) = event_collection(&event) {
                             let collection = collection.to_string();
                             if let Some(c) = client.as_mut() {
@@ -359,23 +331,6 @@ async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
         IpcAction::TransitionRecord { collection, id } => (
             format!("{collection}.transition"),
             serde_json::json!({ "id": id, "target_status": "Active" }),
-        ),
-        IpcAction::SetGoalAndStart(goal) => {
-            // Two IPC calls: set goal then start coordinator
-            if let Err(e) = client
-                .request("coordinator.set_goal", serde_json::json!({ "goal": goal }))
-                .await
-            {
-                warn!("Failed to set coordinator goal: {e}");
-            }
-            (
-                "agent.start".to_string(),
-                serde_json::json!({ "agent_type": "Coordinator" }),
-            )
-        }
-        IpcAction::InterviewRespond(response) => (
-            "coordinator.interview_respond".to_string(),
-            serde_json::json!({ "response": response }),
         ),
         IpcAction::ApprovePlan(plan_id) => (
             "coordinator.approve_plan".to_string(),

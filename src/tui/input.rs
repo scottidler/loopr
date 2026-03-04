@@ -276,17 +276,8 @@ pub fn apply_action(app: &mut App, action: Action) {
                     "/plan" => {
                         app.chat_mode = ChatMode::Plan;
                         app.funnel_state = FunnelState::Interview;
-                        app.chat_history.push(ChatMessage::system(
-                            "Entering Plan mode. Chat context sent to Coordinator.".into(),
-                        ));
-                        // Serialize chat transcript for coordinator
-                        let transcript = app
-                            .chat_history
-                            .iter()
-                            .map(|m| format!("{:?}: {}", m.role, m.content))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        app.pending_ipc = Some(IpcAction::SetGoalAndStart(transcript));
+                        app.chat_history
+                            .push(ChatMessage::system("Entering Plan mode. Focusing on your goal.".into()));
                     }
                     "/chat" => {
                         app.chat_mode = ChatMode::Chat;
@@ -300,10 +291,12 @@ pub fn apply_action(app: &mut App, action: Action) {
                         app.chat_streaming = false;
                     }
                     "/draft" => {
-                        if app.chat_mode == ChatMode::Plan {
-                            app.pending_ipc = Some(IpcAction::InterviewRespond("/draft".into()));
+                        if app.funnel_state == FunnelState::Interview {
+                            app.funnel_state = FunnelState::PlanDraft;
                             app.chat_history
                                 .push(ChatMessage::system("Building draft plan...".into()));
+                            // Signal the TUI-side LLM to produce a draft
+                            app.pending_chat_submit = Some("/draft".into());
                         } else {
                             app.chat_history
                                 .push(ChatMessage::system("Use /plan first to enter Plan mode.".into()));
@@ -320,14 +313,9 @@ pub fn apply_action(app: &mut App, action: Action) {
                     }
                 }
             } else {
-                // Regular message
+                // Regular message — always goes to TUI-side LLM
                 app.chat_history.push(ChatMessage::user(input.clone()));
-                if app.chat_mode == ChatMode::Chat {
-                    app.pending_chat_submit = Some(input);
-                } else {
-                    // Plan mode: send to coordinator interview
-                    app.pending_ipc = Some(IpcAction::InterviewRespond(input));
-                }
+                app.pending_chat_submit = Some(input);
             }
         }
         Action::ChatBackspace => {
@@ -914,6 +902,8 @@ mod tests {
         app.chat_cursor_pos = 5;
         apply_action(&mut app, Action::ChatSubmit);
         assert_eq!(app.chat_mode, ChatMode::Plan);
+        assert_eq!(app.funnel_state, FunnelState::Interview);
+        assert!(app.pending_ipc.is_none()); // no IPC — local state only
         assert!(
             app.chat_history
                 .iter()
@@ -1000,13 +990,15 @@ mod tests {
     }
 
     #[test]
-    fn test_slash_command_draft_in_plan_mode() {
+    fn test_slash_command_draft_in_interview_state() {
         let mut app = App::new();
         app.chat_mode = ChatMode::Plan;
+        app.funnel_state = FunnelState::Interview;
         app.chat_input = "/draft".to_string();
         app.chat_cursor_pos = 6;
         apply_action(&mut app, Action::ChatSubmit);
-        assert_eq!(app.pending_ipc, Some(IpcAction::InterviewRespond("/draft".into())));
+        assert_eq!(app.funnel_state, FunnelState::PlanDraft);
+        assert_eq!(app.pending_chat_submit, Some("/draft".into()));
     }
 
     #[test]
@@ -1015,7 +1007,7 @@ mod tests {
         app.chat_input = "/draft".to_string();
         app.chat_cursor_pos = 6;
         apply_action(&mut app, Action::ChatSubmit);
-        assert!(app.pending_ipc.is_none());
+        assert!(app.pending_chat_submit.is_none());
         assert!(app.chat_history.iter().any(|m| m.content.contains("/plan first")));
     }
 
