@@ -324,6 +324,7 @@ fn coordinator_to_ipc(cmd: &CoordinatorCmd) -> (String, serde_json::Value) {
         CoordinatorCmd::Set { goal } => ("coordinator.set_goal".to_string(), json!({ "goal": goal })),
         CoordinatorCmd::Clear => ("coordinator.clear_goal".to_string(), json!({})),
         CoordinatorCmd::Status => ("coordinator.get_goal".to_string(), json!({})),
+        CoordinatorCmd::AcceptPlan { plan } => ("coordinator.accept_plan".to_string(), json!({ "plan": plan })),
     }
 }
 
@@ -1332,5 +1333,17 @@ mod tests {
         assert_eq!(method, "agent.output");
         assert_eq!(params["session_id"], "sess-1");
         assert_eq!(params["since"], 0);
+    }
+
+    #[test]
+    fn test_coordinator_accept_plan_mapping() {
+        let cmd = Command::Coordinator {
+            cmd: CoordinatorCmd::AcceptPlan {
+                plan: "Build auth module".to_string(),
+            },
+        };
+        let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
+        assert_eq!(method, "coordinator.accept_plan");
+        assert_eq!(params["plan"], "Build auth module");
     }
 }

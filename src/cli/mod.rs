@@ -288,6 +288,12 @@ pub enum CoordinatorCmd {
     /// Get the current coordinator goal
     #[command(name = "goal")]
     Status,
+    /// Accept a plan from text (creates Plan record and activates it)
+    #[command(name = "accept-plan")]
+    AcceptPlan {
+        /// Plan text
+        plan: String,
+    },
 }
 
 /// Lock subcommands.
@@ -985,5 +991,18 @@ mod tests {
     fn test_cli_log_level_default_none() {
         let cli = Cli::parse_from(["loopr", "status"]);
         assert!(cli.log_level.is_none());
+    }
+
+    #[test]
+    fn test_cli_parses_coordinator_accept_plan() {
+        let cli = Cli::parse_from(["loopr", "coordinator", "accept-plan", "Build a todo app"]);
+        match cli.command {
+            Some(Command::Coordinator {
+                cmd: CoordinatorCmd::AcceptPlan { plan },
+            }) => {
+                assert_eq!(plan, "Build a todo app");
+            }
+            _ => panic!("expected Coordinator AcceptPlan"),
+        }
     }
 }
