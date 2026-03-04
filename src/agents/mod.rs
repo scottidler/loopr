@@ -474,6 +474,10 @@ pub enum AgentAction {
         target_status: String,
         reason: String,
     },
+    EvaluateCoverage {
+        parent_collection: String,
+        parent_id: String,
+    },
 
     // === Researcher-only actions ===
     SearchCode {

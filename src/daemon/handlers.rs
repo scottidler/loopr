@@ -183,6 +183,7 @@ pub fn dispatch(
         "validator.validate" => handle_validator_validate(stores, req),
         "validator.report" => handle_validator_report(stores, req),
         "validator.reports" => handle_validator_reports(stores, req),
+        "coverage.evaluate" => handle_coverage_evaluate(stores, req),
         "tool.list" => handle_tool_list(stores, req),
         "coordinator.set_goal" => handle_coordinator_set_goal(stores, event_tx, req),
         "coordinator.clear_goal" => handle_coordinator_clear_goal(stores, event_tx, req),
@@ -3110,6 +3111,153 @@ fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> Daemon
             {
                 return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
             }
+            DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap())
+        }
+        Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),
+    }
+}
+
+// --- Coverage Evaluator handler ---
+
+fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    debug!("handle_coverage_evaluate()");
+    let evaluator = match &stores.evaluator {
+        Some(e) => e.clone(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::internal("coverage evaluator not enabled"));
+        }
+    };
+
+    let parent_collection = match req.params.get("parent_collection").and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("parent_collection is required"));
+        }
+    };
+
+    let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("parent_id is required"));
+        }
+    };
+
+    let report = match parent_collection.as_str() {
+        "plan" | "plans" => {
+            let plans = stores.plans.read().unwrap();
+            let plan = match plans.get(&parent_id) {
+                Some(p) => p.clone(),
+                None => {
+                    return DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id));
+                }
+            };
+            drop(plans);
+            // Gather all Spec children of this Plan
+            let specs = stores.specs.read().unwrap();
+            let child_specs: Vec<_> = specs.values().filter(|s| s.plan_id == parent_id).collect();
+            let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
+            let specs_list = child_specs
+                .iter()
+                .map(|s| format!("- [{}] {}: {}", s.id, s.title, s.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            drop(specs);
+            evaluator.evaluate_plan_specs(
+                &parent_id,
+                &plan.title,
+                &plan.description,
+                &plan.acceptance_criteria,
+                &specs_list,
+                children_ids,
+            )
+        }
+        "spec" | "specs" => {
+            let specs = stores.specs.read().unwrap();
+            let spec = match specs.get(&parent_id) {
+                Some(s) => s.clone(),
+                None => {
+                    return DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id));
+                }
+            };
+            drop(specs);
+            let plan_title = {
+                let plans = stores.plans.read().unwrap();
+                plans.get(&spec.plan_id).map(|p| p.title.clone()).unwrap_or_default()
+            };
+            let phases = stores.phases.read().unwrap();
+            let child_phases: Vec<_> = phases.values().filter(|p| p.spec_id == parent_id).collect();
+            let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
+            let phases_list = child_phases
+                .iter()
+                .map(|p| format!("- [{}] {} (order: {}): {}", p.id, p.title, p.order, p.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            drop(phases);
+            evaluator.evaluate_spec_phases(
+                &parent_id,
+                &spec.title,
+                &spec.description,
+                &plan_title,
+                &phases_list,
+                children_ids,
+            )
+        }
+        "phase" | "phases" => {
+            let phases = stores.phases.read().unwrap();
+            let phase = match phases.get(&parent_id) {
+                Some(p) => p.clone(),
+                None => {
+                    return DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id));
+                }
+            };
+            drop(phases);
+            let spec_title = {
+                let specs = stores.specs.read().unwrap();
+                specs.get(&phase.spec_id).map(|s| s.title.clone()).unwrap_or_default()
+            };
+            let works = stores.works.read().unwrap();
+            let child_works: Vec<_> = works.values().filter(|w| w.phase_id == parent_id).collect();
+            let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
+            let works_list = child_works
+                .iter()
+                .map(|w| format!("- [{}] {}: {}", w.id, w.title, w.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            drop(works);
+            let params = crate::evaluator::PhaseWorksParams {
+                id: parent_id.clone(),
+                title: phase.title,
+                description: phase.description,
+                order: phase.order,
+                spec_title,
+            };
+            evaluator.evaluate_phase_works(&params, &works_list, children_ids)
+        }
+        _ => {
+            return DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params(&format!(
+                    "unsupported parent_collection for coverage: {}",
+                    parent_collection
+                )),
+            );
+        }
+    };
+
+    match report {
+        Ok(report) => {
+            // Persist to TaskStore
+            if let Some(store) = &stores.store
+                && let Err(e) = store.lock().unwrap().create(report.clone())
+            {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+            // Also store in memory
+            stores
+                .coverage_reports
+                .write()
+                .unwrap()
+                .insert(report.id.clone(), report.clone());
             DaemonResponse::ok(req.id, serde_json::to_value(&report).unwrap())
         }
         Err(e) => DaemonResponse::err(req.id, RpcError::internal(&e.to_string())),

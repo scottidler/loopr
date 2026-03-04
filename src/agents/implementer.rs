@@ -627,6 +627,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         ActionResult::AgentSpawned { session_id, agent_type } => {
             format!("spawned {} ({})", agent_type, session_id)
         }
+        ActionResult::CoverageEvaluated { verdict, gaps, .. } => format!("coverage: {} ({} gaps)", verdict, gaps.len()),
         ActionResult::DependencyNotMet { work_id, message } => {
             format!("dep not met for {}: {}", work_id, message)
         } // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — dead variants

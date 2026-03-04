@@ -41,6 +41,10 @@ pub struct CoordinatorState {
     #[serde(default)]
     pub work_first_assigned_at: HashMap<String, i64>,
     pub phase_activated_at: Option<i64>,
+    /// Decomposition attempt count per parent ID.
+    /// Tracks how many times coverage evaluation has failed for children of a parent.
+    #[serde(default)]
+    pub decomposition_attempts: HashMap<String, u32>,
     pub goal_started_at: i64,
     pub phases_completed: Vec<String>,
     pub created_at: i64,
@@ -59,6 +63,7 @@ impl CoordinatorState {
             work_attempts: HashMap::new(),
             work_first_assigned_at: HashMap::new(),
             phase_activated_at: None,
+            decomposition_attempts: HashMap::new(),
             goal_started_at: now,
             phases_completed: Vec::new(),
             created_at: now,
@@ -110,6 +115,25 @@ impl CoordinatorState {
         self.work_first_assigned_at
             .entry(work_id.to_string())
             .or_insert_with(id::now_millis);
+        self.updated_at = id::now_millis();
+    }
+
+    /// Increment the decomposition attempt counter for a parent. Returns the new count.
+    pub fn increment_decomposition_attempts(&mut self, parent_id: &str) -> u32 {
+        let count = self.decomposition_attempts.entry(parent_id.to_string()).or_insert(0);
+        *count += 1;
+        self.updated_at = id::now_millis();
+        *count
+    }
+
+    /// Get the decomposition attempt count for a parent.
+    pub fn decomposition_attempts(&self, parent_id: &str) -> u32 {
+        self.decomposition_attempts.get(parent_id).copied().unwrap_or(0)
+    }
+
+    /// Reset decomposition attempts for a parent (after bubble-up).
+    pub fn reset_decomposition_attempts(&mut self, parent_id: &str) {
+        self.decomposition_attempts.remove(parent_id);
         self.updated_at = id::now_millis();
     }
 

@@ -1502,6 +1502,9 @@ fn format_action_summary(result: &ActionResult) -> String {
         ActionResult::ActionError(e) => format!("ERROR: {}", e),
         ActionResult::RecordCreated { collection, id } => format!("created {}: {}", collection, id),
         ActionResult::AgentSpawned { session_id, agent_type } => format!("spawned {} ({})", agent_type, session_id),
+        ActionResult::CoverageEvaluated { verdict, summary, gaps } => {
+            format!("coverage: {} ({}, {} gaps)", verdict, summary, gaps.len())
+        }
         ActionResult::DependencyNotMet { work_id, message } => {
             format!("dep not met for {}: {}", work_id, message)
         } // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — dead variants

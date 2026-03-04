@@ -982,6 +982,59 @@ pub async fn execute_action(
                 issues,
             })
         }
+        AgentAction::EvaluateCoverage {
+            parent_collection,
+            parent_id,
+        } => {
+            let resp = bridge.request(
+                "coverage.evaluate",
+                serde_json::json!({ "parent_collection": parent_collection, "parent_id": parent_id }),
+            );
+            if resp.is_error() {
+                let msg = resp
+                    .error
+                    .as_ref()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_else(|| "unknown coverage error".to_string());
+                return Ok(ActionResult::ActionError(format!(
+                    "evaluate_coverage {}/{} failed: {}",
+                    parent_collection, parent_id, msg
+                )));
+            }
+            let verdict = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("verdict"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let summary = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("summary"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let gaps: Vec<String> = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("gaps"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|gap| gap.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            agent_log.info(&format!(
+                "EvaluateCoverage {}/{}: verdict={}, gaps={}",
+                parent_collection,
+                parent_id,
+                verdict,
+                gaps.len()
+            ));
+            Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
+        }
         AgentAction::AcquireLock { resource, holder_id } => {
             // Check if there's already an active lock on this resource
             let check_resp = bridge.request(
@@ -1218,6 +1271,12 @@ pub enum ActionResult {
         verdict: String,
         summary: String,
         issues: Vec<String>,
+    },
+    /// Coverage evaluated — contains (verdict, summary, gap_descriptions).
+    CoverageEvaluated {
+        verdict: String,
+        summary: String,
+        gaps: Vec<String>,
     },
     Done(String),
     NeedHelp(String),
