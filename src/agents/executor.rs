@@ -659,6 +659,18 @@ pub async fn execute_action(
                 .unwrap_or("unknown")
                 .to_string();
             agent_log.info(&format!("CreatePlan: {} (id: {})", title, id));
+            // Auto-approve Plan in non-Interactive modes
+            if bridge.config().agents.coordinator.interview_mode != crate::config::InterviewMode::Interactive {
+                let approve_resp = bridge.request("coordinator.approve_plan", serde_json::json!({ "plan_id": id }));
+                if approve_resp.is_error() {
+                    agent_log.warn(&format!(
+                        "auto-approve failed for plan {}: {:?}",
+                        id, approve_resp.error
+                    ));
+                } else {
+                    agent_log.info(&format!("auto-approved plan {} (interview_mode != interactive)", id));
+                }
+            }
             Ok(ActionResult::RecordCreated {
                 collection: "plans".to_string(),
                 id,
@@ -1104,6 +1116,22 @@ pub async fn execute_action(
                 .unwrap_or("unknown")
                 .to_string();
             agent_log.info(&format!("ProposePlan: created draft plan {}", plan_id));
+            // Auto-approve Plan in non-Interactive modes
+            if bridge.config().agents.coordinator.interview_mode != crate::config::InterviewMode::Interactive {
+                let approve_resp =
+                    bridge.request("coordinator.approve_plan", serde_json::json!({ "plan_id": plan_id }));
+                if approve_resp.is_error() {
+                    agent_log.warn(&format!(
+                        "auto-approve failed for plan {}: {:?}",
+                        plan_id, approve_resp.error
+                    ));
+                } else {
+                    agent_log.info(&format!(
+                        "auto-approved plan {} (interview_mode != interactive)",
+                        plan_id
+                    ));
+                }
+            }
             Ok(ActionResult::RecordCreated {
                 collection: "plans".to_string(),
                 id: plan_id,
