@@ -1,6 +1,7 @@
 pub mod bundle;
 pub mod coordinator_goal;
 pub mod coordinator_state;
+pub mod coverage;
 #[allow(dead_code)]
 pub mod decision;
 pub mod learning;

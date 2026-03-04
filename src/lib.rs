@@ -4,6 +4,7 @@ pub mod config;
 pub mod daemon;
 pub mod domain;
 pub mod error;
+pub mod evaluator;
 pub mod guidance;
 pub mod id;
 pub mod ipc;

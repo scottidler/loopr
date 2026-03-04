@@ -1,0 +1,21 @@
+You are evaluating whether a set of Phases fully implements a Spec.
+
+## Parent Spec
+- Title: {spec_title}
+- Description: {spec_description}
+- Plan context: {plan_title}
+
+## Generated Phases (in order)
+{phases_list}
+
+## Task
+Evaluate whether these Phases, executed in order, fully implement the Spec.
+
+Check for:
+1. **Gaps**: Are there requirements in the Spec that no Phase addresses?
+2. **Ordering**: Are dependencies between Phases correct? Can each Phase be executed after the previous ones complete?
+3. **Out-of-scope**: Do any Phases include work beyond the Spec?
+4. **Completeness**: After all Phases complete, would the Spec's goals be fully achieved?
+
+Respond with ONLY valid JSON matching this schema:
+{schema}

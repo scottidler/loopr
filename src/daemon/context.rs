@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::CoordinatorState;
+use crate::domain::coverage::CoverageReport;
 use crate::domain::decision::Decision;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -45,10 +46,13 @@ pub struct Stores {
     pub proposals: StdRwLock<HashMap<String, Proposal>>,
     pub decisions: StdRwLock<HashMap<String, Decision>>,
     pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
+    pub coverage_reports: StdRwLock<HashMap<String, CoverageReport>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
     pub store: Option<Arc<StdMutex<Store>>>,
     /// Doc Validator (LLM-based). None when validator.enabled = false or in legacy contexts.
     pub validator: Option<Arc<DocValidator>>,
+    /// Coverage Evaluator (LLM-based). None when coverage is disabled or in legacy contexts.
+    pub evaluator: Option<Arc<crate::evaluator::CoverageEvaluator>>,
     /// Tool runner for agent subprocess execution. Shared across agent tasks.
     pub tool_runner: Arc<ToolRunner>,
     /// Full config, available to handlers for agent spawning.
@@ -83,8 +87,10 @@ impl Stores {
             proposals: StdRwLock::new(HashMap::new()),
             decisions: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
+            coverage_reports: StdRwLock::new(HashMap::new()),
             store: None,
             validator: None,
+            evaluator: None,
             tool_runner: Arc::new(ToolRunner::new(&[])),
             config: Config::default(),
             agent_handles: StdMutex::new(HashMap::new()),
@@ -152,6 +158,7 @@ impl DaemonContext {
         store.rebuild_indexes::<Proposal>()?;
         store.rebuild_indexes::<Decision>()?;
         store.rebuild_indexes::<ValidationReport>()?;
+        store.rebuild_indexes::<CoverageReport>()?;
         store.rebuild_indexes::<AgentSession>()?;
 
         info!("TaskStore opened at {}", repo_path.display());
@@ -197,6 +204,9 @@ impl DaemonContext {
             for decision in store.list::<Decision>(&[])? {
                 stores.decisions.write().unwrap().insert(decision.id.clone(), decision);
             }
+            for cr in store.list::<CoverageReport>(&[])? {
+                stores.coverage_reports.write().unwrap().insert(cr.id.clone(), cr);
+            }
             for session in store.list::<AgentSession>(&[])? {
                 stores
                     .agent_sessions
@@ -216,6 +226,7 @@ impl DaemonContext {
                 + stores.coordinator_states.read().unwrap().len()
                 + stores.proposals.read().unwrap().len()
                 + stores.decisions.read().unwrap().len()
+                + stores.coverage_reports.read().unwrap().len()
                 + stores.agent_sessions.read().unwrap().len();
             if hydrated > 0 {
                 info!("Hydrated {} records from TaskStore into memory", hydrated);

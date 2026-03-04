@@ -16,6 +16,10 @@ const DEFAULT_GENERATION_PLAN: &str = include_str!("../prompts/generation-plan.p
 const DEFAULT_GENERATION_SPEC: &str = include_str!("../prompts/generation-spec.pmt");
 const DEFAULT_GENERATION_PHASE: &str = include_str!("../prompts/generation-phase.pmt");
 const DEFAULT_GENERATION_WORK: &str = include_str!("../prompts/generation-work.pmt");
+const DEFAULT_COVERAGE_SCHEMA: &str = include_str!("../prompts/coverage-schema.pmt");
+const DEFAULT_COVERAGE_PLAN_SPECS: &str = include_str!("../prompts/coverage-plan-specs.pmt");
+const DEFAULT_COVERAGE_SPEC_PHASES: &str = include_str!("../prompts/coverage-spec-phases.pmt");
+const DEFAULT_COVERAGE_PHASE_WORKS: &str = include_str!("../prompts/coverage-phase-works.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -30,6 +34,10 @@ pub struct PromptStore {
     pub generation_spec: String,
     pub generation_phase: String,
     pub generation_work: String,
+    pub coverage_schema: String,
+    pub coverage_plan_specs: String,
+    pub coverage_spec_phases: String,
+    pub coverage_phase_works: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -72,6 +80,10 @@ pub fn init() {
         generation_spec: load("generation-spec.pmt", DEFAULT_GENERATION_SPEC),
         generation_phase: load("generation-phase.pmt", DEFAULT_GENERATION_PHASE),
         generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORK),
+        coverage_schema: load("coverage-schema.pmt", DEFAULT_COVERAGE_SCHEMA),
+        coverage_plan_specs: load("coverage-plan-specs.pmt", DEFAULT_COVERAGE_PLAN_SPECS),
+        coverage_spec_phases: load("coverage-spec-phases.pmt", DEFAULT_COVERAGE_SPEC_PHASES),
+        coverage_phase_works: load("coverage-phase-works.pmt", DEFAULT_COVERAGE_PHASE_WORKS),
     });
 }
 
@@ -90,6 +102,10 @@ pub fn init_defaults() {
         generation_spec: DEFAULT_GENERATION_SPEC.to_string(),
         generation_phase: DEFAULT_GENERATION_PHASE.to_string(),
         generation_work: DEFAULT_GENERATION_WORK.to_string(),
+        coverage_schema: DEFAULT_COVERAGE_SCHEMA.to_string(),
+        coverage_plan_specs: DEFAULT_COVERAGE_PLAN_SPECS.to_string(),
+        coverage_spec_phases: DEFAULT_COVERAGE_SPEC_PHASES.to_string(),
+        coverage_phase_works: DEFAULT_COVERAGE_PHASE_WORKS.to_string(),
     });
 }
 
@@ -520,7 +536,7 @@ mod tests {
     fn test_all_pmt_files_have_substantial_content() {
         init_defaults();
         let s = store();
-        let fields: [(&str, &str); 12] = [
+        let fields: [(&str, &str); 16] = [
             ("coordinator", &s.coordinator),
             ("implementer", &s.implementer),
             ("reviewer", &s.reviewer),
@@ -533,6 +549,10 @@ mod tests {
             ("generation_spec", &s.generation_spec),
             ("generation_phase", &s.generation_phase),
             ("generation_work", &s.generation_work),
+            ("coverage_schema", &s.coverage_schema),
+            ("coverage_plan_specs", &s.coverage_plan_specs),
+            ("coverage_spec_phases", &s.coverage_spec_phases),
+            ("coverage_phase_works", &s.coverage_phase_works),
         ];
         for (name, content) in &fields {
             assert!(

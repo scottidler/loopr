@@ -1,0 +1,17 @@
+{
+  "verdict": "complete | incomplete",
+  "gaps": [
+    {
+      "parent_criterion": "The specific parent requirement not covered",
+      "description": "What is missing",
+      "severity": "critical | minor"
+    }
+  ],
+  "out_of_scope": [
+    {
+      "child_id": "ID of the child doc with out-of-scope work",
+      "description": "What is out of scope"
+    }
+  ],
+  "summary": "Brief summary of the coverage evaluation"
+}

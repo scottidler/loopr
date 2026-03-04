@@ -1,0 +1,23 @@
+You are evaluating whether a set of Works fully implements a Phase.
+
+## Parent Phase
+- Title: {phase_title}
+- Description: {phase_description}
+- Order: {phase_order}
+- Spec context: {spec_title}
+
+## Generated Works
+{works_list}
+
+## Task
+Evaluate whether these Works, with their dependencies, fully implement the Phase.
+
+Check for:
+1. **Gaps**: Are there deliverables in the Phase that no Work addresses?
+2. **Granularity**: Are Works small enough for a single agent to implement in one session?
+3. **Dependencies**: Are Work dependencies correct and complete? Are there missing dependencies?
+4. **Resource tags**: Do resource_tags accurately reflect which files each Work will touch?
+5. **Acceptance criteria**: Does each Work have testable acceptance criteria?
+
+Respond with ONLY valid JSON matching this schema:
+{schema}
