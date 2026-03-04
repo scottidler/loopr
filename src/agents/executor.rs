@@ -1067,24 +1067,74 @@ pub async fn execute_action(
             Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
         }
         AgentAction::InterviewQuestion { questions } => {
-            // Send questions to TUI via bridge event
-            let resp = bridge.request(
-                "coordinator.interview_question",
-                serde_json::json!({ "questions": questions }),
-            );
-            if resp.is_error() {
-                let msg = resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.message.clone())
-                    .unwrap_or_else(|| "interview question failed".to_string());
-                return Ok(ActionResult::ActionError(msg));
+            let interview_mode = bridge.config().agents.coordinator.interview_mode;
+            if interview_mode == crate::config::InterviewMode::Auto {
+                // Auto mode: synthesize answer from goal + repo context
+                let goal_text = {
+                    let goals = ctx.stores.read_coordinator_goals()?;
+                    goals
+                        .values()
+                        .find(|g| g.active)
+                        .map(|g| g.goal.clone())
+                        .unwrap_or_else(|| "No goal set.".to_string())
+                };
+                let repo_path = &bridge.config().project.repo_path;
+                let readme = std::fs::read_to_string(repo_path.join("README.md"))
+                    .unwrap_or_else(|_| "no README found".to_string());
+                let file_tree = std::fs::read_dir(repo_path)
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .map(|e| e.file_name().to_string_lossy().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_else(|_| "could not list files".to_string());
+                let synthetic_answer = format!(
+                    "Based on the goal: \"{}\"\nRepository context: {}\nFile tree: {}",
+                    goal_text, readme, file_tree
+                );
+                // Call interview_respond to record the exchange
+                let resp = bridge.request(
+                    "coordinator.interview_respond",
+                    serde_json::json!({ "answer": synthetic_answer }),
+                );
+                if resp.is_error() {
+                    let msg = resp
+                        .error
+                        .as_ref()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "interview auto-respond failed".to_string());
+                    return Ok(ActionResult::ActionError(msg));
+                }
+                agent_log.info(&format!(
+                    "InterviewQuestion: auto-answered {} question(s)",
+                    questions.len()
+                ));
+                Ok(ActionResult::Done(format!(
+                    "auto-answered {} interview question(s)",
+                    questions.len()
+                )))
+            } else {
+                // Interactive mode: send questions to TUI via bridge event
+                let resp = bridge.request(
+                    "coordinator.interview_question",
+                    serde_json::json!({ "questions": questions }),
+                );
+                if resp.is_error() {
+                    let msg = resp
+                        .error
+                        .as_ref()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "interview question failed".to_string());
+                    return Ok(ActionResult::ActionError(msg));
+                }
+                agent_log.info(&format!("InterviewQuestion: {} questions sent", questions.len()));
+                Ok(ActionResult::Done(format!(
+                    "sent {} interview question(s)",
+                    questions.len()
+                )))
             }
-            agent_log.info(&format!("InterviewQuestion: {} questions sent", questions.len()));
-            Ok(ActionResult::Done(format!(
-                "sent {} interview question(s)",
-                questions.len()
-            )))
         }
         AgentAction::ProposePlan {
             title,
