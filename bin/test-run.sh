@@ -183,6 +183,8 @@ agents:
   auto_start_reviewer: true
   auto_start_coordinator: true
   pull_based_workers: true
+  coordinator:
+    interview_mode: skip
 
 validator:
   enabled: false
@@ -432,6 +434,37 @@ RESULTS_FILE="${MONITOR_DIR}/results.md"
 } > "${RESULTS_FILE}"
 
 ok "Results snapshot written to ${RESULTS_FILE}"
+
+###############################################################################
+# Success criteria checks
+###############################################################################
+
+TS_DIR="${RUN_DIR}/.taskstore"
+PASS=true
+
+check_collection() {
+    local name="$1"
+    local file="${TS_DIR}/${name}.jsonl"
+    if [[ -f "${file}" ]] && [[ "$(wc -l < "${file}")" -gt 0 ]]; then
+        ok "  ${name}: $(wc -l < "${file}") record(s)"
+    else
+        err "  ${name}: MISSING or empty"
+        PASS=false
+    fi
+}
+
+echo ""
+echo -e "${BOLD}${CYAN}=== Success Criteria ===${NC}"
+check_collection "plans"
+check_collection "specs"
+check_collection "phases"
+
+if [[ "${PASS}" == "true" ]]; then
+    ok "All success criteria met"
+else
+    warn "Some criteria not met (see above)"
+fi
+echo ""
 
 ###############################################################################
 # Claude evaluation (optional)
