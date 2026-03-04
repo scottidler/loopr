@@ -34,7 +34,7 @@ use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{DaemonEvent, IpcMessage};
 
 use super::app::{
-    App, AppState, ChatMessage, ChatMode, ChatRole, ConnectionStatus, InputMode, IpcAction, View, colors,
+    App, AppState, ChatMessage, ChatMode, ChatRole, ConnectionStatus, FunnelState, InputMode, IpcAction, View, colors,
 };
 use super::input::{apply_action, handle_key};
 use super::views;
@@ -46,6 +46,21 @@ const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 const CHAT_SYSTEM_PROMPT: &str = "You are an AI assistant embedded in the Loopr development orchestrator. \
 You help the user explore ideas, discuss architecture, and plan changes to their codebase. \
 When the user is ready to formalize a plan, they will type /plan.";
+
+/// Prompt augmentation for Interview state (plan-focused conversation).
+const INTERVIEW_PROMPT: &str = "You are helping the user coalesce around a concrete, actionable plan. \
+Your job is to ask clarifying questions until the goal, scope, and acceptance criteria are clear. \
+Do not propose a plan until the user signals they are ready by typing /draft. \
+Focus on understanding the problem, constraints, and desired outcome.";
+
+/// Prompt augmentation for /draft — generate a structured plan.
+const DRAFT_PROMPT: &str = "The user is ready for a plan draft. Based on the conversation so far, \
+produce a structured plan with: Title, Goal, Acceptance Criteria (numbered list), and Phases \
+(if applicable). Output plain text, not markdown. Be concise.";
+
+/// Prompt augmentation for PlanDraft refinement (user edits).
+const PLAN_REFINE_PROMPT: &str = "The user wants to refine the plan draft. Apply their feedback and \
+output the revised plan in the same format. Only change what they asked for.";
 
 /// Run the TUI, connecting to the daemon at the given socket path.
 pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
@@ -103,6 +118,24 @@ async fn try_connect(socket_path: &Path) -> Option<IpcClient> {
     let mut client = IpcClient::connect(socket_path).await.ok()?;
     client.handshake(env!("CARGO_PKG_VERSION")).await.ok()?;
     Some(client)
+}
+
+/// Select the system prompt based on funnel state and whether a draft was just requested.
+fn system_prompt_for_state(funnel_state: FunnelState, is_draft_request: bool) -> String {
+    match funnel_state {
+        FunnelState::Chat => CHAT_SYSTEM_PROMPT.to_string(),
+        FunnelState::Interview => {
+            format!("{CHAT_SYSTEM_PROMPT}\n\n{INTERVIEW_PROMPT}")
+        }
+        FunnelState::PlanDraft => {
+            if is_draft_request {
+                format!("{CHAT_SYSTEM_PROMPT}\n\n{DRAFT_PROMPT}")
+            } else {
+                format!("{CHAT_SYSTEM_PROMPT}\n\n{PLAN_REFINE_PROMPT}")
+            }
+        }
+        FunnelState::Executing => CHAT_SYSTEM_PROMPT.to_string(),
+    }
 }
 
 /// Convert app chat history to LLM client format.
@@ -177,11 +210,12 @@ async fn event_loop(
         }
 
         // Check if pending chat submit needs to spawn LLM task
-        if app.pending_chat_submit.take().is_some() {
+        if let Some(ref submit_text) = app.pending_chat_submit.take() {
             if let Some(ref llm) = llm_client {
+                let is_draft_request = submit_text == "/draft";
                 let client_clone = Arc::clone(llm);
                 let messages = chat_history_as_llm_messages(&app.chat_history);
-                let system_prompt = CHAT_SYSTEM_PROMPT.to_string();
+                let system_prompt = system_prompt_for_state(app.funnel_state, is_draft_request);
                 app.chat_streaming = true;
                 app.chat_response_buffer.clear();
 
@@ -1969,5 +2003,40 @@ mod tests {
 
         drop(client);
         let _ = server_handle.await;
+    }
+
+    #[test]
+    fn test_system_prompt_chat_state() {
+        let prompt = system_prompt_for_state(FunnelState::Chat, false);
+        assert!(prompt.contains("Loopr development orchestrator"));
+        assert!(!prompt.contains("clarifying questions"));
+    }
+
+    #[test]
+    fn test_system_prompt_interview_state() {
+        let prompt = system_prompt_for_state(FunnelState::Interview, false);
+        assert!(prompt.contains("Loopr development orchestrator"));
+        assert!(prompt.contains("clarifying questions"));
+    }
+
+    #[test]
+    fn test_system_prompt_draft_request() {
+        let prompt = system_prompt_for_state(FunnelState::PlanDraft, true);
+        assert!(prompt.contains("structured plan"));
+        assert!(!prompt.contains("refine"));
+    }
+
+    #[test]
+    fn test_system_prompt_plan_refine() {
+        let prompt = system_prompt_for_state(FunnelState::PlanDraft, false);
+        assert!(prompt.contains("refine"));
+        assert!(!prompt.contains("structured plan"));
+    }
+
+    #[test]
+    fn test_system_prompt_executing_state() {
+        let prompt = system_prompt_for_state(FunnelState::Executing, false);
+        assert!(prompt.contains("Loopr development orchestrator"));
+        assert!(!prompt.contains("clarifying questions"));
     }
 }
