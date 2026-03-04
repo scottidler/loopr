@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::app::{App, InputMode, IpcAction};
+use super::app::{App, ChatMessage, ChatMode, InputMode, IpcAction};
 
 /// Action resulting from a key press.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,17 +32,121 @@ pub enum Action {
     NewRecord,
     /// Transition selected record's status.
     TransitionRecord,
+    // Chat input actions
+    /// Insert a character at cursor position.
+    ChatChar(char),
+    /// Submit the chat input.
+    ChatSubmit,
+    /// Delete character before cursor (Backspace).
+    ChatBackspace,
+    /// Delete character after cursor (Delete).
+    ChatDelete,
+    /// Move cursor left.
+    ChatCursorLeft,
+    /// Move cursor right.
+    ChatCursorRight,
+    /// Move cursor to start of input.
+    ChatCursorHome,
+    /// Move cursor to end of input.
+    ChatCursorEnd,
+    /// Enter scroll mode (Esc in chat).
+    ChatEnterScroll,
+    /// Scroll history up.
+    ChatScrollUp,
+    /// Scroll history down.
+    ChatScrollDown,
+    /// Scroll to top.
+    ChatScrollTop,
+    /// Scroll to bottom (auto-scroll).
+    ChatScrollBottom,
+    /// Page up in chat history.
+    ChatPageUp,
+    /// Page down in chat history.
+    ChatPageDown,
+    /// Approve plan (Ctrl+a in Plan mode).
+    ApprovePlan,
     None,
+}
+
+/// UTF-8 safe: find previous char boundary before `pos`.
+pub fn prev_char_boundary(input: &str, pos: usize) -> usize {
+    let mut new_pos = pos.saturating_sub(1);
+    while new_pos > 0 && !input.is_char_boundary(new_pos) {
+        new_pos -= 1;
+    }
+    new_pos
+}
+
+/// UTF-8 safe: find next char boundary after `pos`.
+pub fn next_char_boundary(input: &str, pos: usize) -> usize {
+    let mut new_pos = pos + 1;
+    while new_pos < input.len() && !input.is_char_boundary(new_pos) {
+        new_pos += 1;
+    }
+    new_pos.min(input.len())
 }
 
 /// Map a key event to an Action based on current input mode.
 pub fn handle_key(key: KeyEvent, mode: InputMode) -> Action {
+    // Ctrl+c always quits
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::Quit;
+    }
+
     match mode {
         InputMode::GoalInput => match key.code {
             KeyCode::Enter => Action::GoalSubmit,
             KeyCode::Esc => Action::GoalCancel,
             KeyCode::Backspace => Action::GoalBackspace,
             KeyCode::Char(c) => Action::GoalChar(c),
+            _ => Action::None,
+        },
+        InputMode::ChatInput => {
+            // Ctrl+a to approve plan
+            if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Action::ApprovePlan;
+            }
+            match key.code {
+                KeyCode::Enter => Action::ChatSubmit,
+                KeyCode::Esc => Action::ChatEnterScroll,
+                KeyCode::Backspace => Action::ChatBackspace,
+                KeyCode::Delete => Action::ChatDelete,
+                KeyCode::Left => Action::ChatCursorLeft,
+                KeyCode::Right => Action::ChatCursorRight,
+                KeyCode::Home => Action::ChatCursorHome,
+                KeyCode::End => Action::ChatCursorEnd,
+                KeyCode::PageUp => Action::ChatPageUp,
+                KeyCode::PageDown => Action::ChatPageDown,
+                KeyCode::Tab => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        Action::PrevView
+                    } else {
+                        Action::NextView
+                    }
+                }
+                KeyCode::BackTab => Action::PrevView,
+                KeyCode::Char(c) => Action::ChatChar(c),
+                _ => Action::None,
+            }
+        }
+        InputMode::ChatScroll => match key.code {
+            KeyCode::Esc => Action::None, // stay in scroll mode
+            KeyCode::Char('j') | KeyCode::Down => Action::ChatScrollDown,
+            KeyCode::Char('k') | KeyCode::Up => Action::ChatScrollUp,
+            KeyCode::Char('g') => Action::ChatScrollTop,
+            KeyCode::Char('G') => Action::ChatScrollBottom,
+            KeyCode::PageUp => Action::ChatPageUp,
+            KeyCode::PageDown => Action::ChatPageDown,
+            KeyCode::Tab => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    Action::PrevView
+                } else {
+                    Action::NextView
+                }
+            }
+            KeyCode::BackTab => Action::PrevView,
+            // Any other printable char exits scroll mode and inserts
+            KeyCode::Char(c) => Action::ChatChar(c),
             _ => Action::None,
         },
         InputMode::Normal => match key.code {
@@ -68,6 +172,12 @@ pub fn handle_key(key: KeyEvent, mode: InputMode) -> Action {
             _ => Action::None,
         },
     }
+}
+
+/// Parse a slash command from input. Returns Some(command) if input starts with '/'.
+fn parse_slash_command(input: &str) -> Option<&str> {
+    let trimmed = input.trim();
+    if trimmed.starts_with('/') { Some(trimmed) } else { None }
 }
 
 /// Apply an action to the app state.
@@ -132,6 +242,148 @@ pub fn apply_action(app: &mut App, action: Action) {
                 app.pending_ipc = Some(IpcAction::TransitionRecord { collection, id });
             }
         }
+        // Chat input actions
+        Action::ChatChar(c) => {
+            // If in scroll mode, exit to input mode first
+            if app.input_mode == InputMode::ChatScroll {
+                app.input_mode = InputMode::ChatInput;
+                app.chat_scroll = None;
+            }
+            app.chat_input.insert(app.chat_cursor_pos, c);
+            app.chat_cursor_pos += c.len_utf8();
+        }
+        Action::ChatSubmit => {
+            if app.chat_streaming {
+                return; // don't submit while streaming
+            }
+            let input = app.chat_input.trim().to_string();
+            if input.is_empty() {
+                return;
+            }
+            app.chat_input.clear();
+            app.chat_cursor_pos = 0;
+            app.chat_scroll = None;
+
+            // Check for slash commands
+            if let Some(cmd) = parse_slash_command(&input) {
+                match cmd {
+                    "/plan" => {
+                        app.chat_mode = ChatMode::Plan;
+                        app.chat_history.push(ChatMessage::system(
+                            "Entering Plan mode. Chat context sent to Coordinator.".into(),
+                        ));
+                        // Serialize chat transcript for coordinator
+                        let transcript = app
+                            .chat_history
+                            .iter()
+                            .map(|m| format!("{:?}: {}", m.role, m.content))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        app.pending_ipc = Some(IpcAction::SetGoalAndStart(transcript));
+                    }
+                    "/chat" => {
+                        app.chat_mode = ChatMode::Chat;
+                        app.chat_history
+                            .push(ChatMessage::system("Returned to Chat mode.".into()));
+                    }
+                    "/clear" => {
+                        app.chat_history.clear();
+                        app.chat_response_buffer.clear();
+                        app.chat_streaming = false;
+                    }
+                    "/help" => {
+                        app.chat_history.push(ChatMessage::system(
+                            "Commands: /plan (enter Plan mode), /chat (return to Chat mode), /clear (clear history), /help (this message)".into(),
+                        ));
+                    }
+                    _ => {
+                        app.chat_history
+                            .push(ChatMessage::system(format!("Unknown command: {cmd}")));
+                    }
+                }
+            } else {
+                // Regular message
+                app.chat_history.push(ChatMessage::user(input.clone()));
+                if app.chat_mode == ChatMode::Chat {
+                    app.pending_chat_submit = Some(input);
+                } else {
+                    // Plan mode: send to coordinator interview
+                    app.pending_ipc = Some(IpcAction::InterviewRespond(input));
+                }
+            }
+        }
+        Action::ChatBackspace => {
+            if app.chat_cursor_pos > 0 {
+                let new_pos = prev_char_boundary(&app.chat_input, app.chat_cursor_pos);
+                app.chat_input.drain(new_pos..app.chat_cursor_pos);
+                app.chat_cursor_pos = new_pos;
+            }
+        }
+        Action::ChatDelete => {
+            if app.chat_cursor_pos < app.chat_input.len() {
+                let end = next_char_boundary(&app.chat_input, app.chat_cursor_pos);
+                app.chat_input.drain(app.chat_cursor_pos..end);
+            }
+        }
+        Action::ChatCursorLeft => {
+            if app.chat_cursor_pos > 0 {
+                app.chat_cursor_pos = prev_char_boundary(&app.chat_input, app.chat_cursor_pos);
+            }
+        }
+        Action::ChatCursorRight => {
+            if app.chat_cursor_pos < app.chat_input.len() {
+                app.chat_cursor_pos = next_char_boundary(&app.chat_input, app.chat_cursor_pos);
+            }
+        }
+        Action::ChatCursorHome => {
+            app.chat_cursor_pos = 0;
+        }
+        Action::ChatCursorEnd => {
+            app.chat_cursor_pos = app.chat_input.len();
+        }
+        Action::ChatEnterScroll => {
+            app.input_mode = InputMode::ChatScroll;
+        }
+        Action::ChatScrollUp => {
+            let scroll = app.chat_scroll.unwrap_or(0);
+            app.chat_scroll = Some(scroll.saturating_add(1));
+        }
+        Action::ChatScrollDown => {
+            if let Some(scroll) = app.chat_scroll {
+                if scroll <= 1 {
+                    app.chat_scroll = None; // back to auto-scroll
+                } else {
+                    app.chat_scroll = Some(scroll - 1);
+                }
+            }
+        }
+        Action::ChatScrollTop => {
+            // Large number, render will clamp
+            app.chat_scroll = Some(usize::MAX);
+        }
+        Action::ChatScrollBottom => {
+            app.chat_scroll = None; // auto-scroll
+            app.input_mode = InputMode::ChatInput;
+        }
+        Action::ChatPageUp => {
+            let scroll = app.chat_scroll.unwrap_or(0);
+            app.chat_scroll = Some(scroll.saturating_add(10));
+        }
+        Action::ChatPageDown => {
+            if let Some(scroll) = app.chat_scroll {
+                app.chat_scroll = Some(scroll.saturating_sub(10));
+                if app.chat_scroll == Some(0) {
+                    app.chat_scroll = None;
+                }
+            }
+        }
+        Action::ApprovePlan => {
+            if let Some(plan_id) = app.pending_plan_id.take() {
+                app.pending_ipc = Some(IpcAction::ApprovePlan(plan_id));
+                app.chat_history
+                    .push(ChatMessage::system("Plan approved! Starting automation.".into()));
+            }
+        }
         Action::None => {}
     }
 }
@@ -159,6 +411,8 @@ mod tests {
             state: KeyEventState::NONE,
         }
     }
+
+    // --- Normal mode tests (unchanged) ---
 
     #[test]
     fn test_quit_key() {
@@ -265,6 +519,133 @@ mod tests {
         assert_eq!(handle_key(key(KeyCode::Tab), InputMode::GoalInput), Action::None);
     }
 
+    // --- Chat input mode tests ---
+
+    #[test]
+    fn test_chat_input_char() {
+        assert_eq!(
+            handle_key(key(KeyCode::Char('a')), InputMode::ChatInput),
+            Action::ChatChar('a')
+        );
+    }
+
+    #[test]
+    fn test_chat_input_submit() {
+        assert_eq!(
+            handle_key(key(KeyCode::Enter), InputMode::ChatInput),
+            Action::ChatSubmit
+        );
+    }
+
+    #[test]
+    fn test_chat_input_backspace() {
+        assert_eq!(
+            handle_key(key(KeyCode::Backspace), InputMode::ChatInput),
+            Action::ChatBackspace
+        );
+    }
+
+    #[test]
+    fn test_chat_input_cursor_movement() {
+        assert_eq!(
+            handle_key(key(KeyCode::Left), InputMode::ChatInput),
+            Action::ChatCursorLeft
+        );
+        assert_eq!(
+            handle_key(key(KeyCode::Right), InputMode::ChatInput),
+            Action::ChatCursorRight
+        );
+        assert_eq!(
+            handle_key(key(KeyCode::Home), InputMode::ChatInput),
+            Action::ChatCursorHome
+        );
+        assert_eq!(
+            handle_key(key(KeyCode::End), InputMode::ChatInput),
+            Action::ChatCursorEnd
+        );
+    }
+
+    #[test]
+    fn test_chat_input_esc_enters_scroll() {
+        assert_eq!(
+            handle_key(key(KeyCode::Esc), InputMode::ChatInput),
+            Action::ChatEnterScroll
+        );
+    }
+
+    #[test]
+    fn test_chat_input_tab_switches_view() {
+        assert_eq!(handle_key(key(KeyCode::Tab), InputMode::ChatInput), Action::NextView);
+        assert_eq!(
+            handle_key(key_with_mods(KeyCode::Tab, KeyModifiers::SHIFT), InputMode::ChatInput),
+            Action::PrevView
+        );
+    }
+
+    #[test]
+    fn test_chat_input_ctrl_c_quits() {
+        assert_eq!(
+            handle_key(
+                key_with_mods(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                InputMode::ChatInput
+            ),
+            Action::Quit
+        );
+    }
+
+    #[test]
+    fn test_chat_input_ctrl_a_approves_plan() {
+        assert_eq!(
+            handle_key(
+                key_with_mods(KeyCode::Char('a'), KeyModifiers::CONTROL),
+                InputMode::ChatInput
+            ),
+            Action::ApprovePlan
+        );
+    }
+
+    // --- Chat scroll mode tests ---
+
+    #[test]
+    fn test_chat_scroll_jk() {
+        assert_eq!(
+            handle_key(key(KeyCode::Char('j')), InputMode::ChatScroll),
+            Action::ChatScrollDown
+        );
+        assert_eq!(
+            handle_key(key(KeyCode::Char('k')), InputMode::ChatScroll),
+            Action::ChatScrollUp
+        );
+    }
+
+    #[test]
+    fn test_chat_scroll_g_and_big_g() {
+        assert_eq!(
+            handle_key(key(KeyCode::Char('g')), InputMode::ChatScroll),
+            Action::ChatScrollTop
+        );
+        assert_eq!(
+            handle_key(key(KeyCode::Char('G')), InputMode::ChatScroll),
+            Action::ChatScrollBottom
+        );
+    }
+
+    #[test]
+    fn test_chat_scroll_esc_stays() {
+        assert_eq!(handle_key(key(KeyCode::Esc), InputMode::ChatScroll), Action::None);
+    }
+
+    #[test]
+    fn test_chat_scroll_printable_exits_to_input() {
+        // Any non-navigation printable char should insert (exits scroll mode in apply_action)
+        assert_eq!(
+            handle_key(key(KeyCode::Char('a')), InputMode::ChatScroll),
+            Action::ChatChar('a')
+        );
+    }
+
+    // --- Apply action tests ---
+
     #[test]
     fn test_apply_quit() {
         let mut app = App::new();
@@ -277,7 +658,7 @@ mod tests {
     fn test_apply_next_view() {
         let mut app = App::new();
         apply_action(&mut app, Action::NextView);
-        assert_eq!(app.current_view, crate::tui::app::View::Works);
+        assert_eq!(app.current_view, crate::tui::app::View::Dashboard);
     }
 
     #[test]
@@ -382,5 +763,212 @@ mod tests {
         app.state.agent_sessions.push(session);
         apply_action(&mut app, Action::StopCoordinator);
         assert_eq!(app.pending_ipc, Some(IpcAction::StopAgent(session_id)));
+    }
+
+    // --- Chat action tests ---
+
+    #[test]
+    fn test_apply_chat_char() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatChar('h'));
+        apply_action(&mut app, Action::ChatChar('i'));
+        assert_eq!(app.chat_input, "hi");
+        assert_eq!(app.chat_cursor_pos, 2);
+    }
+
+    #[test]
+    fn test_apply_chat_submit() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatChar('h'));
+        apply_action(&mut app, Action::ChatChar('i'));
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.chat_input.is_empty());
+        assert_eq!(app.chat_cursor_pos, 0);
+        assert_eq!(app.chat_history.len(), 1);
+        assert_eq!(app.chat_history[0].content, "hi");
+        assert_eq!(app.chat_history[0].role, super::super::app::ChatRole::User);
+        assert_eq!(app.pending_chat_submit, Some("hi".to_string()));
+    }
+
+    #[test]
+    fn test_apply_chat_submit_empty_is_noop() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.chat_history.is_empty());
+        assert!(app.pending_chat_submit.is_none());
+    }
+
+    #[test]
+    fn test_apply_chat_submit_while_streaming_is_noop() {
+        let mut app = App::new();
+        app.chat_streaming = true;
+        apply_action(&mut app, Action::ChatChar('x'));
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.chat_input, "x"); // not cleared
+        assert!(app.chat_history.is_empty());
+    }
+
+    #[test]
+    fn test_apply_chat_backspace() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatChar('a'));
+        apply_action(&mut app, Action::ChatChar('b'));
+        apply_action(&mut app, Action::ChatBackspace);
+        assert_eq!(app.chat_input, "a");
+        assert_eq!(app.chat_cursor_pos, 1);
+    }
+
+    #[test]
+    fn test_apply_chat_backspace_at_start() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatBackspace);
+        assert!(app.chat_input.is_empty());
+        assert_eq!(app.chat_cursor_pos, 0);
+    }
+
+    #[test]
+    fn test_apply_chat_cursor_movement() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatChar('a'));
+        apply_action(&mut app, Action::ChatChar('b'));
+        apply_action(&mut app, Action::ChatChar('c'));
+        assert_eq!(app.chat_cursor_pos, 3);
+
+        apply_action(&mut app, Action::ChatCursorLeft);
+        assert_eq!(app.chat_cursor_pos, 2);
+
+        apply_action(&mut app, Action::ChatCursorHome);
+        assert_eq!(app.chat_cursor_pos, 0);
+
+        apply_action(&mut app, Action::ChatCursorEnd);
+        assert_eq!(app.chat_cursor_pos, 3);
+
+        apply_action(&mut app, Action::ChatCursorRight);
+        assert_eq!(app.chat_cursor_pos, 3); // already at end
+    }
+
+    #[test]
+    fn test_apply_chat_enter_scroll() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatEnterScroll);
+        assert_eq!(app.input_mode, InputMode::ChatScroll);
+    }
+
+    #[test]
+    fn test_apply_chat_scroll_up_down() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ChatScrollUp);
+        assert_eq!(app.chat_scroll, Some(1));
+        apply_action(&mut app, Action::ChatScrollUp);
+        assert_eq!(app.chat_scroll, Some(2));
+        apply_action(&mut app, Action::ChatScrollDown);
+        assert_eq!(app.chat_scroll, Some(1));
+        apply_action(&mut app, Action::ChatScrollDown);
+        assert_eq!(app.chat_scroll, None); // back to auto-scroll
+    }
+
+    #[test]
+    fn test_apply_chat_scroll_bottom_returns_to_input() {
+        let mut app = App::new();
+        app.input_mode = InputMode::ChatScroll;
+        app.chat_scroll = Some(10);
+        apply_action(&mut app, Action::ChatScrollBottom);
+        assert_eq!(app.chat_scroll, None);
+        assert_eq!(app.input_mode, InputMode::ChatInput);
+    }
+
+    #[test]
+    fn test_chat_char_exits_scroll_mode() {
+        let mut app = App::new();
+        app.input_mode = InputMode::ChatScroll;
+        app.chat_scroll = Some(5);
+        apply_action(&mut app, Action::ChatChar('a'));
+        assert_eq!(app.input_mode, InputMode::ChatInput);
+        assert_eq!(app.chat_scroll, None);
+        assert_eq!(app.chat_input, "a");
+    }
+
+    #[test]
+    fn test_slash_command_plan() {
+        let mut app = App::new();
+        app.chat_input = "/plan".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.chat_mode, ChatMode::Plan);
+        assert!(
+            app.chat_history
+                .iter()
+                .any(|m| m.role == super::super::app::ChatRole::System)
+        );
+    }
+
+    #[test]
+    fn test_slash_command_chat() {
+        let mut app = App::new();
+        app.chat_mode = ChatMode::Plan;
+        app.chat_input = "/chat".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.chat_mode, ChatMode::Chat);
+    }
+
+    #[test]
+    fn test_slash_command_clear() {
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::user("hello".into()));
+        app.chat_input = "/clear".to_string();
+        app.chat_cursor_pos = 6;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.chat_history.is_empty());
+    }
+
+    #[test]
+    fn test_slash_command_help() {
+        let mut app = App::new();
+        app.chat_input = "/help".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.chat_history.len(), 1);
+        assert!(app.chat_history[0].content.contains("/plan"));
+    }
+
+    // --- UTF-8 cursor helper tests ---
+
+    #[test]
+    fn test_prev_char_boundary_ascii() {
+        assert_eq!(prev_char_boundary("hello", 3), 2);
+        assert_eq!(prev_char_boundary("hello", 1), 0);
+        assert_eq!(prev_char_boundary("hello", 0), 0);
+    }
+
+    #[test]
+    fn test_next_char_boundary_ascii() {
+        assert_eq!(next_char_boundary("hello", 0), 1);
+        assert_eq!(next_char_boundary("hello", 4), 5);
+    }
+
+    #[test]
+    fn test_char_boundary_multibyte() {
+        let s = "héllo"; // é is 2 bytes
+        assert_eq!(next_char_boundary(s, 0), 1); // h -> é
+        assert_eq!(next_char_boundary(s, 1), 3); // é (2 bytes) -> l
+        assert_eq!(prev_char_boundary(s, 3), 1); // l -> é
+    }
+
+    #[test]
+    fn test_apply_approve_plan() {
+        let mut app = App::new();
+        app.pending_plan_id = Some("plan-123".to_string());
+        apply_action(&mut app, Action::ApprovePlan);
+        assert_eq!(app.pending_ipc, Some(IpcAction::ApprovePlan("plan-123".to_string())));
+        assert!(app.pending_plan_id.is_none());
+        assert!(app.chat_history.iter().any(|m| m.content.contains("approved")));
+    }
+
+    #[test]
+    fn test_apply_approve_plan_no_pending() {
+        let mut app = App::new();
+        apply_action(&mut app, Action::ApprovePlan);
+        assert!(app.pending_ipc.is_none()); // no plan to approve
     }
 }

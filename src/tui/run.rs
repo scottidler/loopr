@@ -11,7 +11,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
 use tokio::time::Interval;
 
@@ -28,7 +28,7 @@ use crate::domain::work::Work;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::IpcMessage;
 
-use super::app::{App, AppState, ConnectionStatus, InputMode, IpcAction, View};
+use super::app::{App, AppState, ChatMode, ConnectionStatus, InputMode, IpcAction, View, colors};
 use super::input::{apply_action, handle_key};
 use super::views;
 
@@ -164,6 +164,27 @@ async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
             format!("{collection}.transition"),
             serde_json::json!({ "id": id, "target_status": "Active" }),
         ),
+        IpcAction::SetGoalAndStart(goal) => {
+            // Two IPC calls: set goal then start coordinator
+            if let Err(e) = client
+                .request("coordinator.set_goal", serde_json::json!({ "goal": goal }))
+                .await
+            {
+                warn!("Failed to set coordinator goal: {e}");
+            }
+            (
+                "agent.start".to_string(),
+                serde_json::json!({ "agent_type": "Coordinator" }),
+            )
+        }
+        IpcAction::InterviewRespond(response) => (
+            "coordinator.interview_respond".to_string(),
+            serde_json::json!({ "response": response }),
+        ),
+        IpcAction::ApprovePlan(plan_id) => (
+            "coordinator.approve_plan".to_string(),
+            serde_json::json!({ "plan_id": plan_id }),
+        ),
     };
     if let Err(e) = client.request(&method, params).await {
         warn!("Failed to dispatch IPC action {method}: {e}");
@@ -243,20 +264,20 @@ fn event_collection(event: &crate::ipc::protocol::DaemonEvent) -> Option<&str> {
     }
 }
 
-/// Draw the full TUI frame: tab bar, content area, action bar, and optional help overlay.
+/// Draw the full TUI frame: header, content area, footer, and optional help overlay.
 pub fn draw(app: &App, frame: &mut Frame) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Tab bar
-            Constraint::Min(5),    // Main content
-            Constraint::Length(3), // Action bar
+            Constraint::Length(3), // Header
+            Constraint::Min(0),    // Content
+            Constraint::Length(3), // Footer
         ])
         .split(frame.area());
 
-    draw_tab_bar(app, frame, chunks[0]);
-    draw_content(app, frame, chunks[1]);
-    draw_action_bar(app, frame, chunks[2]);
+    render_header(app, frame, chunks[0]);
+    render_content(app, frame, chunks[1]);
+    render_footer(app, frame, chunks[2]);
 
     if app.input_mode == InputMode::GoalInput {
         draw_goal_input(app, frame, frame.area());
@@ -267,25 +288,69 @@ pub fn draw(app: &App, frame: &mut Frame) {
     }
 }
 
-/// Top tab bar showing all views with the current one highlighted.
-fn draw_tab_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let titles: Vec<String> = View::ALL.iter().map(|v| v.to_string()).collect();
+/// Taskdaemon-style header: ● Loopr │ Chat|Plan · Dashboard · Works · ...
+fn render_header(app: &App, frame: &mut Frame, area: Rect) {
+    let connection_indicator = match app.connection {
+        ConnectionStatus::Connected => Span::styled("● ", Style::default().fg(Color::Green)),
+        ConnectionStatus::Disconnected => Span::styled("● ", Style::default().fg(Color::Red)),
+    };
 
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Loopr [{}]", app.current_role)),
-        )
-        .select(View::ALL.iter().position(|v| *v == app.current_view).unwrap_or(0))
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+    let mut spans = vec![
+        connection_indicator,
+        Span::styled(
+            "Loopr",
+            Style::default().fg(colors::HEADER).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" │ ", Style::default().fg(colors::DIM)),
+    ];
 
-    frame.render_widget(tabs, area);
+    // Build tab spans
+    for (i, view) in View::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" · ", Style::default().fg(colors::DIM)));
+        }
+
+        let is_active = app.current_view == *view;
+
+        if *view == View::Chat {
+            // Show Chat|Plan with active mode highlighted
+            let chat_style = if is_active && app.chat_mode == ChatMode::Chat {
+                Style::default().fg(colors::HEADER).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::DIM)
+            };
+            let plan_style = if is_active && app.chat_mode == ChatMode::Plan {
+                Style::default().fg(colors::HEADER).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::DIM)
+            };
+            // If Chat view is not active, show "Chat" dimmed
+            if !is_active {
+                spans.push(Span::styled("Chat", Style::default().fg(colors::DIM)));
+            } else {
+                spans.push(Span::styled("Chat", chat_style));
+                spans.push(Span::styled("|", Style::default().fg(colors::DIM)));
+                spans.push(Span::styled("Plan", plan_style));
+            }
+        } else {
+            let style = if is_active {
+                Style::default().fg(colors::HEADER).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(colors::DIM)
+            };
+            spans.push(Span::styled(view.to_string(), style));
+        }
+    }
+
+    let header_line = Line::from(spans);
+    let header = Paragraph::new(header_line).block(Block::default().borders(Borders::ALL));
+    frame.render_widget(header, area);
 }
 
 /// Delegate to the current view's render function.
-fn draw_content(app: &App, frame: &mut Frame, area: Rect) {
+fn render_content(app: &App, frame: &mut Frame, area: Rect) {
     match app.current_view {
+        View::Chat => views::chat::render(app, frame, area),
         View::Dashboard => views::dashboard::render(app, frame, area),
         View::Works => views::works::render(app, frame, area),
         View::Bundles => views::bundles::render(app, frame, area),
@@ -296,30 +361,92 @@ fn draw_content(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// Bottom bar showing role-specific actions and connection status.
-fn draw_action_bar(app: &App, frame: &mut Frame, area: Rect) {
-    let actions = role_actions(app.current_role);
-    let action_line = Line::from(vec![
-        Span::styled(
-            format!("[{}] ", app.current_role),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(actions.join(" | "), Style::default().fg(Color::White)),
-        Span::raw("  "),
-        Span::styled(
-            app.connection.to_string(),
-            Style::default().fg(match app.connection {
-                ConnectionStatus::Connected => Color::Green,
-                ConnectionStatus::Disconnected => Color::Red,
-            }),
-        ),
-    ]);
+/// Context-sensitive footer with keybinding hints.
+fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
+    let left_spans = match app.current_view {
+        View::Chat => {
+            if app.input_mode == InputMode::ChatScroll {
+                vec![
+                    Span::styled(
+                        "[Esc]",
+                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Back to input  "),
+                    Span::styled(
+                        "[j/k]",
+                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Scroll  "),
+                    Span::styled("[G]", Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD)),
+                    Span::raw(" Bottom"),
+                ]
+            } else {
+                let mut spans = vec![
+                    Span::styled(
+                        "[Enter]",
+                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Send  "),
+                    Span::styled(
+                        "/plan",
+                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Plan  "),
+                    Span::styled(
+                        "/clear",
+                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" Clear"),
+                ];
+                if app.pending_plan_id.is_some() {
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(
+                        "[Ctrl+a]",
+                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::raw(" Approve Plan"));
+                }
+                spans
+            }
+        }
+        _ => {
+            let actions = role_actions(app.current_role);
+            vec![
+                Span::styled(
+                    format!("[{}] ", app.current_role),
+                    Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(actions.join(" | "), Style::default().fg(Color::White)),
+            ]
+        }
+    };
 
-    let bar = Paragraph::new(action_line).block(Block::default().borders(Borders::ALL).title("Actions [? help]"));
-    frame.render_widget(bar, area);
+    let right_spans = vec![
+        Span::styled(
+            "[Tab]",
+            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Views  "),
+        Span::styled("[?]", Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD)),
+        Span::raw(" Help  "),
+        Span::styled(
+            "[Ctrl+c]",
+            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Quit"),
+    ];
+
+    // Combine left and right with spacing
+    let mut all_spans = left_spans;
+    all_spans.push(Span::raw("  "));
+    all_spans.extend(right_spans);
+
+    let footer_line = Line::from(all_spans);
+    let footer = Paragraph::new(footer_line).block(Block::default().borders(Borders::ALL));
+    frame.render_widget(footer, area);
 }
 
-/// Actions available for each role, shown in the action bar.
+/// Actions available for each role, shown in the footer for non-Chat views.
 pub fn role_actions(role: Role) -> Vec<&'static str> {
     match role {
         Role::Coordinator => vec!["g:Goal", "p:Pause", "r:Resume", "x:Stop", "R:Role"],
@@ -1293,8 +1420,8 @@ mod tests {
     }
 
     #[test]
-    fn test_draw_tab_bar_highlighting() {
-        // Verify the tab bar renders correctly with different selected views
+    fn test_render_header_highlighting() {
+        // Verify the header renders correctly with different selected views
         let mut app = App::new();
         let mut terminal = test_terminal();
 
@@ -1303,15 +1430,15 @@ mod tests {
             terminal
                 .draw(|frame| {
                     let area = frame.area();
-                    draw_tab_bar(&app, frame, area);
+                    render_header(&app, frame, area);
                 })
                 .unwrap();
         }
     }
 
     #[test]
-    fn test_draw_content_all_tabs() {
-        // Verify draw_content renders without panic for every view, including with data
+    fn test_render_content_all_views() {
+        // Verify render_content renders without panic for every view, including with data
         let mut app = App::new();
         app.state
             .works
@@ -1344,7 +1471,7 @@ mod tests {
             terminal
                 .draw(|frame| {
                     let area = frame.area();
-                    draw_content(&app, frame, area);
+                    render_content(&app, frame, area);
                 })
                 .unwrap();
         }
