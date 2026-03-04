@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::app::{App, ChatMessage, ChatMode, InputMode, IpcAction};
+use super::app::{App, ChatMessage, ChatMode, FunnelState, InputMode, IpcAction};
 
 /// Action resulting from a key press.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +107,13 @@ pub fn handle_key(key: KeyEvent, mode: InputMode) -> Action {
                 return Action::ApprovePlan;
             }
             match key.code {
-                KeyCode::Enter => Action::ChatSubmit,
+                KeyCode::Enter => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        Action::ChatChar('\n')
+                    } else {
+                        Action::ChatSubmit
+                    }
+                }
                 KeyCode::Esc => Action::ChatEnterScroll,
                 KeyCode::Backspace => Action::ChatBackspace,
                 KeyCode::Delete => Action::ChatDelete,
@@ -269,6 +275,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                 match cmd {
                     "/plan" => {
                         app.chat_mode = ChatMode::Plan;
+                        app.funnel_state = FunnelState::Interview;
                         app.chat_history.push(ChatMessage::system(
                             "Entering Plan mode. Chat context sent to Coordinator.".into(),
                         ));
@@ -283,6 +290,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                     }
                     "/chat" => {
                         app.chat_mode = ChatMode::Chat;
+                        app.funnel_state = FunnelState::Chat;
                         app.chat_history
                             .push(ChatMessage::system("Returned to Chat mode.".into()));
                     }
@@ -291,9 +299,19 @@ pub fn apply_action(app: &mut App, action: Action) {
                         app.chat_response_buffer.clear();
                         app.chat_streaming = false;
                     }
+                    "/draft" => {
+                        if app.chat_mode == ChatMode::Plan {
+                            app.pending_ipc = Some(IpcAction::InterviewRespond("/draft".into()));
+                            app.chat_history
+                                .push(ChatMessage::system("Building draft plan...".into()));
+                        } else {
+                            app.chat_history
+                                .push(ChatMessage::system("Use /plan first to enter Plan mode.".into()));
+                        }
+                    }
                     "/help" => {
                         app.chat_history.push(ChatMessage::system(
-                            "Commands: /plan (enter Plan mode), /chat (return to Chat mode), /clear (clear history), /help (this message)".into(),
+                            "Commands: /plan (Plan mode), /chat (Chat mode), /draft (build draft), /clear (clear), /help (this)".into(),
                         ));
                     }
                     _ => {
@@ -380,6 +398,7 @@ pub fn apply_action(app: &mut App, action: Action) {
         Action::ApprovePlan => {
             if let Some(plan_id) = app.pending_plan_id.take() {
                 app.pending_ipc = Some(IpcAction::ApprovePlan(plan_id));
+                app.funnel_state = FunnelState::Executing;
                 app.chat_history
                     .push(ChatMessage::system("Plan approved! Starting automation.".into()));
             }
@@ -970,5 +989,56 @@ mod tests {
         let mut app = App::new();
         apply_action(&mut app, Action::ApprovePlan);
         assert!(app.pending_ipc.is_none()); // no plan to approve
+    }
+
+    #[test]
+    fn test_shift_enter_inserts_newline() {
+        assert_eq!(
+            handle_key(key_with_mods(KeyCode::Enter, KeyModifiers::SHIFT), InputMode::ChatInput),
+            Action::ChatChar('\n')
+        );
+    }
+
+    #[test]
+    fn test_slash_command_draft_in_plan_mode() {
+        let mut app = App::new();
+        app.chat_mode = ChatMode::Plan;
+        app.chat_input = "/draft".to_string();
+        app.chat_cursor_pos = 6;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.pending_ipc, Some(IpcAction::InterviewRespond("/draft".into())));
+    }
+
+    #[test]
+    fn test_slash_command_draft_in_chat_mode() {
+        let mut app = App::new();
+        app.chat_input = "/draft".to_string();
+        app.chat_cursor_pos = 6;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.pending_ipc.is_none());
+        assert!(app.chat_history.iter().any(|m| m.content.contains("/plan first")));
+    }
+
+    #[test]
+    fn test_funnel_state_transitions() {
+        let mut app = App::new();
+        assert_eq!(app.funnel_state, FunnelState::Chat);
+
+        // /plan transitions to Interview
+        app.chat_input = "/plan".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.funnel_state, FunnelState::Interview);
+
+        // /chat transitions back to Chat
+        app.chat_input = "/chat".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.funnel_state, FunnelState::Chat);
+
+        // ApprovePlan transitions to Executing
+        app.pending_plan_id = Some("plan-1".to_string());
+        apply_action(&mut app, Action::ApprovePlan);
+        assert_eq!(app.funnel_state, FunnelState::Executing);
     }
 }

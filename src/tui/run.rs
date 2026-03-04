@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind, MouseEventKind};
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 use futures::StreamExt;
@@ -72,7 +72,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -93,7 +93,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
 
     result
 }
@@ -204,16 +204,35 @@ async fn event_loop(
 
         tokio::select! {
             crossterm_event = events.next() => {
-                if let Some(Ok(Event::Key(key))) = crossterm_event
-                    && key.kind == KeyEventKind::Press
-                {
-                    let action = handle_key(key, app.input_mode);
-                    apply_action(app, action);
+                match crossterm_event {
+                    Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                        let action = handle_key(key, app.input_mode);
+                        apply_action(app, action);
 
-                    // Dispatch any pending IPC action
-                    if let (Some(ipc_action), Some(c)) = (app.pending_ipc.take(), client.as_mut()) {
-                        dispatch_ipc_action(c, ipc_action).await;
+                        // Dispatch any pending IPC action
+                        if let (Some(ipc_action), Some(c)) = (app.pending_ipc.take(), client.as_mut()) {
+                            dispatch_ipc_action(c, ipc_action).await;
+                        }
                     }
+                    Some(Ok(Event::Mouse(mouse))) if app.current_view == View::Chat => {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                let scroll = app.chat_scroll.unwrap_or(0);
+                                app.chat_scroll = Some(scroll.saturating_add(3));
+                            }
+                            MouseEventKind::ScrollDown => {
+                                if let Some(scroll) = app.chat_scroll {
+                                    if scroll <= 3 {
+                                        app.chat_scroll = None;
+                                    } else {
+                                        app.chat_scroll = Some(scroll - 3);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
             }
             // LLM streaming chunks (Chat mode)
@@ -278,6 +297,7 @@ async fn event_loop(
                             && let Some(plan_id) = event.data.get("plan_id").and_then(|v| v.as_str())
                         {
                             app.pending_plan_id = Some(plan_id.to_string());
+                            app.funnel_state = super::app::FunnelState::PlanDraft;
                             let summary = event.data.get("summary")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("Plan ready for review.");
@@ -500,14 +520,9 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 Style::default().fg(colors::DIM)
             };
-            // If Chat view is not active, show "Chat" dimmed
-            if !is_active {
-                spans.push(Span::styled("Chat", Style::default().fg(colors::DIM)));
-            } else {
-                spans.push(Span::styled("Chat", chat_style));
-                spans.push(Span::styled("|", Style::default().fg(colors::DIM)));
-                spans.push(Span::styled("Plan", plan_style));
-            }
+            spans.push(Span::styled("Chat", chat_style));
+            spans.push(Span::styled("|", Style::default().fg(colors::DIM)));
+            spans.push(Span::styled("Plan", plan_style));
         } else {
             let style = if is_active {
                 Style::default().fg(colors::HEADER).add_modifier(Modifier::BOLD)
@@ -564,16 +579,37 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
                     ),
                     Span::raw(" Send  "),
                     Span::styled(
-                        "/plan",
+                        "[Shift+Enter]",
                         Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" Plan  "),
+                    Span::raw(" Newline  "),
                     Span::styled(
-                        "/clear",
+                        "[Esc]",
                         Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" Clear"),
+                    Span::raw(" Scroll  "),
                 ];
+                match app.chat_mode {
+                    ChatMode::Chat => {
+                        spans.push(Span::styled(
+                            "/plan",
+                            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::raw(" Plan"));
+                    }
+                    ChatMode::Plan => {
+                        spans.push(Span::styled(
+                            "/chat",
+                            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::raw(" Chat  "));
+                        spans.push(Span::styled(
+                            "/draft",
+                            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
+                        ));
+                        spans.push(Span::raw(" Build Draft"));
+                    }
+                }
                 if app.pending_plan_id.is_some() {
                     spans.push(Span::raw("  "));
                     spans.push(Span::styled(
@@ -625,7 +661,7 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
 /// Actions available for each role, shown in the footer for non-Chat views.
 pub fn role_actions(role: Role) -> Vec<&'static str> {
     match role {
-        Role::Coordinator => vec!["g:Goal", "p:Pause", "r:Resume", "x:Stop", "R:Role"],
+        Role::Coordinator => vec!["p:Pause", "r:Resume", "x:Stop", "R:Role"],
         Role::Integrator => vec!["n:New Tick", "t:Transition", "R:Role"],
         Role::Implementer => vec!["n:New Work", "t:Transition", "R:Role"],
         Role::Reviewer => vec!["t:Transition", "R:Role"],
@@ -775,12 +811,11 @@ mod tests {
     #[test]
     fn test_role_actions_coordinator() {
         let actions = role_actions(Role::Coordinator);
-        assert_eq!(actions.len(), 5);
-        assert!(actions[0].contains("Goal"));
-        assert!(actions[1].contains("Pause"));
-        assert!(actions[2].contains("Resume"));
-        assert!(actions[3].contains("Stop"));
-        assert!(actions[4].contains("Role"));
+        assert_eq!(actions.len(), 4);
+        assert!(actions[0].contains("Pause"));
+        assert!(actions[1].contains("Resume"));
+        assert!(actions[2].contains("Stop"));
+        assert!(actions[3].contains("Role"));
     }
 
     #[test]

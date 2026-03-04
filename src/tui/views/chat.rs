@@ -1,10 +1,26 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use crate::tui::app::{App, ChatMode, ChatRole, InputMode, colors};
+use crate::tui::app::{App, ChatMode, ChatRole, FunnelState, InputMode, colors};
+
+/// Calculate the height needed for the input area based on content and width.
+fn calculate_input_height(input: &str, width: u16) -> u16 {
+    if input.is_empty() {
+        return 1;
+    }
+    let effective_width = width.saturating_sub(3) as usize; // "> " prefix + cursor
+    if effective_width == 0 {
+        return 1;
+    }
+    input
+        .split('\n')
+        .map(|seg| (seg.len().div_ceil(effective_width)).max(1))
+        .sum::<usize>()
+        .max(1) as u16
+}
 
 /// Render the chat view: history area + input area.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
@@ -12,10 +28,18 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         ChatMode::Chat => " Chat ",
         ChatMode::Plan => " Plan ",
     };
+
+    let border_color = match app.funnel_state {
+        FunnelState::Chat => colors::HEADER,
+        FunnelState::Interview => Color::Yellow,
+        FunnelState::PlanDraft => Color::Green,
+        FunnelState::Executing => Color::Blue,
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(colors::HEADER));
+        .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -24,13 +48,12 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    // Split inner: history fills remaining, input at bottom (1 line)
-    let input_height = 1;
+    let input_height = calculate_input_height(&app.chat_input, inner.width);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(0),               // History
-            Constraint::Length(input_height), // Input
+            Constraint::Length(input_height), // Input (dynamic)
         ])
         .split(inner);
 
@@ -167,7 +190,7 @@ fn render_input(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     let line = Line::from(spans);
-    let paragraph = Paragraph::new(line);
+    let paragraph = Paragraph::new(line).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
 
@@ -318,5 +341,71 @@ mod tests {
                 render(&app, frame, frame.area());
             })
             .unwrap();
+    }
+
+    #[test]
+    fn test_calculate_input_height_empty() {
+        assert_eq!(calculate_input_height("", 80), 1);
+    }
+
+    #[test]
+    fn test_calculate_input_height_single_line() {
+        assert_eq!(calculate_input_height("hello", 80), 1);
+    }
+
+    #[test]
+    fn test_calculate_input_height_multiline() {
+        assert_eq!(calculate_input_height("line1\nline2\nline3", 80), 3);
+    }
+
+    #[test]
+    fn test_calculate_input_height_wrapping() {
+        // width=10, effective=7, "abcdefghij" = 10 chars -> ceil(10/7) = 2
+        assert_eq!(calculate_input_height("abcdefghij", 10), 2);
+    }
+
+    #[test]
+    fn test_calculate_input_height_zero_width() {
+        assert_eq!(calculate_input_height("hello", 0), 1);
+        assert_eq!(calculate_input_height("hello", 3), 1); // effective=0
+    }
+
+    #[test]
+    fn test_render_with_multiline_input() {
+        let mut app = App::new();
+        app.chat_input = "line1\nline2".into();
+        app.chat_cursor_pos = 11;
+
+        let mut terminal = test_terminal();
+        terminal
+            .draw(|frame| {
+                render(&app, frame, frame.area());
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_render_funnel_state_colors() {
+        use crate::tui::app::FunnelState;
+
+        let mut app = App::new();
+        let mut terminal = test_terminal();
+
+        // Chat state
+        app.funnel_state = FunnelState::Chat;
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        // Interview state
+        app.funnel_state = FunnelState::Interview;
+        app.chat_mode = ChatMode::Plan;
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        // PlanDraft state
+        app.funnel_state = FunnelState::PlanDraft;
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        // Executing state
+        app.funnel_state = FunnelState::Executing;
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
     }
 }
