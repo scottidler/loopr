@@ -207,7 +207,7 @@ pub fn dispatch(
         "coordinator.get_state" => handle_coordinator_get_state(stores, req),
         "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
         "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
-        "coordinator.approve_plan" => handle_coordinator_approve_plan(stores, event_tx, req),
+        "coordinator.accept_plan" => handle_coordinator_accept_plan(stores, event_tx, req),
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
@@ -4048,21 +4048,60 @@ fn handle_coordinator_interview_respond(
     })
 }
 
-fn handle_coordinator_approve_plan(
+fn handle_coordinator_accept_plan(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_coordinator_approve_plan()");
-        let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
-            Some(id) => id.to_string(),
-            None => {
+        debug!("handle_coordinator_accept_plan()");
+
+        // Resolve plan_id: either from existing plan_id param, or by creating a new Plan from text
+        let plan_id = if let Some(id) = req.params.get("plan_id").and_then(|v| v.as_str()) {
+            // Existing plan_id takes priority
+            id.to_string()
+        } else if let Some(text) = req.params.get("plan").and_then(|v| v.as_str()) {
+            // Create a Plan record from raw text
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("plan_id is required"),
+                    RpcError::invalid_params("plan text is empty"),
                 ));
             }
+            // Extract title: first non-empty line, truncated to 120 chars
+            let title = trimmed
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| {
+                    let t = line.trim();
+                    if t.len() > 120 { t[..120].to_string() } else { t.to_string() }
+                })
+                .unwrap_or_else(|| "Accepted Plan".to_string());
+
+            let plan = Plan::new(title, trimmed.to_string(), String::new());
+            let id = plan.id.clone();
+
+            // Persist to TaskStore
+            if let Some(store_arc) = &stores.store
+                && let Err(e) = store_arc
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create(plan.clone())
+            {
+                return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+            }
+
+            // Insert into in-memory HashMap
+            stores.write_plans()?.insert(id.clone(), plan);
+            let _ = event_tx.send(DaemonEvent::record_created("plan", &id));
+
+            id
+        } else {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params("plan_id or plan text is required"),
+            ));
         };
 
         // Activate the Plan (Draft → Active)
@@ -4106,13 +4145,13 @@ fn handle_coordinator_approve_plan(
         }
 
         let _ = event_tx.send(DaemonEvent::new(
-            "coordinator.plan_approved",
+            "coordinator.plan_accepted",
             json!({ "plan_id": plan_id }),
         ));
 
         Ok(DaemonResponse::ok(
             req.id,
-            json!({ "approved": true, "plan_id": plan_id }),
+            json!({ "accepted": true, "plan_id": plan_id }),
         ))
     })
 }
@@ -12665,5 +12704,136 @@ mod tests {
         );
         assert!(!resp.is_error(), "agent.status fallback failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["id"], session_id);
+    }
+
+    // --- coordinator.accept_plan tests ---
+
+    #[test]
+    fn test_accept_plan_with_plan_id() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Create a plan first
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Test Plan", "description": "desc"})),
+        );
+        assert!(!resp.is_error());
+        let plan_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // Accept with plan_id (backward compat)
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "coordinator.accept_plan", json!({"plan_id": plan_id})),
+        );
+        assert!(!resp.is_error(), "accept_plan failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["plan_id"], plan_id);
+
+        // Verify plan is now Active
+        let plans = stores.read_plans().unwrap();
+        assert_eq!(plans[&plan_id].status, HierarchyStatus::Active);
+    }
+
+    #[test]
+    fn test_accept_plan_with_text() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "coordinator.accept_plan",
+                json!({"plan": "My Plan Title\nGoal: Build auth"}),
+            ),
+        );
+        assert!(!resp.is_error(), "accept_plan with text failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["accepted"], true);
+        let plan_id = result["plan_id"].as_str().unwrap();
+
+        // Verify plan was created and activated
+        let plans = stores.read_plans().unwrap();
+        let plan = &plans[plan_id];
+        assert_eq!(plan.title, "My Plan Title");
+        assert_eq!(plan.description, "My Plan Title\nGoal: Build auth");
+        assert_eq!(plan.status, HierarchyStatus::Active);
+    }
+
+    #[test]
+    fn test_accept_plan_neither_param() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "coordinator.accept_plan", json!({})),
+        );
+        assert!(resp.is_error());
+        assert!(
+            resp.error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("plan_id or plan text is required")
+        );
+    }
+
+    #[test]
+    fn test_accept_plan_empty_text() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "coordinator.accept_plan", json!({"plan": "   "})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("plan text is empty"));
+    }
+
+    #[test]
+    fn test_accept_plan_title_extraction() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        // Title from first non-empty line
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "coordinator.accept_plan",
+                json!({"plan": "\n\n  Auth Module  \nDetails here"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let plan_id = resp.result.as_ref().unwrap()["plan_id"].as_str().unwrap();
+        let plans = stores.read_plans().unwrap();
+        assert_eq!(plans[plan_id].title, "Auth Module");
     }
 }
