@@ -273,39 +273,83 @@ pub fn apply_action(app: &mut App, action: Action) {
             // Check for slash commands
             if let Some(cmd) = parse_slash_command(&input) {
                 match cmd {
-                    "/plan" => {
+                    "/plan" if app.funnel_state == FunnelState::Chat => {
                         app.chat_mode = ChatMode::Plan;
                         app.funnel_state = FunnelState::Interview;
                         app.chat_history
                             .push(ChatMessage::system("Entering Plan mode. Focusing on your goal.".into()));
                     }
-                    "/chat" => {
+                    "/plan" => {
+                        // Already in Plan mode — ignore
+                    }
+                    "/chat" if matches!(app.funnel_state, FunnelState::Interview | FunnelState::PlanDraft) => {
                         app.chat_mode = ChatMode::Chat;
                         app.funnel_state = FunnelState::Chat;
                         app.chat_history
                             .push(ChatMessage::system("Returned to Chat mode.".into()));
                     }
-                    "/clear" => {
+                    "/chat" => {
+                        // Already in Chat — ignore
+                    }
+                    "/clear" if app.funnel_state == FunnelState::Chat => {
                         app.chat_history.clear();
                         app.chat_response_buffer.clear();
                         app.chat_streaming = false;
+                        app.chat_mode = ChatMode::Chat;
+                        app.funnel_state = FunnelState::Chat;
+                    }
+                    "/clear" => {
+                        app.chat_history.push(ChatMessage::system(
+                            "Use /chat first to return to Chat mode before clearing.".into(),
+                        ));
+                    }
+                    "/draft" if app.funnel_state == FunnelState::Interview => {
+                        app.funnel_state = FunnelState::PlanDraft;
+                        app.chat_history
+                            .push(ChatMessage::system("Building draft plan...".into()));
+                        app.pending_chat_submit = Some("/draft".into());
                     }
                     "/draft" => {
-                        if app.funnel_state == FunnelState::Interview {
-                            app.funnel_state = FunnelState::PlanDraft;
+                        app.chat_history
+                            .push(ChatMessage::system("Use /plan first to enter Plan mode.".into()));
+                    }
+                    "/accept" if app.funnel_state == FunnelState::PlanDraft => {
+                        // Same as Ctrl+a — extract plan and approve
+                        let plan_text = app
+                            .chat_history
+                            .iter()
+                            .rev()
+                            .find(|m| m.role == super::app::ChatRole::Assistant)
+                            .map(|m| m.content.clone())
+                            .unwrap_or_default();
+                        if !plan_text.is_empty() {
+                            app.pending_ipc = Some(IpcAction::ApprovePlan(plan_text));
+                            app.funnel_state = FunnelState::Executing;
+                            app.current_view = super::app::View::Dashboard;
+                            app.input_mode = InputMode::Normal;
                             app.chat_history
-                                .push(ChatMessage::system("Building draft plan...".into()));
-                            // Signal the TUI-side LLM to produce a draft
-                            app.pending_chat_submit = Some("/draft".into());
-                        } else {
-                            app.chat_history
-                                .push(ChatMessage::system("Use /plan first to enter Plan mode.".into()));
+                                .push(ChatMessage::system("Plan approved! Starting automation.".into()));
                         }
                     }
-                    "/help" => {
+                    "/accept" => {
                         app.chat_history.push(ChatMessage::system(
-                            "Commands: /plan (Plan mode), /chat (Chat mode), /draft (build draft), /clear (clear), /help (this)".into(),
+                            "Use /draft first to generate a plan before accepting.".into(),
                         ));
+                    }
+                    "/help" => {
+                        let help = match app.funnel_state {
+                            FunnelState::Chat => {
+                                "Commands: /plan (enter Plan mode), /clear (clear history), /help (this)"
+                            }
+                            FunnelState::Interview => {
+                                "Commands: /draft (build draft), /chat (back to Chat), /help (this)"
+                            }
+                            FunnelState::PlanDraft => {
+                                "Commands: /accept or Ctrl+a (accept plan), /chat (back to Chat), /help (this)"
+                            }
+                            FunnelState::Executing => "Plan is executing. Use Dashboard view to monitor progress.",
+                        };
+                        app.chat_history.push(ChatMessage::system(help.into()));
                     }
                     _ => {
                         app.chat_history
@@ -927,10 +971,12 @@ mod tests {
     fn test_slash_command_chat() {
         let mut app = App::new();
         app.chat_mode = ChatMode::Plan;
+        app.funnel_state = FunnelState::Interview;
         app.chat_input = "/chat".to_string();
         app.chat_cursor_pos = 5;
         apply_action(&mut app, Action::ChatSubmit);
         assert_eq!(app.chat_mode, ChatMode::Chat);
+        assert_eq!(app.funnel_state, FunnelState::Chat);
     }
 
     #[test]
@@ -1060,5 +1106,75 @@ mod tests {
         app.chat_history.push(ChatMessage::assistant("The plan".into()));
         apply_action(&mut app, Action::ApprovePlan);
         assert_eq!(app.funnel_state, FunnelState::Executing);
+    }
+
+    #[test]
+    fn test_slash_plan_ignored_when_already_in_interview() {
+        let mut app = App::new();
+        app.chat_mode = ChatMode::Plan;
+        app.funnel_state = FunnelState::Interview;
+        let history_len = app.chat_history.len();
+        app.chat_input = "/plan".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.funnel_state, FunnelState::Interview);
+        assert_eq!(app.chat_history.len(), history_len); // no message added
+    }
+
+    #[test]
+    fn test_slash_accept_in_plan_draft() {
+        let mut app = App::new();
+        app.funnel_state = FunnelState::PlanDraft;
+        app.chat_history.push(ChatMessage::assistant("Title: My Plan".into()));
+        app.chat_input = "/accept".to_string();
+        app.chat_cursor_pos = 7;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.funnel_state, FunnelState::Executing);
+        assert_eq!(app.pending_ipc, Some(IpcAction::ApprovePlan("Title: My Plan".into())));
+    }
+
+    #[test]
+    fn test_slash_accept_not_in_plan_draft() {
+        let mut app = App::new();
+        app.chat_input = "/accept".to_string();
+        app.chat_cursor_pos = 7;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert_eq!(app.funnel_state, FunnelState::Chat);
+        assert!(app.chat_history.iter().any(|m| m.content.contains("/draft first")));
+    }
+
+    #[test]
+    fn test_slash_clear_only_in_chat() {
+        let mut app = App::new();
+        app.funnel_state = FunnelState::Interview;
+        app.chat_history.push(ChatMessage::user("test".into()));
+        app.chat_input = "/clear".to_string();
+        app.chat_cursor_pos = 6;
+        apply_action(&mut app, Action::ChatSubmit);
+        // Should NOT clear — not in Chat state
+        assert_eq!(app.chat_history.len(), 2); // original + error message
+    }
+
+    #[test]
+    fn test_slash_help_context_sensitive() {
+        let mut app = App::new();
+        app.chat_input = "/help".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.chat_history[0].content.contains("/plan"));
+
+        app.chat_history.clear();
+        app.funnel_state = FunnelState::Interview;
+        app.chat_input = "/help".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.chat_history[0].content.contains("/draft"));
+
+        app.chat_history.clear();
+        app.funnel_state = FunnelState::PlanDraft;
+        app.chat_input = "/help".to_string();
+        app.chat_cursor_pos = 5;
+        apply_action(&mut app, Action::ChatSubmit);
+        assert!(app.chat_history[0].content.contains("/accept"));
     }
 }

@@ -561,53 +561,38 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
                     Span::raw(" Bottom"),
                 ]
             } else {
-                let mut spans = vec![
-                    Span::styled(
-                        "[Enter]",
-                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" Send  "),
-                    Span::styled(
-                        "[Shift+Enter]",
-                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" Newline  "),
-                    Span::styled(
-                        "[Esc]",
-                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" Scroll  "),
-                ];
-                match app.chat_mode {
-                    ChatMode::Chat => {
-                        spans.push(Span::styled(
-                            "/plan",
-                            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                        ));
-                        spans.push(Span::raw(" Plan"));
-                    }
-                    ChatMode::Plan => {
-                        spans.push(Span::styled(
-                            "/chat",
-                            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                        ));
-                        spans.push(Span::raw(" Chat  "));
-                        spans.push(Span::styled(
-                            "/draft",
-                            Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                        ));
-                        spans.push(Span::raw(" Build Draft"));
-                    }
+                let kb = |text: &'static str| {
+                    Span::styled(text, Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD))
+                };
+                match app.funnel_state {
+                    FunnelState::Chat => vec![
+                        kb("[Enter]"),
+                        Span::raw(" Send  "),
+                        kb("[Shift+Enter]"),
+                        Span::raw(" Newline  "),
+                        kb("[Esc]"),
+                        Span::raw(" Scroll  "),
+                        kb("/plan"),
+                        Span::raw(" Plan"),
+                    ],
+                    FunnelState::Interview => vec![
+                        kb("[Enter]"),
+                        Span::raw(" Send  "),
+                        kb("/draft"),
+                        Span::raw(" Build Draft  "),
+                        kb("/chat"),
+                        Span::raw(" Chat"),
+                    ],
+                    FunnelState::PlanDraft => vec![
+                        kb("/accept"),
+                        Span::raw(" Accept Plan  "),
+                        kb("[Ctrl+a]"),
+                        Span::raw(" Accept Plan  "),
+                        kb("/chat"),
+                        Span::raw(" Chat"),
+                    ],
+                    FunnelState::Executing => vec![Span::raw("Executing...")],
                 }
-                if app.funnel_state == FunnelState::PlanDraft {
-                    spans.push(Span::raw("  "));
-                    spans.push(Span::styled(
-                        "[Ctrl+a]",
-                        Style::default().fg(colors::KEYBIND).add_modifier(Modifier::BOLD),
-                    ));
-                    spans.push(Span::raw(" Approve Plan"));
-                }
-                spans
             }
         }
         _ => {
