@@ -700,6 +700,13 @@ fn apply_fsm_transition(
     stores: &Stores,
     log: &AgentLogger,
 ) -> Option<IterationOutcome> {
+    let old_state = coord_state.fsm_state;
+    log::info!(
+        "[coordinator] {} -> {} (goal: {})",
+        old_state,
+        new_state,
+        coord_state.goal_id
+    );
     // Handle ActivatePhase: complete previous phase, find and set the next phase
     if new_state == CoordinatorFsmState::ActivatePhase {
         // If transitioning from PhaseGate, complete the previous phase

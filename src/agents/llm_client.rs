@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use reqwest::Client;
 use tokio::sync::broadcast;
 
@@ -172,7 +172,7 @@ impl AgentLlmClient {
                 if let Some(text) = parse_sse_text_delta(&line) {
                     accumulated.push_str(&text);
                     self.emit_chunk(&text, false);
-                    debug!("LLM chunk: {} bytes", text.len());
+                    trace!("LLM chunk: {} bytes", text.len());
                 }
             }
         }
