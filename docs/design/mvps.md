@@ -15,3 +15,12 @@
 | **IPC** | NDJSON over Unix socket, daemon as single authority | Same | Same + streaming LLM output to TUI | Same + coordinator.set_goal/clear_goal |
 | **Key Principle** | "Your hardest problems are not LLM problems. Prove the system works first." | "Safest entry point for intelligence: read-only, can't break Tick semantics." | "Everything plugs into the backbone MVP1 built." | "RWL at every level. The Coordinator is the meta-Ralph." |
 | **Design Doc** | `design/2026-02-25-loopr-v3-mvp1.md` | `design/2026-02-26-loopr-v3-mvp2.md` | `design/2026-02-26-loopr-v3-mvp3.md` | `design/2026-02-26-loopr-v3-mvp4.md` |
+
+---
+
+| | **MVP5** | **MVP6** | **MVP7** | **MVP8** | **MVP9** |
+|---|---|---|---|---|---|
+| **Goal** | Coordinator control loop & sequential phase execution | 12 structural fixes (bundle lifecycle, merge, convergence) | IPC type safety & lifecycle audit | Worktree isolation & implementer reliability | Semantic decomposition evaluation & collaborative Plan creation |
+| **What It Proves** | Coordinator sequences phases, enforces dependencies, converges | Multi-Tick builds work; merge conflicts handled | Typed IPC prevents silent data loss; Work reaches Done | Implementers produce valid Bundles reliably | Decomposition quality matches implementation quality — tight feedback loops at every level |
+| **Key Principle** | "Sequence work like a real dev team" | "Fix the pipeline — every edge case" | "Compile-time contracts across IPC boundaries" | "Exactly one valid worktree per Work" | "Pit of success: high-quality Plans recursively beget high-quality code" |
+| **Design Doc** | `design/2026-02-28-loopr-v3-mvp5-coordinator-sequencing.md` | `design/2026-02-28-loopr-v3-mvp6-structural-fixes.md` | `design/2026-02-28-loopr-v3-mvp7-type-safety-audit.md` | `design/2026-02-28-loopr-v3-mvp8-worktree-implementer-reliability.md` | `design/2026-03-03-loopr-v3-mvp9-semantic-decomposition.md` |
