@@ -13,7 +13,7 @@ mod tests {
     use tokio::sync::broadcast;
 
     use crate::agents::{AgentSession, AgentStatus, AgentType};
-    use crate::config::{Config, IntegratorConfig};
+    use crate::config::{Config, IntegratorConfig, InterviewMode};
     use crate::daemon::context::Stores;
     use crate::daemon::handlers::dispatch;
     use crate::domain::learning::{Learning, LearningScope};
@@ -2425,7 +2425,7 @@ mod tests {
         let goal_id = goal["id"].as_str().unwrap().to_string();
 
         // Insert CoordinatorState directly (the Coordinator agent would normally do this)
-        let mut state = CoordinatorState::new(goal_id.clone());
+        let mut state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
         let state_id = state.id.clone();
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
 
@@ -2796,7 +2796,7 @@ mod tests {
         let goal_id = goal["id"].as_str().unwrap().to_string();
 
         // Create state, advance to Executing
-        let mut state = CoordinatorState::new(goal_id.clone());
+        let mut state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
         state.transition_to(CoordinatorFsmState::ActivatePhase);
         state.activate_phase("phase-1".to_string());
         state.increment_attempts("wi-1");
@@ -2970,7 +2970,7 @@ mod tests {
 
         // Now simulate Coordinator FSM: Phase 1 complete, advance to Phase 2
         let goal_id = "test-goal".to_string();
-        let mut coord_state = CoordinatorState::new(goal_id);
+        let mut coord_state = CoordinatorState::new(goal_id, InterviewMode::Interactive);
         coord_state.activate_phase(phase1_id.clone());
         assert_eq!(coord_state.fsm_state, CoordinatorFsmState::Executing);
 

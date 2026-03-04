@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
+use crate::config::InterviewMode;
 use crate::id;
 
 /// A single interview exchange: questions asked and user's answer.
@@ -69,13 +70,21 @@ pub struct CoordinatorState {
 }
 
 impl CoordinatorState {
-    pub fn new(goal_id: String) -> Self {
-        log::debug!("CoordinatorState::new(goal_id={})", goal_id);
+    pub fn new(goal_id: String, interview_mode: InterviewMode) -> Self {
+        log::debug!(
+            "CoordinatorState::new(goal_id={}, interview_mode={:?})",
+            goal_id,
+            interview_mode
+        );
         let now = id::now_millis();
+        let (fsm_state, plan_approved) = match interview_mode {
+            InterviewMode::Skip => (CoordinatorFsmState::Planning, true),
+            InterviewMode::Auto | InterviewMode::Interactive => (CoordinatorFsmState::Interviewing, false),
+        };
         Self {
             id: id::generate_id("cs"),
             goal_id,
-            fsm_state: CoordinatorFsmState::Interviewing,
+            fsm_state,
             current_phase_id: None,
             work_attempts: HashMap::new(),
             work_first_assigned_at: HashMap::new(),
@@ -84,7 +93,7 @@ impl CoordinatorState {
             goal_started_at: now,
             phases_completed: Vec::new(),
             interview_context: Vec::new(),
-            plan_approved: false,
+            plan_approved,
             created_at: now,
             updated_at: now,
         }
@@ -192,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_coordinator_state_new() {
-        let state = CoordinatorState::new("goal-1".to_string());
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert!(!state.id.is_empty());
         assert_eq!(state.goal_id, "goal-1");
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
@@ -206,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_fsm_state_transitions() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
 
         state.transition_to(CoordinatorFsmState::ActivatePhase);
@@ -231,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_work_attempts() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert_eq!(state.attempts("wi-1"), 0);
 
         assert_eq!(state.increment_attempts("wi-1"), 1);
@@ -243,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_multiple_phases_completed() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.activate_phase("phase-1".to_string());
         state.complete_phase();
         state.activate_phase("phase-2".to_string());
@@ -253,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_serde_roundtrip() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.activate_phase("phase-1".to_string());
         state.increment_attempts("wi-1");
         state.increment_attempts("wi-1");
@@ -288,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_record_trait() {
-        let state = CoordinatorState::new("goal-1".to_string());
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert_eq!(Record::id(&state), state.id);
         assert_eq!(Record::updated_at(&state), state.updated_at);
         assert_eq!(CoordinatorState::collection_name(), "coordinator_states");
@@ -305,13 +314,13 @@ mod tests {
 
     #[test]
     fn test_work_first_assigned_at_empty_on_new() {
-        let state = CoordinatorState::new("goal-1".to_string());
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert!(state.work_first_assigned_at.is_empty());
     }
 
     #[test]
     fn test_record_first_assignment() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.record_first_assignment("wi-1");
         assert!(state.work_first_assigned_at.contains_key("wi-1"));
         assert!(*state.work_first_assigned_at.get("wi-1").unwrap() > 0);
@@ -319,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_record_first_assignment_not_overwritten() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.record_first_assignment("wi-1");
         let first_time = *state.work_first_assigned_at.get("wi-1").unwrap();
         // Simulate time passing
@@ -331,14 +340,14 @@ mod tests {
 
     #[test]
     fn test_work_age_minutes_none_for_unassigned() {
-        let state = CoordinatorState::new("goal-1".to_string());
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let now = crate::id::now_millis();
         assert!(state.work_age_minutes("wi-1", now).is_none());
     }
 
     #[test]
     fn test_work_age_minutes_zero_for_just_assigned() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.record_first_assignment("wi-1");
         let now = crate::id::now_millis();
         let age = state.work_age_minutes("wi-1", now).unwrap();
@@ -351,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_work_age_minutes_synthetic() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         // Manually set assigned_at to 45 minutes ago
         let now = crate::id::now_millis();
         state
@@ -363,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_serde_roundtrip_with_first_assigned() {
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.record_first_assignment("wi-1");
         state.record_first_assignment("wi-2");
 
@@ -389,5 +398,28 @@ mod tests {
         });
         let state: CoordinatorState = serde_json::from_value(json).unwrap();
         assert!(state.work_first_assigned_at.is_empty());
+    }
+
+    // --- InterviewMode tests ---
+
+    #[test]
+    fn test_new_with_skip_starts_in_planning() {
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Skip);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
+        assert!(state.plan_approved);
+    }
+
+    #[test]
+    fn test_new_with_interactive_starts_in_interviewing() {
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
+        assert!(!state.plan_approved);
+    }
+
+    #[test]
+    fn test_new_with_auto_starts_in_interviewing() {
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Auto);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
+        assert!(!state.plan_approved);
     }
 }

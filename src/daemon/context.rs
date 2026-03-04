@@ -492,7 +492,7 @@ impl DaemonContext {
 mod tests {
     use super::*;
     use crate::agents::AgentType;
-    use crate::config::ProjectConfig;
+    use crate::config::{InterviewMode, ProjectConfig};
     use crate::test_util::TestDir;
 
     /// Create a test Config with repo_path pointing to a unique temp directory
@@ -569,7 +569,9 @@ mod tests {
                 .create(Lock::new("file.rs".into(), "owner".into(), "coordinator".into()))
                 .unwrap();
             store.create(CoordinatorGoal::new("goal".into())).unwrap();
-            store.create(CoordinatorState::new("goal1".into())).unwrap();
+            store
+                .create(CoordinatorState::new("goal1".into(), InterviewMode::Interactive))
+                .unwrap();
             store
                 .create(Proposal::new("title".into(), "desc".into(), "author".into()))
                 .unwrap();

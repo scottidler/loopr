@@ -663,7 +663,8 @@ fn load_or_create_coordinator_state(stores: &Stores) -> Option<CoordinatorState>
     }
 
     // Create new state
-    let state = CoordinatorState::new(goal_id);
+    let interview_mode = stores.config.agents.coordinator.interview_mode;
+    let state = CoordinatorState::new(goal_id, interview_mode);
     let id = state.id.clone();
     stores
         .write_coordinator_states()
@@ -1589,7 +1590,7 @@ mod tests {
     use super::*;
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::{Agent, AgentContext, AgentSession};
-    use crate::config::{Config, ProjectConfig};
+    use crate::config::{Config, InterviewMode, ProjectConfig};
     use crate::domain::bundle::Bundle;
     use crate::domain::lock::Lock;
     use crate::domain::phase::Phase;
@@ -1948,7 +1949,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -1972,7 +1973,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -1996,7 +1997,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -2015,7 +2016,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -2557,7 +2558,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -2586,7 +2587,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -2653,7 +2654,7 @@ mod tests {
         stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
 
         // Create an existing state in Executing
-        let mut existing = CoordinatorState::new(goal_id.clone());
+        let mut existing = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
         existing.transition_to(CoordinatorFsmState::Executing);
         existing.current_phase_id = Some("phase-1".to_string());
         let existing_id = existing.id.clone();
@@ -2689,7 +2690,7 @@ mod tests {
         phase.status = HierarchyStatus::Active;
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Planning;
         let config = CoordinatorConfig::default();
 
@@ -2711,7 +2712,7 @@ mod tests {
         wi.status = WorkStatus::Done;
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -2726,7 +2727,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         // No more phases to activate
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
         let config = CoordinatorConfig::default();
 
@@ -2739,7 +2740,7 @@ mod tests {
         let dir = TestDir::new("loopr-coord-fsm-persist");
         let stores = test_stores(&dir);
 
-        let mut state = CoordinatorState::new("goal-1".to_string());
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         state.transition_to(CoordinatorFsmState::Executing);
         let state_id = state.id.clone();
 
@@ -2755,7 +2756,7 @@ mod tests {
         let dir = TestDir::new("loopr-coord-fsm-nophase");
         let stores = test_stores(&dir);
 
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let status = build_phase_status(&stores, &coord_state);
         assert!(status.contains("No active phase"));
     }
@@ -2775,7 +2776,7 @@ mod tests {
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.current_phase_id = Some(phase_id);
 
         let status = build_phase_status(&stores, &coord_state);
@@ -2794,7 +2795,7 @@ mod tests {
         let dir = TestDir::new("loopr-fsm-plannoplan");
         let stores = test_stores(&dir);
 
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let config = CoordinatorConfig::default();
         assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
     }
@@ -2808,7 +2809,7 @@ mod tests {
         plan.status = HierarchyStatus::Active;
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let config = CoordinatorConfig::default();
         assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
     }
@@ -2827,7 +2828,7 @@ mod tests {
         spec.status = HierarchyStatus::Active;
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let config = CoordinatorConfig::default();
         assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
     }
@@ -2841,7 +2842,7 @@ mod tests {
         let plan = Plan::new("P".into(), "d".into(), "c".into());
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let config = CoordinatorConfig::default();
         assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
     }
@@ -2860,7 +2861,7 @@ mod tests {
         let wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -2876,7 +2877,7 @@ mod tests {
         let dir = TestDir::new("loopr-fsm-actnopid");
         let stores = test_stores(&dir);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
         // current_phase_id is None
         let config = CoordinatorConfig::default();
@@ -2893,7 +2894,7 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -2917,7 +2918,7 @@ mod tests {
         wi.status = WorkStatus::InProgress;
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -2941,7 +2942,7 @@ mod tests {
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -2968,7 +2969,7 @@ mod tests {
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -2986,7 +2987,7 @@ mod tests {
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
         // No work items!
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         let config = CoordinatorConfig::default();
@@ -3012,7 +3013,7 @@ mod tests {
         wi.status = WorkStatus::InProgress;
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         // Set phase_activated_at far in the past
@@ -3042,7 +3043,7 @@ mod tests {
         wi.status = WorkStatus::InProgress;
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         // Goal started 5 hours ago, timeout is 4 hours
@@ -3064,7 +3065,7 @@ mod tests {
         let dir = TestDir::new("loopr-fsm-execnophase");
         let stores = test_stores(&dir);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         // current_phase_id is None — shouldn't happen normally, but shouldn't panic
         let config = CoordinatorConfig::default();
@@ -3098,7 +3099,7 @@ mod tests {
         phase2.status = HierarchyStatus::Active;
         stores.phases.write().unwrap().insert(phase2.id.clone(), phase2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
         coord_state.current_phase_id = Some(phase1_id.clone());
         coord_state.phases_completed.push(phase1_id); // Phase 1 is done
@@ -3117,7 +3118,7 @@ mod tests {
         let dir = TestDir::new("loopr-fsm-goalnone");
         let stores = test_stores(&dir);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::GoalComplete;
         let config = CoordinatorConfig::default();
 
@@ -3140,7 +3141,7 @@ mod tests {
         wi.status = WorkStatus::Done;
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         coord_state.phase_activated_at = Some(crate::id::now_millis() - 7_200_000);
@@ -3170,7 +3171,7 @@ mod tests {
         wi.status = WorkStatus::InProgress;
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
         // Both phase and goal timed out
@@ -3216,7 +3217,7 @@ mod tests {
         let p2_id = p2.id.clone();
         stores.phases.write().unwrap().insert(p2_id.clone(), p2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.phases_completed.push(p1_id.clone());
 
         let result = find_next_phase_to_activate(&stores, &coord_state);
@@ -3232,7 +3233,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         // No phases at all
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         let result = find_next_phase_to_activate(&stores, &coord_state);
         assert!(result.is_none());
     }
@@ -3266,7 +3267,7 @@ mod tests {
         stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
         // Coordinator is in PhaseGate with phase 1 as current
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
         coord_state.current_phase_id = Some(p1_id.clone());
 
@@ -3392,7 +3393,7 @@ mod tests {
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.current_phase_id = Some(phase_id.clone());
 
         let agent_log = test_agent_logger(&dir);
@@ -3585,7 +3586,7 @@ mod tests {
         let wi2_id = wi2.id.clone();
         stores.works.write().unwrap().insert(wi2_id.clone(), wi2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.current_phase_id = Some(phase_id);
 
         let status = build_phase_status(&stores, &coord_state);
@@ -3611,7 +3612,7 @@ mod tests {
         wi2.dependencies = vec![wi1_id.clone()];
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.current_phase_id = Some(phase_id);
 
         let status = build_phase_status(&stores, &coord_state);
@@ -3626,7 +3627,7 @@ mod tests {
 
     #[test]
     fn test_increment_attempts_tracks_retries() {
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert_eq!(coord_state.attempts("wi-1"), 0);
         assert_eq!(coord_state.increment_attempts("wi-1"), 1);
         assert_eq!(coord_state.increment_attempts("wi-1"), 2);
@@ -3636,7 +3637,7 @@ mod tests {
 
     #[test]
     fn test_decrement_attempts_on_dependency_not_met() {
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         // Simulate: increment, then undo (DependencyNotMet)
         coord_state.increment_attempts("wi-1");
         assert_eq!(coord_state.attempts("wi-1"), 1);
@@ -3681,7 +3682,7 @@ mod tests {
         };
         stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.current_phase_id = Some(phase_id);
 
         let status = build_phase_status(&stores, &coord_state);
@@ -3838,7 +3839,7 @@ mod tests {
 
         let outcome = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await
@@ -3871,7 +3872,7 @@ mod tests {
 
         let result = agent
             .run_iteration(
-                &mut CoordinatorState::new("test-goal".to_string()),
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
                 &mut Lifeguard::new(),
             )
             .await;
@@ -3900,7 +3901,7 @@ mod tests {
         let wi_id = wi.id.clone();
         stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
 
@@ -3931,7 +3932,7 @@ mod tests {
         let wi_id = wi.id.clone();
         stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
 
@@ -3966,7 +3967,7 @@ mod tests {
         wi2.status = WorkStatus::Integrated;
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
-        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         coord_state.fsm_state = CoordinatorFsmState::Executing;
         coord_state.current_phase_id = Some(phase_id);
 

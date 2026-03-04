@@ -166,6 +166,21 @@ impl Default for StrategyConfig {
     }
 }
 
+/// How the Coordinator handles the interview phase.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterviewMode {
+    /// Default: Coordinator asks questions, human answers via TUI.
+    #[default]
+    Interactive,
+    /// Coordinator generates questions then self-answers from goal + repo context.
+    /// Auto-approves the resulting Plan.
+    Auto,
+    /// Skip Interviewing entirely. Start in Planning state.
+    /// Auto-creates a Plan from the goal text.
+    Skip,
+}
+
 /// Coordinator-specific config extending AgentRoleConfig.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -178,6 +193,8 @@ pub struct CoordinatorConfig {
     pub max_work_retries: u32,
     pub phase_timeout_secs: u64,
     pub goal_timeout_secs: u64,
+    #[serde(default)]
+    pub interview_mode: InterviewMode,
 }
 
 impl Default for CoordinatorConfig {
@@ -200,6 +217,7 @@ impl Default for CoordinatorConfig {
             max_work_retries: 3,
             phase_timeout_secs: 3600,
             goal_timeout_secs: 14400,
+            interview_mode: InterviewMode::default(),
         }
     }
 }
@@ -1016,5 +1034,54 @@ plan_approval_required: false
     fn test_config_has_evaluator() {
         let config = Config::default();
         assert!(!config.evaluator.enabled);
+    }
+
+    // --- InterviewMode tests ---
+
+    #[test]
+    fn test_interview_mode_default() {
+        assert_eq!(InterviewMode::default(), InterviewMode::Interactive);
+    }
+
+    #[test]
+    fn test_interview_mode_serde_roundtrip() {
+        for mode in [InterviewMode::Interactive, InterviewMode::Auto, InterviewMode::Skip] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let deserialized: InterviewMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_coordinator_config_interview_mode_default() {
+        let cc = CoordinatorConfig::default();
+        assert_eq!(cc.interview_mode, InterviewMode::Interactive);
+    }
+
+    #[test]
+    fn test_coordinator_config_interview_mode_yaml() {
+        let yaml = r#"
+interview_mode: skip
+"#;
+        let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse coordinator config");
+        assert_eq!(cc.interview_mode, InterviewMode::Skip);
+    }
+
+    #[test]
+    fn test_coordinator_config_interview_mode_yaml_auto() {
+        let yaml = r#"
+interview_mode: auto
+"#;
+        let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse coordinator config");
+        assert_eq!(cc.interview_mode, InterviewMode::Auto);
+    }
+
+    #[test]
+    fn test_coordinator_config_interview_mode_yaml_omitted() {
+        let yaml = r#"
+active_interval_secs: 10
+"#;
+        let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse without interview_mode");
+        assert_eq!(cc.interview_mode, InterviewMode::Interactive);
     }
 }
