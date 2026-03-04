@@ -307,18 +307,17 @@ mod tests {
     fn test_render_plan_display_with_pending_approval() {
         let mut app = App::new();
         app.chat_mode = ChatMode::Plan;
-        app.pending_plan_id = Some("plan-123".to_string());
+        app.funnel_state = FunnelState::PlanDraft;
         app.chat_history
             .push(ChatMessage::user("Let's add parallel validation".into()));
-        app.chat_history.push(ChatMessage::system(
-            "Entering Plan mode. Chat context sent to Coordinator.".into(),
-        ));
+        app.chat_history
+            .push(ChatMessage::system("Entering Plan mode. Focusing on your goal.".into()));
         app.chat_history.push(ChatMessage::assistant(
             "Should parallel validation be opt-in or the default?".into(),
         ));
         app.chat_history.push(ChatMessage::user("Opt-in via config".into()));
-        app.chat_history.push(ChatMessage::system(
-            "=== Proposed Plan ===\nTitle: Parallel Bundle Validation\n\nPress Ctrl+a to approve and activate.".into(),
+        app.chat_history.push(ChatMessage::assistant(
+            "Title: Parallel Bundle Validation\n\nGoal: Add parallel validation\n\nAcceptance Criteria:\n1. Opt-in via config".into(),
         ));
 
         let mut terminal = test_terminal();

@@ -366,9 +366,9 @@ async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
             format!("{collection}.transition"),
             serde_json::json!({ "id": id, "target_status": "Active" }),
         ),
-        IpcAction::ApprovePlan(plan_id) => (
+        IpcAction::ApprovePlan(plan_text) => (
             "coordinator.approve_plan".to_string(),
-            serde_json::json!({ "plan_id": plan_id }),
+            serde_json::json!({ "plan": plan_text }),
         ),
     };
     if let Err(e) = client.request(&method, params).await {
@@ -599,7 +599,7 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
                         spans.push(Span::raw(" Build Draft"));
                     }
                 }
-                if app.pending_plan_id.is_some() {
+                if app.funnel_state == FunnelState::PlanDraft {
                     spans.push(Span::raw("  "));
                     spans.push(Span::styled(
                         "[Ctrl+a]",

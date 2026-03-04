@@ -384,11 +384,23 @@ pub fn apply_action(app: &mut App, action: Action) {
             }
         }
         Action::ApprovePlan => {
-            if let Some(plan_id) = app.pending_plan_id.take() {
-                app.pending_ipc = Some(IpcAction::ApprovePlan(plan_id));
-                app.funnel_state = FunnelState::Executing;
-                app.chat_history
-                    .push(ChatMessage::system("Plan approved! Starting automation.".into()));
+            if app.funnel_state == FunnelState::PlanDraft {
+                // Extract plan text from the last assistant message
+                let plan_text = app
+                    .chat_history
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == super::app::ChatRole::Assistant)
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default();
+                if !plan_text.is_empty() {
+                    app.pending_ipc = Some(IpcAction::ApprovePlan(plan_text));
+                    app.funnel_state = FunnelState::Executing;
+                    app.current_view = super::app::View::Dashboard;
+                    app.input_mode = InputMode::Normal;
+                    app.chat_history
+                        .push(ChatMessage::system("Plan approved! Starting automation.".into()));
+                }
             }
         }
         Action::None => {}
@@ -965,20 +977,35 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_approve_plan() {
+    fn test_apply_approve_plan_in_plan_draft() {
         let mut app = App::new();
-        app.pending_plan_id = Some("plan-123".to_string());
+        app.funnel_state = FunnelState::PlanDraft;
+        app.chat_history
+            .push(ChatMessage::assistant("Title: My Plan\nGoal: Do stuff".into()));
         apply_action(&mut app, Action::ApprovePlan);
-        assert_eq!(app.pending_ipc, Some(IpcAction::ApprovePlan("plan-123".to_string())));
-        assert!(app.pending_plan_id.is_none());
+        assert_eq!(
+            app.pending_ipc,
+            Some(IpcAction::ApprovePlan("Title: My Plan\nGoal: Do stuff".into()))
+        );
+        assert_eq!(app.funnel_state, FunnelState::Executing);
+        assert_eq!(app.current_view, crate::tui::app::View::Dashboard);
         assert!(app.chat_history.iter().any(|m| m.content.contains("approved")));
     }
 
     #[test]
-    fn test_apply_approve_plan_no_pending() {
+    fn test_apply_approve_plan_not_in_plan_draft() {
         let mut app = App::new();
         apply_action(&mut app, Action::ApprovePlan);
-        assert!(app.pending_ipc.is_none()); // no plan to approve
+        assert!(app.pending_ipc.is_none()); // not in PlanDraft state
+    }
+
+    #[test]
+    fn test_apply_approve_plan_no_assistant_message() {
+        let mut app = App::new();
+        app.funnel_state = FunnelState::PlanDraft;
+        // No assistant messages in history
+        apply_action(&mut app, Action::ApprovePlan);
+        assert!(app.pending_ipc.is_none()); // empty plan text, no IPC
     }
 
     #[test]
@@ -1028,8 +1055,9 @@ mod tests {
         apply_action(&mut app, Action::ChatSubmit);
         assert_eq!(app.funnel_state, FunnelState::Chat);
 
-        // ApprovePlan transitions to Executing
-        app.pending_plan_id = Some("plan-1".to_string());
+        // ApprovePlan transitions to Executing (requires PlanDraft state + assistant message)
+        app.funnel_state = FunnelState::PlanDraft;
+        app.chat_history.push(ChatMessage::assistant("The plan".into()));
         apply_action(&mut app, Action::ApprovePlan);
         assert_eq!(app.funnel_state, FunnelState::Executing);
     }

@@ -214,7 +214,6 @@ pub struct App {
     pub chat_response_buffer: String,
     pub chat_scroll: Option<usize>,
     pub pending_chat_submit: Option<String>,
-    pub pending_plan_id: Option<String>,
     pub frame_count: u64,
     pub funnel_state: FunnelState,
 }
@@ -246,7 +245,6 @@ impl App {
             chat_response_buffer: String::new(),
             chat_scroll: None,
             pending_chat_submit: None,
-            pending_plan_id: None,
             frame_count: 0,
             funnel_state: FunnelState::Chat,
         }
