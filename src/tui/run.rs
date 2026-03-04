@@ -1,5 +1,6 @@
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
@@ -13,9 +14,13 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
+use tokio::sync::broadcast;
 use tokio::time::Interval;
 
-use crate::agents::AgentSession;
+use crate::agents::implementer::{ChatMessage as LlmChatMessage, LlmClient};
+use crate::agents::llm_client::AgentLlmClient;
+use crate::agents::{AgentEvent, AgentSession};
+use crate::config::AgentRoleConfig;
 use crate::domain::bundle::Bundle;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -26,14 +31,21 @@ use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::work::Work;
 use crate::ipc::client::IpcClient;
-use crate::ipc::protocol::IpcMessage;
+use crate::ipc::protocol::{DaemonEvent, IpcMessage};
 
-use super::app::{App, AppState, ChatMode, ConnectionStatus, InputMode, IpcAction, View, colors};
+use super::app::{
+    App, AppState, ChatMessage, ChatMode, ChatRole, ConnectionStatus, InputMode, IpcAction, View, colors,
+};
 use super::input::{apply_action, handle_key};
 use super::views;
 
 /// Reconnect interval when disconnected from daemon.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
+
+/// System prompt for free chat mode.
+const CHAT_SYSTEM_PROMPT: &str = "You are an AI assistant embedded in the Loopr development orchestrator. \
+You help the user explore ideas, discuss architecture, and plan changes to their codebase. \
+When the user is ready to formalize a plan, they will type /plan.";
 
 /// Run the TUI, connecting to the daemon at the given socket path.
 pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
@@ -45,6 +57,17 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
         .handshake(env!("CARGO_PKG_VERSION"))
         .await
         .map_err(|e| eyre::eyre!("Handshake failed: {e}"))?;
+
+    // Create TUI-side LLM client for free chat
+    let chat_config = AgentRoleConfig::default_implementer(); // reuse model config
+    let (llm_event_tx, _) = broadcast::channel::<DaemonEvent>(256);
+    let llm_client = match AgentLlmClient::new(chat_config, "tui-chat".to_string(), llm_event_tx.clone()) {
+        Ok(c) => Some(Arc::new(c)),
+        Err(e) => {
+            warn!("Chat LLM client unavailable (set ANTHROPIC_API_KEY): {e}");
+            None
+        }
+    };
 
     // Setup terminal
     enable_raw_mode()?;
@@ -58,7 +81,15 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     app.connection = ConnectionStatus::Connected;
 
     // Run event loop; capture result so we always restore the terminal
-    let result = event_loop(&mut terminal, &mut app, Some(client), socket_path).await;
+    let result = event_loop(
+        &mut terminal,
+        &mut app,
+        Some(client),
+        socket_path,
+        llm_client,
+        llm_event_tx,
+    )
+    .await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -74,19 +105,96 @@ async fn try_connect(socket_path: &Path) -> Option<IpcClient> {
     Some(client)
 }
 
-/// Main select! loop: keyboard events + IPC messages + reconnection.
+/// Convert app chat history to LLM client format.
+fn chat_history_as_llm_messages(history: &[ChatMessage]) -> Vec<LlmChatMessage> {
+    history
+        .iter()
+        .filter_map(|m| match m.role {
+            ChatRole::User => Some(LlmChatMessage::user(&m.content)),
+            ChatRole::Assistant => Some(LlmChatMessage::assistant(&m.content)),
+            ChatRole::System => None, // system messages are not part of LLM conversation
+        })
+        .collect()
+}
+
+/// Extract LLM chunk text from a DaemonEvent, if it's an LlmOutput event for the TUI chat session.
+fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
+    if event.event != "agent.llm_output" {
+        return None;
+    }
+    let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
+    if let AgentEvent::LlmOutput {
+        session_id,
+        chunk,
+        is_final,
+    } = agent_event
+        && session_id == "tui-chat"
+    {
+        return Some((chunk, is_final));
+    }
+    None
+}
+
+/// Main select! loop: keyboard events + IPC messages + reconnection + LLM streaming.
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     mut client: Option<IpcClient>,
     socket_path: &Path,
+    llm_client: Option<Arc<AgentLlmClient>>,
+    llm_event_tx: broadcast::Sender<DaemonEvent>,
 ) -> eyre::Result<()> {
     let mut events = EventStream::new();
     let mut reconnect_timer: Interval = tokio::time::interval(RECONNECT_INTERVAL);
     // Consume the first immediate tick so we don't reconnect on startup
     reconnect_timer.tick().await;
 
+    let mut llm_event_rx = llm_event_tx.subscribe();
+
+    // Track the background LLM task
+    let mut llm_task: Option<tokio::task::JoinHandle<eyre::Result<String>>> = None;
+
+    // Show warning if no LLM client
+    if llm_client.is_none() {
+        app.chat_history.push(ChatMessage::system(
+            "Set ANTHROPIC_API_KEY to enable chat. Free chat is disabled.".into(),
+        ));
+    }
+
     loop {
+        // Non-blocking drain of all available streaming chunks
+        while let Ok(event) = llm_event_rx.try_recv() {
+            if let Some((chunk_text, is_final)) = extract_llm_chunk(&event) {
+                app.chat_response_buffer.push_str(&chunk_text);
+                if is_final {
+                    let content = std::mem::take(&mut app.chat_response_buffer);
+                    if !content.is_empty() {
+                        app.chat_history.push(ChatMessage::assistant(content));
+                    }
+                    app.chat_streaming = false;
+                }
+            }
+        }
+
+        // Check if pending chat submit needs to spawn LLM task
+        if app.pending_chat_submit.take().is_some() {
+            if let Some(ref llm) = llm_client {
+                let client_clone = Arc::clone(llm);
+                let messages = chat_history_as_llm_messages(&app.chat_history);
+                let system_prompt = CHAT_SYSTEM_PROMPT.to_string();
+                app.chat_streaming = true;
+                app.chat_response_buffer.clear();
+
+                llm_task = Some(tokio::spawn(async move {
+                    client_clone.call_with_history(&system_prompt, &messages).await
+                }));
+            } else {
+                app.chat_history.push(ChatMessage::system(
+                    "Chat is unavailable — ANTHROPIC_API_KEY not set.".into(),
+                ));
+            }
+        }
+
         terminal.draw(|frame| draw(app, frame))?;
 
         if app.should_quit {
@@ -104,6 +212,46 @@ async fn event_loop(
                     // Dispatch any pending IPC action
                     if let (Some(ipc_action), Some(c)) = (app.pending_ipc.take(), client.as_mut()) {
                         dispatch_ipc_action(c, ipc_action).await;
+                    }
+                }
+            }
+            // LLM streaming chunks (Chat mode)
+            Ok(event) = llm_event_rx.recv(), if app.chat_streaming => {
+                if let Some((chunk_text, is_final)) = extract_llm_chunk(&event) {
+                    app.chat_response_buffer.push_str(&chunk_text);
+                    if is_final {
+                        let content = std::mem::take(&mut app.chat_response_buffer);
+                        if !content.is_empty() {
+                            app.chat_history.push(ChatMessage::assistant(content));
+                        }
+                        app.chat_streaming = false;
+                    }
+                }
+            }
+            // LLM task completion (error handling)
+            result = async { llm_task.as_mut().expect("guarded by is_some").await }, if llm_task.is_some() => {
+                llm_task = None;
+                match result {
+                    Ok(Ok(_)) => {
+                        // Response already handled via streaming chunks
+                        // Ensure streaming is finalized
+                        if app.chat_streaming {
+                            let content = std::mem::take(&mut app.chat_response_buffer);
+                            if !content.is_empty() {
+                                app.chat_history.push(ChatMessage::assistant(content));
+                            }
+                            app.chat_streaming = false;
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        app.chat_streaming = false;
+                        app.chat_response_buffer.clear();
+                        app.chat_history.push(ChatMessage::system(format!("Error: {e}")));
+                    }
+                    Err(e) => {
+                        app.chat_streaming = false;
+                        app.chat_response_buffer.clear();
+                        app.chat_history.push(ChatMessage::system(format!("LLM task panicked: {e}")));
                     }
                 }
             }
