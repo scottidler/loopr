@@ -256,6 +256,25 @@ impl DaemonContext {
             info!("Doc Validator disabled");
         }
 
+        // Create CoverageEvaluator if enabled in config
+        if config.evaluator.enabled {
+            info!(
+                "Coverage Evaluator enabled: provider={}, model={}",
+                config.evaluator.provider, config.evaluator.model
+            );
+            let eval_config = crate::config::ValidatorConfig {
+                enabled: true,
+                provider: config.evaluator.provider.clone(),
+                model: config.evaluator.model.clone(),
+                api_key_env: config.evaluator.api_key_env.clone(),
+                max_tokens: config.evaluator.max_tokens,
+                temperature: config.evaluator.temperature,
+            };
+            stores.evaluator = Some(Arc::new(crate::evaluator::CoverageEvaluator::new(eval_config)));
+        } else {
+            info!("Coverage Evaluator disabled");
+        }
+
         // Load guidance: schema docs from transition rules + LOOPR.md files from disk
         stores.guidance = crate::guidance::load_guidance(&repo_path);
 

@@ -106,6 +106,19 @@ impl Default for WorkSlaConfig {
     }
 }
 
+/// How strict the Coverage Evaluator is about minor gaps.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageStrictness {
+    /// All children must fully cover the parent — no gaps allowed.
+    #[default]
+    RequireComplete,
+    /// Minor gaps are allowed; only critical gaps block activation.
+    AllowMinorGaps,
+    /// Coverage evaluation runs but results are advisory only — never blocks.
+    SuggestOnly,
+}
+
 /// Strategy knobs controlling system behavior.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -118,6 +131,18 @@ pub struct StrategyConfig {
     pub promotion: PromotionPolicy,
     pub max_lock_ttl_minutes: u64,
     pub work_sla: WorkSlaConfig,
+    /// Enable/disable coverage evaluation at decomposition boundaries.
+    pub coverage_enabled: bool,
+    /// How strict the Coverage Evaluator is about minor gaps.
+    pub coverage_strictness: CoverageStrictness,
+    /// Maximum decomposition attempts per parent before bubble-up.
+    pub max_decomposition_attempts: u32,
+    /// Maximum bubble-up depth to prevent infinite recursion.
+    pub max_bubble_up_depth: u32,
+    /// Enable/disable the collaborative Plan interview.
+    pub plan_interview_enabled: bool,
+    /// Require explicit user approval of the Plan before decomposition.
+    pub plan_approval_required: bool,
 }
 
 impl Default for StrategyConfig {
@@ -131,6 +156,12 @@ impl Default for StrategyConfig {
             promotion: PromotionPolicy::default(),
             max_lock_ttl_minutes: 60,
             work_sla: WorkSlaConfig::default(),
+            coverage_enabled: true,
+            coverage_strictness: CoverageStrictness::default(),
+            max_decomposition_attempts: 3,
+            max_bubble_up_depth: 2,
+            plan_interview_enabled: true,
+            plan_approval_required: true,
         }
     }
 }
@@ -381,6 +412,31 @@ impl Default for ValidatorConfig {
     }
 }
 
+/// Coverage Evaluator configuration — LLM-powered coverage evaluation at decomposition boundaries.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct EvaluatorConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub model: String,
+    pub api_key_env: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+impl Default for EvaluatorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 4096,
+            temperature: 0.0,
+        }
+    }
+}
+
 impl Default for IntegratorConfig {
     fn default() -> Self {
         Self {
@@ -415,6 +471,7 @@ pub struct Config {
     pub project: ProjectConfig,
     pub integrator: IntegratorConfig,
     pub validator: ValidatorConfig,
+    pub evaluator: EvaluatorConfig,
     pub agents: AgentConfig,
     pub strategy: StrategyConfig,
 }
@@ -429,6 +486,7 @@ impl Default for Config {
             project: ProjectConfig::default(),
             integrator: IntegratorConfig::default(),
             validator: ValidatorConfig::default(),
+            evaluator: EvaluatorConfig::default(),
             agents: AgentConfig::default(),
             strategy: StrategyConfig::default(),
         }
@@ -893,5 +951,69 @@ name: test
 "#;
         let config: Config = serde_yaml::from_str(yaml).expect("should parse config without log_level");
         assert!(config.log_level.is_none());
+    }
+
+    // --- Coverage & Interview config tests ---
+
+    #[test]
+    fn test_coverage_strictness_default() {
+        assert_eq!(CoverageStrictness::default(), CoverageStrictness::RequireComplete);
+    }
+
+    #[test]
+    fn test_coverage_strictness_serde_roundtrip() {
+        for strictness in [
+            CoverageStrictness::RequireComplete,
+            CoverageStrictness::AllowMinorGaps,
+            CoverageStrictness::SuggestOnly,
+        ] {
+            let json = serde_json::to_string(&strictness).unwrap();
+            let deserialized: CoverageStrictness = serde_json::from_str(&json).unwrap();
+            assert_eq!(strictness, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_strategy_config_coverage_defaults() {
+        let sc = StrategyConfig::default();
+        assert!(sc.coverage_enabled);
+        assert_eq!(sc.coverage_strictness, CoverageStrictness::RequireComplete);
+        assert_eq!(sc.max_decomposition_attempts, 3);
+        assert_eq!(sc.max_bubble_up_depth, 2);
+        assert!(sc.plan_interview_enabled);
+        assert!(sc.plan_approval_required);
+    }
+
+    #[test]
+    fn test_strategy_config_coverage_yaml() {
+        let yaml = r#"
+coverage_enabled: false
+coverage_strictness: allow_minor_gaps
+max_decomposition_attempts: 5
+max_bubble_up_depth: 3
+plan_interview_enabled: false
+plan_approval_required: false
+"#;
+        let sc: StrategyConfig = serde_yaml::from_str(yaml).expect("should parse coverage config");
+        assert!(!sc.coverage_enabled);
+        assert_eq!(sc.coverage_strictness, CoverageStrictness::AllowMinorGaps);
+        assert_eq!(sc.max_decomposition_attempts, 5);
+        assert_eq!(sc.max_bubble_up_depth, 3);
+        assert!(!sc.plan_interview_enabled);
+        assert!(!sc.plan_approval_required);
+    }
+
+    #[test]
+    fn test_evaluator_config_default() {
+        let ec = EvaluatorConfig::default();
+        assert!(!ec.enabled);
+        assert_eq!(ec.provider, "anthropic");
+        assert_eq!(ec.model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn test_config_has_evaluator() {
+        let config = Config::default();
+        assert!(!config.evaluator.enabled);
     }
 }
