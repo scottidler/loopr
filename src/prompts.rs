@@ -20,6 +20,7 @@ const DEFAULT_COVERAGE_SCHEMA: &str = include_str!("../prompts/coverage-schema.p
 const DEFAULT_COVERAGE_PLAN_SPECS: &str = include_str!("../prompts/coverage-plan-specs.pmt");
 const DEFAULT_COVERAGE_SPEC_PHASES: &str = include_str!("../prompts/coverage-spec-phases.pmt");
 const DEFAULT_COVERAGE_PHASE_WORKS: &str = include_str!("../prompts/coverage-phase-works.pmt");
+const DEFAULT_INTERVIEW: &str = include_str!("../prompts/interview.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -38,6 +39,7 @@ pub struct PromptStore {
     pub coverage_plan_specs: String,
     pub coverage_spec_phases: String,
     pub coverage_phase_works: String,
+    pub interview: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -84,6 +86,7 @@ pub fn init() {
         coverage_plan_specs: load("coverage-plan-specs.pmt", DEFAULT_COVERAGE_PLAN_SPECS),
         coverage_spec_phases: load("coverage-spec-phases.pmt", DEFAULT_COVERAGE_SPEC_PHASES),
         coverage_phase_works: load("coverage-phase-works.pmt", DEFAULT_COVERAGE_PHASE_WORKS),
+        interview: load("interview.pmt", DEFAULT_INTERVIEW),
     });
 }
 
@@ -106,6 +109,7 @@ pub fn init_defaults() {
         coverage_plan_specs: DEFAULT_COVERAGE_PLAN_SPECS.to_string(),
         coverage_spec_phases: DEFAULT_COVERAGE_SPEC_PHASES.to_string(),
         coverage_phase_works: DEFAULT_COVERAGE_PHASE_WORKS.to_string(),
+        interview: DEFAULT_INTERVIEW.to_string(),
     });
 }
 
@@ -536,7 +540,7 @@ mod tests {
     fn test_all_pmt_files_have_substantial_content() {
         init_defaults();
         let s = store();
-        let fields: [(&str, &str); 16] = [
+        let fields: [(&str, &str); 17] = [
             ("coordinator", &s.coordinator),
             ("implementer", &s.implementer),
             ("reviewer", &s.reviewer),
@@ -553,6 +557,7 @@ mod tests {
             ("coverage_plan_specs", &s.coverage_plan_specs),
             ("coverage_spec_phases", &s.coverage_spec_phases),
             ("coverage_phase_works", &s.coverage_phase_works),
+            ("interview", &s.interview),
         ];
         for (name, content) in &fields {
             assert!(

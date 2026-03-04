@@ -1035,6 +1035,61 @@ pub async fn execute_action(
             ));
             Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
         }
+        AgentAction::InterviewQuestion { questions } => {
+            // Send questions to TUI via bridge event
+            let resp = bridge.request(
+                "coordinator.interview_question",
+                serde_json::json!({ "questions": questions }),
+            );
+            if resp.is_error() {
+                let msg = resp
+                    .error
+                    .as_ref()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_else(|| "interview question failed".to_string());
+                return Ok(ActionResult::ActionError(msg));
+            }
+            agent_log.info(&format!("InterviewQuestion: {} questions sent", questions.len()));
+            Ok(ActionResult::Done(format!(
+                "sent {} interview question(s)",
+                questions.len()
+            )))
+        }
+        AgentAction::ProposePlan {
+            title,
+            description,
+            acceptance_criteria,
+        } => {
+            // Create Plan as Draft via bridge
+            let resp = bridge.request(
+                "plan.create",
+                serde_json::json!({
+                    "title": title,
+                    "description": description,
+                    "acceptance_criteria": acceptance_criteria,
+                }),
+            );
+            if resp.is_error() {
+                let msg = resp
+                    .error
+                    .as_ref()
+                    .map(|e| e.message.clone())
+                    .unwrap_or_else(|| "plan creation failed".to_string());
+                return Ok(ActionResult::ActionError(msg));
+            }
+            let plan_id = resp
+                .result
+                .as_ref()
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            agent_log.info(&format!("ProposePlan: created draft plan {}", plan_id));
+            Ok(ActionResult::RecordCreated {
+                collection: "plans".to_string(),
+                id: plan_id,
+            })
+        }
         AgentAction::ReviseParent {
             collection,
             id,

@@ -190,6 +190,9 @@ pub fn dispatch(
         "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
         "coordinator.get_state" => handle_coordinator_get_state(stores, req),
         "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
+        "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
+        "coordinator.approve_plan" => handle_coordinator_approve_plan(stores, event_tx, req),
+        "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
@@ -3481,6 +3484,140 @@ fn handle_coordinator_reset_state(
         json!({ "message": "Coordinator state cleared" }),
     ));
     DaemonResponse::ok(req.id, json!({ "reset": true, "removed": removed.len() }))
+}
+
+// --- Interview handlers ---
+
+fn handle_coordinator_interview_respond(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    debug!("handle_coordinator_interview_respond()");
+    let answer = match req.params.get("answer").and_then(|v| v.as_str()) {
+        Some(a) => a.to_string(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("answer is required"));
+        }
+    };
+
+    // Find the active CoordinatorState
+    let mut states = stores.coordinator_states.write().unwrap();
+    let state = match states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
+        Some(s) => s,
+        None => {
+            return DaemonResponse::err(req.id, RpcError::internal("no active coordinator state"));
+        }
+    };
+
+    // Record the exchange (questions were sent in a previous action)
+    let exchange = crate::domain::coordinator_state::InterviewExchange {
+        questions: vec![], // questions were already sent via InterviewQuestion action
+        answer: answer.clone(),
+        timestamp: crate::id::now_millis(),
+    };
+    state.interview_context.push(exchange);
+    state.updated_at = crate::id::now_millis();
+
+    // Persist
+    if let Some(store_arc) = &stores.store
+        && let Err(e) = store_arc.lock().unwrap().update(state.clone())
+    {
+        return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+    }
+
+    let _ = event_tx.send(DaemonEvent::new(
+        "coordinator.interview_response",
+        json!({ "answer": answer, "exchange_count": state.interview_context.len() }),
+    ));
+
+    DaemonResponse::ok(
+        req.id,
+        json!({
+            "status": "received",
+            "exchange_count": state.interview_context.len()
+        }),
+    )
+}
+
+fn handle_coordinator_approve_plan(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    debug!("handle_coordinator_approve_plan()");
+    let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("plan_id is required"));
+        }
+    };
+
+    // Activate the Plan (Draft → Active)
+    {
+        let mut plans = stores.plans.write().unwrap();
+        match plans.get_mut(&plan_id) {
+            Some(plan) => {
+                plan.status = HierarchyStatus::Active;
+                plan.updated_at = crate::id::now_millis();
+                if let Some(store_arc) = &stores.store
+                    && let Err(e) = store_arc.lock().unwrap().update(plan.clone())
+                {
+                    return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+                }
+            }
+            None => {
+                return DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id));
+            }
+        }
+    }
+
+    // Update CoordinatorState: plan_approved = true, transition to Planning
+    {
+        let mut states = stores.coordinator_states.write().unwrap();
+        if let Some(state) = states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
+            state.plan_approved = true;
+            state.fsm_state = crate::domain::coordinator_state::CoordinatorFsmState::Planning;
+            state.updated_at = crate::id::now_millis();
+            if let Some(store_arc) = &stores.store
+                && let Err(e) = store_arc.lock().unwrap().update(state.clone())
+            {
+                return DaemonResponse::err(req.id, RpcError::internal(&e.to_string()));
+            }
+        }
+    }
+
+    let _ = event_tx.send(DaemonEvent::new(
+        "coordinator.plan_approved",
+        json!({ "plan_id": plan_id }),
+    ));
+
+    DaemonResponse::ok(req.id, json!({ "approved": true, "plan_id": plan_id }))
+}
+
+fn handle_coordinator_interview_question(
+    _stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    debug!("handle_coordinator_interview_question()");
+    let questions = match req.params.get("questions").and_then(|v| v.as_array()) {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect::<Vec<_>>(),
+        None => {
+            return DaemonResponse::err(req.id, RpcError::invalid_params("questions array is required"));
+        }
+    };
+
+    // Emit event for TUI to display
+    let _ = event_tx.send(DaemonEvent::new(
+        "coordinator.interview_question",
+        json!({ "questions": questions }),
+    ));
+
+    DaemonResponse::ok(req.id, json!({ "status": "questions_sent", "count": questions.len() }))
 }
 
 // --- Agent handlers ---

@@ -5,9 +5,20 @@ use taskstore::{IndexValue, Record};
 
 use crate::id;
 
+/// A single interview exchange: questions asked and user's answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterviewExchange {
+    /// Questions asked in this round
+    pub questions: Vec<String>,
+    /// User's response to this round's questions
+    pub answer: String,
+    pub timestamp: i64,
+}
+
 /// FSM states for the Coordinator control loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoordinatorFsmState {
+    Interviewing,
     Planning,
     ActivatePhase,
     Executing,
@@ -47,6 +58,12 @@ pub struct CoordinatorState {
     pub decomposition_attempts: HashMap<String, u32>,
     pub goal_started_at: i64,
     pub phases_completed: Vec<String>,
+    /// Interview context accumulated during the Interviewing state.
+    #[serde(default)]
+    pub interview_context: Vec<InterviewExchange>,
+    /// Whether the user has approved the Plan.
+    #[serde(default)]
+    pub plan_approved: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -58,7 +75,7 @@ impl CoordinatorState {
         Self {
             id: id::generate_id("cs"),
             goal_id,
-            fsm_state: CoordinatorFsmState::Planning,
+            fsm_state: CoordinatorFsmState::Interviewing,
             current_phase_id: None,
             work_attempts: HashMap::new(),
             work_first_assigned_at: HashMap::new(),
@@ -66,6 +83,8 @@ impl CoordinatorState {
             decomposition_attempts: HashMap::new(),
             goal_started_at: now,
             phases_completed: Vec::new(),
+            interview_context: Vec::new(),
+            plan_approved: false,
             created_at: now,
             updated_at: now,
         }
@@ -175,7 +194,7 @@ mod tests {
         let state = CoordinatorState::new("goal-1".to_string());
         assert!(!state.id.is_empty());
         assert_eq!(state.goal_id, "goal-1");
-        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
         assert!(state.current_phase_id.is_none());
         assert!(state.work_attempts.is_empty());
         assert!(state.phase_activated_at.is_none());
@@ -187,7 +206,7 @@ mod tests {
     #[test]
     fn test_fsm_state_transitions() {
         let mut state = CoordinatorState::new("goal-1".to_string());
-        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
 
         state.transition_to(CoordinatorFsmState::ActivatePhase);
         assert_eq!(state.fsm_state, CoordinatorFsmState::ActivatePhase);
@@ -277,7 +296,7 @@ mod tests {
         assert_eq!(fields.get("goal_id"), Some(&IndexValue::String("goal-1".to_string())));
         assert_eq!(
             fields.get("fsm_state"),
-            Some(&IndexValue::String("Planning".to_string()))
+            Some(&IndexValue::String("Interviewing".to_string()))
         );
     }
 

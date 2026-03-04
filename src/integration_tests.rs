@@ -2426,9 +2426,12 @@ mod tests {
         // Insert CoordinatorState directly (the Coordinator agent would normally do this)
         let mut state = CoordinatorState::new(goal_id.clone());
         let state_id = state.id.clone();
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
+
+        // Transition through all states: Interviewing → Planning → ActivatePhase → ...
+        state.transition_to(CoordinatorFsmState::Planning);
         assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
 
-        // Transition through all states
         state.transition_to(CoordinatorFsmState::ActivatePhase);
         assert_eq!(state.fsm_state, CoordinatorFsmState::ActivatePhase);
 

@@ -765,6 +765,17 @@ fn build_fsm_footer(
     agent_log: &AgentLogger,
 ) -> String {
     match coord_state.fsm_state {
+        CoordinatorFsmState::Interviewing => {
+            // In Interviewing state, the Coordinator generates interview questions
+            // or proposes a Plan. This is handled by the interview IPC handlers;
+            // the FSM footer just signals the state.
+            "## Interviewing\n\n\
+             You are in the Interviewing state. Generate interview questions to clarify the user's goal, \
+             or propose a Plan if you have enough context.\n\n\
+             Use InterviewQuestion to ask the user questions, or ProposePlan to propose a Plan draft.\n\n\
+             Respond with a JSON array of actions."
+                .to_string()
+        }
         CoordinatorFsmState::Planning => {
             // Use existing generation footer logic for Plan→Spec→Phase hierarchy
             if let Some(gen_footer) =
@@ -970,6 +981,14 @@ fn check_fsm_transition(
     config: &CoordinatorConfig,
 ) -> Option<CoordinatorFsmState> {
     match coord_state.fsm_state {
+        CoordinatorFsmState::Interviewing => {
+            // Transition to Planning when plan_approved is set
+            if coord_state.plan_approved {
+                Some(CoordinatorFsmState::Planning)
+            } else {
+                None
+            }
+        }
         CoordinatorFsmState::Planning => {
             // Transition when: Active Plan AND Active Spec AND all Phases Active
             let plan = generation::find_active_plan(stores)?;
@@ -2567,7 +2586,7 @@ mod tests {
 
         let state = load_or_create_coordinator_state(&stores).unwrap();
         assert_eq!(state.goal_id, goal_id);
-        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
     }
 
     #[test]
@@ -2616,7 +2635,8 @@ mod tests {
         phase.status = HierarchyStatus::Active;
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        let coord_state = CoordinatorState::new("goal-1".to_string());
+        let mut coord_state = CoordinatorState::new("goal-1".to_string());
+        coord_state.fsm_state = CoordinatorFsmState::Planning;
         let config = CoordinatorConfig::default();
 
         let transition = check_fsm_transition(&stores, &coord_state, &config);

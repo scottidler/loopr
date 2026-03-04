@@ -484,6 +484,15 @@ pub enum AgentAction {
         reason: String,
         diagnostic: String,
     },
+    InterviewQuestion {
+        #[serde(default, deserialize_with = "string_or_vec")]
+        questions: Vec<String>,
+    },
+    ProposePlan {
+        title: String,
+        description: String,
+        acceptance_criteria: String,
+    },
 
     // === Researcher-only actions ===
     SearchCode {
