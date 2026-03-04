@@ -64,7 +64,7 @@ pub enum Action {
     /// Page down in chat history.
     ChatPageDown,
     /// Approve plan (Ctrl+a in Plan mode).
-    ApprovePlan,
+    AcceptPlan,
     None,
 }
 
@@ -104,7 +104,7 @@ pub fn handle_key(key: KeyEvent, mode: InputMode) -> Action {
         InputMode::ChatInput => {
             // Ctrl+a to approve plan
             if key.code == KeyCode::Char('a') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                return Action::ApprovePlan;
+                return Action::AcceptPlan;
             }
             match key.code {
                 KeyCode::Enter => {
@@ -323,7 +323,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                             .map(|m| m.content.clone())
                             .unwrap_or_default();
                         if !plan_text.is_empty() {
-                            app.pending_ipc = Some(IpcAction::ApprovePlan(plan_text));
+                            app.pending_ipc = Some(IpcAction::AcceptPlan(plan_text));
                             app.funnel_state = FunnelState::Executing;
                             app.current_view = super::app::View::Dashboard;
                             app.input_mode = InputMode::Normal;
@@ -427,7 +427,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                 }
             }
         }
-        Action::ApprovePlan => {
+        Action::AcceptPlan => {
             if app.funnel_state == FunnelState::PlanDraft {
                 // Extract plan text from the last assistant message
                 let plan_text = app
@@ -438,7 +438,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                     .map(|m| m.content.clone())
                     .unwrap_or_default();
                 if !plan_text.is_empty() {
-                    app.pending_ipc = Some(IpcAction::ApprovePlan(plan_text));
+                    app.pending_ipc = Some(IpcAction::AcceptPlan(plan_text));
                     app.funnel_state = FunnelState::Executing;
                     app.current_view = super::app::View::Dashboard;
                     app.input_mode = InputMode::Normal;
@@ -663,7 +663,7 @@ mod tests {
                 key_with_mods(KeyCode::Char('a'), KeyModifiers::CONTROL),
                 InputMode::ChatInput
             ),
-            Action::ApprovePlan
+            Action::AcceptPlan
         );
     }
 
@@ -1028,10 +1028,10 @@ mod tests {
         app.funnel_state = FunnelState::PlanDraft;
         app.chat_history
             .push(ChatMessage::assistant("Title: My Plan\nGoal: Do stuff".into()));
-        apply_action(&mut app, Action::ApprovePlan);
+        apply_action(&mut app, Action::AcceptPlan);
         assert_eq!(
             app.pending_ipc,
-            Some(IpcAction::ApprovePlan("Title: My Plan\nGoal: Do stuff".into()))
+            Some(IpcAction::AcceptPlan("Title: My Plan\nGoal: Do stuff".into()))
         );
         assert_eq!(app.funnel_state, FunnelState::Executing);
         assert_eq!(app.current_view, crate::tui::app::View::Dashboard);
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn test_apply_approve_plan_not_in_plan_draft() {
         let mut app = App::new();
-        apply_action(&mut app, Action::ApprovePlan);
+        apply_action(&mut app, Action::AcceptPlan);
         assert!(app.pending_ipc.is_none()); // not in PlanDraft state
     }
 
@@ -1050,7 +1050,7 @@ mod tests {
         let mut app = App::new();
         app.funnel_state = FunnelState::PlanDraft;
         // No assistant messages in history
-        apply_action(&mut app, Action::ApprovePlan);
+        apply_action(&mut app, Action::AcceptPlan);
         assert!(app.pending_ipc.is_none()); // empty plan text, no IPC
     }
 
@@ -1101,10 +1101,10 @@ mod tests {
         apply_action(&mut app, Action::ChatSubmit);
         assert_eq!(app.funnel_state, FunnelState::Chat);
 
-        // ApprovePlan transitions to Executing (requires PlanDraft state + assistant message)
+        // AcceptPlan transitions to Executing (requires PlanDraft state + assistant message)
         app.funnel_state = FunnelState::PlanDraft;
         app.chat_history.push(ChatMessage::assistant("The plan".into()));
-        apply_action(&mut app, Action::ApprovePlan);
+        apply_action(&mut app, Action::AcceptPlan);
         assert_eq!(app.funnel_state, FunnelState::Executing);
     }
 
@@ -1130,7 +1130,7 @@ mod tests {
         app.chat_cursor_pos = 7;
         apply_action(&mut app, Action::ChatSubmit);
         assert_eq!(app.funnel_state, FunnelState::Executing);
-        assert_eq!(app.pending_ipc, Some(IpcAction::ApprovePlan("Title: My Plan".into())));
+        assert_eq!(app.pending_ipc, Some(IpcAction::AcceptPlan("Title: My Plan".into())));
     }
 
     #[test]

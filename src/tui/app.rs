@@ -106,7 +106,7 @@ pub enum IpcAction {
     StopAgent(String),
     NewRecord { collection: String },
     TransitionRecord { collection: String, id: String },
-    ApprovePlan(String),
+    AcceptPlan(String),
 }
 
 /// TUI views, cycled with Tab. Chat is the default.

@@ -366,8 +366,8 @@ async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
             format!("{collection}.transition"),
             serde_json::json!({ "id": id, "target_status": "Active" }),
         ),
-        IpcAction::ApprovePlan(plan_text) => (
-            "coordinator.approve_plan".to_string(),
+        IpcAction::AcceptPlan(plan_text) => (
+            "coordinator.accept_plan".to_string(),
             serde_json::json!({ "plan": plan_text }),
         ),
     };

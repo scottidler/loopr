@@ -661,7 +661,7 @@ pub async fn execute_action(
             agent_log.info(&format!("CreatePlan: {} (id: {})", title, id));
             // Auto-approve Plan in non-Interactive modes
             if bridge.config().agents.coordinator.interview_mode != crate::config::InterviewMode::Interactive {
-                let approve_resp = bridge.request("coordinator.approve_plan", serde_json::json!({ "plan_id": id }));
+                let approve_resp = bridge.request("coordinator.accept_plan", serde_json::json!({ "plan_id": id }));
                 if approve_resp.is_error() {
                     agent_log.warn(&format!(
                         "auto-approve failed for plan {}: {:?}",
@@ -1168,8 +1168,7 @@ pub async fn execute_action(
             agent_log.info(&format!("ProposePlan: created draft plan {}", plan_id));
             // Auto-approve Plan in non-Interactive modes
             if bridge.config().agents.coordinator.interview_mode != crate::config::InterviewMode::Interactive {
-                let approve_resp =
-                    bridge.request("coordinator.approve_plan", serde_json::json!({ "plan_id": plan_id }));
+                let approve_resp = bridge.request("coordinator.accept_plan", serde_json::json!({ "plan_id": plan_id }));
                 if approve_resp.is_error() {
                     agent_log.warn(&format!(
                         "auto-approve failed for plan {}: {:?}",
