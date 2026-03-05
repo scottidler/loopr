@@ -4435,6 +4435,35 @@ fn handle_agent_stop(
             }
         };
 
+        // Check if this is a Chat session (stored in chat_sessions, not agent_sessions)
+        {
+            let chat_sessions = stores
+                .chat_sessions
+                .read()
+                .map_err(|_| eyre!("chat_sessions lock poisoned"))?;
+            if chat_sessions.contains_key(session_id) {
+                // Abort the chat task handle if it exists
+                if let Ok(mut handles) = stores.lock_agent_handles()
+                    && let Some(handle) = handles.remove(session_id)
+                {
+                    handle.abort();
+                }
+                // Emit final event so TUI knows streaming stopped
+                let _ = event_tx.send(DaemonEvent::new(
+                    "agent.llm_output",
+                    serde_json::json!(crate::agents::AgentEvent::LlmOutput {
+                        session_id: session_id.to_string(),
+                        chunk: String::new(),
+                        is_final: true,
+                    }),
+                ));
+                return Ok(DaemonResponse::ok(
+                    req.id,
+                    serde_json::json!({ "session_id": session_id, "status": "Idle" }),
+                ));
+            }
+        }
+
         let mut sessions = stores.write_agent_sessions()?;
         let session = match sessions.get_mut(session_id) {
             Some(s) => s,
