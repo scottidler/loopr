@@ -1,3 +1,4 @@
+pub mod builtin;
 pub mod configured;
 pub mod context;
 pub mod detect;

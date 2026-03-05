@@ -16,17 +16,32 @@ pub struct ToolExecutor {
 }
 
 impl ToolExecutor {
-    /// Create with only configured project tools (no built-ins yet — Phase 3 adds those).
+    /// Create with all built-in tools plus configured project tools.
+    /// Configured tools override built-ins with the same name.
     pub fn standard(configured: &[ToolEntry]) -> Self {
         debug!("ToolExecutor::standard(configured_count={})", configured.len());
         let mut tools: HashMap<String, Box<dyn Tool>> = HashMap::new();
+
+        // Insert builtins first
+        for builtin in crate::tools::builtin::all_builtins() {
+            tools.insert(builtin.name().to_string(), builtin);
+        }
+
+        // Configured tools override builtins
         for entry in configured {
             if tools.contains_key(&entry.name) {
-                warn!("Configured tool '{}' overrides existing tool", entry.name);
+                warn!("Configured tool '{}' overrides built-in tool", entry.name);
             }
             tools.insert(entry.name.clone(), Box::new(ConfiguredTool::new(entry.clone())));
         }
         Self { tools }
+    }
+
+    /// Subset for TUI chat (all built-ins + configured, minus agent-only tools).
+    pub fn chat(configured: &[ToolEntry]) -> Self {
+        let mut exec = Self::standard(configured);
+        exec.tools.remove("plan"); // agent-only
+        exec
     }
 
     /// Auto-detect project type and register appropriate configured tools.
@@ -87,28 +102,36 @@ mod tests {
         ]
     }
 
+    const BUILTIN_COUNT: usize = 14;
+
     #[test]
     fn test_executor_standard() {
         let exec = ToolExecutor::standard(&test_entries());
-        assert_eq!(exec.tools.len(), 2);
+        // 14 builtins + 2 configured
+        assert_eq!(exec.tools.len(), BUILTIN_COUNT + 2);
         let tools = exec.available_tools();
         assert!(tools.contains(&"echo-test"));
         assert!(tools.contains(&"fail-test"));
+        // Builtins present
+        assert!(tools.contains(&"read"));
+        assert!(tools.contains(&"write"));
     }
 
     #[test]
     fn test_executor_empty() {
         let exec = ToolExecutor::standard(&[]);
-        assert!(exec.available_tools().is_empty());
+        // Only builtins
+        assert_eq!(exec.available_tools().len(), BUILTIN_COUNT);
     }
 
     #[test]
     fn test_executor_definitions() {
         let exec = ToolExecutor::standard(&test_entries());
         let defs = exec.definitions();
-        assert_eq!(defs.len(), 2);
+        assert_eq!(defs.len(), BUILTIN_COUNT + 2);
         assert!(defs.iter().any(|d| d.name == "echo-test"));
         assert!(defs.iter().any(|d| d.name == "fail-test"));
+        assert!(defs.iter().any(|d| d.name == "read"));
     }
 
     #[tokio::test]
@@ -175,10 +198,18 @@ mod tests {
         }];
         let exec = ToolExecutor::standard(&entries);
         let defs = exec.definitions();
-        assert_eq!(defs.len(), 1);
-        let def = &defs[0];
-        assert_eq!(def.name, "test");
+        // 14 builtins + 1 configured (test overrides builtin? no, "test" is not a builtin name)
+        assert_eq!(defs.len(), BUILTIN_COUNT + 1);
+        let def = defs.iter().find(|d| d.name == "test").expect("test tool not found");
         assert_eq!(def.description, "cargo test");
         assert_eq!(def.input_schema["type"], "object");
+    }
+
+    #[test]
+    fn test_executor_chat_excludes_plan() {
+        let exec = ToolExecutor::chat(&[]);
+        let tools = exec.available_tools();
+        assert!(!tools.contains(&"plan"), "chat executor should not have plan tool");
+        assert!(tools.contains(&"read"), "chat executor should have read tool");
     }
 }
