@@ -8,6 +8,7 @@ use crate::daemon::context::Stores;
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::role::Role;
 use crate::guidance::AgentGuidance;
+use crate::tools::ToolExecutor;
 use crate::tools::ToolRunner;
 
 // =====================================================
@@ -398,6 +399,12 @@ impl<'a> ContextBuilder<'a> {
     pub fn with_tools(mut self, tool_runner: &ToolRunner) -> Self {
         debug!("ContextBuilder::with_tools()");
         self.tools = tool_runner.available_tools().into_iter().map(String::from).collect();
+        self
+    }
+
+    pub fn with_tool_executor(mut self, executor: &ToolExecutor) -> Self {
+        debug!("ContextBuilder::with_tool_executor()");
+        self.tools = executor.available_tools().into_iter().map(String::from).collect();
         self
     }
 
