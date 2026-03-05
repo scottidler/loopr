@@ -1,3 +1,4 @@
+pub mod delegate;
 pub mod edit;
 pub mod fetch;
 pub mod find;

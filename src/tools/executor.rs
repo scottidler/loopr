@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use log::{debug, warn};
 
 use crate::config::ToolEntry;
+use crate::tools::agentic_loop::AgenticLlm;
+use crate::tools::builtin::delegate::DelegateTool;
 use crate::tools::configured::ConfiguredTool;
 use crate::tools::context::ToolContext;
 use crate::tools::detect::detect_project_tools;
@@ -41,6 +44,17 @@ impl ToolExecutor {
     pub fn chat(configured: &[ToolEntry]) -> Self {
         let mut exec = Self::standard(configured);
         exec.tools.remove("plan"); // agent-only
+        exec
+    }
+
+    /// Chat executor with delegate tool for subagent delegation.
+    /// The child executor (used by delegate) does NOT include the delegate tool itself,
+    /// preventing unbounded recursion.
+    pub fn chat_with_delegation(configured: &[ToolEntry], llm: Arc<dyn AgenticLlm>) -> Self {
+        let mut exec = Self::chat(configured);
+        let child_executor = Arc::new(Self::chat(configured));
+        let delegate = DelegateTool::new(llm, child_executor);
+        exec.tools.insert("delegate".to_string(), Box::new(delegate));
         exec
     }
 

@@ -4834,7 +4834,10 @@ fn handle_chat_submit(
         };
 
         let system_prompt = crate::domain::chat::system_prompt_for_chat(funnel_state, is_draft_request);
-        let executor = stores.tool_executor.clone();
+        let executor = std::sync::Arc::new(crate::tools::executor::ToolExecutor::chat_with_delegation(
+            &stores.config.agents.tools,
+            llm.clone(),
+        ));
         let cwd = stores.config.project.repo_path.clone();
         let ctx = crate::tools::context::ToolContext::new(cwd, session_id.clone());
         let stores_clone = stores.clone();
