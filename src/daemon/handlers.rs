@@ -2,7 +2,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use eyre::eyre;
-use log::debug;
+use log::{debug, info};
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -48,6 +48,7 @@ fn max_pool_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
         AgentType::Coordinator => config.agents.coordinator.role.max_pool,
         AgentType::Researcher => config.agents.researcher.max_pool,
         AgentType::Integrator => 1,
+        AgentType::Chat => 1, // Single chat session for now
     }
 }
 
@@ -209,6 +210,9 @@ pub fn dispatch(
         "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
         "coordinator.accept_plan" => handle_coordinator_accept_plan(stores, event_tx, req),
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
+        "chat.submit" => handle_chat_submit(stores, event_tx, req),
+        "chat.attach" => handle_chat_attach(stores, req),
+        "chat.history" => handle_chat_history(stores, req),
         "agent.start" => handle_agent_start(stores, event_tx, worktree_mgr, req),
         "agent.stop" => handle_agent_stop(stores, event_tx, req),
         "agent.pause" => handle_agent_pause(stores, event_tx, req),
@@ -4276,7 +4280,7 @@ fn handle_agent_start(
                     ));
                 }
             }
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => {
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Chat => {
                 // These agents operate without worktrees; no target ID required at start time
             }
         }
@@ -4363,6 +4367,7 @@ fn handle_agent_start(
             AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
             AgentType::Researcher => stores.config.agents.researcher.model.clone(),
             AgentType::Integrator => "deterministic".to_string(),
+            AgentType::Chat => stores.config.agents.implementer.model.clone(),
         };
         let mut session = AgentSession::new(agent_type, model);
         session.work_id = work_id;
@@ -4715,6 +4720,128 @@ fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespon
             None => Vec::new(),
         };
         Ok(DaemonResponse::ok(req.id, serde_json::to_value(&output)?))
+    })
+}
+
+// --- Chat handlers ---
+
+/// Handle chat.submit — send a user message and start/resume the Chat agentic loop.
+/// Phase 2 stub: validates params, returns acknowledgement.
+/// Phase 3 will add actual daemon-side execution with checkpointing.
+fn handle_chat_submit(
+    stores: &Arc<Stores>,
+    _event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    try_handler!(req.id, {
+        debug!("handle_chat_submit()");
+        let session_id = req
+            .params
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default-chat")
+            .to_string();
+        let message = match req.params.get("message").and_then(|v| v.as_str()) {
+            Some(m) => m.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("message is required"),
+                ));
+            }
+        };
+
+        // Lazy-create ChatHistory if it doesn't exist
+        {
+            let mut sessions = stores
+                .chat_sessions
+                .write()
+                .map_err(|_| eyre::eyre!("chat_sessions lock poisoned"))?;
+            sessions
+                .entry(session_id.clone())
+                .or_insert_with(|| crate::domain::chat::ChatHistory::new(session_id.clone()));
+        }
+
+        // Stub: acknowledge the submission (Phase 3 will spawn the chat task)
+        info!("chat.submit: session={}, message_len={}", session_id, message.len());
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({
+                "session_id": session_id,
+                "status": "Idle"
+            }),
+        ))
+    })
+}
+
+/// Handle chat.attach — subscribe to a running Chat session's event stream + rehydrate history.
+/// Returns full message array + current status.
+fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_handler!(req.id, {
+        debug!("handle_chat_attach()");
+        let session_id = req
+            .params
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default-chat")
+            .to_string();
+
+        // Lazy-create if needed
+        let mut sessions = stores
+            .chat_sessions
+            .write()
+            .map_err(|_| eyre::eyre!("chat_sessions lock poisoned"))?;
+        let history = sessions
+            .entry(session_id.clone())
+            .or_insert_with(|| crate::domain::chat::ChatHistory::new(session_id.clone()));
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({
+                "session_id": history.session_id,
+                "status": "Idle",
+                "funnel_state": history.funnel_state,
+                "messages": history.messages,
+                "streaming": false
+            }),
+        ))
+    })
+}
+
+/// Handle chat.history — read-only history fetch (no event subscription).
+fn handle_chat_history(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_handler!(req.id, {
+        debug!("handle_chat_history()");
+        let session_id = req
+            .params
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default-chat")
+            .to_string();
+
+        let sessions = stores
+            .chat_sessions
+            .read()
+            .map_err(|_| eyre::eyre!("chat_sessions lock poisoned"))?;
+
+        match sessions.get(&session_id) {
+            Some(history) => Ok(DaemonResponse::ok(
+                req.id,
+                serde_json::json!({
+                    "session_id": history.session_id,
+                    "funnel_state": history.funnel_state,
+                    "messages": history.messages,
+                }),
+            )),
+            None => Ok(DaemonResponse::ok(
+                req.id,
+                serde_json::json!({
+                    "session_id": session_id,
+                    "funnel_state": "chat",
+                    "messages": [],
+                }),
+            )),
+        }
     })
 }
 
@@ -12113,6 +12240,7 @@ mod tests {
                 AgentType::Reviewer => config.agents.reviewer.model.clone(),
                 AgentType::Researcher => config.agents.researcher.model.clone(),
                 AgentType::Integrator => "deterministic".to_string(),
+                AgentType::Chat => config.agents.implementer.model.clone(),
             };
             assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
         }

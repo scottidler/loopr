@@ -183,6 +183,7 @@ pub enum AgentType {
     Coordinator,
     Researcher,
     Integrator,
+    Chat,
 }
 
 impl AgentType {
@@ -194,6 +195,7 @@ impl AgentType {
             AgentType::Coordinator => crate::domain::role::Role::Coordinator,
             AgentType::Researcher => crate::domain::role::Role::Researcher,
             AgentType::Integrator => crate::domain::role::Role::Integrator,
+            AgentType::Chat => crate::domain::role::Role::Coordinator, // Chat uses Coordinator role as default
         }
     }
 
@@ -201,7 +203,11 @@ impl AgentType {
     pub fn is_thinking_plane(&self) -> bool {
         matches!(
             self,
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Reviewer
+            AgentType::Coordinator
+                | AgentType::Researcher
+                | AgentType::Integrator
+                | AgentType::Reviewer
+                | AgentType::Chat
         )
     }
 }
@@ -214,6 +220,7 @@ impl fmt::Display for AgentType {
             AgentType::Coordinator => write!(f, "coordinator"),
             AgentType::Researcher => write!(f, "researcher"),
             AgentType::Integrator => write!(f, "integrator"),
+            AgentType::Chat => write!(f, "chat"),
         }
     }
 }
@@ -226,6 +233,7 @@ pub enum AgentStatus {
     Running,
     WaitingForLlm,
     Paused,
+    Idle,
     Completed,
     Failed,
     Cancelled,
@@ -251,6 +259,7 @@ impl AgentStatus {
             // Running transitions
             | (AgentStatus::Running, AgentStatus::WaitingForLlm)
             | (AgentStatus::Running, AgentStatus::Paused)
+            | (AgentStatus::Running, AgentStatus::Idle)
             | (AgentStatus::Running, AgentStatus::Completed)
             | (AgentStatus::Running, AgentStatus::Failed)
             | (AgentStatus::Running, AgentStatus::Cancelled)
@@ -261,6 +270,9 @@ impl AgentStatus {
             // Paused transitions
             | (AgentStatus::Paused, AgentStatus::Running)
             | (AgentStatus::Paused, AgentStatus::Cancelled)
+            // Idle transitions (Chat sessions: loop done, awaiting next input)
+            | (AgentStatus::Idle, AgentStatus::Running)
+            | (AgentStatus::Idle, AgentStatus::Cancelled)
         )
     }
 }
@@ -274,6 +286,7 @@ impl fmt::Display for AgentStatus {
             AgentStatus::Paused => write!(f, "paused"),
             AgentStatus::Completed => write!(f, "completed"),
             AgentStatus::Failed => write!(f, "failed"),
+            AgentStatus::Idle => write!(f, "idle"),
             AgentStatus::Cancelled => write!(f, "cancelled"),
         }
     }

@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use crate::agents::{AgentEvent, AgentSession, AgentStatus};
 use crate::config::Config;
 use crate::domain::bundle::{Bundle, BundleStatus};
+use crate::domain::chat::ChatHistory;
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::CoordinatorState;
 use crate::domain::coverage::CoverageReport;
@@ -76,6 +77,8 @@ pub struct Stores {
     pub shutting_down: AtomicBool,
     /// Session directory for this daemon run. Used by AgentLogger for scoped log output.
     pub session_dir: Option<std::path::PathBuf>,
+    /// Chat session conversation histories, keyed by session ID (e.g., "default-chat").
+    pub chat_sessions: StdRwLock<HashMap<String, ChatHistory>>,
 }
 
 macro_rules! store_accessors {
@@ -164,6 +167,7 @@ impl Stores {
             shutting_down: AtomicBool::new(false),
             guidance: AgentGuidance::schema_only(),
             session_dir: None,
+            chat_sessions: StdRwLock::new(HashMap::new()),
         }
     }
 }

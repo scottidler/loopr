@@ -34,18 +34,8 @@ pub enum ChatMode {
     Plan,
 }
 
-/// Funnel state for border color and UX feedback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FunnelState {
-    /// Free conversation (TUI-side LLM).
-    Chat,
-    /// Coordinator asking clarifying questions.
-    Interview,
-    /// Draft plan proposed, awaiting user review.
-    PlanDraft,
-    /// Plan accepted, automation running.
-    Executing,
-}
+/// Re-export FunnelState from domain::chat (shared between TUI and daemon).
+pub use crate::domain::chat::FunnelState;
 
 /// Role of a chat message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

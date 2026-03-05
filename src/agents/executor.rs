@@ -154,7 +154,7 @@ pub async fn run_agent_task(
             AgentType::Implementer => session.work_id.clone(),
             AgentType::Reviewer => session.bundle_id.clone(),
             // Already handled by is_thinking_plane() above
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator => None,
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Chat => None,
         }
     };
 
@@ -427,6 +427,11 @@ async fn run_agent_loop(
             let mut agent = integrator::IntegratorAgent::new(ctx, config);
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
+        }
+        AgentType::Chat => {
+            // Chat sessions are not started via run_agent_task — they use chat.submit IPC.
+            // This arm should never be reached.
+            return Ok(());
         }
     };
 

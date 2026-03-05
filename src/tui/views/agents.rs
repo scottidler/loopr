@@ -13,6 +13,7 @@ fn status_color(status: AgentStatus) -> Color {
         AgentStatus::Starting => Color::Yellow,
         AgentStatus::Running | AgentStatus::WaitingForLlm => Color::Green,
         AgentStatus::Paused => Color::Cyan,
+        AgentStatus::Idle => Color::Gray,
         AgentStatus::Completed => Color::Blue,
         AgentStatus::Failed => Color::Red,
         AgentStatus::Cancelled => Color::DarkGray,

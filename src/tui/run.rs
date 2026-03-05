@@ -21,6 +21,7 @@ use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::{AgentEvent, AgentSession};
 use crate::config::AgentRoleConfig;
 use crate::domain::bundle::Bundle;
+use crate::domain::chat::{self as chat, system_prompt_for_chat};
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
@@ -44,26 +45,6 @@ use super::views;
 
 /// Reconnect interval when disconnected from daemon.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
-
-/// System prompt for free chat mode.
-const CHAT_SYSTEM_PROMPT: &str = "You are an AI assistant embedded in the Loopr development orchestrator. \
-You help the user explore ideas, discuss architecture, and plan changes to their codebase. \
-When the user is ready to formalize a plan, they will type /plan.";
-
-/// Prompt augmentation for Interview state (plan-focused conversation).
-const INTERVIEW_PROMPT: &str = "You are helping the user coalesce around a concrete, actionable plan. \
-Your job is to ask clarifying questions until the goal, scope, and acceptance criteria are clear. \
-Do not propose a plan until the user signals they are ready by typing /draft. \
-Focus on understanding the problem, constraints, and desired outcome.";
-
-/// Prompt augmentation for /draft — generate a structured plan.
-const DRAFT_PROMPT: &str = "The user is ready for a plan draft. Based on the conversation so far, \
-produce a structured plan with: Title, Goal, Acceptance Criteria (numbered list), and Phases \
-(if applicable). Output plain text, not markdown. Be concise.";
-
-/// Prompt augmentation for PlanDraft refinement (user edits).
-const PLAN_REFINE_PROMPT: &str = "The user wants to refine the plan draft. Apply their feedback and \
-output the revised plan in the same format. Only change what they asked for.";
 
 /// Run the TUI, connecting to the daemon at the given socket path.
 pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
@@ -135,20 +116,7 @@ async fn try_connect(socket_path: &Path) -> Option<IpcClient> {
 
 /// Select the system prompt based on funnel state and whether a draft was just requested.
 fn system_prompt_for_state(funnel_state: FunnelState, is_draft_request: bool) -> String {
-    match funnel_state {
-        FunnelState::Chat => CHAT_SYSTEM_PROMPT.to_string(),
-        FunnelState::Interview => {
-            format!("{CHAT_SYSTEM_PROMPT}\n\n{INTERVIEW_PROMPT}")
-        }
-        FunnelState::PlanDraft => {
-            if is_draft_request {
-                format!("{CHAT_SYSTEM_PROMPT}\n\n{DRAFT_PROMPT}")
-            } else {
-                format!("{CHAT_SYSTEM_PROMPT}\n\n{PLAN_REFINE_PROMPT}")
-            }
-        }
-        FunnelState::Executing => CHAT_SYSTEM_PROMPT.to_string(),
-    }
+    system_prompt_for_chat(funnel_state, is_draft_request)
 }
 
 /// Extract LLM chunk text from a DaemonEvent, if it's an LlmOutput event for the TUI chat session.
@@ -265,7 +233,7 @@ async fn event_loop(
                 // Slash commands like /draft don't add a user message to history,
                 // so the last message may be an assistant response.
                 if app.canonical_messages.last().map(|m| m.role.as_str()) != Some("user") {
-                    let synthetic = if is_draft_request { DRAFT_PROMPT } else { submit_text.as_str() };
+                    let synthetic = if is_draft_request { chat::DRAFT_PROMPT } else { submit_text.as_str() };
                     app.canonical_messages.push(Message {
                         role: "user".to_string(),
                         content: vec![ContentBlock::Text {
@@ -2165,7 +2133,7 @@ mod tests {
         // Apply the same logic as the event loop
         let is_draft_request = true;
         if canonical.last().map(|m| m.role.as_str()) != Some("user") {
-            let synthetic = if is_draft_request { DRAFT_PROMPT } else { "fallback" };
+            let synthetic = if is_draft_request { chat::DRAFT_PROMPT } else { "fallback" };
             canonical.push(crate::tools::types::Message {
                 role: "user".to_string(),
                 content: vec![crate::tools::types::ContentBlock::Text {

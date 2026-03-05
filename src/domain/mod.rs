@@ -1,4 +1,5 @@
 pub mod bundle;
+pub mod chat;
 pub mod coordinator_goal;
 pub mod coordinator_state;
 pub mod coverage;
