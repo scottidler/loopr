@@ -3,11 +3,15 @@ use std::time::Instant;
 use log::debug;
 use tokio::sync::broadcast;
 
+use crate::agents::context::estimate_tokens;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::context::ToolContext;
 use crate::tools::executor::ToolExecutor;
 use crate::tools::traits::ToolResult;
 use crate::tools::types::{ContentBlock, Message, ToolCall, ToolDefinition};
+
+/// Maximum characters per tool result before truncation (~8K tokens).
+const MAX_TOOL_RESULT_CHARS: usize = 32_768;
 
 /// Conversation state for the agentic tool loop.
 pub struct AgenticConversation {
@@ -24,6 +28,43 @@ pub struct AgenticResult {
     pub messages: Vec<Message>,
     /// Total number of tool calls made.
     pub tool_calls_count: usize,
+}
+
+/// Cap a tool result at MAX_TOOL_RESULT_CHARS, truncating at the last newline.
+fn cap_tool_result(content: String) -> String {
+    if content.len() <= MAX_TOOL_RESULT_CHARS {
+        return content;
+    }
+    let truncated = &content[..MAX_TOOL_RESULT_CHARS];
+    if let Some(pos) = truncated.rfind('\n') {
+        format!(
+            "{}\n... [output truncated at ~{} chars]",
+            &truncated[..pos],
+            MAX_TOOL_RESULT_CHARS
+        )
+    } else {
+        format!("{}\n... [output truncated]", truncated)
+    }
+}
+
+/// Estimate the total token count of a message array.
+pub fn estimate_message_tokens(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .map(|m| {
+            m.content
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::Text { text } => estimate_tokens(text),
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        estimate_tokens(name) + estimate_tokens(&input.to_string())
+                    }
+                    ContentBlock::ToolResult { content, .. } => estimate_tokens(content),
+                })
+                .sum::<usize>()
+                + 10 // overhead per message (role, structural JSON)
+        })
+        .sum()
 }
 
 /// Callback trait for the LLM completion step in the agentic loop.
@@ -165,7 +206,7 @@ pub async fn run_tool_loop(
 
             tool_results.push(ContentBlock::ToolResult {
                 tool_use_id: call.id.clone(),
-                content: result.content,
+                content: cap_tool_result(result.content),
                 is_error: result.is_error,
             });
         }
@@ -533,5 +574,61 @@ mod tests {
             },
         ];
         assert_eq!(extract_text(&blocks), "hello world");
+    }
+
+    #[test]
+    fn test_cap_tool_result_under_limit() {
+        let content = "short content".to_string();
+        let capped = cap_tool_result(content.clone());
+        assert_eq!(capped, content);
+    }
+
+    #[test]
+    fn test_cap_tool_result_over_limit() {
+        let content = "x\n".repeat(20_000); // ~40K chars
+        let capped = cap_tool_result(content);
+        assert!(capped.len() < MAX_TOOL_RESULT_CHARS + 100);
+        assert!(capped.contains("output truncated"));
+    }
+
+    #[test]
+    fn test_cap_tool_result_no_newline() {
+        let content = "x".repeat(40_000);
+        let capped = cap_tool_result(content);
+        assert!(capped.contains("output truncated"));
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_empty() {
+        assert_eq!(estimate_message_tokens(&[]), 0);
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_text() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "hello world".to_string(),
+            }],
+        }];
+        let tokens = estimate_message_tokens(&messages);
+        // ~3 tokens + 10 overhead = ~13
+        assert!(tokens > 0);
+        assert!(tokens < 50);
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_tool_result() {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".to_string(),
+                content: "a".repeat(4000),
+                is_error: false,
+            }],
+        }];
+        let tokens = estimate_message_tokens(&messages);
+        // ~1000 tokens + 10 overhead
+        assert!(tokens > 500);
     }
 }
