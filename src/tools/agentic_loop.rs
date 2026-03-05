@@ -39,27 +39,26 @@ pub trait AgenticLlm: Send + Sync {
 /// 2. If tool_use blocks returned, execute them
 /// 3. Feed tool results back as user message
 /// 4. Repeat until end_turn or max iterations
+///
+/// `messages` is the full conversation history in Anthropic API format.
+/// For a fresh conversation, pass a single user message.
 pub async fn run_tool_loop(
     llm: &dyn AgenticLlm,
     executor: &ToolExecutor,
     ctx: &ToolContext,
     system_prompt: &str,
-    initial_message: &str,
+    messages: Vec<Message>,
     max_iterations: u32,
 ) -> eyre::Result<AgenticResult> {
     debug!(
-        "run_tool_loop(max_iterations={}, tools={})",
+        "run_tool_loop(max_iterations={}, messages={}, tools={})",
         max_iterations,
+        messages.len(),
         executor.available_tools().len()
     );
 
     let tool_defs = executor.definitions();
-    let mut messages = vec![Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: initial_message.to_string(),
-        }],
-    }];
+    let mut messages = messages;
 
     let mut total_tool_calls = 0;
 
@@ -132,6 +131,14 @@ pub async fn run_tool_loop(
     })
 }
 
+/// Create a `Vec<Message>` with a single user message (convenience for simple calls).
+pub fn user_message(text: &str) -> Vec<Message> {
+    vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text { text: text.to_string() }],
+    }]
+}
+
 /// Extract text content from content blocks.
 fn extract_text(blocks: &[ContentBlock]) -> String {
     blocks
@@ -199,7 +206,9 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(PathBuf::from("/tmp"), "test".into());
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", "hi", 10).await.unwrap();
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("hi"), 10)
+            .await
+            .unwrap();
         assert_eq!(result.text, "Hello!");
         assert_eq!(result.tool_calls_count, 0);
         assert_eq!(result.messages.len(), 2); // user + assistant
@@ -232,7 +241,7 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(dir.clone(), "test".into()).with_deny_patterns(vec![]);
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", "run echo", 10)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("run echo"), 10)
             .await
             .unwrap();
         assert_eq!(result.text, "Done executing tool.");
@@ -263,8 +272,63 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(std::env::temp_dir(), "test".into());
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", "loop", 3).await.unwrap();
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("loop"), 3)
+            .await
+            .unwrap();
         assert_eq!(result.tool_calls_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_run_tool_loop_with_prior_messages() {
+        // Simulate a multi-turn conversation: prior user + assistant, then new user message
+        let llm = MockAgenticLlm::new(vec![(
+            vec![ContentBlock::Text {
+                text: "I remember the prior context.".to_string(),
+            }],
+            Some(crate::tools::types::StopReason::EndTurn),
+        )]);
+        let executor = ToolExecutor::standard(&[]);
+        let ctx = ToolContext::new(PathBuf::from("/tmp"), "test".into());
+
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "hello".to_string(),
+                }],
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "hi there".to_string(),
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "do you remember?".to_string(),
+                }],
+            },
+        ];
+
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", messages, 10)
+            .await
+            .unwrap();
+        assert_eq!(result.text, "I remember the prior context.");
+        // 3 prior messages + 1 assistant response
+        assert_eq!(result.messages.len(), 4);
+        assert_eq!(result.tool_calls_count, 0);
+    }
+
+    #[test]
+    fn test_user_message_helper() {
+        let msgs = user_message("hello");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "user");
+        match &msgs[0].content[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "hello"),
+            _ => panic!("expected Text block"),
+        }
     }
 
     #[test]
