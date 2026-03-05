@@ -179,8 +179,16 @@ fn run_summary(session: Option<&str>) -> eyre::Result<()> {
     if summary_path.exists() {
         println!("{}", fs::read_to_string(&summary_path)?);
     } else {
-        println!("No summary.md found for this session.");
-        println!("(Summary is generated on daemon shutdown.)");
+        // Generate on-the-fly from log file
+        let session_name = session_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        println!("(No summary.md found — generating from log...)");
+        crate::session_summary::generate_summary(&session_dir, &session_name, "unknown");
+        if summary_path.exists() {
+            println!("{}", fs::read_to_string(&summary_path)?);
+        }
     }
     Ok(())
 }

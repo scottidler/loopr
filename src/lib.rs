@@ -11,6 +11,7 @@ pub mod guidance;
 pub mod id;
 pub mod ipc;
 pub mod prompts;
+pub mod session_summary;
 pub mod tools;
 pub mod tui;
 pub mod validator;

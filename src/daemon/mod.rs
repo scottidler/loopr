@@ -245,6 +245,25 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         graceful_shutdown(&c.stores, &event_tx).await;
     }
 
+    // Generate session summary before cleanup
+    {
+        let c = ctx.read().await;
+        let start_time = format!(
+            "{}-{}-{}T{}:{}:{}",
+            &c.session_id[..4],
+            &c.session_id[4..6],
+            &c.session_id[6..8],
+            &c.session_id[9..11],
+            &c.session_id[11..13],
+            &c.session_id[13..15],
+        );
+        crate::session_summary::generate_summary(&c.session_dir, &c.session_id, &start_time);
+        eprintln!(
+            "loopr session {} ended. Run `loopr diagnose dump` for diagnostics.",
+            c.session_id
+        );
+    }
+
     // Cleanup on shutdown
     ipc_server.cleanup();
     {
