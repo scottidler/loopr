@@ -6,26 +6,30 @@ pub mod work_queue;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eyre::{Context, eyre};
+use eyre::eyre;
 use log::{debug, error, info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
 use crate::agents::AgentStatus;
+use crate::config::Config;
 use crate::ipc::protocol::DaemonEvent;
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::{DaemonContext, Stores};
 
-/// Check if the daemon is running; if not, spawn it in the background and wait
-/// for the socket to appear. This lets `loopr` (TUI) and CLI commands work
-/// without requiring a separate `loopr daemon` step.
-pub fn ensure_daemon(pid_path: &std::path::Path, socket_path: &std::path::Path) -> eyre::Result<()> {
-    debug!(
-        "ensure_daemon(pid_path={}, socket_path={})",
-        pid_path.display(),
-        socket_path.display()
-    );
+/// Check if the daemon is running; if not, double-fork to spawn it in the
+/// background and wait for the socket to appear. Uses proper Unix
+/// daemonization (fork → setsid → fork) so the daemon is fully detached
+/// from the spawning terminal session.
+///
+/// IMPORTANT: This function must be called BEFORE any Tokio runtime is
+/// created. The double-fork requires a single-threaded process to be safe.
+/// The grandchild (daemon) creates its own Tokio runtime post-fork.
+pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<()> {
+    let pid_path = &config.daemon.pid_path;
+    let socket_path = &config.daemon.socket_path;
+
     // Check PID file — is a daemon already alive?
     if let Ok(contents) = std::fs::read_to_string(pid_path)
         && let Ok(pid) = contents.trim().parse::<u32>()
@@ -36,7 +40,7 @@ pub fn ensure_daemon(pid_path: &std::path::Path, socket_path: &std::path::Path) 
             return Ok(());
         }
         // PID alive but socket missing — daemon may still be starting up
-        info!("Daemon process alive (pid={pid}) but socket not ready, waiting...");
+        eprintln!("Daemon process alive (pid={pid}) but socket not ready, waiting...");
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(100));
             if socket_path.exists() {
@@ -49,29 +53,86 @@ pub fn ensure_daemon(pid_path: &std::path::Path, socket_path: &std::path::Path) 
         ));
     }
 
-    // No live daemon — spawn one
+    // No live daemon — double-fork daemonize
     eprintln!("Starting daemon...");
-    let exe = std::env::current_exe().context("failed to determine loopr executable path")?;
-    std::process::Command::new(exe)
-        .arg("daemon")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .context("failed to spawn daemon process")?;
 
-    // Wait for socket to appear (up to 3 seconds)
-    for _ in 0..30 {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if socket_path.exists() {
-            return Ok(());
+    // SAFETY: No Tokio runtime exists at this point (main is sync).
+    // Fork is safe in a single-threaded process before any runtime setup.
+    unsafe {
+        // First fork
+        let pid = libc::fork();
+        if pid < 0 {
+            return Err(eyre!("first fork failed: {}", std::io::Error::last_os_error()));
+        }
+        if pid > 0 {
+            // Parent: reap first child (exits immediately), then wait for socket
+            let mut status: libc::c_int = 0;
+            libc::waitpid(pid, &mut status, 0);
+
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if socket_path.exists() {
+                    return Ok(());
+                }
+            }
+            return Err(eyre!(
+                "daemon started but socket never appeared at {}",
+                socket_path.display()
+            ));
+        }
+
+        // First child: become session leader (detach from terminal)
+        if libc::setsid() < 0 {
+            libc::_exit(1);
+        }
+
+        // Second fork: grandchild cannot acquire a controlling terminal
+        let pid2 = libc::fork();
+        if pid2 < 0 {
+            libc::_exit(1);
+        }
+        if pid2 > 0 {
+            // First child: exit immediately
+            libc::_exit(0);
+        }
+
+        // Grandchild: redirect stdio to /dev/null
+        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        if devnull >= 0 {
+            libc::dup2(devnull, libc::STDIN_FILENO);
+            libc::dup2(devnull, libc::STDOUT_FILENO);
+            libc::dup2(devnull, libc::STDERR_FILENO);
+            if devnull > 2 {
+                libc::close(devnull);
+            }
         }
     }
 
-    Err(eyre::eyre!(
-        "daemon was spawned but socket never appeared at {}",
-        socket_path.display()
-    ))
+    // === Grandchild (daemon) only from here ===
+    let session_id = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
+    let log_path = crate::setup_logging(config, log_level, Some(&session_id)).expect("daemon: failed to setup logging");
+    let session_dir = log_path.parent().map(std::path::PathBuf::from).unwrap_or_default();
+
+    info!(
+        "Daemon started via double-fork (session: {}, pid: {})",
+        session_id,
+        std::process::id()
+    );
+
+    let rt = tokio::runtime::Runtime::new().expect("daemon: failed to create Tokio runtime");
+    let result = rt.block_on(async {
+        let (ctx, _) = DaemonContext::shared(config.clone(), session_id, session_dir)?;
+        daemon_main(ctx).await
+    });
+
+    // Grandchild exits here — NEVER returns to caller
+    std::process::exit(match result {
+        Ok(()) => 0,
+        Err(e) => {
+            error!("daemon exited with error: {}", e);
+            1
+        }
+    });
 }
 
 /// Ensure only one daemon runs at a time. If a stale PID file exists from a
@@ -739,5 +800,49 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(&pid_path);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_daemon_already_running() {
+        // When a daemon is already running (PID alive + socket exists),
+        // ensure_daemon should return Ok immediately without forking.
+        let (_dir, config) = test_config();
+        let socket_path = config.daemon.socket_path.clone();
+        let (ctx, _tx) = context::DaemonContext::shared(
+            config.clone(),
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        // Start a real daemon
+        let daemon_handle = tokio::spawn(daemon_main(ctx));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // ensure_daemon should detect the running daemon and return Ok
+        let result = ensure_daemon(&config, None);
+        assert!(result.is_ok(), "ensure_daemon should detect running daemon");
+
+        daemon_handle.abort();
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[test]
+    fn test_ensure_daemon_stale_pid_no_socket() {
+        // When PID file points to a dead process and no socket exists,
+        // ensure_daemon would attempt to double-fork. We can't easily test
+        // the fork path in unit tests, so instead test the "no PID file" path
+        // which also triggers the fork. Since we can't fork in tests, we just
+        // verify the PID-check logic by testing with a live PID + missing socket.
+        let (_dir, config) = test_config();
+
+        // Write our own PID (alive) but no socket → should timeout waiting for socket
+        std::fs::create_dir_all(config.daemon.pid_path.parent().unwrap()).unwrap();
+        std::fs::write(&config.daemon.pid_path, std::process::id().to_string()).unwrap();
+
+        let result = ensure_daemon(&config, None);
+        assert!(result.is_err(), "should error when PID alive but no socket");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("socket never appeared"));
     }
 }

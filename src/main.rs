@@ -10,8 +10,7 @@ use loopr::daemon;
 use loopr::domain;
 use loopr::tui;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let cli_args = Cli::parse();
     let config = Config::load(cli_args.config.as_ref()).context("Failed to load configuration")?;
@@ -24,31 +23,45 @@ async fn main() -> Result<()> {
             cli::diagnose::run(cmd)
         }
         Some(Command::Daemon) => {
+            // Explicit foreground daemon — create runtime directly
             let session_id = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
             let log_path = loopr::setup_logging(&config, cli_args.log_level.as_deref(), Some(&session_id))
                 .context("Failed to setup logging")?;
             let session_dir = log_path.parent().map(PathBuf::from).unwrap_or_default();
             info!("Starting daemon (session: {})", session_id);
-            let (ctx, _event_tx) = daemon::context::DaemonContext::shared(config, session_id, session_dir)?;
-            daemon::daemon_main(ctx).await.context("daemon exited with error")
+            tokio::runtime::Runtime::new()
+                .context("Failed to create Tokio runtime")?
+                .block_on(async {
+                    let (ctx, _event_tx) = daemon::context::DaemonContext::shared(config, session_id, session_dir)?;
+                    daemon::daemon_main(ctx).await.context("daemon exited with error")
+                })
         }
         Some(Command::Tui) | None => {
+            // ensure_daemon may double-fork — MUST happen before Tokio runtime
+            daemon::ensure_daemon(&config, cli_args.log_level.as_deref())?;
+            // Only the parent reaches here (grandchild diverges in ensure_daemon)
             loopr::setup_logging(&config, cli_args.log_level.as_deref(), None).context("Failed to setup logging")?;
-            daemon::ensure_daemon(&config.daemon.pid_path, &config.daemon.socket_path)?;
             info!(
                 "Starting TUI, connecting to daemon at {}",
                 config.daemon.socket_path.display()
             );
-            tui::run::run_tui(&config.daemon.socket_path)
-                .await
-                .context("TUI failed")?;
-            Ok(())
+            tokio::runtime::Runtime::new()
+                .context("Failed to create Tokio runtime")?
+                .block_on(async {
+                    tui::run::run_tui(&config.daemon.socket_path)
+                        .await
+                        .context("TUI failed")?;
+                    Ok(())
+                })
         }
         Some(ref cmd) => {
+            // ensure_daemon may double-fork — MUST happen before Tokio runtime
+            daemon::ensure_daemon(&config, cli_args.log_level.as_deref())?;
             loopr::setup_logging(&config, cli_args.log_level.as_deref(), None).context("Failed to setup logging")?;
-            daemon::ensure_daemon(&config.daemon.pid_path, &config.daemon.socket_path)?;
             info!("CLI command: {:?}", cmd);
-            cli::dispatch::run(cmd, &config.daemon.socket_path, role).await
+            tokio::runtime::Runtime::new()
+                .context("Failed to create Tokio runtime")?
+                .block_on(async { cli::dispatch::run(cmd, &config.daemon.socket_path, role).await })
         }
     }
 }
