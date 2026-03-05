@@ -1,6 +1,5 @@
 use std::io;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind, MouseEventKind};
@@ -14,14 +13,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
-use tokio::sync::broadcast;
 use tokio::time::Interval;
 
-use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::{AgentEvent, AgentSession};
-use crate::config::AgentRoleConfig;
 use crate::domain::bundle::Bundle;
-use crate::domain::chat::{self as chat, system_prompt_for_chat};
+use crate::domain::chat::{self as chat};
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
@@ -32,10 +28,6 @@ use crate::domain::tick::Tick;
 use crate::domain::work::Work;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{DaemonEvent, IpcMessage};
-use crate::tools::agentic_loop::{AgenticResult, run_tool_loop};
-use crate::tools::context::ToolContext;
-use crate::tools::executor::ToolExecutor;
-use crate::tools::types::{ContentBlock, Message};
 
 use super::app::{
     App, AppState, ChatMessage, ChatMode, ChatRole, ConnectionStatus, FunnelState, InputMode, IpcAction, View, colors,
@@ -57,22 +49,6 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
         .await
         .map_err(|e| eyre::eyre!("Handshake failed: {e}"))?;
 
-    // Create TUI-side LLM client for free chat
-    let chat_config = AgentRoleConfig::default_implementer(); // reuse model config
-    let (llm_event_tx, _) = broadcast::channel::<DaemonEvent>(256);
-    let llm_client = match AgentLlmClient::new(chat_config, "tui-chat".to_string(), llm_event_tx.clone()) {
-        Ok(c) => Some(Arc::new(c)),
-        Err(e) => {
-            warn!("Chat LLM client unavailable (set ANTHROPIC_API_KEY): {e}");
-            None
-        }
-    };
-
-    // Create tool executor and context for agentic chat
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let tool_executor = Arc::new(ToolExecutor::chat(&[]));
-    let tool_ctx = Arc::new(ToolContext::new(cwd, "tui-chat".into()).with_sandbox(false));
-
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -85,17 +61,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     app.connection = ConnectionStatus::Connected;
 
     // Run event loop; capture result so we always restore the terminal
-    let result = event_loop(
-        &mut terminal,
-        &mut app,
-        Some(client),
-        socket_path,
-        llm_client,
-        llm_event_tx,
-        tool_executor,
-        tool_ctx,
-    )
-    .await;
+    let result = event_loop(&mut terminal, &mut app, Some(client), socket_path).await;
 
     // Restore terminal — disable mouse capture first to stop mouse event
     // tracking before leaving the alternate screen, preventing raw escape
@@ -114,12 +80,10 @@ async fn try_connect(socket_path: &Path) -> Option<IpcClient> {
     Some(client)
 }
 
-/// Select the system prompt based on funnel state and whether a draft was just requested.
-fn system_prompt_for_state(funnel_state: FunnelState, is_draft_request: bool) -> String {
-    system_prompt_for_chat(funnel_state, is_draft_request)
-}
+/// Chat session ID used for daemon-owned chat.
+const CHAT_SESSION_ID: &str = "default-chat";
 
-/// Extract LLM chunk text from a DaemonEvent, if it's an LlmOutput event for the TUI chat session.
+/// Extract LLM chunk text from a DaemonEvent, if it's an LlmOutput event for the Chat session.
 fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
     if event.event != "agent.llm_output" {
         return None;
@@ -130,7 +94,7 @@ fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
         chunk,
         is_final,
     } = agent_event
-        && session_id == "tui-chat"
+        && session_id == CHAT_SESSION_ID
     {
         return Some((chunk, is_final));
     }
@@ -143,7 +107,7 @@ fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
         "agent.tool_started" => {
             let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
             if let AgentEvent::ToolStarted { session_id, tool } = agent_event
-                && session_id == "tui-chat"
+                && session_id == CHAT_SESSION_ID
             {
                 return Some(ChatMessage {
                     role: ChatRole::ToolInvocation,
@@ -160,7 +124,7 @@ fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
                 exit_code,
                 duration_ms,
             } = agent_event
-                && session_id == "tui-chat"
+                && session_id == CHAT_SESSION_ID
             {
                 let is_error = exit_code != 0;
                 let prefix = if is_error { "✗" } else { "✓" };
@@ -175,102 +139,63 @@ fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
     }
 }
 
-/// Main select! loop: keyboard events + IPC messages + reconnection + LLM streaming.
-#[allow(clippy::too_many_arguments)]
+/// Main select! loop: keyboard events + IPC messages + reconnection.
+/// Chat execution is daemon-side; the TUI sends chat.submit IPC and renders streamed events.
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     mut client: Option<IpcClient>,
     socket_path: &Path,
-    llm_client: Option<Arc<AgentLlmClient>>,
-    llm_event_tx: broadcast::Sender<DaemonEvent>,
-    tool_executor: Arc<ToolExecutor>,
-    tool_ctx: Arc<ToolContext>,
 ) -> eyre::Result<()> {
     let mut events = EventStream::new();
     let mut reconnect_timer: Interval = tokio::time::interval(RECONNECT_INTERVAL);
     // Consume the first immediate tick so we don't reconnect on startup
     reconnect_timer.tick().await;
 
-    let mut llm_event_rx = llm_event_tx.subscribe();
-
-    // Track the background LLM/tool-loop task
-    let mut llm_task: Option<tokio::task::JoinHandle<eyre::Result<AgenticResult>>> = None;
-
-    // Show warning if no LLM client
-    if llm_client.is_none() {
-        app.chat_history.push(ChatMessage::system(
-            "Set ANTHROPIC_API_KEY to enable chat. Free chat is disabled.".into(),
-        ));
-    }
-
     loop {
-        // Non-blocking drain of all available streaming chunks and tool events
-        while let Ok(event) = llm_event_rx.try_recv() {
-            if let Some((chunk_text, is_final)) = extract_llm_chunk(&event) {
-                app.chat_response_buffer.push_str(&chunk_text);
-                if is_final {
-                    let content = std::mem::take(&mut app.chat_response_buffer);
-                    if !content.is_empty() {
-                        // Tap 1b: Assistant response finalized
-                        log::debug!("[chat] assistant: {} chars", content.len());
-                        app.chat_history.push(ChatMessage::assistant(content));
-                    }
-                    app.chat_streaming = false;
-                }
-            } else if let Some(tool_msg) = extract_tool_event(&event) {
-                app.chat_history.push(tool_msg);
-            }
-        }
-
-        // Check if pending chat submit needs to spawn LLM task
+        // Check if pending chat submit needs to send IPC
         if let Some(ref submit_text) = app.pending_chat_submit.take() {
-            if let Some(ref llm) = llm_client {
+            if let Some(c) = client.as_mut() {
                 let is_draft_request = submit_text == "/draft";
-                let system_prompt = system_prompt_for_state(app.funnel_state, is_draft_request);
+                let message = if is_draft_request {
+                    chat::DRAFT_PROMPT.to_string()
+                } else {
+                    submit_text.clone()
+                };
 
-                // Ensure canonical_messages end with a user message (API requirement).
-                // Slash commands like /draft don't add a user message to history,
-                // so the last message may be an assistant response.
-                if app.canonical_messages.last().map(|m| m.role.as_str()) != Some("user") {
-                    let synthetic = if is_draft_request { chat::DRAFT_PROMPT } else { submit_text.as_str() };
-                    app.canonical_messages.push(Message {
-                        role: "user".to_string(),
-                        content: vec![ContentBlock::Text {
-                            text: synthetic.to_string(),
-                        }],
-                    });
-                }
-
-                let messages = app.canonical_messages.clone();
-                let client_clone = Arc::clone(llm);
-                let executor_clone = Arc::clone(&tool_executor);
-                let ctx_clone = Arc::clone(&tool_ctx);
-                let event_tx_clone = llm_event_tx.clone();
-
-                // Tap 1a: User chat message submitted
                 log::debug!("[chat] user: {}", submit_text);
 
-                app.chat_streaming = true;
-                app.chat_response_buffer.clear();
+                let params = serde_json::json!({
+                    "session_id": CHAT_SESSION_ID,
+                    "message": message,
+                    "funnel_state": app.funnel_state,
+                    "is_draft_request": is_draft_request,
+                });
 
-                llm_task = Some(tokio::spawn(async move {
-                    run_tool_loop(
-                        client_clone.as_ref(),
-                        executor_clone.as_ref(),
-                        ctx_clone.as_ref(),
-                        &system_prompt,
-                        messages,
-                        10,
-                        Some(&event_tx_clone),
-                        None,
-                    )
-                    .await
-                }));
+                match c.request("chat.submit", params).await {
+                    Ok((resp, ipc_events)) => {
+                        // Process any events that arrived with the response
+                        for event in ipc_events {
+                            handle_daemon_event(app, &event);
+                        }
+                        if resp.is_error() {
+                            let msg = resp
+                                .error
+                                .map(|e| e.message)
+                                .unwrap_or_else(|| "unknown error".to_string());
+                            app.chat_history.push(ChatMessage::system(format!("Error: {msg}")));
+                        } else {
+                            app.chat_streaming = true;
+                            app.chat_response_buffer.clear();
+                        }
+                    }
+                    Err(e) => {
+                        app.chat_history.push(ChatMessage::system(format!("IPC error: {e}")));
+                    }
+                }
             } else {
-                app.chat_history.push(ChatMessage::system(
-                    "Chat is unavailable — ANTHROPIC_API_KEY not set.".into(),
-                ));
+                app.chat_history
+                    .push(ChatMessage::system("Not connected to daemon.".into()));
             }
         }
 
@@ -314,60 +239,13 @@ async fn event_loop(
                     _ => {}
                 }
             }
-            // LLM streaming chunks and tool events (Chat mode)
-            Ok(event) = llm_event_rx.recv(), if app.chat_streaming => {
-                if let Some((chunk_text, is_final)) = extract_llm_chunk(&event) {
-                    app.chat_response_buffer.push_str(&chunk_text);
-                    // NOTE: is_final from individual complete() calls is always false now.
-                    // Finalization happens when the task completes below.
-                    if is_final {
-                        let content = std::mem::take(&mut app.chat_response_buffer);
-                        if !content.is_empty() {
-                            app.chat_history.push(ChatMessage::assistant(content));
-                        }
-                        app.chat_streaming = false;
-                    }
-                } else if let Some(tool_msg) = extract_tool_event(&event) {
-                    app.chat_history.push(tool_msg);
-                }
-            }
-            // Tool loop task completion
-            result = async { llm_task.as_mut().expect("guarded by is_some").await }, if llm_task.is_some() => {
-                llm_task = None;
-                match result {
-                    Ok(Ok(agentic_result)) => {
-                        // Update canonical messages from the full conversation
-                        app.canonical_messages = agentic_result.messages;
-
-                        // Finalize streaming display
-                        let content = std::mem::take(&mut app.chat_response_buffer);
-                        if !content.is_empty() {
-                            app.chat_history.push(ChatMessage::assistant(content));
-                        } else if !agentic_result.text.is_empty() {
-                            app.chat_history.push(ChatMessage::assistant(agentic_result.text));
-                        } else if agentic_result.tool_calls_count > 0 {
-                            app.chat_history.push(ChatMessage::system(
-                                "Tool loop reached maximum iterations without a final response.".into(),
-                            ));
-                        }
-                        app.chat_streaming = false;
-                    }
-                    Ok(Err(e)) => {
-                        // Don't update canonical_messages on error (preserve for retry)
-                        app.chat_streaming = false;
-                        app.chat_response_buffer.clear();
-                        app.chat_history.push(ChatMessage::system(format!("Error: {e}")));
-                    }
-                    Err(e) => {
-                        app.chat_streaming = false;
-                        app.chat_response_buffer.clear();
-                        app.chat_history.push(ChatMessage::system(format!("LLM task panicked: {e}")));
-                    }
-                }
-            }
             ipc_msg = async { client.as_mut().expect("guarded by is_some").recv().await }, if client.is_some() => {
                 match ipc_msg {
                     Ok(Some(IpcMessage::Event(event))) => {
+                        // Handle LLM streaming chunks and tool events for Chat
+                        handle_daemon_event(app, &event);
+
+                        // Handle record events (refresh collections)
                         if let Some(collection) = event_collection(&event) {
                             let collection = collection.to_string();
                             if let Some(c) = client.as_mut() {
@@ -396,6 +274,23 @@ async fn event_loop(
     }
 
     Ok(())
+}
+
+/// Process a daemon event for Chat streaming (LLM chunks + tool events).
+fn handle_daemon_event(app: &mut App, event: &DaemonEvent) {
+    if let Some((chunk_text, is_final)) = extract_llm_chunk(event) {
+        app.chat_response_buffer.push_str(&chunk_text);
+        if is_final {
+            let content = std::mem::take(&mut app.chat_response_buffer);
+            if !content.is_empty() {
+                log::debug!("[chat] assistant: {} chars", content.len());
+                app.chat_history.push(ChatMessage::assistant(content));
+            }
+            app.chat_streaming = false;
+        }
+    } else if let Some(tool_msg) = extract_tool_event(event) {
+        app.chat_history.push(tool_msg);
+    }
 }
 
 /// Send an IPC action to the daemon.
@@ -2046,35 +1941,35 @@ mod tests {
 
     #[test]
     fn test_system_prompt_chat_state() {
-        let prompt = system_prompt_for_state(FunnelState::Chat, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::Chat, false);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(!prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_interview_state() {
-        let prompt = system_prompt_for_state(FunnelState::Interview, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::Interview, false);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_draft_request() {
-        let prompt = system_prompt_for_state(FunnelState::PlanDraft, true);
+        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, true);
         assert!(prompt.contains("structured plan"));
         assert!(!prompt.contains("refine"));
     }
 
     #[test]
     fn test_system_prompt_plan_refine() {
-        let prompt = system_prompt_for_state(FunnelState::PlanDraft, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, false);
         assert!(prompt.contains("refine"));
         assert!(!prompt.contains("structured plan"));
     }
 
     #[test]
     fn test_system_prompt_executing_state() {
-        let prompt = system_prompt_for_state(FunnelState::Executing, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::Executing, false);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(!prompt.contains("clarifying questions"));
     }
@@ -2155,7 +2050,7 @@ mod tests {
 
     #[test]
     fn test_extract_tool_event_started() {
-        let event = DaemonEvent::agent_tool_started("tui-chat", "read");
+        let event = DaemonEvent::agent_tool_started(CHAT_SESSION_ID, "read");
         let msg = extract_tool_event(&event).unwrap();
         assert_eq!(msg.role, ChatRole::ToolInvocation);
         assert!(msg.content.contains("read"));
@@ -2164,7 +2059,7 @@ mod tests {
 
     #[test]
     fn test_extract_tool_event_completed_success() {
-        let event = DaemonEvent::agent_tool_completed("tui-chat", "shell", 0, 150);
+        let event = DaemonEvent::agent_tool_completed(CHAT_SESSION_ID, "shell", 0, 150);
         let msg = extract_tool_event(&event).unwrap();
         assert_eq!(msg.role, ChatRole::ToolInvocation);
         assert!(msg.content.contains("✓"));
@@ -2174,7 +2069,7 @@ mod tests {
 
     #[test]
     fn test_extract_tool_event_completed_error() {
-        let event = DaemonEvent::agent_tool_completed("tui-chat", "shell", 1, 50);
+        let event = DaemonEvent::agent_tool_completed(CHAT_SESSION_ID, "shell", 1, 50);
         let msg = extract_tool_event(&event).unwrap();
         assert!(msg.content.contains("✗"));
     }
