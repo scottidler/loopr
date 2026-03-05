@@ -236,6 +236,13 @@ pub async fn run_tool_loop(
     for iteration in 0..max_iterations {
         debug!("agentic_loop iteration {}", iteration);
 
+        // Log token estimate for observability
+        let estimated_tokens = estimate_tokens(system_prompt) + estimate_message_tokens(&messages);
+        debug!(
+            "[agent:{}] iteration {} token_estimate={}",
+            ctx.exec_id, iteration, estimated_tokens
+        );
+
         // Auto-compact old messages if context is too large
         auto_compact(llm, system_prompt, &mut messages).await;
 
