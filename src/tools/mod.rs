@@ -1,3 +1,12 @@
+pub mod context;
+pub mod error;
+pub mod shell;
+pub mod traits;
+pub mod types;
+
+pub use traits::{Tool, ToolResult as UnifiedToolResult};
+pub use types::{CompletionResponse, ContentBlock, Message, StopReason, ToolCall, ToolDefinition};
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
