@@ -199,7 +199,7 @@ pub async fn run_agent_task(
     let cleanup_key = worktree_key.clone();
 
     // Create per-agent logger
-    let agent_log = match AgentLogger::new(agent_type, &session_id) {
+    let agent_log = match AgentLogger::new(agent_type, &session_id, stores.session_dir.as_deref()) {
         Ok(al) => al,
         Err(e) => {
             error!("Agent {} failed to create logger: {}", session_id, e);

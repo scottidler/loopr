@@ -448,6 +448,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
                 "taskstore": taskstore_stats,
                 "current_tick_sha": current_tick_sha,
                 "stale_works": stale_works,
+                "session_id": stores.session_dir.as_ref().and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string())),
             }),
         ))
     })
@@ -4342,6 +4343,10 @@ fn handle_agent_start(
         session.bundle_id = bundle_id;
         session.target_id = target_id;
         session.query = query;
+        session.daemon_session_id = stores
+            .session_dir
+            .as_ref()
+            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()));
 
         let session_json = match serde_json::to_value(&session) {
             Ok(v) => v,

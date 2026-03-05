@@ -74,6 +74,8 @@ pub struct Stores {
     pub git_lock: StdMutex<()>,
     /// Signal for graceful shutdown of persistent workers.
     pub shutting_down: AtomicBool,
+    /// Session directory for this daemon run. Used by AgentLogger for scoped log output.
+    pub session_dir: Option<std::path::PathBuf>,
 }
 
 macro_rules! store_accessors {
@@ -161,6 +163,7 @@ impl Stores {
             git_lock: StdMutex::new(()),
             shutting_down: AtomicBool::new(false),
             guidance: AgentGuidance::schema_only(),
+            session_dir: None,
         }
     }
 }
@@ -193,12 +196,19 @@ pub struct DaemonContext {
     pub config: Config,
     pub stores: Arc<Stores>,
     pub worktree_manager: WorktreeManager,
+    pub session_id: String,
+    pub session_dir: std::path::PathBuf,
 }
 
 impl DaemonContext {
     /// Create a new DaemonContext with the given config and event broadcast channel.
     /// Opens the TaskStore at the project repo_path and rebuilds indexes for all domain types.
-    pub fn new(config: Config, event_tx: broadcast::Sender<DaemonEvent>) -> eyre::Result<Self> {
+    pub fn new(
+        config: Config,
+        event_tx: broadcast::Sender<DaemonEvent>,
+        session_id: String,
+        session_dir: std::path::PathBuf,
+    ) -> eyre::Result<Self> {
         let repo_path = config.project.repo_path.clone();
         let worktree_dir = if config.project.worktree_dir.is_absolute() {
             config.project.worktree_dir.clone()
@@ -299,6 +309,7 @@ impl DaemonContext {
 
         // Store config for handler access (agent spawning, etc.)
         stores.config = config.clone();
+        stores.session_dir = Some(session_dir.clone());
 
         // Create ToolRunner from agent config
         stores.tool_runner = Arc::new(ToolRunner::new(&config.agents.tools));
@@ -346,6 +357,8 @@ impl DaemonContext {
             event_tx,
             stores: Arc::new(stores),
             worktree_manager,
+            session_id,
+            session_dir,
         })
     }
 
@@ -483,11 +496,15 @@ impl DaemonContext {
     }
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
-    pub fn shared(config: Config) -> eyre::Result<(Arc<RwLock<Self>>, broadcast::Sender<DaemonEvent>)> {
+    pub fn shared(
+        config: Config,
+        session_id: String,
+        session_dir: std::path::PathBuf,
+    ) -> eyre::Result<(Arc<RwLock<Self>>, broadcast::Sender<DaemonEvent>)> {
         debug!("DaemonContext::shared()");
         let (event_tx, _) = broadcast::channel::<DaemonEvent>(256);
         let tx = event_tx.clone();
-        let ctx = Self::new(config, event_tx)?;
+        let ctx = Self::new(config, event_tx, session_id, session_dir)?;
         Ok((Arc::new(RwLock::new(ctx)), tx))
     }
 }
@@ -518,7 +535,13 @@ mod tests {
     fn test_context_new() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         assert_eq!(ctx.config.name, "loopr");
         // Fresh TaskStore has no records, so HashMaps are empty after hydration
         assert!(ctx.stores.plans.read().unwrap().is_empty());
@@ -540,7 +563,13 @@ mod tests {
 
         // Second: open DaemonContext — should hydrate HashMaps from TaskStore
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         assert_eq!(ctx.stores.plans.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.specs.read().unwrap().len(), 1);
     }
@@ -589,7 +618,13 @@ mod tests {
         }
 
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         assert_eq!(ctx.stores.plans.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.specs.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.phases.read().unwrap().len(), 1);
@@ -610,7 +645,13 @@ mod tests {
         let (_dir, config) = test_config();
         let repo_path = config.project.repo_path.clone();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // TaskStore should have created .taskstore/ directory
         assert!(repo_path.join(".taskstore").exists());
@@ -626,7 +667,13 @@ mod tests {
     fn test_context_taskstore_crud() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Create a plan via TaskStore
         let plan = Plan::new("Test Plan".into(), "Description".into(), "Criteria".into());
@@ -654,7 +701,12 @@ mod tests {
     #[test]
     fn test_context_shared() {
         let (_dir, config) = test_config();
-        let (ctx, tx) = DaemonContext::shared(config).unwrap();
+        let (ctx, tx) = DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         // Can subscribe from the returned sender
         let _rx = tx.subscribe();
         // Can read from the context
@@ -669,7 +721,13 @@ mod tests {
     fn test_context_event_broadcast() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         let mut rx = ctx.event_tx.subscribe();
         let event = DaemonEvent::record_created("plan", "p1");
         ctx.event_tx.send(event.clone()).unwrap();
@@ -680,7 +738,12 @@ mod tests {
     #[test]
     fn test_context_shared_event_broadcast() {
         let (_dir, config) = test_config();
-        let (ctx, tx) = DaemonContext::shared(config).unwrap();
+        let (ctx, tx) = DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let c = ctx.read().await;
@@ -808,7 +871,13 @@ mod tests {
     fn test_recover_orphaned_works() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Insert a Work in InProgress state (orphaned)
         let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
@@ -833,7 +902,13 @@ mod tests {
     fn test_recover_orphaned_bundles() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Insert a Bundle in Integrating state (orphaned)
         let mut bundle = Bundle::new(
@@ -868,7 +943,13 @@ mod tests {
     fn test_recover_both_orphaned_types() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
         wi.status = WorkStatus::InProgress;
@@ -891,7 +972,13 @@ mod tests {
     fn test_recover_no_orphans() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Draft Work — not orphaned
         let wi = Work::new("phase-1".into(), "Normal WI".into(), "".into());
@@ -909,7 +996,13 @@ mod tests {
     fn test_recover_empty_stores() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
         let recovered = ctx.recover_orphaned_records();
         assert_eq!(recovered, 0);
     }
@@ -918,7 +1011,13 @@ mod tests {
     fn test_recover_stuck_tick_sealing() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let mut tick = Tick::new(1);
         tick.status = TickStatus::Sealing;
@@ -936,7 +1035,13 @@ mod tests {
     fn test_recover_stuck_tick_validating() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let mut tick = Tick::new(2);
         tick.status = TickStatus::Validating;
@@ -954,7 +1059,13 @@ mod tests {
     fn test_recover_open_tick_recovered() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let tick = Tick::new(3);
         let tick_id = tick.id.clone();
@@ -971,7 +1082,13 @@ mod tests {
     fn test_recover_mixed_orphans() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Orphaned InProgress Work
         let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
@@ -1001,7 +1118,13 @@ mod tests {
     fn test_recover_stuck_session_running() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
         session.status = AgentStatus::Running;
@@ -1024,7 +1147,13 @@ mod tests {
     fn test_recover_stuck_session_waiting_for_llm() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
         session.status = AgentStatus::Running;
@@ -1047,7 +1176,13 @@ mod tests {
     fn test_recover_completed_session_not_touched() {
         let (_dir, config) = test_config();
         let (tx, _rx) = broadcast::channel(16);
-        let ctx = DaemonContext::new(config, tx).unwrap();
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
         session.status = AgentStatus::Completed;

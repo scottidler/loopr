@@ -409,7 +409,13 @@ mod tests {
     async fn test_write_and_remove_pid_file() {
         let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
-        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+        let ctx = context::DaemonContext::new(
+            config.clone(),
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         write_pid_file(&ctx).unwrap();
         assert!(config.daemon.pid_path.exists());
@@ -424,7 +430,12 @@ mod tests {
     async fn test_daemon_handshake() {
         let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
+        let (ctx, _tx) = context::DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Start daemon in background
         let daemon_handle = tokio::spawn(daemon_main(ctx));
@@ -453,7 +464,12 @@ mod tests {
         let (_dir, config) = test_config();
         let pid_path = config.daemon.pid_path.clone();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
+        let (ctx, _tx) = context::DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -474,7 +490,12 @@ mod tests {
     async fn test_daemon_multiple_clients() {
         let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
+        let (ctx, _tx) = context::DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -499,7 +520,12 @@ mod tests {
     async fn test_daemon_status() {
         let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
+        let (ctx, _tx) = context::DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -523,7 +549,13 @@ mod tests {
     async fn test_ensure_one_daemon_stale_pid_cleanup() {
         let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
-        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+        let ctx = context::DaemonContext::new(
+            config.clone(),
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Write a PID file with a PID that does not exist (stale)
         std::fs::create_dir_all(config.daemon.pid_path.parent().unwrap()).unwrap();
@@ -541,7 +573,13 @@ mod tests {
     async fn test_ensure_one_daemon_live_daemon_errors() {
         let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
-        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+        let ctx = context::DaemonContext::new(
+            config.clone(),
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // Write the current process PID — /proc/<our_pid> exists, so it looks alive
         let our_pid = std::process::id();
@@ -559,7 +597,13 @@ mod tests {
     async fn test_ensure_one_daemon_stale_socket_cleanup() {
         let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
-        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+        let ctx = context::DaemonContext::new(
+            config.clone(),
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         // No PID file, but a stale socket exists
         std::fs::create_dir_all(config.daemon.socket_path.parent().unwrap()).unwrap();
@@ -576,7 +620,13 @@ mod tests {
     async fn test_write_version_file() {
         let (_dir, config) = test_config();
         let (tx, _rx) = tokio::sync::broadcast::channel(16);
-        let ctx = context::DaemonContext::new(config.clone(), tx).unwrap();
+        let ctx = context::DaemonContext::new(
+            config.clone(),
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         write_version_file(&ctx).unwrap();
 
@@ -645,7 +695,12 @@ mod tests {
         let (_dir, config) = test_config();
         let socket_path = config.daemon.socket_path.clone();
         let pid_path = config.daemon.pid_path.clone();
-        let (ctx, _tx) = context::DaemonContext::shared(config).unwrap();
+        let (ctx, _tx) = context::DaemonContext::shared(
+            config,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
 
         let daemon_handle = tokio::spawn(daemon_main(ctx));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

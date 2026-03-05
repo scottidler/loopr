@@ -84,19 +84,32 @@ fn parse_level_filter(s: &str) -> Option<LevelFilter> {
     }
 }
 
-pub fn setup_logging(config: &Config, cli_log_level: Option<&str>) -> eyre::Result<()> {
-    let log_dir = dirs::data_local_dir()
+/// Set up logging. When `session_id` is provided (daemon), creates a session
+/// directory at `~/.local/share/loopr/sessions/{session_id}/` with `loopr.log`
+/// inside it and updates the `latest` symlink. When None (TUI, one-shot CLI),
+/// writes to `~/.local/share/loopr/logs/loopr.log` as before.
+pub fn setup_logging(config: &Config, cli_log_level: Option<&str>, session_id: Option<&str>) -> eyre::Result<PathBuf> {
+    let base_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("loopr")
-        .join("logs");
+        .join("loopr");
 
-    fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
+    let log_file = if let Some(sid) = session_id {
+        let session_dir = base_dir.join("sessions").join(sid);
+        fs::create_dir_all(session_dir.join("agents")).context("Failed to create session agents directory")?;
 
-    // Create agents/ subdirectory for per-agent logs
-    let agents_log_dir = log_dir.join("agents");
-    fs::create_dir_all(&agents_log_dir).context("Failed to create agents log directory")?;
+        // Update `latest` symlink
+        let sessions_dir = base_dir.join("sessions");
+        let latest = sessions_dir.join("latest");
+        let _ = fs::remove_file(&latest);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(sid, &latest).context("Failed to create latest symlink")?;
 
-    let log_file = log_dir.join("loopr.log");
+        session_dir.join("loopr.log")
+    } else {
+        let log_dir = base_dir.join("logs");
+        fs::create_dir_all(&log_dir).context("Failed to create log directory")?;
+        log_dir.join("loopr.log")
+    };
 
     let target = Box::new(
         fs::OpenOptions::new()
@@ -130,7 +143,7 @@ pub fn setup_logging(config: &Config, cli_log_level: Option<&str>) -> eyre::Resu
         level,
         log_file.display()
     );
-    Ok(())
+    Ok(log_file)
 }
 
 #[allow(clippy::unwrap_used)]

@@ -118,7 +118,7 @@ impl AgentContext {
             ),
             stores.config.clone(),
         );
-        let log = AgentLogger::new(agent_type, session_id)?;
+        let log = AgentLogger::new(agent_type, session_id, stores.session_dir.as_deref())?;
 
         Ok(Self {
             session,
@@ -302,6 +302,9 @@ pub struct AgentSession {
     /// Query string for Researcher agents. Set by SpawnResearcher action.
     #[serde(default)]
     pub query: Option<String>,
+    /// Daemon session ID that spawned this agent (e.g. "20260305T143200").
+    #[serde(default)]
+    pub daemon_session_id: Option<String>,
 }
 
 impl AgentSession {
@@ -321,6 +324,7 @@ impl AgentSession {
             updated_at: now,
             target_id: None,
             query: None,
+            daemon_session_id: None,
         }
     }
 
@@ -361,6 +365,9 @@ impl Record for AgentSession {
         }
         if let Some(ref tid) = self.target_id {
             m.insert("target_id".into(), IndexValue::String(tid.clone()));
+        }
+        if let Some(ref dsid) = self.daemon_session_id {
+            m.insert("daemon_session_id".into(), IndexValue::String(dsid.clone()));
         }
         m
     }

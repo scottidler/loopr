@@ -1,14 +1,14 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::agents::AgentType;
 
 /// Per-agent logger that writes to both a dedicated log file and the main daemon log.
 ///
-/// Each agent session gets its own log file at:
-/// `~/.local/share/loopr/logs/agents/agent-<type>-<session_id>.log`
+/// When a session directory is provided, writes to `{session_dir}/agents/{type}-{id}.log`.
+/// Falls back to `~/.local/share/loopr/logs/agents/agent-{type}-{id}.log` otherwise.
 ///
 /// Every log method writes a formatted line to the per-agent file AND calls
 /// the corresponding `log::*!` macro with a `[session_id]` prefix.
@@ -21,16 +21,22 @@ pub struct AgentLogger {
 
 impl AgentLogger {
     /// Create a new AgentLogger, opening the per-agent log file.
-    pub fn new(agent_type: AgentType, session_id: &str) -> eyre::Result<Self> {
-        let log_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("loopr")
-            .join("logs")
-            .join("agents");
+    /// When `session_dir` is provided, writes to `{session_dir}/agents/`.
+    /// Otherwise falls back to the legacy path.
+    pub fn new(agent_type: AgentType, session_id: &str, session_dir: Option<&Path>) -> eyre::Result<Self> {
+        let log_dir = if let Some(dir) = session_dir {
+            dir.join("agents")
+        } else {
+            dirs::data_local_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("loopr")
+                .join("logs")
+                .join("agents")
+        };
 
         fs::create_dir_all(&log_dir)?;
 
-        let file_name = format!("agent-{}-{}.log", agent_type, session_id);
+        let file_name = format!("{}-{}.log", agent_type, session_id);
         let file_path = log_dir.join(&file_name);
 
         let file = OpenOptions::new().create(true).append(true).open(&file_path)?;
@@ -105,7 +111,7 @@ mod tests {
 
     fn test_logger(agent_type: AgentType, suffix: &str) -> (AgentLogger, TestDir) {
         let tmp_dir = TestDir::new(&format!("loopr_agent_logger_test_{suffix}"));
-        let file_path = tmp_dir.join(format!("agent-{}-test123.log", agent_type));
+        let file_path = tmp_dir.join(format!("{}-test123.log", agent_type));
         // Remove stale file from previous test run
         let _ = fs::remove_file(&file_path);
 
@@ -131,7 +137,30 @@ mod tests {
     fn test_agent_logger_file_naming() {
         let (logger, _tmp) = test_logger(AgentType::Implementer, "naming");
         let name = logger.file_path().file_name().unwrap().to_string_lossy();
-        assert_eq!(name, "agent-implementer-test123.log");
+        assert_eq!(name, "implementer-test123.log");
+    }
+
+    #[test]
+    fn test_agent_logger_session_scoped() {
+        let tmp_dir = TestDir::new("loopr_agent_logger_test_session");
+        let session_dir = tmp_dir.join("session1");
+        fs::create_dir_all(session_dir.join("agents")).unwrap();
+
+        let logger = AgentLogger::new(AgentType::Implementer, "ag01", Some(&session_dir)).unwrap();
+        logger.info("session scoped");
+
+        assert!(logger.file_path().exists());
+        assert!(logger.file_path().starts_with(session_dir.join("agents")));
+        let name = logger.file_path().file_name().unwrap().to_string_lossy();
+        assert_eq!(name, "implementer-ag01.log");
+    }
+
+    #[test]
+    fn test_agent_logger_legacy_fallback() {
+        let logger = AgentLogger::new(AgentType::Reviewer, "ag02", None).unwrap();
+        assert!(logger.file_path().exists());
+        let name = logger.file_path().file_name().unwrap().to_string_lossy();
+        assert_eq!(name, "reviewer-ag02.log");
     }
 
     #[test]
