@@ -1,3 +1,4 @@
+pub mod diagnose;
 pub mod dispatch;
 
 use clap::Parser;
@@ -453,6 +454,57 @@ pub enum Command {
     },
     /// Graceful daemon shutdown
     Shutdown,
+    /// Session diagnostics (logs, state, agent history)
+    Diagnose {
+        #[command(subcommand)]
+        cmd: DiagnoseCmd,
+    },
+}
+
+/// Diagnose subcommands for querying session history and logs.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum DiagnoseCmd {
+    /// Dump ALL diagnostic data from the last session
+    Dump {
+        /// Session ID (e.g. 20260305T143200). Defaults to latest.
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Only include log lines matching this pattern
+        #[arg(short, long)]
+        filter: Option<String>,
+    },
+    /// Show the session log only
+    Log {
+        /// Session ID. Defaults to latest.
+        #[arg(short, long)]
+        session: Option<String>,
+        /// Only show lines matching this pattern
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// Number of lines from end (like tail -n)
+        #[arg(short, long)]
+        tail: Option<usize>,
+    },
+    /// List available session logs
+    Sessions {
+        /// Number of sessions to show (default: 10)
+        #[arg(short = 'n', long, default_value = "10")]
+        count: usize,
+    },
+    /// Show the session summary only
+    Summary {
+        /// Session ID. Defaults to latest.
+        #[arg(short, long)]
+        session: Option<String>,
+    },
+    /// Show TaskStore state snapshot
+    State,
+    /// Show agent session history
+    Agents {
+        /// Only show failed agents
+        #[arg(long)]
+        failed: bool,
+    },
 }
 
 #[allow(clippy::unwrap_used)]
@@ -1003,6 +1055,92 @@ mod tests {
                 assert_eq!(plan, "Build a todo app");
             }
             _ => panic!("expected Coordinator AcceptPlan"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_dump() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "dump"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::Dump { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_dump_with_session() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "dump", "-s", "20260305T143200"]);
+        match cli.command {
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::Dump { session, filter },
+            }) => {
+                assert_eq!(session, Some("20260305T143200".to_string()));
+                assert!(filter.is_none());
+            }
+            _ => panic!("expected Diagnose Dump"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_log() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "log", "--tail", "50"]);
+        match cli.command {
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::Log { tail, .. },
+            }) => {
+                assert_eq!(tail, Some(50));
+            }
+            _ => panic!("expected Diagnose Log"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_sessions() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "sessions"]);
+        match cli.command {
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::Sessions { count },
+            }) => {
+                assert_eq!(count, 10);
+            }
+            _ => panic!("expected Diagnose Sessions"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_summary() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "summary"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::Summary { .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_state() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "state"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::State
+            })
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_diagnose_agents() {
+        let cli = Cli::parse_from(["loopr", "diagnose", "agents", "--failed"]);
+        match cli.command {
+            Some(Command::Diagnose {
+                cmd: DiagnoseCmd::Agents { failed },
+            }) => {
+                assert!(failed);
+            }
+            _ => panic!("expected Diagnose Agents"),
         }
     }
 }

@@ -19,6 +19,10 @@ async fn main() -> Result<()> {
     let role = cli_args.r#as.unwrap_or(domain::role::Role::Coordinator);
 
     match cli_args.command {
+        Some(Command::Diagnose { ref cmd }) => {
+            // Diagnose runs locally — no daemon, no session logging needed
+            cli::diagnose::run(cmd)
+        }
         Some(Command::Daemon) => {
             let session_id = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
             let log_path = loopr::setup_logging(&config, cli_args.log_level.as_deref(), Some(&session_id))
