@@ -1,3 +1,4 @@
+pub mod agentic_loop;
 pub mod builtin;
 pub mod configured;
 pub mod context;
