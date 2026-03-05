@@ -1,5 +1,9 @@
-use log::debug;
+use std::time::Instant;
 
+use log::debug;
+use tokio::sync::broadcast;
+
+use crate::ipc::protocol::DaemonEvent;
 use crate::tools::context::ToolContext;
 use crate::tools::executor::ToolExecutor;
 use crate::tools::traits::ToolResult;
@@ -49,6 +53,7 @@ pub async fn run_tool_loop(
     system_prompt: &str,
     messages: Vec<Message>,
     max_iterations: u32,
+    event_tx: Option<&broadcast::Sender<DaemonEvent>>,
 ) -> eyre::Result<AgenticResult> {
     debug!(
         "run_tool_loop(max_iterations={}, messages={}, tools={})",
@@ -100,8 +105,26 @@ pub async fn run_tool_loop(
         let mut tool_results = Vec::new();
         for call in &tool_uses {
             debug!("executing tool: {} (id: {})", call.name, call.id);
+
+            if let Some(tx) = event_tx {
+                let _ = tx.send(DaemonEvent::agent_tool_started(&ctx.exec_id, &call.name));
+            }
+
+            let start = Instant::now();
             let result: ToolResult = executor.execute(call, ctx).await;
+            let duration_ms = start.elapsed().as_millis() as u64;
             total_tool_calls += 1;
+
+            let exit_code = if result.is_error { 1 } else { 0 };
+            if let Some(tx) = event_tx {
+                let _ = tx.send(DaemonEvent::agent_tool_completed(
+                    &ctx.exec_id,
+                    &call.name,
+                    exit_code,
+                    duration_ms,
+                ));
+            }
+
             tool_results.push(ContentBlock::ToolResult {
                 tool_use_id: call.id.clone(),
                 content: result.content,
@@ -206,7 +229,7 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(PathBuf::from("/tmp"), "test".into());
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("hi"), 10)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("hi"), 10, None)
             .await
             .unwrap();
         assert_eq!(result.text, "Hello!");
@@ -241,7 +264,7 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(dir.clone(), "test".into()).with_deny_patterns(vec![]);
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("run echo"), 10)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("run echo"), 10, None)
             .await
             .unwrap();
         assert_eq!(result.text, "Done executing tool.");
@@ -272,7 +295,7 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(std::env::temp_dir(), "test".into());
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("loop"), 3)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("loop"), 3, None)
             .await
             .unwrap();
         assert_eq!(result.tool_calls_count, 3);
@@ -311,13 +334,53 @@ mod tests {
             },
         ];
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", messages, 10)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", messages, 10, None)
             .await
             .unwrap();
         assert_eq!(result.text, "I remember the prior context.");
         // 3 prior messages + 1 assistant response
         assert_eq!(result.messages.len(), 4);
         assert_eq!(result.tool_calls_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_tool_loop_emits_tool_events() {
+        let dir = std::env::temp_dir().join("loopr-agentic-events");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let llm = MockAgenticLlm::new(vec![
+            (
+                vec![ContentBlock::ToolUse {
+                    id: "tu-1".to_string(),
+                    name: "shell".to_string(),
+                    input: serde_json::json!({"command": "echo test"}),
+                }],
+                Some(crate::tools::types::StopReason::ToolUse),
+            ),
+            (
+                vec![ContentBlock::Text {
+                    text: "Done.".to_string(),
+                }],
+                Some(crate::tools::types::StopReason::EndTurn),
+            ),
+        ]);
+        let executor = ToolExecutor::standard(&[]);
+        let ctx = ToolContext::new(dir.clone(), "test-session".into()).with_deny_patterns(vec![]);
+
+        let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("go"), 10, Some(&tx))
+            .await
+            .unwrap();
+        assert_eq!(result.tool_calls_count, 1);
+
+        // Should have received ToolStarted + ToolCompleted events
+        let event1 = rx.try_recv().unwrap();
+        assert_eq!(event1.event, "agent.tool_started");
+
+        let event2 = rx.try_recv().unwrap();
+        assert_eq!(event2.event, "agent.tool_completed");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
