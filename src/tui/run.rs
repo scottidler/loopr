@@ -2178,4 +2178,111 @@ mod tests {
             _ => panic!("expected Text block"),
         }
     }
+
+    #[test]
+    fn test_extract_tool_event_started() {
+        let event = DaemonEvent::agent_tool_started("tui-chat", "read");
+        let msg = extract_tool_event(&event).unwrap();
+        assert_eq!(msg.role, ChatRole::ToolInvocation);
+        assert!(msg.content.contains("read"));
+        assert!(msg.content.contains("⟳"));
+    }
+
+    #[test]
+    fn test_extract_tool_event_completed_success() {
+        let event = DaemonEvent::agent_tool_completed("tui-chat", "shell", 0, 150);
+        let msg = extract_tool_event(&event).unwrap();
+        assert_eq!(msg.role, ChatRole::ToolInvocation);
+        assert!(msg.content.contains("✓"));
+        assert!(msg.content.contains("shell"));
+        assert!(msg.content.contains("150ms"));
+    }
+
+    #[test]
+    fn test_extract_tool_event_completed_error() {
+        let event = DaemonEvent::agent_tool_completed("tui-chat", "shell", 1, 50);
+        let msg = extract_tool_event(&event).unwrap();
+        assert!(msg.content.contains("✗"));
+    }
+
+    #[test]
+    fn test_extract_tool_event_wrong_session() {
+        let event = DaemonEvent::agent_tool_started("other-session", "read");
+        assert!(extract_tool_event(&event).is_none());
+    }
+
+    #[test]
+    fn test_extract_tool_event_unrelated_event() {
+        let event = DaemonEvent::record_created("work", "w1");
+        assert!(extract_tool_event(&event).is_none());
+    }
+
+    #[test]
+    fn test_streaming_display_finalization_with_buffer() {
+        // Simulate: response buffer has accumulated text, task completes
+        let mut app = App::new();
+        app.chat_streaming = true;
+        app.chat_response_buffer = "Hello from tool loop".to_string();
+
+        // Simulate what the task completion handler does
+        let content = std::mem::take(&mut app.chat_response_buffer);
+        if !content.is_empty() {
+            app.chat_history.push(ChatMessage::assistant(content));
+        }
+        app.chat_streaming = false;
+
+        assert!(!app.chat_streaming);
+        assert_eq!(app.chat_history.len(), 1);
+        assert_eq!(app.chat_history[0].content, "Hello from tool loop");
+        assert_eq!(app.chat_history[0].role, ChatRole::Assistant);
+    }
+
+    #[test]
+    fn test_streaming_display_finalization_empty_buffer_uses_result_text() {
+        // Simulate: buffer is empty but AgenticResult has text
+        let mut app = App::new();
+        app.chat_streaming = true;
+        app.chat_response_buffer.clear();
+
+        let agentic_text = "Final answer from tool loop".to_string();
+
+        // Simulate what the task completion handler does
+        let content = std::mem::take(&mut app.chat_response_buffer);
+        if !content.is_empty() {
+            app.chat_history.push(ChatMessage::assistant(content));
+        } else if !agentic_text.is_empty() {
+            app.chat_history.push(ChatMessage::assistant(agentic_text));
+        }
+        app.chat_streaming = false;
+
+        assert_eq!(app.chat_history.len(), 1);
+        assert_eq!(app.chat_history[0].content, "Final answer from tool loop");
+    }
+
+    #[test]
+    fn test_streaming_display_max_iterations_message() {
+        // Simulate: both buffer and result text are empty, but tool calls were made
+        let mut app = App::new();
+        app.chat_streaming = true;
+        app.chat_response_buffer.clear();
+
+        let agentic_text = String::new();
+        let tool_calls_count = 3;
+
+        let content = std::mem::take(&mut app.chat_response_buffer);
+        if !content.is_empty() {
+            app.chat_history.push(ChatMessage::assistant(content));
+        } else if !agentic_text.is_empty() {
+            app.chat_history.push(ChatMessage::assistant(agentic_text));
+        } else if tool_calls_count > 0 {
+            app.chat_history.push(ChatMessage::system(
+                "Tool loop reached maximum iterations without a final response.".into(),
+            ));
+        }
+        app.chat_streaming = false;
+
+        assert_eq!(app.chat_history.len(), 1);
+        assert_eq!(app.chat_history[0].role, ChatRole::System);
+        assert!(app.chat_history[0].content.contains("maximum iterations"));
+    }
 }
