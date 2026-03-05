@@ -64,6 +64,7 @@ mod tests {
             bridge,
             event_tx: tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         }
     }
@@ -2380,6 +2381,7 @@ mod tests {
             bridge: impl_bridge,
             event_tx: tx.clone(),
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         };
         let agent = implementer::ImplementerAgent::new(ctx, llm, config, wi_id.clone(), dir.to_path_buf());

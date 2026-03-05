@@ -1697,6 +1697,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         };
         let llm = Box::new(MockLlm::new(responses));

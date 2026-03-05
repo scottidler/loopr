@@ -28,6 +28,7 @@ use crate::agents::bridge::AgentIpcBridge;
 use crate::daemon::context::Stores;
 use crate::id;
 use crate::ipc::protocol::DaemonEvent;
+use crate::tools::ToolExecutor;
 use crate::tools::ToolRunner;
 use crate::worktree::manager::WorktreeManager;
 
@@ -88,6 +89,7 @@ pub struct AgentContext {
     pub bridge: AgentIpcBridge,
     pub event_tx: broadcast::Sender<DaemonEvent>,
     pub tool_runner: Arc<ToolRunner>,
+    pub tool_executor: Arc<ToolExecutor>,
     pub log: AgentLogger,
 }
 
@@ -124,6 +126,7 @@ impl AgentContext {
             bridge,
             event_tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log,
         })
     }
@@ -610,6 +613,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         };
         (ctx, event_rx)

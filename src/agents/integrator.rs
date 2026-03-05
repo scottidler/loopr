@@ -981,6 +981,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
+            tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
         };
         IntegratorAgent::new(ctx, intg_config)
@@ -1008,6 +1009,7 @@ mod tests {
             bridge,
             event_tx: event_tx.clone(),
             tool_runner: Arc::new(ToolRunner::new(&[])),
+            tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
         };
         (IntegratorAgent::new(ctx, intg_config), event_tx)

@@ -28,6 +28,7 @@ use crate::domain::validation::ValidationReport;
 use crate::domain::work::{Work, WorkStatus};
 use crate::guidance::AgentGuidance;
 use crate::ipc::protocol::DaemonEvent;
+use crate::tools::ToolExecutor;
 use crate::tools::ToolRunner;
 use crate::validator::DocValidator;
 use crate::worktree::manager::WorktreeManager;
@@ -57,6 +58,8 @@ pub struct Stores {
     pub evaluator: Option<Arc<crate::evaluator::CoverageEvaluator>>,
     /// Tool runner for agent subprocess execution. Shared across agent tasks.
     pub tool_runner: Arc<ToolRunner>,
+    /// Unified tool executor (built-in + configured tools). Shared across agent tasks.
+    pub tool_executor: Arc<ToolExecutor>,
     /// Full config, available to handlers for agent spawning.
     pub config: Config,
     /// Assembled guidance (schema docs + LOOPR.md files), loaded once at startup.
@@ -151,6 +154,7 @@ impl Stores {
             validator: None,
             evaluator: None,
             tool_runner: Arc::new(ToolRunner::new(&[])),
+            tool_executor: Arc::new(ToolExecutor::standard(&[])),
             config: Config::default(),
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
@@ -298,6 +302,7 @@ impl DaemonContext {
 
         // Create ToolRunner from agent config
         stores.tool_runner = Arc::new(ToolRunner::new(&config.agents.tools));
+        stores.tool_executor = Arc::new(ToolExecutor::standard(&config.agents.tools));
         info!(
             "Tool runner initialized with {} tools",
             stores.tool_runner.available_tools().len()

@@ -763,6 +763,7 @@ mod tests {
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), dir);
         let agent_log = test_agent_logger(dir);
         let tool_runner = stores.tool_runner.clone();
+        let tool_executor = stores.tool_executor.clone();
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
         session.work_id = Some(wi_id.clone());
@@ -781,6 +782,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner,
+            tool_executor,
             log: agent_log,
         };
         ImplementerAgent::new(ctx, llm, config, wi_id, dir.to_path_buf())
@@ -1228,6 +1230,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         };
         let mut agent = ImplementerAgent::new(ctx, llm, config, wi_id, dir.to_path_buf());

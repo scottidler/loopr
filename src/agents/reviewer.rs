@@ -377,6 +377,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
+            tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
         };
         ReviewerAgent::new(ctx, llm, config).unwrap()
@@ -601,6 +602,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
+            tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
         };
         let llm = Box::new(MockReviewLlm::new("{}"));

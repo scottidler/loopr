@@ -368,9 +368,13 @@ async fn run_agent_loop(
             worktree,
             &stores.config.agents.tools,
         ));
+        ctx.tool_executor = Arc::new(crate::tools::ToolExecutor::detect_or_configured(
+            worktree,
+            &stores.config.agents.tools,
+        ));
         agent_log.info(&format!(
-            "Session tool runner: {} tools (detected from {})",
-            ctx.tool_runner.available_tools().len(),
+            "Session tool executor: {} tools (detected from {})",
+            ctx.tool_executor.available_tools().len(),
             wt_path
         ));
     }
@@ -1679,6 +1683,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         };
         (ctx, event_rx)
@@ -1702,6 +1707,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(tool_entries)),
+            tool_executor: Arc::new(crate::tools::ToolExecutor::standard(tool_entries)),
             log: agent_log,
         }
     }
@@ -1724,6 +1730,7 @@ mod tests {
             bridge,
             event_tx,
             tool_runner: stores.tool_runner.clone(),
+            tool_executor: stores.tool_executor.clone(),
             log: agent_log,
         }
     }

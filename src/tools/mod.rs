@@ -1,9 +1,13 @@
+pub mod configured;
 pub mod context;
+pub mod detect;
 pub mod error;
+pub mod executor;
 pub mod shell;
 pub mod traits;
 pub mod types;
 
+pub use executor::ToolExecutor;
 pub use traits::{Tool, ToolResult as UnifiedToolResult};
 pub use types::{CompletionResponse, ContentBlock, Message, StopReason, ToolCall, ToolDefinition};
 
