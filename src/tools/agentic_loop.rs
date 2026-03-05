@@ -13,6 +13,15 @@ use crate::tools::types::{ContentBlock, Message, ToolCall, ToolDefinition};
 /// Maximum characters per tool result before truncation (~8K tokens).
 const MAX_TOOL_RESULT_CHARS: usize = 32_768;
 
+/// Trigger compaction when estimated input tokens exceed this threshold.
+/// Set at 75% of the 200K context window to leave room for output tokens,
+/// tool definitions (~2K tokens), and estimation error margin.
+const COMPACTION_THRESHOLD: usize = 150_000;
+
+/// Minimum number of messages to keep uncompacted (most recent).
+/// These are the "working set" the LLM needs for its current task.
+const PROTECTED_TAIL_MESSAGES: usize = 6;
+
 /// Conversation state for the agentic tool loop.
 pub struct AgenticConversation {
     pub messages: Vec<Message>,
@@ -91,6 +100,114 @@ pub trait AgenticLlm: Send + Sync {
 /// Used by Chat sessions for per-iteration checkpointing.
 pub type OnCheckpoint = dyn Fn(&[Message]) + Send + Sync;
 
+/// Auto-compact old messages when context exceeds COMPACTION_THRESHOLD.
+/// Uses the LLM to summarize old messages before discarding them.
+/// Falls back to dumb truncation if summarization fails.
+async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut Vec<Message>) {
+    let total = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
+    if total <= COMPACTION_THRESHOLD {
+        return;
+    }
+
+    let mut split = messages.len().saturating_sub(PROTECTED_TAIL_MESSAGES);
+    if split == 0 {
+        return;
+    }
+    while split > 0 && messages[split].role != "assistant" {
+        split -= 1;
+    }
+    if split == 0 {
+        return;
+    }
+
+    let summary_input = format_messages_for_summary(&messages[..split]);
+
+    let summary_prompt = "You are a context compactor. Summarize the following conversation \
+        history into a concise recap. Preserve: key findings, file contents that were analyzed, \
+        decisions made, and any state the assistant needs to continue its work. \
+        Be factual and structured. Use bullet points.";
+
+    let summary_messages = vec![Message {
+        role: "user".to_string(),
+        content: vec![ContentBlock::Text {
+            text: format!("Summarize this conversation history:\n\n{}", summary_input),
+        }],
+    }];
+
+    match llm.complete(summary_prompt, &summary_messages, &[]).await {
+        Ok((blocks, _)) => {
+            let summary_text = extract_text(&blocks);
+            let summary_message = Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: format!(
+                        "[Context compacted — summary of {} earlier messages]\n\n{}",
+                        split, summary_text
+                    ),
+                }],
+            };
+
+            let protected = messages[split..].to_vec();
+            messages.clear();
+            messages.push(summary_message);
+            messages.extend(protected);
+
+            debug!(
+                "auto_compact: compacted {} messages into summary (~{} tokens), {} protected",
+                split,
+                estimate_tokens(&summary_text),
+                messages.len() - 1
+            );
+        }
+        Err(e) => {
+            log::warn!("auto_compact: summarization failed ({}), falling back to truncation", e);
+            fallback_truncate(messages, split);
+        }
+    }
+}
+
+/// Fallback: replace old tool results with placeholders (no LLM needed).
+fn fallback_truncate(messages: &mut [Message], compactable_end: usize) {
+    for msg in messages[..compactable_end].iter_mut() {
+        for block in msg.content.iter_mut() {
+            if let ContentBlock::ToolResult { content, .. } = block
+                && estimate_tokens(content) > 50
+            {
+                *content = "[earlier content truncated — re-read if needed]".to_string();
+            }
+        }
+    }
+}
+
+/// Format old messages into a text block for the summarizer.
+fn format_messages_for_summary(messages: &[Message]) -> String {
+    let mut out = String::new();
+    for msg in messages {
+        out.push_str(&format!("--- {} ---\n", msg.role));
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text } => {
+                    out.push_str(text);
+                    out.push('\n');
+                }
+                ContentBlock::ToolUse { name, input, .. } => {
+                    out.push_str(&format!("[tool call: {} args={}]\n", name, input));
+                }
+                ContentBlock::ToolResult { content, is_error, .. } => {
+                    let prefix = if *is_error { "[tool error]" } else { "[tool result]" };
+                    let display = if content.len() > 4000 {
+                        format!("{}...[{} chars total]", &content[..4000], content.len())
+                    } else {
+                        content.clone()
+                    };
+                    out.push_str(&format!("{} {}\n", prefix, display));
+                }
+            }
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_tool_loop(
     llm: &dyn AgenticLlm,
@@ -118,6 +235,9 @@ pub async fn run_tool_loop(
 
     for iteration in 0..max_iterations {
         debug!("agentic_loop iteration {}", iteration);
+
+        // Auto-compact old messages if context is too large
+        auto_compact(llm, system_prompt, &mut messages).await;
 
         let (content_blocks, stop_reason) = llm.complete(system_prompt, &messages, &tool_defs).await?;
 
