@@ -46,6 +46,11 @@ pub trait AgenticLlm: Send + Sync {
 ///
 /// `messages` is the full conversation history in Anthropic API format.
 /// For a fresh conversation, pass a single user message.
+/// Optional callback invoked after each completed iteration (LLM response + tool results).
+/// Used by Chat sessions for per-iteration checkpointing.
+pub type OnCheckpoint = dyn Fn(&[Message]) + Send + Sync;
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tool_loop(
     llm: &dyn AgenticLlm,
     executor: &ToolExecutor,
@@ -54,6 +59,7 @@ pub async fn run_tool_loop(
     messages: Vec<Message>,
     max_iterations: u32,
     event_tx: Option<&broadcast::Sender<DaemonEvent>>,
+    on_checkpoint: Option<&OnCheckpoint>,
 ) -> eyre::Result<AgenticResult> {
     debug!(
         "run_tool_loop(max_iterations={}, messages={}, tools={})",
@@ -177,6 +183,11 @@ pub async fn run_tool_loop(
             content: tool_results,
         });
 
+        // Checkpoint: persist messages after each completed iteration
+        if let Some(cb) = on_checkpoint {
+            cb(&messages);
+        }
+
         // Inject a hint if too many consecutive failures
         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
             debug!(
@@ -288,7 +299,7 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(PathBuf::from("/tmp"), "test".into());
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("hi"), 10, None)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("hi"), 10, None, None)
             .await
             .unwrap();
         assert_eq!(result.text, "Hello!");
@@ -323,9 +334,18 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(dir.clone(), "test".into()).with_deny_patterns(vec![]);
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("run echo"), 10, None)
-            .await
-            .unwrap();
+        let result = run_tool_loop(
+            &llm,
+            &executor,
+            &ctx,
+            "system",
+            user_message("run echo"),
+            10,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.text, "Done executing tool.");
         assert_eq!(result.tool_calls_count, 1);
         // user + assistant(tool_use) + user(tool_result) + assistant(text)
@@ -354,7 +374,7 @@ mod tests {
         let executor = ToolExecutor::standard(&[]);
         let ctx = ToolContext::new(std::env::temp_dir(), "test".into());
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("loop"), 3, None)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("loop"), 3, None, None)
             .await
             .unwrap();
         assert_eq!(result.tool_calls_count, 3);
@@ -393,7 +413,7 @@ mod tests {
             },
         ];
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", messages, 10, None)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", messages, 10, None, None)
             .await
             .unwrap();
         assert_eq!(result.text, "I remember the prior context.");
@@ -427,7 +447,7 @@ mod tests {
         let ctx = ToolContext::new(dir.clone(), "test-session".into()).with_deny_patterns(vec![]);
 
         let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("go"), 10, Some(&tx))
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("go"), 10, Some(&tx), None)
             .await
             .unwrap();
         assert_eq!(result.tool_calls_count, 1);
@@ -465,7 +485,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let ctx = ToolContext::new(dir.clone(), "test".into()).with_deny_patterns(vec![]);
 
-        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("read it"), 6, None)
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("read it"), 6, None, None)
             .await
             .unwrap();
 

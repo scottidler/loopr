@@ -263,6 +263,7 @@ async fn event_loop(
                         messages,
                         10,
                         Some(&event_tx_clone),
+                        None,
                     )
                     .await
                 }));
