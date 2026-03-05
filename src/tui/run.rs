@@ -17,7 +17,6 @@ use ratatui::{Frame, Terminal};
 use tokio::sync::broadcast;
 use tokio::time::Interval;
 
-use crate::agents::implementer::{ChatMessage as LlmChatMessage, LlmClient};
 use crate::agents::llm_client::AgentLlmClient;
 use crate::agents::{AgentEvent, AgentSession};
 use crate::config::AgentRoleConfig;
@@ -32,6 +31,10 @@ use crate::domain::tick::Tick;
 use crate::domain::work::Work;
 use crate::ipc::client::IpcClient;
 use crate::ipc::protocol::{DaemonEvent, IpcMessage};
+use crate::tools::agentic_loop::{AgenticResult, run_tool_loop};
+use crate::tools::context::ToolContext;
+use crate::tools::executor::ToolExecutor;
+use crate::tools::types::{ContentBlock, Message};
 
 use super::app::{
     App, AppState, ChatMessage, ChatMode, ChatRole, ConnectionStatus, FunnelState, InputMode, IpcAction, View, colors,
@@ -84,6 +87,11 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
         }
     };
 
+    // Create tool executor and context for agentic chat
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let tool_executor = Arc::new(ToolExecutor::chat(&[]));
+    let tool_ctx = Arc::new(ToolContext::new(cwd, "tui-chat".into()));
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -103,6 +111,8 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
         socket_path,
         llm_client,
         llm_event_tx,
+        tool_executor,
+        tool_ctx,
     )
     .await;
 
@@ -141,18 +151,6 @@ fn system_prompt_for_state(funnel_state: FunnelState, is_draft_request: bool) ->
     }
 }
 
-/// Convert app chat history to LLM client format.
-fn chat_history_as_llm_messages(history: &[ChatMessage]) -> Vec<LlmChatMessage> {
-    history
-        .iter()
-        .filter_map(|m| match m.role {
-            ChatRole::User => Some(LlmChatMessage::user(&m.content)),
-            ChatRole::Assistant => Some(LlmChatMessage::assistant(&m.content)),
-            ChatRole::System | ChatRole::ToolInvocation => None,
-        })
-        .collect()
-}
-
 /// Extract LLM chunk text from a DaemonEvent, if it's an LlmOutput event for the TUI chat session.
 fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
     if event.event != "agent.llm_output" {
@@ -171,7 +169,46 @@ fn extract_llm_chunk(event: &DaemonEvent) -> Option<(String, bool)> {
     None
 }
 
+/// Extract a tool event from a DaemonEvent and convert to a ChatMessage for display.
+fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
+    match event.event.as_str() {
+        "agent.tool_started" => {
+            let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
+            if let AgentEvent::ToolStarted { session_id, tool } = agent_event
+                && session_id == "tui-chat"
+            {
+                return Some(ChatMessage {
+                    role: ChatRole::ToolInvocation,
+                    content: format!("⟳ tool: {tool}"),
+                });
+            }
+            None
+        }
+        "agent.tool_completed" => {
+            let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
+            if let AgentEvent::ToolCompleted {
+                session_id,
+                tool,
+                exit_code,
+                duration_ms,
+            } = agent_event
+                && session_id == "tui-chat"
+            {
+                let is_error = exit_code != 0;
+                let prefix = if is_error { "✗" } else { "✓" };
+                return Some(ChatMessage {
+                    role: ChatRole::ToolInvocation,
+                    content: format!("{prefix} tool: {tool} ({duration_ms}ms)"),
+                });
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 /// Main select! loop: keyboard events + IPC messages + reconnection + LLM streaming.
+#[allow(clippy::too_many_arguments)]
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -179,6 +216,8 @@ async fn event_loop(
     socket_path: &Path,
     llm_client: Option<Arc<AgentLlmClient>>,
     llm_event_tx: broadcast::Sender<DaemonEvent>,
+    tool_executor: Arc<ToolExecutor>,
+    tool_ctx: Arc<ToolContext>,
 ) -> eyre::Result<()> {
     let mut events = EventStream::new();
     let mut reconnect_timer: Interval = tokio::time::interval(RECONNECT_INTERVAL);
@@ -187,8 +226,8 @@ async fn event_loop(
 
     let mut llm_event_rx = llm_event_tx.subscribe();
 
-    // Track the background LLM task
-    let mut llm_task: Option<tokio::task::JoinHandle<eyre::Result<String>>> = None;
+    // Track the background LLM/tool-loop task
+    let mut llm_task: Option<tokio::task::JoinHandle<eyre::Result<AgenticResult>>> = None;
 
     // Show warning if no LLM client
     if llm_client.is_none() {
@@ -198,7 +237,7 @@ async fn event_loop(
     }
 
     loop {
-        // Non-blocking drain of all available streaming chunks
+        // Non-blocking drain of all available streaming chunks and tool events
         while let Ok(event) = llm_event_rx.try_recv() {
             if let Some((chunk_text, is_final)) = extract_llm_chunk(&event) {
                 app.chat_response_buffer.push_str(&chunk_text);
@@ -209,6 +248,8 @@ async fn event_loop(
                     }
                     app.chat_streaming = false;
                 }
+            } else if let Some(tool_msg) = extract_tool_event(&event) {
+                app.chat_history.push(tool_msg);
             }
         }
 
@@ -216,22 +257,41 @@ async fn event_loop(
         if let Some(ref submit_text) = app.pending_chat_submit.take() {
             if let Some(ref llm) = llm_client {
                 let is_draft_request = submit_text == "/draft";
-                let client_clone = Arc::clone(llm);
-                let mut messages = chat_history_as_llm_messages(&app.chat_history);
                 let system_prompt = system_prompt_for_state(app.funnel_state, is_draft_request);
 
-                // Ensure messages end with a user message (API requirement).
+                // Ensure canonical_messages end with a user message (API requirement).
                 // Slash commands like /draft don't add a user message to history,
                 // so the last message may be an assistant response.
-                if messages.last().map(|m| m.role.as_str()) != Some("user") {
+                if app.canonical_messages.last().map(|m| m.role.as_str()) != Some("user") {
                     let synthetic = if is_draft_request { DRAFT_PROMPT } else { submit_text.as_str() };
-                    messages.push(LlmChatMessage::user(synthetic));
+                    app.canonical_messages.push(Message {
+                        role: "user".to_string(),
+                        content: vec![ContentBlock::Text {
+                            text: synthetic.to_string(),
+                        }],
+                    });
                 }
+
+                let messages = app.canonical_messages.clone();
+                let client_clone = Arc::clone(llm);
+                let executor_clone = Arc::clone(&tool_executor);
+                let ctx_clone = Arc::clone(&tool_ctx);
+                let event_tx_clone = llm_event_tx.clone();
+
                 app.chat_streaming = true;
                 app.chat_response_buffer.clear();
 
                 llm_task = Some(tokio::spawn(async move {
-                    client_clone.call_with_history(&system_prompt, &messages).await
+                    run_tool_loop(
+                        client_clone.as_ref(),
+                        executor_clone.as_ref(),
+                        ctx_clone.as_ref(),
+                        &system_prompt,
+                        messages,
+                        10,
+                        Some(&event_tx_clone),
+                    )
+                    .await
                 }));
             } else {
                 app.chat_history.push(ChatMessage::system(
@@ -280,10 +340,12 @@ async fn event_loop(
                     _ => {}
                 }
             }
-            // LLM streaming chunks (Chat mode)
+            // LLM streaming chunks and tool events (Chat mode)
             Ok(event) = llm_event_rx.recv(), if app.chat_streaming => {
                 if let Some((chunk_text, is_final)) = extract_llm_chunk(&event) {
                     app.chat_response_buffer.push_str(&chunk_text);
+                    // NOTE: is_final from individual complete() calls is always false now.
+                    // Finalization happens when the task completes below.
                     if is_final {
                         let content = std::mem::take(&mut app.chat_response_buffer);
                         if !content.is_empty() {
@@ -291,24 +353,33 @@ async fn event_loop(
                         }
                         app.chat_streaming = false;
                     }
+                } else if let Some(tool_msg) = extract_tool_event(&event) {
+                    app.chat_history.push(tool_msg);
                 }
             }
-            // LLM task completion (error handling)
+            // Tool loop task completion
             result = async { llm_task.as_mut().expect("guarded by is_some").await }, if llm_task.is_some() => {
                 llm_task = None;
                 match result {
-                    Ok(Ok(_)) => {
-                        // Response already handled via streaming chunks
-                        // Ensure streaming is finalized
-                        if app.chat_streaming {
-                            let content = std::mem::take(&mut app.chat_response_buffer);
-                            if !content.is_empty() {
-                                app.chat_history.push(ChatMessage::assistant(content));
-                            }
-                            app.chat_streaming = false;
+                    Ok(Ok(agentic_result)) => {
+                        // Update canonical messages from the full conversation
+                        app.canonical_messages = agentic_result.messages;
+
+                        // Finalize streaming display
+                        let content = std::mem::take(&mut app.chat_response_buffer);
+                        if !content.is_empty() {
+                            app.chat_history.push(ChatMessage::assistant(content));
+                        } else if !agentic_result.text.is_empty() {
+                            app.chat_history.push(ChatMessage::assistant(agentic_result.text));
+                        } else if agentic_result.tool_calls_count > 0 {
+                            app.chat_history.push(ChatMessage::system(
+                                "Tool loop reached maximum iterations without a final response.".into(),
+                            ));
                         }
+                        app.chat_streaming = false;
                     }
                     Ok(Err(e)) => {
+                        // Don't update canonical_messages on error (preserve for retry)
                         app.chat_streaming = false;
                         app.chat_response_buffer.clear();
                         app.chat_history.push(ChatMessage::system(format!("Error: {e}")));
@@ -2035,44 +2106,76 @@ mod tests {
     }
 
     #[test]
-    fn test_chat_history_as_llm_messages_filters_system() {
-        let history = vec![
-            ChatMessage::user("hello".into()),
-            ChatMessage::assistant("hi there".into()),
-            ChatMessage::system("Entering Plan mode.".into()),
-        ];
-        let messages = chat_history_as_llm_messages(&history);
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].role, "user");
-        assert_eq!(messages[1].role, "assistant");
+    fn test_canonical_messages_lifecycle() {
+        let mut app = App::new();
+        assert!(app.canonical_messages.is_empty());
+
+        // Simulate user message
+        app.canonical_messages.push(crate::tools::types::Message {
+            role: "user".to_string(),
+            content: vec![crate::tools::types::ContentBlock::Text {
+                text: "hello".to_string(),
+            }],
+        });
+        assert_eq!(app.canonical_messages.len(), 1);
+        assert_eq!(app.canonical_messages[0].role, "user");
+
+        // Simulate assistant response with tool use
+        app.canonical_messages.push(crate::tools::types::Message {
+            role: "assistant".to_string(),
+            content: vec![crate::tools::types::ContentBlock::Text {
+                text: "hi there".to_string(),
+            }],
+        });
+        assert_eq!(app.canonical_messages.len(), 2);
+
+        // Clear resets both
+        app.chat_history.clear();
+        app.canonical_messages.clear();
+        assert!(app.canonical_messages.is_empty());
     }
 
     #[test]
-    fn test_draft_request_appends_user_message_when_last_is_assistant() {
-        // Simulates the /draft flow: user chats, assistant responds,
-        // system messages from /plan and /draft are filtered out,
-        // leaving the conversation ending with an assistant message.
-        // The fix ensures a synthetic user message is appended.
-        let history = vec![
-            ChatMessage::user("I want to build a todo app".into()),
-            ChatMessage::assistant("Great idea! What framework?".into()),
-            ChatMessage::system("Entering Plan mode.".into()),
-            ChatMessage::system("Building draft plan...".into()),
+    fn test_draft_request_appends_synthetic_user_message() {
+        // Simulates the /draft flow with canonical_messages.
+        // When canonical_messages ends with assistant, a synthetic user message is appended.
+        let mut canonical = vec![
+            crate::tools::types::Message {
+                role: "user".to_string(),
+                content: vec![crate::tools::types::ContentBlock::Text {
+                    text: "I want to build a todo app".to_string(),
+                }],
+            },
+            crate::tools::types::Message {
+                role: "assistant".to_string(),
+                content: vec![crate::tools::types::ContentBlock::Text {
+                    text: "Great idea! What framework?".to_string(),
+                }],
+            },
         ];
-        let mut messages = chat_history_as_llm_messages(&history);
 
         // Before fix: messages ends with assistant — API would reject
-        assert_eq!(messages.last().unwrap().role, "assistant");
+        assert_eq!(canonical.last().unwrap().role, "assistant");
 
         // Apply the same logic as the event loop
         let is_draft_request = true;
-        if messages.last().map(|m| m.role.as_str()) != Some("user") {
+        if canonical.last().map(|m| m.role.as_str()) != Some("user") {
             let synthetic = if is_draft_request { DRAFT_PROMPT } else { "fallback" };
-            messages.push(LlmChatMessage::user(synthetic));
+            canonical.push(crate::tools::types::Message {
+                role: "user".to_string(),
+                content: vec![crate::tools::types::ContentBlock::Text {
+                    text: synthetic.to_string(),
+                }],
+            });
         }
 
         // After fix: messages ends with user
-        assert_eq!(messages.last().unwrap().role, "user");
-        assert!(messages.last().unwrap().content.contains("plan draft"));
+        assert_eq!(canonical.last().unwrap().role, "user");
+        match &canonical.last().unwrap().content[0] {
+            crate::tools::types::ContentBlock::Text { text } => {
+                assert!(text.contains("plan draft"));
+            }
+            _ => panic!("expected Text block"),
+        }
     }
 }

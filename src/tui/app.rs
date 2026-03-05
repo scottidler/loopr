@@ -13,6 +13,7 @@ use crate::domain::role::Role;
 use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::work::Work;
+use crate::tools::types::Message;
 
 /// Color palette stolen from taskdaemon.
 pub mod colors {
@@ -218,6 +219,9 @@ pub struct App {
     // Chat fields
     pub chat_mode: ChatMode,
     pub chat_history: Vec<ChatMessage>,
+    /// Canonical conversation in Anthropic API format.
+    /// Persists across turns, includes tool_use and tool_result blocks.
+    pub canonical_messages: Vec<Message>,
     pub chat_input: String,
     pub chat_cursor_pos: usize,
     pub chat_streaming: bool,
@@ -249,6 +253,7 @@ impl App {
             pending_ipc: None,
             chat_mode: ChatMode::Chat,
             chat_history: Vec::new(),
+            canonical_messages: Vec::new(),
             chat_input: String::new(),
             chat_cursor_pos: 0,
             chat_streaming: false,

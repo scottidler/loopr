@@ -293,6 +293,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                     }
                     "/clear" if app.funnel_state == FunnelState::Chat => {
                         app.chat_history.clear();
+                        app.canonical_messages.clear();
                         app.chat_response_buffer.clear();
                         app.chat_streaming = false;
                         app.chat_mode = ChatMode::Chat;
@@ -359,6 +360,11 @@ pub fn apply_action(app: &mut App, action: Action) {
             } else {
                 // Regular message — always goes to TUI-side LLM
                 app.chat_history.push(ChatMessage::user(input.clone()));
+                // Also append to canonical messages for the Anthropic API
+                app.canonical_messages.push(crate::tools::types::Message {
+                    role: "user".to_string(),
+                    content: vec![crate::tools::types::ContentBlock::Text { text: input.clone() }],
+                });
                 app.pending_chat_submit = Some(input);
             }
         }
