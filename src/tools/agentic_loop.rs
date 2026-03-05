@@ -66,6 +66,8 @@ pub async fn run_tool_loop(
     let mut messages = messages;
 
     let mut total_tool_calls = 0;
+    let mut consecutive_failures: u32 = 0;
+    const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
     for iteration in 0..max_iterations {
         debug!("agentic_loop iteration {}", iteration);
@@ -103,6 +105,7 @@ pub async fn run_tool_loop(
 
         // Execute all tool calls
         let mut tool_results = Vec::new();
+        let mut all_failed = true;
         for call in &tool_uses {
             debug!("executing tool: {} (id: {})", call.name, call.id);
 
@@ -114,6 +117,10 @@ pub async fn run_tool_loop(
             let result: ToolResult = executor.execute(call, ctx).await;
             let duration_ms = start.elapsed().as_millis() as u64;
             total_tool_calls += 1;
+
+            if !result.is_error {
+                all_failed = false;
+            }
 
             let exit_code = if result.is_error { 1 } else { 0 };
             if let Some(tx) = event_tx {
@@ -132,11 +139,38 @@ pub async fn run_tool_loop(
             });
         }
 
+        // Track consecutive all-error iterations
+        if all_failed {
+            consecutive_failures += 1;
+        } else {
+            consecutive_failures = 0;
+        }
+
         // Add tool results as user message
         messages.push(Message {
             role: "user".to_string(),
             content: tool_results,
         });
+
+        // Inject a hint if too many consecutive failures
+        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+            debug!(
+                "agentic_loop: {} consecutive all-error iterations, injecting hint",
+                consecutive_failures
+            );
+            messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: format!(
+                        "WARNING: The last {} tool call iterations all failed. \
+                         Stop retrying the same approach. Either use a different tool, \
+                         change your strategy, or respond with what you know so far.",
+                        consecutive_failures
+                    ),
+                }],
+            });
+            consecutive_failures = 0;
+        }
     }
 
     // Max iterations reached — return what we have
@@ -379,6 +413,50 @@ mod tests {
 
         let event2 = rx.try_recv().unwrap();
         assert_eq!(event2.event, "agent.tool_completed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_run_tool_loop_consecutive_failure_hint() {
+        // LLM calls a tool that always errors — after 3 consecutive failures,
+        // a hint message should be injected into the conversation.
+        let llm = MockAgenticLlm::new(
+            (0..10)
+                .map(|i| {
+                    (
+                        vec![ContentBlock::ToolUse {
+                            id: format!("tu-{}", i),
+                            name: "read".to_string(),
+                            input: serde_json::json!({"path": "nonexistent-file.txt"}),
+                        }],
+                        Some(crate::tools::types::StopReason::ToolUse),
+                    )
+                })
+                .collect(),
+        );
+        let executor = ToolExecutor::standard(&[]);
+        let dir = std::env::temp_dir().join("loopr-fail-hint");
+        let _ = std::fs::create_dir_all(&dir);
+        let ctx = ToolContext::new(dir.clone(), "test".into()).with_deny_patterns(vec![]);
+
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("read it"), 6, None)
+            .await
+            .unwrap();
+
+        // After 3 consecutive failures, a hint user message should appear
+        let hint_messages: Vec<_> = result
+            .messages
+            .iter()
+            .filter(|m| {
+                m.role == "user"
+                    && m.content.iter().any(|b| match b {
+                        ContentBlock::Text { text } => text.contains("WARNING"),
+                        _ => false,
+                    })
+            })
+            .collect();
+        assert!(!hint_messages.is_empty(), "expected at least one failure hint message");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -916,6 +916,7 @@ mod tests {
     use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
+    use std::path::Path;
     use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
     use tokio::sync::broadcast;
@@ -1890,72 +1891,41 @@ mod tests {
 
     #[test]
     fn test_merge_bundle_branches_success() {
+        fn git(dir: &Path, args: &[&str]) -> std::process::Output {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        }
+
         let dir = TestDir::new("loopr-intg-merge-ok");
 
         // Initialize git repo with initial commit
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["init"]);
+        git(&dir, &["config", "user.email", "test@test.com"]);
+        git(&dir, &["config", "user.name", "Test"]);
         std::fs::write(dir.join("main.txt"), "main").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "initial"]);
+
+        // Record the default branch name
+        let out = git(&dir, &["branch", "--show-current"]);
+        let default_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
         // Create a feature branch with a commit
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "feature-1"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["checkout", "-b", "feature-1"]);
         std::fs::write(dir.join("feature.txt"), "feature").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "feature"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["checkout", "master"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        // Try main if master doesn't exist
-        let out = std::process::Command::new("git")
-            .args(["branch", "--show-current"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        let branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if branch != "master" {
-            std::process::Command::new("git")
-                .args(["checkout", "main"])
-                .current_dir(&dir)
-                .output()
-                .unwrap();
-        }
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "feature"]);
+        git(&dir, &["checkout", &default_branch]);
 
         let result = merge_bundle_branches(&dir, &["feature-1".to_string()]);
         assert!(result.is_ok(), "merge should succeed: {:?}", result);
@@ -1963,71 +1933,46 @@ mod tests {
 
     #[test]
     fn test_merge_bundle_branches_failure_cleans_up() {
+        fn git(dir: &Path, args: &[&str]) -> std::process::Output {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        }
+
         let dir = TestDir::new("loopr-intg-merge-abort");
 
         // Initialize git repo
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["init"]);
+        git(&dir, &["config", "user.email", "test@test.com"]);
+        git(&dir, &["config", "user.name", "Test"]);
         std::fs::write(dir.join("conflict.txt"), "main-content").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "initial"]);
+
+        // Record the default branch name (main or master)
+        let out = git(&dir, &["branch", "--show-current"]);
+        let default_branch = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
         // Create a feature branch with conflicting content
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "conflict-branch"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["checkout", "-b", "conflict-branch"]);
         std::fs::write(dir.join("conflict.txt"), "branch-content").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "branch change"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "branch change"]);
 
-        // Go back and make a conflicting change on main
-        std::process::Command::new("git")
-            .args(["checkout", "-"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        // Go back to the default branch and make a conflicting change
+        git(&dir, &["checkout", &default_branch]);
         std::fs::write(dir.join("conflict.txt"), "main-different-content").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "main diverge"])
-            .current_dir(&dir)
-            .output()
-            .unwrap();
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-m", "main diverge"]);
 
         // Merge should fail due to conflict
         let result = merge_bundle_branches(&dir, &["conflict-branch".to_string()]);

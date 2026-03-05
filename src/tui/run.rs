@@ -90,7 +90,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     // Create tool executor and context for agentic chat
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let tool_executor = Arc::new(ToolExecutor::chat(&[]));
-    let tool_ctx = Arc::new(ToolContext::new(cwd, "tui-chat".into()));
+    let tool_ctx = Arc::new(ToolContext::new(cwd, "tui-chat".into()).with_sandbox(false));
 
     // Setup terminal
     enable_raw_mode()?;
