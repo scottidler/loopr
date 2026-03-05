@@ -8,6 +8,8 @@ use crate::agents::implementer::{ChatMessage, LlmClient};
 use crate::agents::{AgentEvent, AgentStatus};
 use crate::config::AgentRoleConfig;
 use crate::ipc::protocol::DaemonEvent;
+use crate::tools::agentic_loop::AgenticLlm;
+use crate::tools::types::{CompletionResponse, ContentBlock, Message, StopReason, ToolDefinition};
 
 /// Real LLM client using reqwest async HTTP with SSE streaming for the Anthropic Messages API.
 ///
@@ -214,6 +216,101 @@ impl LlmClient for AgentLlmClient {
             messages.len()
         );
         self.call_streaming_with_messages(system_prompt, messages).await
+    }
+}
+
+#[async_trait]
+impl AgenticLlm for AgentLlmClient {
+    async fn complete(
+        &self,
+        system_prompt: &str,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+    ) -> Result<(Vec<ContentBlock>, Option<StopReason>)> {
+        debug!(
+            "AgentLlmClient::complete(messages={}, tools={})",
+            messages.len(),
+            tools.len()
+        );
+
+        let api_messages: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                let content: Vec<serde_json::Value> = m
+                    .content
+                    .iter()
+                    .map(|block| serde_json::to_value(block).unwrap_or_default())
+                    .collect();
+                serde_json::json!({
+                    "role": m.role,
+                    "content": content,
+                })
+            })
+            .collect();
+
+        let tool_defs: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })
+            })
+            .collect();
+
+        let mut body = serde_json::json!({
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "system": system_prompt,
+            "messages": api_messages,
+        });
+
+        if !tool_defs.is_empty() {
+            body["tools"] = serde_json::Value::Array(tool_defs);
+        }
+
+        self.emit_status(AgentStatus::WaitingForLlm);
+
+        let response = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| eyre!("HTTP request failed: {}", e))?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            warn!("Rate limited (429) — backing off");
+            return Err(eyre!("rate limited (429) — retry with backoff"));
+        }
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(eyre!("API error {}: {}", status, error_body));
+        }
+
+        self.emit_status(AgentStatus::Running);
+
+        let resp_text = response.text().await.map_err(|e| eyre!("read body: {}", e))?;
+        let completion: CompletionResponse = serde_json::from_str(&resp_text)
+            .map_err(|e| eyre!("parse response: {}: {}", e, &resp_text[..resp_text.len().min(500)]))?;
+
+        // Emit any text blocks as chunks for TUI streaming display.
+        // NOTE: Do NOT emit is_final=true here — in a tool loop with multiple iterations,
+        // that would prematurely finalize the chat response. The caller (run_tool_loop /
+        // chat event loop) is responsible for signaling completion.
+        for block in &completion.content {
+            if let ContentBlock::Text { text } = block {
+                self.emit_chunk(text, false);
+            }
+        }
+
+        Ok((completion.content, completion.stop_reason))
     }
 }
 
