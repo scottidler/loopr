@@ -93,6 +93,7 @@ fn render_history(app: &App, frame: &mut Frame, area: Rect) {
                 ),
                 ChatRole::Assistant => ("  ", Style::default().fg(colors::REPL_ASSISTANT)),
                 ChatRole::System => ("  ", Style::default().fg(colors::DIM)),
+                ChatRole::ToolInvocation => ("  ", Style::default().fg(colors::DIM).add_modifier(Modifier::ITALIC)),
             };
 
             for line_text in msg.content.lines() {

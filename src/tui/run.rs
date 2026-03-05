@@ -148,7 +148,7 @@ fn chat_history_as_llm_messages(history: &[ChatMessage]) -> Vec<LlmChatMessage> 
         .filter_map(|m| match m.role {
             ChatRole::User => Some(LlmChatMessage::user(&m.content)),
             ChatRole::Assistant => Some(LlmChatMessage::assistant(&m.content)),
-            ChatRole::System => None, // system messages are not part of LLM conversation
+            ChatRole::System | ChatRole::ToolInvocation => None,
         })
         .collect()
 }

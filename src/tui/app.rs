@@ -52,6 +52,8 @@ pub enum ChatRole {
     User,
     Assistant,
     System,
+    /// A tool invocation (shown inline in chat during agentic loop).
+    ToolInvocation,
 }
 
 /// A single message in the chat history.
@@ -80,6 +82,14 @@ impl ChatMessage {
         Self {
             role: ChatRole::System,
             content,
+        }
+    }
+
+    pub fn tool_invocation(tool_name: &str, is_error: bool) -> Self {
+        let prefix = if is_error { "✗" } else { "✓" };
+        Self {
+            role: ChatRole::ToolInvocation,
+            content: format!("{} tool: {}", prefix, tool_name),
         }
     }
 }
