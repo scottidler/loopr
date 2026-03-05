@@ -175,6 +175,7 @@ pub async fn run_agent_task(
                     session.error_message = Some(format!("worktree creation failed: {}", e));
                     persist_session(&stores, session);
                 }
+                debug!("[agent_status] {}: -> Failed (worktree creation)", session_id);
                 let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Failed));
                 return;
             }
@@ -225,6 +226,7 @@ pub async fn run_agent_task(
             persist_session(&stores, session);
         }
     }
+    debug!("[agent_status] {}: -> Running", session_id);
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
 
     let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
@@ -333,6 +335,7 @@ pub async fn run_agent_task(
         agent_log.info(&format!("created failure learning {} on '{}'", learning_id, wi_title));
     }
 
+    debug!("[agent_status] {}: -> {:?} (terminal)", session_id, terminal_status);
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
 
     agent_log.info(&format!("task finished → {:?}", terminal_status));
@@ -1599,6 +1602,7 @@ pub async fn run_single_work(
     }
     stores.write_agent_sessions()?.insert(session_id.clone(), session);
     let _ = event_tx.send(DaemonEvent::record_created("agent_session", &session_id));
+    debug!("[agent_status] {}: -> Starting (worker spawn)", session_id);
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Starting));
 
     info!(

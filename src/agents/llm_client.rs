@@ -85,6 +85,7 @@ impl AgentLlmClient {
 
     /// Emit a status change event.
     fn emit_status(&self, status: AgentStatus) {
+        log::debug!("[agent_status] {}: -> {:?}", self.session_id, status);
         let _ = self
             .event_tx
             .send(DaemonEvent::agent_status_changed(&self.session_id, status));

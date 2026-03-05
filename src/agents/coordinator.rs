@@ -1281,6 +1281,7 @@ impl CoordinatorAgent {
             iteration, coord_state.fsm_state, assembled.token_estimate
         ));
 
+        log::debug!("[agent_status] {}: -> WaitingForLlm", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::WaitingForLlm,
@@ -1323,6 +1324,7 @@ impl CoordinatorAgent {
         };
         guard.reset_parse_failures();
 
+        log::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::Running,

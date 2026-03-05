@@ -244,6 +244,8 @@ async fn event_loop(
                 if is_final {
                     let content = std::mem::take(&mut app.chat_response_buffer);
                     if !content.is_empty() {
+                        // Tap 1b: Assistant response finalized
+                        log::debug!("[chat] assistant: {} chars", content.len());
                         app.chat_history.push(ChatMessage::assistant(content));
                     }
                     app.chat_streaming = false;
@@ -277,6 +279,9 @@ async fn event_loop(
                 let executor_clone = Arc::clone(&tool_executor);
                 let ctx_clone = Arc::clone(&tool_ctx);
                 let event_tx_clone = llm_event_tx.clone();
+
+                // Tap 1a: User chat message submitted
+                log::debug!("[chat] user: {}", submit_text);
 
                 app.chat_streaming = true;
                 app.chat_response_buffer.clear();

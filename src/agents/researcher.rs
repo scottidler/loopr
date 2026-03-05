@@ -224,6 +224,7 @@ impl ResearcherAgent {
             iteration, assembled.token_estimate
         ));
 
+        log::debug!("[agent_status] {}: -> WaitingForLlm", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::WaitingForLlm,
@@ -260,6 +261,7 @@ impl ResearcherAgent {
             }
         };
 
+        log::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::Running,

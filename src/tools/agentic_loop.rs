@@ -74,6 +74,15 @@ pub async fn run_tool_loop(
 
         let (content_blocks, stop_reason) = llm.complete(system_prompt, &messages, &tool_defs).await?;
 
+        // Tap 2: LLM response finalized
+        debug!(
+            "[agent:{}] llm_response: stop_reason={:?} blocks={} text_len={}",
+            ctx.exec_id,
+            stop_reason,
+            content_blocks.len(),
+            extract_text(&content_blocks).len()
+        );
+
         // Add assistant message
         messages.push(Message {
             role: "assistant".to_string(),
@@ -107,7 +116,11 @@ pub async fn run_tool_loop(
         let mut tool_results = Vec::new();
         let mut all_failed = true;
         for call in &tool_uses {
-            debug!("executing tool: {} (id: {})", call.name, call.id);
+            // Tap 3: Tool call dispatched
+            debug!(
+                "[agent:{}] tool_call: tool={} id={} args={}",
+                ctx.exec_id, call.name, call.id, call.input
+            );
 
             if let Some(tx) = event_tx {
                 let _ = tx.send(DaemonEvent::agent_tool_started(&ctx.exec_id, &call.name));
@@ -123,6 +136,18 @@ pub async fn run_tool_loop(
             }
 
             let exit_code = if result.is_error { 1 } else { 0 };
+
+            // Tap 4: Tool result received
+            debug!(
+                "[agent:{}] tool_result: tool={} is_error={} exit={} duration={}ms content_len={}",
+                ctx.exec_id,
+                call.name,
+                result.is_error,
+                exit_code,
+                duration_ms,
+                result.content.len()
+            );
+
             if let Some(tx) = event_tx {
                 let _ = tx.send(DaemonEvent::agent_tool_completed(
                     &ctx.exec_id,

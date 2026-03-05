@@ -704,6 +704,10 @@ fn handle_plan_transition(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
+        debug!(
+            "[transition] plan.{}: {:?} -> {:?} by {}",
+            id, from, target_status, role
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "plan",
             &id,
@@ -1001,6 +1005,10 @@ fn handle_spec_transition(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
+        debug!(
+            "[transition] spec.{}: {:?} -> {:?} by {}",
+            id, from, target_status, role
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "spec",
             &id,
@@ -1299,6 +1307,10 @@ fn handle_phase_transition(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
+        debug!(
+            "[transition] phase.{}: {:?} -> {:?} by {}",
+            id, from, target_status, role
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "phase",
             &id,
@@ -1684,6 +1696,10 @@ fn handle_work_transition(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
+        debug!(
+            "[transition] work.{}: {:?} -> {:?} by {}",
+            id, from, target_status, role
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "work",
             &id,
@@ -2092,6 +2108,10 @@ fn handle_bundle_transition(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
+        debug!(
+            "[transition] bundle.{}: {:?} -> {:?} by {}",
+            id, from, target_status, role
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "bundle",
             &id,
@@ -2346,6 +2366,10 @@ fn handle_tick_transition(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
+        debug!(
+            "[transition] tick.{}: {:?} -> {:?} by {}",
+            id, from, target_status, role
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "tick",
             &id,
@@ -3310,6 +3334,7 @@ fn handle_integrator_validate(
                 return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
             }
         }
+        debug!("[transition] tick.{}: Sealing -> Validating by Integrator", tick_id);
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "tick",
             &tick_id,
@@ -3422,6 +3447,7 @@ fn handle_integrator_publish(
                 return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
             }
 
+            debug!("[transition] tick.{}: Open -> Sealing by Integrator", tick_id);
             let _ = event_tx.send(DaemonEvent::transition_completed(
                 "tick",
                 &tick_id,
@@ -4367,6 +4393,7 @@ fn handle_agent_start(
 
         stores.write_agent_sessions()?.insert(id.clone(), session);
         let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
+        debug!("[agent_status] {}: -> Starting (type={:?})", id, agent_type);
         let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));
 
         // Spawn agent task as a Tokio background task
@@ -4441,6 +4468,7 @@ fn handle_agent_stop(
         };
 
         let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+        debug!("[agent_status] {}: -> Cancelled", session_id);
         let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Cancelled));
         Ok(DaemonResponse::ok(req.id, session_json))
     })
@@ -4500,6 +4528,7 @@ fn handle_agent_pause(
         };
 
         let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+        debug!("[agent_status] {}: -> Paused", session_id);
         let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Paused));
         Ok(DaemonResponse::ok(req.id, session_json))
     })
@@ -4552,6 +4581,7 @@ fn handle_agent_resume(
         };
 
         let _ = event_tx.send(DaemonEvent::record_updated("agent_session", session_id));
+        debug!("[agent_status] {}: -> Running (resumed)", session_id);
         let _ = event_tx.send(DaemonEvent::agent_status_changed(session_id, AgentStatus::Running));
         Ok(DaemonResponse::ok(req.id, session_json))
     })
