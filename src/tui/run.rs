@@ -315,11 +315,11 @@ async fn event_loop(
                     }
                     Ok(Some(IpcMessage::Response(resp))) => {
                         // Async response (e.g., chat.submit ack) — check for errors
-                        if resp.is_error() {
-                            if let Some(err) = resp.error {
-                                app.chat_history.push(ChatMessage::system(format!("Error: {}", err.message)));
-                                app.chat_streaming = false;
-                            }
+                        if resp.is_error()
+                            && let Some(err) = resp.error
+                        {
+                            app.chat_history.push(ChatMessage::system(format!("Error: {}", err.message)));
+                            app.chat_streaming = false;
                         }
                     }
                 }
@@ -935,7 +935,7 @@ mod tests {
         // when a new daemon becomes available
         use crate::ipc::protocol::DaemonEvent;
         use crate::ipc::server::{IpcServer, handle_client};
-        
+
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1723,7 +1723,7 @@ mod tests {
     async fn test_refresh_collection_updates_specs() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        
+
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1775,7 +1775,7 @@ mod tests {
     async fn test_refresh_collection_updates_phases() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        
+
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1827,7 +1827,7 @@ mod tests {
     async fn test_refresh_collection_updates_learnings() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        
+
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1883,7 +1883,7 @@ mod tests {
     async fn test_refresh_collection_updates_locks() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        
+
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1935,7 +1935,7 @@ mod tests {
     async fn test_refresh_collection_updates_agent_sessions() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        
+
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();

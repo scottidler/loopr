@@ -266,17 +266,30 @@ impl AgenticLlm for AgentLlmClient {
             })
             .collect();
 
+        let system_block = serde_json::json!([
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }
+        ]);
+
         let mut body = serde_json::json!({
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
             "stream": true,
-            "system": system_prompt,
+            "system": system_block,
             "messages": api_messages,
         });
 
         if !tool_defs.is_empty() {
-            body["tools"] = serde_json::Value::Array(tool_defs);
+            // Add cache_control to the last tool definition for prompt caching
+            let mut tool_array = tool_defs;
+            if let Some(last) = tool_array.last_mut() {
+                last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            }
+            body["tools"] = serde_json::Value::Array(tool_array);
         }
 
         self.emit_status(AgentStatus::WaitingForLlm);
@@ -286,6 +299,7 @@ impl AgenticLlm for AgentLlmClient {
             .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "prompt-caching-2024-07-31")
             .header("content-type", "application/json")
             .json(&body)
             .send()
