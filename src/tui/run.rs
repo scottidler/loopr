@@ -38,6 +38,10 @@ use super::views;
 /// Reconnect interval when disconnected from daemon.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Target frame interval during streaming (~30fps). Batches SSE chunks between frames
+/// to avoid rendering every 1-character delta.
+const FRAME_INTERVAL: Duration = Duration::from_millis(33);
+
 /// Restore the terminal to normal mode. Called on both clean exit and panic.
 /// Uses raw escape sequences as a fallback to guarantee mouse tracking stops.
 fn restore_terminal() {
@@ -217,6 +221,7 @@ async fn event_loop(
     let mut reconnect_timer: Interval = tokio::time::interval(RECONNECT_INTERVAL);
     // Consume the first immediate tick so we don't reconnect on startup
     reconnect_timer.tick().await;
+    let mut last_render = std::time::Instant::now();
 
     loop {
         // Fire-and-forget chat submit — never blocks the event loop.
@@ -254,8 +259,14 @@ async fn event_loop(
             }
         }
 
-        app.frame_count = app.frame_count.wrapping_add(1);
-        terminal.draw(|frame| draw(app, frame))?;
+        // Throttle renders to ~30fps during streaming. Always render immediately
+        // for non-streaming state (keyboard events, view switches, etc.).
+        let now = std::time::Instant::now();
+        if !app.chat_streaming || now.duration_since(last_render) >= FRAME_INTERVAL {
+            app.frame_count = app.frame_count.wrapping_add(1);
+            terminal.draw(|frame| draw(app, frame))?;
+            last_render = now;
+        }
 
         if app.should_quit {
             break;
@@ -295,35 +306,42 @@ async fn event_loop(
                 }
             }
             ipc_msg = async { client.as_mut().expect("guarded by is_some").recv().await }, if client.is_some() => {
+                // Collect the first message + drain all immediately-available IPC
+                // messages. Batching SSE chunks between frames prevents rendering
+                // per-character deltas.
+                let mut pending: Vec<IpcMessage> = Vec::new();
+                let mut disconnected = false;
                 match ipc_msg {
-                    Ok(Some(IpcMessage::Event(event))) => {
-                        // Handle LLM streaming chunks and tool events for Chat
-                        handle_daemon_event(app, &event);
+                    Ok(Some(msg)) => pending.push(msg),
+                    Ok(None) | Err(_) => disconnected = true,
+                }
 
-                        // Handle record events (refresh collections)
-                        if let Some(collection) = event_collection(&event) {
-                            let collection = collection.to_string();
-                            if let Some(c) = client.as_mut() {
-                                refresh_collection(&mut app.state, c, &collection).await;
-                            }
-                        }
-                    }
-                    Ok(None) | Err(_) => {
-                        info!("Lost connection to daemon, will attempt reconnection");
-                        app.connection = ConnectionStatus::Disconnected;
-                        client = None;
-                    }
-                    Ok(Some(IpcMessage::Response(resp))) => {
-                        // Async response (e.g., chat.submit ack) — check for errors
-                        if resp.is_error()
-                            && let Some(err) = resp.error
-                        {
-                            app.chat_history.push(ChatMessage::system(format!("Error: {}", err.message)));
-                            app.chat_streaming = false;
+                if !disconnected
+                    && let Some(c) = client.as_mut()
+                {
+                    loop {
+                        match c.try_recv() {
+                            Ok(Some(msg)) => pending.push(msg),
+                            Ok(None) => break,
+                            Err(_) => { disconnected = true; break; }
                         }
                     }
                 }
+
+                // Process all collected messages
+                for msg in pending {
+                    process_ipc_message(app, &mut client, msg).await;
+                }
+
+                if disconnected {
+                    info!("Lost connection to daemon, will attempt reconnection");
+                    app.connection = ConnectionStatus::Disconnected;
+                    client = None;
+                }
             }
+            // During streaming, wake up at frame intervals to render even if no IPC
+            // events arrive (keeps the spinner animating).
+            _ = tokio::time::sleep(FRAME_INTERVAL), if app.chat_streaming => {}
             _ = reconnect_timer.tick(), if client.is_none() => {
                 if let Some((new_client, session_id)) = try_connect(socket_path).await {
                     info!("Reconnected to daemon");
@@ -336,6 +354,30 @@ async fn event_loop(
     }
 
     Ok(())
+}
+
+/// Process a single IPC message: dispatch events to handlers and refresh collections.
+async fn process_ipc_message(app: &mut App, client: &mut Option<IpcClient>, msg: IpcMessage) {
+    match msg {
+        IpcMessage::Event(event) => {
+            handle_daemon_event(app, &event);
+            if let Some(collection) = event_collection(&event) {
+                let collection = collection.to_string();
+                if let Some(c) = client.as_mut() {
+                    refresh_collection(&mut app.state, c, &collection).await;
+                }
+            }
+        }
+        IpcMessage::Response(resp) => {
+            if resp.is_error()
+                && let Some(err) = resp.error
+            {
+                app.chat_history
+                    .push(ChatMessage::system(format!("Error: {}", err.message)));
+                app.chat_streaming = false;
+            }
+        }
+    }
 }
 
 /// Process a daemon event for Chat streaming (LLM chunks + tool events).

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use futures::SinkExt;
+use futures::{FutureExt, SinkExt};
 use tokio::net::UnixStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{Framed, LinesCodec};
@@ -89,6 +89,20 @@ impl IpcClient {
             }
             Some(Err(e)) => Err(ClientError::Io(std::io::Error::other(e.to_string()))),
             None => Ok(None),
+        }
+    }
+
+    /// Non-blocking: return a message if one is immediately available, else None.
+    pub fn try_recv(&mut self) -> Result<Option<IpcMessage>, ClientError> {
+        // Poll the underlying stream without awaiting
+        match self.framed.next().now_or_never() {
+            Some(Some(Ok(line))) => {
+                let msg = IpcMessage::from_json(&line).map_err(ClientError::Deserialize)?;
+                Ok(Some(msg))
+            }
+            Some(Some(Err(e))) => Err(ClientError::Io(std::io::Error::other(e.to_string()))),
+            Some(None) => Ok(None), // stream closed
+            None => Ok(None),       // nothing available
         }
     }
 
