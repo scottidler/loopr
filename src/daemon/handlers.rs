@@ -4822,9 +4822,9 @@ fn handle_chat_submit(
             }
         }
 
-        // Create daemon-side LLM client for this chat session
-        let config = stores.config.agents.implementer.clone();
-        let llm = match crate::agents::llm_client::AgentLlmClient::new(config, session_id.clone(), event_tx.clone()) {
+        // Create daemon-side LLM client for this chat session using ChatConfig
+        let chat_config = stores.config.chat.to_role_config();
+        let llm = match crate::agents::llm_client::AgentLlmClient::new(chat_config, session_id.clone(), event_tx.clone()) {
             Ok(c) => Arc::new(c),
             Err(e) => {
                 return Ok(DaemonResponse::err(
@@ -4834,11 +4834,25 @@ fn handle_chat_submit(
             }
         };
 
+        // Create a separate LLM client for delegate subagents (fast model)
+        let delegate_config = stores.config.chat.to_delegate_role_config();
+        let delegate_llm: Arc<dyn crate::tools::agentic_loop::AgenticLlm> =
+            match crate::agents::llm_client::AgentLlmClient::new(delegate_config, format!("{}:delegate", session_id), event_tx.clone()) {
+                Ok(c) => Arc::new(c),
+                Err(e) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::internal(&format!("failed to create delegate LLM client: {}", e)),
+                    ));
+                }
+            };
+
         let system_prompt = crate::domain::chat::system_prompt_for_chat(funnel_state, is_draft_request);
         let executor = std::sync::Arc::new(crate::tools::executor::ToolExecutor::chat_with_delegation(
             &stores.config.agents.tools,
-            llm.clone(),
+            delegate_llm,
         ));
+        let max_iterations = stores.config.chat.max_iterations;
         let cwd = stores.config.project.repo_path.clone();
         let ctx = crate::tools::context::ToolContext::new(cwd, session_id.clone())
             .with_sandbox(false);
@@ -4866,7 +4880,7 @@ fn handle_chat_submit(
                 &ctx,
                 &system_prompt,
                 messages,
-                10,
+                max_iterations,
                 Some(&event_tx_clone),
                 Some(&checkpoint_fn),
             )

@@ -405,6 +405,57 @@ pub struct ToolEntry {
     pub worktree: bool,
 }
 
+/// Chat session configuration — model for interactive chat and delegate subagents.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ChatConfig {
+    pub model: String,
+    pub delegate_model: String,
+    pub api_key_env: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub max_iterations: u32,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            model: "claude-sonnet-4-6".to_string(),
+            delegate_model: "claude-haiku-4-5-20251001".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 8192,
+            temperature: 0.3,
+            max_iterations: 10,
+        }
+    }
+}
+
+impl ChatConfig {
+    /// Build an `AgentRoleConfig` for the parent chat LLM.
+    pub fn to_role_config(&self) -> AgentRoleConfig {
+        AgentRoleConfig {
+            model: self.model.clone(),
+            api_key_env: self.api_key_env.clone(),
+            max_tokens: self.max_tokens,
+            max_iterations: self.max_iterations,
+            temperature: self.temperature,
+            ..AgentRoleConfig::default_implementer()
+        }
+    }
+
+    /// Build an `AgentRoleConfig` for delegate subagents.
+    pub fn to_delegate_role_config(&self) -> AgentRoleConfig {
+        AgentRoleConfig {
+            model: self.delegate_model.clone(),
+            api_key_env: self.api_key_env.clone(),
+            max_tokens: self.max_tokens,
+            max_iterations: 20,
+            temperature: self.temperature,
+            ..AgentRoleConfig::default_implementer()
+        }
+    }
+}
+
 /// Doc Validator configuration — LLM-powered document validation for quality gates.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -487,6 +538,7 @@ pub struct Config {
     pub log_level: Option<String>,
     pub daemon: DaemonConfig,
     pub project: ProjectConfig,
+    pub chat: ChatConfig,
     pub integrator: IntegratorConfig,
     pub validator: ValidatorConfig,
     pub evaluator: EvaluatorConfig,
@@ -502,6 +554,7 @@ impl Default for Config {
             log_level: None,
             daemon: DaemonConfig::default(),
             project: ProjectConfig::default(),
+            chat: ChatConfig::default(),
             integrator: IntegratorConfig::default(),
             validator: ValidatorConfig::default(),
             evaluator: EvaluatorConfig::default(),
@@ -1074,6 +1127,58 @@ interview_mode: auto
 "#;
         let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse coordinator config");
         assert_eq!(cc.interview_mode, InterviewMode::Auto);
+    }
+
+    // --- ChatConfig tests ---
+
+    #[test]
+    fn test_chat_config_default() {
+        let cc = ChatConfig::default();
+        assert_eq!(cc.model, "claude-sonnet-4-6");
+        assert_eq!(cc.delegate_model, "claude-haiku-4-5-20251001");
+        assert_eq!(cc.max_tokens, 8192);
+        assert_eq!(cc.max_iterations, 10);
+        assert!((cc.temperature - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_chat_config_to_role_config() {
+        let cc = ChatConfig::default();
+        let role = cc.to_role_config();
+        assert_eq!(role.model, "claude-sonnet-4-6");
+        assert_eq!(role.max_tokens, 8192);
+        assert_eq!(role.max_iterations, 10);
+    }
+
+    #[test]
+    fn test_chat_config_to_delegate_role_config() {
+        let cc = ChatConfig::default();
+        let role = cc.to_delegate_role_config();
+        assert_eq!(role.model, "claude-haiku-4-5-20251001");
+        assert_eq!(role.max_iterations, 20);
+    }
+
+    #[test]
+    fn test_chat_config_yaml_roundtrip() {
+        let yaml = r#"
+model: "claude-opus-4-6"
+delegate_model: "claude-sonnet-4-6"
+max_tokens: 4096
+temperature: 0.5
+max_iterations: 20
+"#;
+        let cc: ChatConfig = serde_yaml::from_str(yaml).expect("should parse chat config");
+        assert_eq!(cc.model, "claude-opus-4-6");
+        assert_eq!(cc.delegate_model, "claude-sonnet-4-6");
+        assert_eq!(cc.max_tokens, 4096);
+        assert_eq!(cc.max_iterations, 20);
+    }
+
+    #[test]
+    fn test_config_has_chat() {
+        let config = Config::default();
+        assert_eq!(config.chat.model, "claude-sonnet-4-6");
+        assert_eq!(config.chat.delegate_model, "claude-haiku-4-5-20251001");
     }
 
     #[test]
