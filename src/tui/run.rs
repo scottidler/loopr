@@ -38,6 +38,13 @@ use super::views;
 /// Reconnect interval when disconnected from daemon.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Restore the terminal to normal mode. Called on both clean exit and panic.
+fn restore_terminal() {
+    let _ = execute!(io::stdout(), DisableMouseCapture);
+    let _ = disable_raw_mode();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+}
+
 /// Run the TUI, connecting to the daemon at the given socket path.
 pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     // Connect to daemon
@@ -65,6 +72,13 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Install panic hook that restores the terminal before printing the panic.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        original_hook(info);
+    }));
+
     // Create app state
     let mut app = App::new();
     app.connection = ConnectionStatus::Connected;
@@ -73,12 +87,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     // Run event loop; capture result so we always restore the terminal
     let result = event_loop(&mut terminal, &mut app, Some(client), socket_path).await;
 
-    // Restore terminal — disable mouse capture first to stop mouse event
-    // tracking before leaving the alternate screen, preventing raw escape
-    // sequences from leaking into the main terminal buffer.
-    execute!(terminal.backend_mut(), DisableMouseCapture)?;
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    restore_terminal();
 
     result
 }
@@ -239,6 +248,10 @@ async fn event_loop(
         }
 
         tokio::select! {
+            // Ctrl+C signal — always responsive, even if other arms are blocked
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
             crossterm_event = events.next() => {
                 match crossterm_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
