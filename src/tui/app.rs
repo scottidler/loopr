@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Instant;
 
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
@@ -215,6 +216,7 @@ pub struct App {
     pub chat_input: String,
     pub chat_cursor_pos: usize,
     pub chat_streaming: bool,
+    pub chat_started_at: Option<Instant>,
     pub chat_response_buffer: String,
     pub chat_scroll: Option<usize>,
     pub pending_chat_submit: Option<String>,
@@ -248,6 +250,7 @@ impl App {
             chat_input: String::new(),
             chat_cursor_pos: 0,
             chat_streaming: false,
+            chat_started_at: None,
             chat_response_buffer: String::new(),
             chat_scroll: None,
             pending_chat_submit: None,

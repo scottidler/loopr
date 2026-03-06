@@ -260,6 +260,7 @@ async fn event_loop(
                 match c.send("chat.submit", params).await {
                     Ok(_) => {
                         app.chat_streaming = true;
+                        app.chat_started_at = Some(std::time::Instant::now());
                         app.chat_response_buffer.clear();
                     }
                     Err(e) => {
@@ -387,6 +388,7 @@ async fn process_ipc_message(app: &mut App, client: &mut Option<IpcClient>, msg:
             {
                 app.chat_history
                     .push(ChatMessage::system(format!("Error: {}", err.message)));
+                app.chat_started_at = None;
                 app.chat_streaming = false;
             }
         }
@@ -403,6 +405,18 @@ fn handle_daemon_event(app: &mut App, event: &DaemonEvent) {
                 log::debug!("[chat] assistant: {} chars", content.len());
                 app.chat_history.push(ChatMessage::assistant(content));
             }
+            let elapsed = app.chat_started_at.map(|t| t.elapsed()).unwrap_or_default();
+            let secs = elapsed.as_secs_f64();
+            let elapsed_str = if secs < 60.0 {
+                format!("{secs:.1}s")
+            } else {
+                let mins = secs as u64 / 60;
+                let rem = secs % 60.0;
+                format!("{mins}m {rem:.0}s")
+            };
+            app.chat_history
+                .push(ChatMessage::system(format!("✓ Done ({elapsed_str})")));
+            app.chat_started_at = None;
             app.chat_streaming = false;
         }
     } else if let Some(tool_msg) = extract_tool_event(event) {

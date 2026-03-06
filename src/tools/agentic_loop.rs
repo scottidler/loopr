@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use log::{debug, info};
+use log::debug;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::agents::context::estimate_tokens;
@@ -182,7 +182,7 @@ async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut 
             messages.extend(protected);
 
             let tokens_after = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
-            info!(
+            debug!(
                 "[timing:auto_compact] {}ms tokens_before={} tokens_after={}",
                 compact_start.elapsed().as_millis(),
                 tokens_before,
@@ -199,7 +199,7 @@ async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut 
             log::warn!("auto_compact: summarization failed ({}), falling back to truncation", e);
             fallback_truncate(messages, split);
             let tokens_after = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
-            info!(
+            debug!(
                 "[timing:auto_compact] {}ms tokens_before={} tokens_after={} (fallback)",
                 compact_start.elapsed().as_millis(),
                 tokens_before,
@@ -321,7 +321,7 @@ pub async fn run_tool_loop(
             "total={}ms llm={}ms tools={}ms tool_count={}",
             iter_ms, llm_ms, tools_ms, tool_count
         );
-        info!("[timing:{}] iter {}: {}", exec_id, iteration, detail);
+        debug!("[timing:{}] iter {}: {}", exec_id, iteration, detail);
         if let Some(tx) = event_tx {
             let _ = tx.send(DaemonEvent::agent_timing_info(
                 exec_id,
@@ -344,7 +344,7 @@ pub async fn run_tool_loop(
             "total={}ms iterations={} tool_calls={}",
             loop_ms, iterations, total_tool_calls
         );
-        info!("[timing:{}] loop_complete: {}", exec_id, detail);
+        debug!("[timing:{}] loop_complete: {}", exec_id, detail);
         if let Some(tx) = event_tx {
             let _ = tx.send(DaemonEvent::agent_timing_info(exec_id, "loop_complete", &detail));
         }

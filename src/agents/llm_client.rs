@@ -327,7 +327,7 @@ impl AgenticLlm for AgentLlmClient {
 
         let total_ms = call_start.elapsed().as_millis();
         let ttft_ms = ttft.map(|d| d.as_millis()).unwrap_or(0);
-        info!(
+        debug!(
             "[timing:{}] complete: total={}ms ttft={}ms blocks={}",
             self.session_id,
             total_ms,
