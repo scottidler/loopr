@@ -97,6 +97,13 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
 
     restore_terminal();
 
+    if !app.session_id.is_empty() {
+        eprintln!(
+            "loopr session {} ended. Run `loopr diagnose dump` for diagnostics.",
+            app.session_id
+        );
+    }
+
     result
 }
 
@@ -523,12 +530,17 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     // Inner area = total area minus 2 for borders
     let inner_width = area.width.saturating_sub(2) as usize;
 
-    if !app.session_id.is_empty() && inner_width > left_width + 2 {
-        let padding = inner_width.saturating_sub(left_width + app.session_id.len());
-        if padding > 0 {
-            spans.push(Span::raw(" ".repeat(padding)));
-        }
-        spans.push(Span::styled(&app.session_id, Style::default().fg(colors::DIM)));
+    // Right-aligned: "version | session_id " (1 char buffer from border)
+    let version = crate::version();
+    let right_text = if !app.session_id.is_empty() {
+        format!("{} | {} ", version, app.session_id)
+    } else {
+        format!("{} ", version)
+    };
+    if inner_width > left_width + right_text.len() + 1 {
+        let padding = inner_width.saturating_sub(left_width + right_text.len());
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(Span::styled(right_text, Style::default().fg(colors::DIM)));
     }
 
     let header_line = Line::from(spans);
