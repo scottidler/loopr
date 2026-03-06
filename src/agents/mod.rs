@@ -574,6 +574,11 @@ pub enum AgentEvent {
         session_id: String,
         new_tick_id: String,
     },
+    TimingInfo {
+        session_id: String,
+        label: String,
+        detail: String,
+    },
 }
 
 #[allow(clippy::unwrap_used)]

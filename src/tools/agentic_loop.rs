@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use log::debug;
+use log::{debug, info};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::agents::context::estimate_tokens;
@@ -135,6 +135,9 @@ async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut 
         return;
     }
 
+    let compact_start = Instant::now();
+    let tokens_before = total;
+
     let mut split = messages.len().saturating_sub(PROTECTED_TAIL_MESSAGES);
     if split == 0 {
         return;
@@ -178,6 +181,13 @@ async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut 
             messages.push(summary_message);
             messages.extend(protected);
 
+            let tokens_after = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
+            info!(
+                "[timing:auto_compact] {}ms tokens_before={} tokens_after={}",
+                compact_start.elapsed().as_millis(),
+                tokens_before,
+                tokens_after
+            );
             debug!(
                 "auto_compact: compacted {} messages into summary (~{} tokens), {} protected",
                 split,
@@ -188,6 +198,13 @@ async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut 
         Err(e) => {
             log::warn!("auto_compact: summarization failed ({}), falling back to truncation", e);
             fallback_truncate(messages, split);
+            let tokens_after = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
+            info!(
+                "[timing:auto_compact] {}ms tokens_before={} tokens_after={} (fallback)",
+                compact_start.elapsed().as_millis(),
+                tokens_before,
+                tokens_after
+            );
         }
     }
 }
@@ -287,7 +304,54 @@ pub async fn run_tool_loop(
     let mut output_recovery_count: u32 = 0;
     const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
+    let loop_start = Instant::now();
+
+    /// Emit iteration timing via log and optional event channel.
+    fn emit_iteration_timing(
+        exec_id: &str,
+        iteration: u32,
+        iter_start: &Instant,
+        llm_ms: u128,
+        tools_ms: u128,
+        tool_count: usize,
+        event_tx: Option<&broadcast::Sender<DaemonEvent>>,
+    ) {
+        let iter_ms = iter_start.elapsed().as_millis();
+        let detail = format!(
+            "total={}ms llm={}ms tools={}ms tool_count={}",
+            iter_ms, llm_ms, tools_ms, tool_count
+        );
+        info!("[timing:{}] iter {}: {}", exec_id, iteration, detail);
+        if let Some(tx) = event_tx {
+            let _ = tx.send(DaemonEvent::agent_timing_info(
+                exec_id,
+                &format!("iter {iteration}"),
+                &detail,
+            ));
+        }
+    }
+
+    /// Emit loop_complete timing via log and optional event channel.
+    fn emit_loop_timing(
+        exec_id: &str,
+        loop_start: &Instant,
+        iterations: u32,
+        total_tool_calls: usize,
+        event_tx: Option<&broadcast::Sender<DaemonEvent>>,
+    ) {
+        let loop_ms = loop_start.elapsed().as_millis();
+        let detail = format!(
+            "total={}ms iterations={} tool_calls={}",
+            loop_ms, iterations, total_tool_calls
+        );
+        info!("[timing:{}] loop_complete: {}", exec_id, detail);
+        if let Some(tx) = event_tx {
+            let _ = tx.send(DaemonEvent::agent_timing_info(exec_id, "loop_complete", &detail));
+        }
+    }
+
     for iteration in 0..max_iterations {
+        let iter_start = Instant::now();
         debug!("agentic_loop iteration {}", iteration);
 
         // Log token estimate for observability
@@ -306,6 +370,7 @@ pub async fn run_tool_loop(
         // Streaming tool execution: start tools as their blocks complete during SSE
         let (block_tx, mut block_rx) = mpsc::unbounded_channel();
 
+        let llm_start = Instant::now();
         let (llm_result, early_tool_results) = tokio::join!(
             llm.complete_streaming(system_prompt, &messages, &tool_defs, block_tx),
             async {
@@ -348,6 +413,7 @@ pub async fn run_tool_loop(
             }
         );
 
+        let llm_ms = llm_start.elapsed().as_millis();
         let (content_blocks, stop_reason) = llm_result?;
 
         // Tap 2: LLM response finalized
@@ -380,6 +446,8 @@ pub async fn run_tool_loop(
 
         // End turn: no tool calls and not a max_tokens recovery scenario
         if tool_uses.is_empty() && stop_reason != Some(crate::tools::types::StopReason::MaxTokens) {
+            emit_iteration_timing(&ctx.exec_id, iteration, &iter_start, llm_ms, 0, 0, event_tx);
+            emit_loop_timing(&ctx.exec_id, &loop_start, iteration + 1, total_tool_calls, event_tx);
             let text = extract_text(&content_blocks);
             return Ok(AgenticResult {
                 text,
@@ -415,6 +483,8 @@ pub async fn run_tool_loop(
 
         // No tool calls and no recovery possible — return
         if tool_uses.is_empty() {
+            emit_iteration_timing(&ctx.exec_id, iteration, &iter_start, llm_ms, 0, 0, event_tx);
+            emit_loop_timing(&ctx.exec_id, &loop_start, iteration + 1, total_tool_calls, event_tx);
             let text = extract_text(&content_blocks);
             return Ok(AgenticResult {
                 text,
@@ -425,6 +495,8 @@ pub async fn run_tool_loop(
 
         // Only execute tools if stop_reason is ToolUse
         if stop_reason != Some(crate::tools::types::StopReason::ToolUse) {
+            emit_iteration_timing(&ctx.exec_id, iteration, &iter_start, llm_ms, 0, 0, event_tx);
+            emit_loop_timing(&ctx.exec_id, &loop_start, iteration + 1, total_tool_calls, event_tx);
             let text = extract_text(&content_blocks);
             return Ok(AgenticResult {
                 text,
@@ -436,6 +508,7 @@ pub async fn run_tool_loop(
         // Use early results from streaming, or fall back to collecting any that didn't
         // start streaming (shouldn't happen with correct complete_streaming impl)
         let results = early_tool_results;
+        let tools_ms = iter_start.elapsed().as_millis().saturating_sub(llm_ms);
 
         let mut tool_results = Vec::new();
         let mut all_failed = true;
@@ -482,6 +555,16 @@ pub async fn run_tool_loop(
             content: tool_results,
         });
 
+        emit_iteration_timing(
+            &ctx.exec_id,
+            iteration,
+            &iter_start,
+            llm_ms,
+            tools_ms,
+            tool_uses.len(),
+            event_tx,
+        );
+
         // Checkpoint: persist messages after each completed iteration
         if let Some(cb) = on_checkpoint {
             cb(&messages);
@@ -509,6 +592,8 @@ pub async fn run_tool_loop(
     }
 
     // Max iterations reached — return what we have
+    emit_loop_timing(&ctx.exec_id, &loop_start, max_iterations, total_tool_calls, event_tx);
+
     let last_text = messages
         .iter()
         .rev()

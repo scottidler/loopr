@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::{debug, info, trace, warn};
@@ -318,13 +320,19 @@ impl AgenticLlm for AgentLlmClient {
 
         self.emit_status(AgentStatus::Running);
 
-        // Parse SSE stream into content blocks
-        let (content_blocks, stop_reason) = self.read_sse_content_blocks(response).await?;
+        let call_start = Instant::now();
 
+        // Parse SSE stream into content blocks
+        let (content_blocks, stop_reason, ttft) = self.read_sse_content_blocks(response).await?;
+
+        let total_ms = call_start.elapsed().as_millis();
+        let ttft_ms = ttft.map(|d| d.as_millis()).unwrap_or(0);
         info!(
-            "complete() streamed {} blocks for session {}",
-            content_blocks.len(),
-            self.session_id
+            "[timing:{}] complete: total={}ms ttft={}ms blocks={}",
+            self.session_id,
+            total_ms,
+            ttft_ms,
+            content_blocks.len()
         );
 
         Ok((content_blocks, stop_reason))
@@ -351,9 +359,11 @@ impl AgentLlmClient {
     async fn read_sse_content_blocks(
         &self,
         response: reqwest::Response,
-    ) -> Result<(Vec<ContentBlock>, Option<StopReason>)> {
+    ) -> Result<(Vec<ContentBlock>, Option<StopReason>, Option<Duration>)> {
         use futures::StreamExt;
 
+        let stream_start = Instant::now();
+        let mut first_chunk_time: Option<Duration> = None;
         let mut blocks: Vec<ContentBlock> = Vec::new();
         let mut current: Option<BlockAccumulator> = None;
         let mut stop_reason: Option<StopReason> = None;
@@ -399,6 +409,9 @@ impl AgentLlmClient {
                         });
                     }
                     "content_block_delta" => {
+                        if first_chunk_time.is_none() {
+                            first_chunk_time = Some(stream_start.elapsed());
+                        }
                         let delta = &value["delta"];
                         let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                         match (&mut current, delta_type) {
@@ -445,7 +458,7 @@ impl AgentLlmClient {
             blocks.push(finalize_block(acc));
         }
 
-        Ok((blocks, stop_reason))
+        Ok((blocks, stop_reason, first_chunk_time))
     }
 }
 

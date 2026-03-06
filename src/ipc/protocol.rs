@@ -306,6 +306,15 @@ impl DaemonEvent {
         )
     }
 
+    pub fn agent_timing_info(session_id: &str, label: &str, detail: &str) -> Self {
+        let event = AgentEvent::TimingInfo {
+            session_id: session_id.to_string(),
+            label: label.to_string(),
+            detail: detail.to_string(),
+        };
+        Self::new("agent.timing_info", serde_json::to_value(event).unwrap_or_default())
+    }
+
     pub fn learning_policy_contradicted(learning_id: &str) -> Self {
         Self::new(
             "learning.policy_contradicted",
@@ -525,5 +534,33 @@ mod tests {
         let event = DaemonEvent::learning_policy_contradicted("l1");
         assert_eq!(event.event, "learning.policy_contradicted");
         assert_eq!(event.data["learning_id"], "l1");
+    }
+
+    #[test]
+    fn test_event_agent_timing_info() {
+        let event = DaemonEvent::agent_timing_info("chat-1", "iter 0", "total=3204ms llm=2891ms tools=298ms");
+        assert_eq!(event.event, "agent.timing_info");
+        let data: AgentEvent = serde_json::from_value(event.data).unwrap();
+        match data {
+            AgentEvent::TimingInfo {
+                session_id,
+                label,
+                detail,
+            } => {
+                assert_eq!(session_id, "chat-1");
+                assert_eq!(label, "iter 0");
+                assert!(detail.contains("total=3204ms"));
+            }
+            _ => panic!("expected TimingInfo"),
+        }
+    }
+
+    #[test]
+    fn test_event_agent_timing_info_roundtrip() {
+        let event = DaemonEvent::agent_timing_info("s1", "loop_complete", "total=4360ms iterations=2");
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: DaemonEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.event, "agent.timing_info");
+        assert_eq!(event, parsed);
     }
 }

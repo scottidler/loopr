@@ -202,6 +202,22 @@ fn extract_tool_event(event: &DaemonEvent) -> Option<ChatMessage> {
             }
             None
         }
+        "agent.timing_info" => {
+            let agent_event: AgentEvent = serde_json::from_value(event.data.clone()).ok()?;
+            if let AgentEvent::TimingInfo {
+                session_id,
+                label,
+                detail,
+            } = agent_event
+                && session_id == CHAT_SESSION_ID
+            {
+                return Some(ChatMessage {
+                    role: ChatRole::ToolInvocation,
+                    content: format!("⏱ {label}: {detail}"),
+                });
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -2210,6 +2226,22 @@ mod tests {
     #[test]
     fn test_extract_tool_event_unrelated_event() {
         let event = DaemonEvent::record_created("work", "w1");
+        assert!(extract_tool_event(&event).is_none());
+    }
+
+    #[test]
+    fn test_extract_tool_event_timing_info() {
+        let event = DaemonEvent::agent_timing_info(CHAT_SESSION_ID, "iter 0", "total=3204ms llm=2891ms tools=298ms");
+        let msg = extract_tool_event(&event).unwrap();
+        assert_eq!(msg.role, ChatRole::ToolInvocation);
+        assert!(msg.content.contains("⏱"));
+        assert!(msg.content.contains("iter 0"));
+        assert!(msg.content.contains("total=3204ms"));
+    }
+
+    #[test]
+    fn test_extract_tool_event_timing_info_wrong_session() {
+        let event = DaemonEvent::agent_timing_info("other-session", "iter 0", "total=100ms");
         assert!(extract_tool_event(&event).is_none());
     }
 
