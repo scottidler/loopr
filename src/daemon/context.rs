@@ -79,6 +79,8 @@ pub struct Stores {
     pub session_dir: Option<std::path::PathBuf>,
     /// Chat session conversation histories, keyed by session ID (e.g., "default-chat").
     pub chat_sessions: StdRwLock<HashMap<String, ChatHistory>>,
+    /// Daemon session ID (timestamp-based), set once at startup.
+    pub session_id: String,
 }
 
 macro_rules! store_accessors {
@@ -168,6 +170,7 @@ impl Stores {
             guidance: AgentGuidance::schema_only(),
             session_dir: None,
             chat_sessions: StdRwLock::new(HashMap::new()),
+            session_id: String::new(),
         }
     }
 }
@@ -355,6 +358,8 @@ impl DaemonContext {
 
         // Load guidance: schema docs from transition rules + LOOPR.md files from disk
         stores.guidance = crate::guidance::load_guidance(&repo_path);
+
+        stores.session_id = session_id.clone();
 
         Ok(Self {
             config,

@@ -220,6 +220,7 @@ pub struct App {
     pub pending_chat_submit: Option<String>,
     pub frame_count: u64,
     pub funnel_state: FunnelState,
+    pub session_id: String,
 }
 
 impl Default for App {
@@ -252,6 +253,7 @@ impl App {
             pending_chat_submit: None,
             frame_count: 0,
             funnel_state: FunnelState::Chat,
+            session_id: String::new(),
         }
     }
 
