@@ -858,9 +858,11 @@ mod tests {
         // verify the PID-check logic by testing with a live PID + missing socket.
         let (_dir, config) = test_config();
 
-        // Write our own PID (alive) but no socket → should timeout waiting for socket
-        std::fs::create_dir_all(config.daemon.pid_path.parent().unwrap()).unwrap();
+        // Write our own PID (alive) + matching version but no socket → should timeout waiting for socket
+        let runtime_dir = config.daemon.pid_path.parent().unwrap();
+        std::fs::create_dir_all(runtime_dir).unwrap();
         std::fs::write(&config.daemon.pid_path, std::process::id().to_string()).unwrap();
+        std::fs::write(runtime_dir.join("daemon.version"), crate::version()).unwrap();
 
         let result = ensure_daemon(&config, None);
         assert!(result.is_err(), "should error when PID alive but no socket");
