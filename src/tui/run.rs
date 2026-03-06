@@ -341,6 +341,13 @@ fn handle_daemon_event(app: &mut App, event: &DaemonEvent) {
             app.chat_streaming = false;
         }
     } else if let Some(tool_msg) = extract_tool_event(event) {
+        // Flush any accumulated text before showing the tool event.
+        // Each agentic loop iteration produces text + tool_use blocks;
+        // without flushing, text from all iterations gets concatenated.
+        let content = std::mem::take(&mut app.chat_response_buffer);
+        if !content.is_empty() {
+            app.chat_history.push(ChatMessage::assistant(content));
+        }
         app.chat_history.push(tool_msg);
     }
 }
