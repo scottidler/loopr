@@ -425,7 +425,7 @@ impl Default for ChatConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 8192,
             temperature: 0.3,
-            max_iterations: 10,
+            max_iterations: 3,
         }
     }
 }
@@ -1137,7 +1137,7 @@ interview_mode: auto
         assert_eq!(cc.model, "claude-sonnet-4-6");
         assert_eq!(cc.delegate_model, "claude-haiku-4-5-20251001");
         assert_eq!(cc.max_tokens, 8192);
-        assert_eq!(cc.max_iterations, 10);
+        assert_eq!(cc.max_iterations, 3);
         assert!((cc.temperature - 0.3).abs() < f32::EPSILON);
     }
 
@@ -1147,7 +1147,7 @@ interview_mode: auto
         let role = cc.to_role_config();
         assert_eq!(role.model, "claude-sonnet-4-6");
         assert_eq!(role.max_tokens, 8192);
-        assert_eq!(role.max_iterations, 10);
+        assert_eq!(role.max_iterations, 3);
     }
 
     #[test]

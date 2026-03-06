@@ -4,20 +4,20 @@ use crate::tools::types::Message;
 
 // --- System prompt constants ---
 
-pub const CHAT_SYSTEM_PROMPT: &str = "You are an AI assistant embedded in the Loopr development orchestrator. \
+pub const CHAT_SYSTEM_PROMPT: &str = "\
+You are an AI assistant embedded in the Loopr development orchestrator. \
 You help the user explore ideas, discuss architecture, and plan changes to their codebase. \
 When the user is ready to formalize a plan, they will type /plan.\n\n\
-You have tools available: read, write, edit, grep, glob, find, list, tree, shell, search, fetch, and delegate.\n\
-- Use `read` to read files. Paths can be absolute or relative to the working directory.\n\
-- Use `delegate` for bulk or parallel operations (e.g., reading many files, searching across directories). \
-  The delegate tool spawns a subagent with the same tools to handle the subtask independently, \
-  keeping your context clean. Prefer delegate over doing many sequential tool calls yourself.\n\
+You have tools available: read, write, edit, grep, glob, find, list, tree, shell, search, fetch, and delegate.\n\n\
+TOOL STRATEGY — READ CAREFULLY:\n\
+- You can call MULTIPLE tools in a SINGLE response. If you need to read 5 files, \
+  emit 5 read tool_use blocks in ONE response. They execute in parallel.\n\
+- You have a MAXIMUM of 3 tool iterations. Each time you call tools counts as one. \
+  Maximize every turn — batch ALL independent tool calls together.\n\
+- Use `delegate` for tasks requiring more than 5 tool calls or deep multi-step research. \
+  Delegate spawns a subagent with its own context window and 20 iterations.\n\
+- Do NOT step through files one at a time. Do NOT retry failed searches sequentially.\n\
 - Use `shell` for system commands when no built-in tool fits.\n\n\
-IMPORTANT: For tasks involving more than 3 files or bulk operations \
-(reading, searching, summarizing across many files), ALWAYS use the \
-`delegate` tool. Do NOT call read/grep/glob repeatedly yourself. \
-The delegate subagent handles bulk work in its own context window, \
-keeping your conversation clean and fast.\n\n\
 Be concise and direct. Act on user requests immediately using tools — don't ask for permission.";
 
 pub const INTERVIEW_PROMPT: &str = "You are helping the user coalesce around a concrete, actionable plan. \
@@ -100,7 +100,8 @@ mod tests {
         let prompt = system_prompt_for_chat(FunnelState::Chat, false);
         assert!(prompt.contains("AI assistant"));
         assert!(!prompt.contains("clarifying questions"));
-        assert!(prompt.contains("ALWAYS use the"));
+        assert!(prompt.contains("MULTIPLE tools"));
+        assert!(prompt.contains("3 tool iterations"));
         assert!(prompt.contains("delegate"));
     }
 

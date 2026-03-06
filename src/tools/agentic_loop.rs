@@ -22,6 +22,15 @@ const COMPACTION_THRESHOLD: usize = 150_000;
 /// These are the "working set" the LLM needs for its current task.
 const PROTECTED_TAIL_MESSAGES: usize = 6;
 
+/// Max times we'll attempt to recover from output token limit per loop invocation.
+const MAX_OUTPUT_RECOVERY_ATTEMPTS: u32 = 3;
+
+/// Microcompact: truncate tool results longer than this (chars) outside the protected tail.
+const MICROCOMPACT_THRESHOLD: usize = 4096;
+
+/// How many chars to keep as preview when microcompacting.
+const MICROCOMPACT_PREVIEW: usize = 2048;
+
 /// Conversation state for the agentic tool loop.
 pub struct AgenticConversation {
     pub messages: Vec<Message>,
@@ -208,6 +217,33 @@ fn format_messages_for_summary(messages: &[Message]) -> String {
     out
 }
 
+/// Lightweight per-turn pruning. No LLM call needed.
+/// Truncates oversized tool results outside the protected tail.
+fn microcompact(messages: &mut [Message], protected_tail: usize) {
+    let compactable_end = messages.len().saturating_sub(protected_tail);
+    if compactable_end == 0 {
+        return;
+    }
+
+    for msg in messages[..compactable_end].iter_mut() {
+        for block in msg.content.iter_mut() {
+            if let ContentBlock::ToolResult { content, .. } = block {
+                if content.len() > MICROCOMPACT_THRESHOLD {
+                    let preview_end = MICROCOMPACT_PREVIEW.min(content.len());
+                    let preview = &content[..preview_end];
+                    let cut = preview.rfind('\n').unwrap_or(preview_end);
+                    let original_len = content.len();
+                    *content = format!(
+                        "{}\n... [truncated from {} chars — re-read if needed]",
+                        &content[..cut],
+                        original_len
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_tool_loop(
     llm: &dyn AgenticLlm,
@@ -231,6 +267,7 @@ pub async fn run_tool_loop(
 
     let mut total_tool_calls = 0;
     let mut consecutive_failures: u32 = 0;
+    let mut output_recovery_count: u32 = 0;
     const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
     for iteration in 0..max_iterations {
@@ -242,6 +279,9 @@ pub async fn run_tool_loop(
             "[agent:{}] iteration {} token_estimate={}",
             ctx.exec_id, iteration, estimated_tokens
         );
+
+        // Lightweight per-turn pruning (sub-ms, no LLM call)
+        microcompact(&mut messages, PROTECTED_TAIL_MESSAGES);
 
         // Auto-compact old messages if context is too large
         auto_compact(llm, system_prompt, &mut messages).await;
@@ -276,8 +316,53 @@ pub async fn run_tool_loop(
             })
             .collect();
 
-        if tool_uses.is_empty() || stop_reason != Some(crate::tools::types::StopReason::ToolUse) {
-            // No tool calls or end_turn — extract final text and return
+        // End turn: no tool calls and not a max_tokens recovery scenario
+        if tool_uses.is_empty() && stop_reason != Some(crate::tools::types::StopReason::MaxTokens) {
+            let text = extract_text(&content_blocks);
+            return Ok(AgenticResult {
+                text,
+                messages,
+                tool_calls_count: total_tool_calls,
+            });
+        }
+
+        // Max tokens recovery: if the model hit the output limit, inject a
+        // "resume" message and continue. Consumes an iteration from the budget.
+        if stop_reason == Some(crate::tools::types::StopReason::MaxTokens)
+            && output_recovery_count < MAX_OUTPUT_RECOVERY_ATTEMPTS
+        {
+            output_recovery_count += 1;
+            debug!(
+                "agentic_loop: max_tokens recovery attempt {}/{}",
+                output_recovery_count, MAX_OUTPUT_RECOVERY_ATTEMPTS
+            );
+            messages.push(Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "Output token limit hit. Resume directly — no apology, no recap \
+                           of what you were doing. Pick up mid-thought if that is where the \
+                           cut happened. Break remaining work into smaller pieces."
+                        .to_string(),
+                }],
+            });
+            if let Some(cb) = on_checkpoint {
+                cb(&messages);
+            }
+            continue;
+        }
+
+        // No tool calls and no recovery possible — return
+        if tool_uses.is_empty() {
+            let text = extract_text(&content_blocks);
+            return Ok(AgenticResult {
+                text,
+                messages,
+                tool_calls_count: total_tool_calls,
+            });
+        }
+
+        // Only execute tools if stop_reason is ToolUse
+        if stop_reason != Some(crate::tools::types::StopReason::ToolUse) {
             let text = extract_text(&content_blocks);
             return Ok(AgenticResult {
                 text,
@@ -751,5 +836,111 @@ mod tests {
         let tokens = estimate_message_tokens(&messages);
         // ~1000 tokens + 10 overhead
         assert!(tokens > 500);
+    }
+
+    #[tokio::test]
+    async fn test_run_tool_loop_max_tokens_recovery() {
+        let llm = MockAgenticLlm::new(vec![
+            // First response: text but hit max_tokens
+            (
+                vec![ContentBlock::Text {
+                    text: "Starting analysis of the cod".to_string(),
+                }],
+                Some(crate::tools::types::StopReason::MaxTokens),
+            ),
+            // Second response: resumed text, end_turn
+            (
+                vec![ContentBlock::Text {
+                    text: "ebase. Here is the full answer.".to_string(),
+                }],
+                Some(crate::tools::types::StopReason::EndTurn),
+            ),
+        ]);
+        let executor = ToolExecutor::standard(&[]);
+        let ctx = ToolContext::new(PathBuf::from("/tmp"), "test".into());
+
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("analyze"), 5, None, None)
+            .await
+            .unwrap();
+
+        // The recovery message should be in the conversation
+        let recovery_msgs: Vec<_> = result
+            .messages
+            .iter()
+            .filter(|m| {
+                m.role == "user"
+                    && m.content.iter().any(|b| match b {
+                        ContentBlock::Text { text } => text.contains("Output token limit hit"),
+                        _ => false,
+                    })
+            })
+            .collect();
+        assert_eq!(recovery_msgs.len(), 1, "expected exactly one recovery message");
+
+        // Final text should be from the second response
+        assert!(result.text.contains("full answer"));
+    }
+
+    #[test]
+    fn test_microcompact_truncates_old_results() {
+        let mut messages = vec![
+            // Old message with oversized tool result
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".to_string(),
+                    content: format!("line one\n{}", "x".repeat(5000)),
+                    is_error: false,
+                }],
+            },
+            // Recent messages (protected tail)
+            Message {
+                role: "assistant".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "thinking...".to_string(),
+                }],
+            },
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "continue".to_string(),
+                }],
+            },
+        ];
+
+        microcompact(&mut messages, 2);
+
+        // The old tool result should be truncated
+        if let ContentBlock::ToolResult { content, .. } = &messages[0].content[0] {
+            assert!(content.len() < 3000, "expected truncated content, got {} chars", content.len());
+            assert!(content.contains("truncated from"));
+        } else {
+            panic!("expected ToolResult");
+        }
+    }
+
+    #[test]
+    fn test_microcompact_preserves_protected_tail() {
+        let big_content = "y".repeat(5000);
+        let mut messages = vec![
+            Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".to_string(),
+                    content: big_content.clone(),
+                    is_error: false,
+                }],
+            },
+        ];
+
+        // All messages are in the protected tail
+        microcompact(&mut messages, 1);
+
+        // Should NOT be truncated
+        if let ContentBlock::ToolResult { content, .. } = &messages[0].content[0] {
+            assert_eq!(content.len(), 5000, "protected tail should not be truncated");
+        } else {
+            panic!("expected ToolResult");
+        }
     }
 }
