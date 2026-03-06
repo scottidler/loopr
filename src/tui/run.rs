@@ -47,10 +47,7 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 fn restore_terminal() {
     // Hard-disable all mouse tracking modes with raw escape sequences.
     // This must happen BEFORE leaving raw mode so the sequences are sent properly.
-    let _ = io::Write::write_all(
-        &mut io::stdout(),
-        b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l",
-    );
+    let _ = io::Write::write_all(&mut io::stdout(), b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l");
     let _ = io::Write::flush(&mut io::stdout());
     let _ = execute!(io::stdout(), DisableMouseCapture);
     let _ = disable_raw_mode();
@@ -903,11 +900,7 @@ mod tests {
 
     /// Build a mock handshake response that passes version checking.
     fn mock_handshake(req: &crate::ipc::protocol::DaemonRequest) -> crate::ipc::protocol::DaemonResponse {
-        let client_version = req
-            .params
-            .get("client_version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let client_version = req.params.get("client_version").and_then(|v| v.as_str()).unwrap_or("");
         crate::ipc::protocol::DaemonResponse::ok(
             req.id,
             serde_json::json!({
@@ -951,12 +944,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
                 let event_rx = event_tx.subscribe();
-                handle_client(
-                    stream,
-                    |req| mock_handshake(&req),
-                    event_rx,
-                )
-                .await;
+                handle_client(stream, |req| mock_handshake(&req), event_rx).await;
             }
             server.cleanup();
         });
@@ -978,7 +966,6 @@ mod tests {
         use crate::ipc::protocol::DaemonEvent;
         use crate::ipc::server::{IpcServer, handle_client};
 
-
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("reconnect2-{}.sock", crate::id::generate_id("xx")));
@@ -997,12 +984,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
                 let event_rx = event_tx.subscribe();
-                handle_client(
-                    stream,
-                    |req| mock_handshake(&req),
-                    event_rx,
-                )
-                .await;
+                handle_client(stream, |req| mock_handshake(&req), event_rx).await;
             }
             server.cleanup();
         });
@@ -1766,7 +1748,6 @@ mod tests {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
 
-
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id("xx")));
@@ -1818,7 +1799,6 @@ mod tests {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
 
-
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-phase-{}.sock", crate::id::generate_id("xx")));
@@ -1869,7 +1849,6 @@ mod tests {
     async fn test_refresh_collection_updates_learnings() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1926,7 +1905,6 @@ mod tests {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
 
-
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-lock-{}.sock", crate::id::generate_id("xx")));
@@ -1977,7 +1955,6 @@ mod tests {
     async fn test_refresh_collection_updates_agent_sessions() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();

@@ -244,18 +244,18 @@ fn microcompact(messages: &mut [Message], protected_tail: usize) {
 
     for msg in messages[..compactable_end].iter_mut() {
         for block in msg.content.iter_mut() {
-            if let ContentBlock::ToolResult { content, .. } = block {
-                if content.len() > MICROCOMPACT_THRESHOLD {
-                    let preview_end = MICROCOMPACT_PREVIEW.min(content.len());
-                    let preview = &content[..preview_end];
-                    let cut = preview.rfind('\n').unwrap_or(preview_end);
-                    let original_len = content.len();
-                    *content = format!(
-                        "{}\n... [truncated from {} chars — re-read if needed]",
-                        &content[..cut],
-                        original_len
-                    );
-                }
+            if let ContentBlock::ToolResult { content, .. } = block
+                && content.len() > MICROCOMPACT_THRESHOLD
+            {
+                let preview_end = MICROCOMPACT_PREVIEW.min(content.len());
+                let preview = &content[..preview_end];
+                let cut = preview.rfind('\n').unwrap_or(preview_end);
+                let original_len = content.len();
+                *content = format!(
+                    "{}\n... [truncated from {} chars — re-read if needed]",
+                    &content[..cut],
+                    original_len
+                );
             }
         }
     }
@@ -447,11 +447,19 @@ pub async fn run_tool_loop(
             let exit_code = if result.is_error { 1 } else { 0 };
             debug!(
                 "[agent:{}] tool_result: tool={} is_error={} exit={} duration={}ms content_len={}",
-                ctx.exec_id, call.name, result.is_error, exit_code, duration_ms, result.content.len()
+                ctx.exec_id,
+                call.name,
+                result.is_error,
+                exit_code,
+                duration_ms,
+                result.content.len()
             );
             if let Some(tx) = event_tx {
                 let _ = tx.send(DaemonEvent::agent_tool_completed(
-                    &ctx.exec_id, &call.name, exit_code, duration_ms,
+                    &ctx.exec_id,
+                    &call.name,
+                    exit_code,
+                    duration_ms,
                 ));
             }
             tool_results.push(ContentBlock::ToolResult {
@@ -956,7 +964,11 @@ mod tests {
 
         // The old tool result should be truncated
         if let ContentBlock::ToolResult { content, .. } = &messages[0].content[0] {
-            assert!(content.len() < 3000, "expected truncated content, got {} chars", content.len());
+            assert!(
+                content.len() < 3000,
+                "expected truncated content, got {} chars",
+                content.len()
+            );
             assert!(content.contains("truncated from"));
         } else {
             panic!("expected ToolResult");
@@ -966,16 +978,14 @@ mod tests {
     #[test]
     fn test_microcompact_preserves_protected_tail() {
         let big_content = "y".repeat(5000);
-        let mut messages = vec![
-            Message {
-                role: "user".to_string(),
-                content: vec![ContentBlock::ToolResult {
-                    tool_use_id: "t1".to_string(),
-                    content: big_content.clone(),
-                    is_error: false,
-                }],
-            },
-        ];
+        let mut messages = vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".to_string(),
+                content: big_content.clone(),
+                is_error: false,
+            }],
+        }];
 
         // All messages are in the protected tail
         microcompact(&mut messages, 1);
@@ -1017,7 +1027,9 @@ mod tests {
                 Ok(self.responses[idx].clone())
             } else {
                 Ok((
-                    vec![ContentBlock::Text { text: "done".to_string() }],
+                    vec![ContentBlock::Text {
+                        text: "done".to_string(),
+                    }],
                     Some(crate::tools::types::StopReason::EndTurn),
                 ))
             }
@@ -1092,10 +1104,7 @@ mod tests {
         )]);
 
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let (blocks, stop) = llm
-            .complete_streaming("sys", &[], &[], tx)
-            .await
-            .unwrap();
+        let (blocks, stop) = llm.complete_streaming("sys", &[], &[], tx).await.unwrap();
 
         assert_eq!(blocks.len(), 2);
         assert_eq!(stop, Some(crate::tools::types::StopReason::ToolUse));

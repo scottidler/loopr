@@ -45,7 +45,9 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
 
         if daemon_version.trim() != our_version {
             // Silent restart — this is normal after a rebuild
-            unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
             // Wait for it to die
             for _ in 0..30 {
                 std::thread::sleep(std::time::Duration::from_millis(100));

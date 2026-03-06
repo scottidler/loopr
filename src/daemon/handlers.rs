@@ -4824,20 +4824,25 @@ fn handle_chat_submit(
 
         // Create daemon-side LLM client for this chat session using ChatConfig
         let chat_config = stores.config.chat.to_role_config();
-        let llm = match crate::agents::llm_client::AgentLlmClient::new(chat_config, session_id.clone(), event_tx.clone()) {
-            Ok(c) => Arc::new(c),
-            Err(e) => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::internal(&format!("failed to create LLM client: {}", e)),
-                ));
-            }
-        };
+        let llm =
+            match crate::agents::llm_client::AgentLlmClient::new(chat_config, session_id.clone(), event_tx.clone()) {
+                Ok(c) => Arc::new(c),
+                Err(e) => {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::internal(&format!("failed to create LLM client: {}", e)),
+                    ));
+                }
+            };
 
         // Create a separate LLM client for delegate subagents (fast model)
         let delegate_config = stores.config.chat.to_delegate_role_config();
         let delegate_llm: Arc<dyn crate::tools::agentic_loop::AgenticLlm> =
-            match crate::agents::llm_client::AgentLlmClient::new(delegate_config, format!("{}:delegate", session_id), event_tx.clone()) {
+            match crate::agents::llm_client::AgentLlmClient::new(
+                delegate_config,
+                format!("{}:delegate", session_id),
+                event_tx.clone(),
+            ) {
                 Ok(c) => Arc::new(c),
                 Err(e) => {
                     return Ok(DaemonResponse::err(
@@ -4854,8 +4859,7 @@ fn handle_chat_submit(
         ));
         let max_iterations = stores.config.chat.max_iterations;
         let cwd = stores.config.project.repo_path.clone();
-        let ctx = crate::tools::context::ToolContext::new(cwd, session_id.clone())
-            .with_sandbox(false);
+        let ctx = crate::tools::context::ToolContext::new(cwd, session_id.clone()).with_sandbox(false);
         let stores_clone = stores.clone();
         let session_id_clone = session_id.clone();
         let event_tx_clone = event_tx.clone();

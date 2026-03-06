@@ -25,23 +25,11 @@ pub enum MessagePriority {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MessagePayload {
-    TaskCompleted {
-        task_id: String,
-        status: String,
-    },
-    ReviewRequested {
-        task_id: String,
-        files: Vec<String>,
-    },
-    ShutdownRequest {
-        reason: String,
-    },
-    IdleNotification {
-        summary: String,
-    },
-    Custom {
-        data: serde_json::Value,
-    },
+    TaskCompleted { task_id: String, status: String },
+    ReviewRequested { task_id: String, files: Vec<String> },
+    ShutdownRequest { reason: String },
+    IdleNotification { summary: String },
+    Custom { data: serde_json::Value },
 }
 
 /// In-memory mailbox for inter-agent messaging with priority ordering.
@@ -51,9 +39,7 @@ pub struct TaskMailbox {
 
 impl TaskMailbox {
     pub fn new() -> Self {
-        Self {
-            messages: Vec::new(),
-        }
+        Self { messages: Vec::new() }
     }
 
     /// Send a message to the mailbox.
@@ -103,7 +89,13 @@ impl Default for TaskMailbox {
 mod tests {
     use super::*;
 
-    fn make_message(id: &str, from: &str, to: &str, priority: MessagePriority, payload: MessagePayload) -> AgentMessage {
+    fn make_message(
+        id: &str,
+        from: &str,
+        to: &str,
+        priority: MessagePriority,
+        payload: MessagePayload,
+    ) -> AgentMessage {
         AgentMessage {
             id: id.to_string(),
             from: from.to_string(),
@@ -152,9 +144,7 @@ mod tests {
                 task_id: "t1".into(),
                 files: vec!["src/main.rs".into()],
             },
-            MessagePayload::ShutdownRequest {
-                reason: "test".into(),
-            },
+            MessagePayload::ShutdownRequest { reason: "test".into() },
             MessagePayload::IdleNotification {
                 summary: "nothing to do".into(),
             },
@@ -175,12 +165,24 @@ mod tests {
     fn test_mailbox_send_and_read() {
         let mut mailbox = TaskMailbox::new();
         mailbox.send(make_message(
-            "m1", "coord", "impl-1", MessagePriority::Normal,
-            MessagePayload::TaskCompleted { task_id: "t1".into(), status: "done".into() },
+            "m1",
+            "coord",
+            "impl-1",
+            MessagePriority::Normal,
+            MessagePayload::TaskCompleted {
+                task_id: "t1".into(),
+                status: "done".into(),
+            },
         ));
         mailbox.send(make_message(
-            "m2", "coord", "impl-2", MessagePriority::Normal,
-            MessagePayload::TaskCompleted { task_id: "t2".into(), status: "done".into() },
+            "m2",
+            "coord",
+            "impl-2",
+            MessagePriority::Normal,
+            MessagePayload::TaskCompleted {
+                task_id: "t2".into(),
+                status: "done".into(),
+            },
         ));
 
         let msgs = mailbox.read_for("impl-1");
@@ -196,15 +198,26 @@ mod tests {
     fn test_mailbox_priority_ordering() {
         let mut mailbox = TaskMailbox::new();
         mailbox.send(make_message(
-            "m1", "coord", "impl-1", MessagePriority::Normal,
-            MessagePayload::Custom { data: serde_json::json!("normal") },
+            "m1",
+            "coord",
+            "impl-1",
+            MessagePriority::Normal,
+            MessagePayload::Custom {
+                data: serde_json::json!("normal"),
+            },
         ));
         mailbox.send(make_message(
-            "m2", "coord", "impl-1", MessagePriority::Shutdown,
+            "m2",
+            "coord",
+            "impl-1",
+            MessagePriority::Shutdown,
             MessagePayload::ShutdownRequest { reason: "test".into() },
         ));
         mailbox.send(make_message(
-            "m3", "coord", "impl-1", MessagePriority::Idle,
+            "m3",
+            "coord",
+            "impl-1",
+            MessagePriority::Idle,
             MessagePayload::IdleNotification { summary: "idle".into() },
         ));
 
@@ -220,8 +233,13 @@ mod tests {
     fn test_mailbox_broadcast() {
         let mut mailbox = TaskMailbox::new();
         mailbox.send(make_message(
-            "m1", "coord", "broadcast", MessagePriority::Shutdown,
-            MessagePayload::ShutdownRequest { reason: "shutdown".into() },
+            "m1",
+            "coord",
+            "broadcast",
+            MessagePriority::Shutdown,
+            MessagePayload::ShutdownRequest {
+                reason: "shutdown".into(),
+            },
         ));
 
         // All agents should see broadcast messages
@@ -237,12 +255,22 @@ mod tests {
     fn test_mailbox_unread_count() {
         let mut mailbox = TaskMailbox::new();
         mailbox.send(make_message(
-            "m1", "coord", "impl-1", MessagePriority::Normal,
-            MessagePayload::Custom { data: serde_json::json!("a") },
+            "m1",
+            "coord",
+            "impl-1",
+            MessagePriority::Normal,
+            MessagePayload::Custom {
+                data: serde_json::json!("a"),
+            },
         ));
         mailbox.send(make_message(
-            "m2", "coord", "impl-1", MessagePriority::Normal,
-            MessagePayload::Custom { data: serde_json::json!("b") },
+            "m2",
+            "coord",
+            "impl-1",
+            MessagePriority::Normal,
+            MessagePayload::Custom {
+                data: serde_json::json!("b"),
+            },
         ));
 
         assert_eq!(mailbox.unread_count("impl-1"), 2);
@@ -256,12 +284,22 @@ mod tests {
     fn test_mailbox_gc() {
         let mut mailbox = TaskMailbox::new();
         mailbox.send(make_message(
-            "m1", "coord", "impl-1", MessagePriority::Normal,
-            MessagePayload::Custom { data: serde_json::json!("a") },
+            "m1",
+            "coord",
+            "impl-1",
+            MessagePriority::Normal,
+            MessagePayload::Custom {
+                data: serde_json::json!("a"),
+            },
         ));
         mailbox.send(make_message(
-            "m2", "coord", "impl-1", MessagePriority::Normal,
-            MessagePayload::Custom { data: serde_json::json!("b") },
+            "m2",
+            "coord",
+            "impl-1",
+            MessagePriority::Normal,
+            MessagePayload::Custom {
+                data: serde_json::json!("b"),
+            },
         ));
 
         let _ = mailbox.read_for("impl-1");
