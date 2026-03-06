@@ -9,7 +9,7 @@ use crate::agents::{AgentEvent, AgentStatus};
 use crate::config::AgentRoleConfig;
 use crate::ipc::protocol::DaemonEvent;
 use crate::tools::agentic_loop::AgenticLlm;
-use crate::tools::types::{CompletionResponse, ContentBlock, Message, StopReason, ToolDefinition};
+use crate::tools::types::{ContentBlock, Message, StopReason, ToolDefinition};
 
 /// Real LLM client using reqwest async HTTP with SSE streaming for the Anthropic Messages API.
 ///
@@ -222,6 +222,12 @@ impl LlmClient for AgentLlmClient {
 
 #[async_trait]
 impl AgenticLlm for AgentLlmClient {
+    /// Call the Anthropic Messages API with SSE streaming and tool support.
+    ///
+    /// Text chunks are emitted live via `emit_chunk` for real-time TUI display.
+    /// Tool input JSON is buffered silently until `content_block_stop`, then assembled
+    /// into complete `ContentBlock::ToolUse` entries. Returns the same atomic
+    /// `(Vec<ContentBlock>, Option<StopReason>)` that `run_tool_loop` expects.
     async fn complete(
         &self,
         system_prompt: &str,
@@ -264,6 +270,7 @@ impl AgenticLlm for AgentLlmClient {
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
+            "stream": true,
             "system": system_prompt,
             "messages": api_messages,
         });
@@ -297,21 +304,145 @@ impl AgenticLlm for AgentLlmClient {
 
         self.emit_status(AgentStatus::Running);
 
-        let resp_text = response.text().await.map_err(|e| eyre!("read body: {}", e))?;
-        let completion: CompletionResponse = serde_json::from_str(&resp_text)
-            .map_err(|e| eyre!("parse response: {}: {}", e, &resp_text[..resp_text.len().min(500)]))?;
+        // Parse SSE stream into content blocks
+        let (content_blocks, stop_reason) = self.read_sse_content_blocks(response).await?;
 
-        // Emit any text blocks as chunks for TUI streaming display.
-        // NOTE: Do NOT emit is_final=true here — in a tool loop with multiple iterations,
-        // that would prematurely finalize the chat response. The caller (run_tool_loop /
-        // chat event loop) is responsible for signaling completion.
-        for block in &completion.content {
-            if let ContentBlock::Text { text } = block {
-                self.emit_chunk(text, false);
+        info!(
+            "complete() streamed {} blocks for session {}",
+            content_blocks.len(),
+            self.session_id
+        );
+
+        Ok((content_blocks, stop_reason))
+    }
+}
+
+/// Per-block accumulator used while reading the SSE stream.
+enum BlockAccumulator {
+    Text(String),
+    ToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+    },
+}
+
+impl AgentLlmClient {
+    /// Read an SSE stream and assemble it into typed `ContentBlock`s.
+    ///
+    /// - Text deltas are emitted live via `emit_chunk` and accumulated into `ContentBlock::Text`.
+    /// - Tool input_json deltas are buffered silently, parsed on `content_block_stop`,
+    ///   and assembled into `ContentBlock::ToolUse`.
+    /// - `message_delta` with `stop_reason` is captured for the return value.
+    async fn read_sse_content_blocks(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<(Vec<ContentBlock>, Option<StopReason>)> {
+        use futures::StreamExt;
+
+        let mut blocks: Vec<ContentBlock> = Vec::new();
+        let mut current: Option<BlockAccumulator> = None;
+        let mut stop_reason: Option<StopReason> = None;
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|e| eyre!("stream read error: {}", e))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(line_end) = buffer.find('\n') {
+                let line = buffer[..line_end].trim_end_matches('\r').to_string();
+                buffer = buffer[line_end + 1..].to_string();
+
+                let Some(data) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
+                }
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+                    continue;
+                };
+
+                let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                match event_type {
+                    "content_block_start" => {
+                        // Finalize any previous block
+                        if let Some(acc) = current.take() {
+                            blocks.push(finalize_block(acc));
+                        }
+                        let cb = &value["content_block"];
+                        let block_type = cb.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        current = Some(match block_type {
+                            "tool_use" => BlockAccumulator::ToolUse {
+                                id: cb.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                name: cb.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                input_json: String::new(),
+                            },
+                            _ => BlockAccumulator::Text(String::new()),
+                        });
+                    }
+                    "content_block_delta" => {
+                        let delta = &value["delta"];
+                        let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        match (&mut current, delta_type) {
+                            (Some(BlockAccumulator::Text(buf)), "text_delta") => {
+                                if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
+                                    buf.push_str(text);
+                                    self.emit_chunk(text, false);
+                                }
+                            }
+                            (Some(BlockAccumulator::ToolUse { input_json, .. }), "input_json_delta") => {
+                                if let Some(json_chunk) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                                    input_json.push_str(json_chunk);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    "content_block_stop" => {
+                        if let Some(acc) = current.take() {
+                            blocks.push(finalize_block(acc));
+                        }
+                    }
+                    "message_delta" => {
+                        if let Some(reason_str) = value
+                            .get("delta")
+                            .and_then(|d| d.get("stop_reason"))
+                            .and_then(|v| v.as_str())
+                        {
+                            stop_reason = Some(match reason_str {
+                                "tool_use" => StopReason::ToolUse,
+                                "max_tokens" => StopReason::MaxTokens,
+                                "stop_sequence" => StopReason::StopSequence,
+                                _ => StopReason::EndTurn,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
 
-        Ok((completion.content, completion.stop_reason))
+        // Finalize any trailing block
+        if let Some(acc) = current.take() {
+            blocks.push(finalize_block(acc));
+        }
+
+        Ok((blocks, stop_reason))
+    }
+}
+
+/// Convert a block accumulator into a typed ContentBlock.
+fn finalize_block(acc: BlockAccumulator) -> ContentBlock {
+    match acc {
+        BlockAccumulator::Text(text) => ContentBlock::Text { text },
+        BlockAccumulator::ToolUse { id, name, input_json } => {
+            let input = serde_json::from_str(&input_json).unwrap_or(serde_json::json!({}));
+            ContentBlock::ToolUse { id, name, input }
+        }
     }
 }
 
@@ -724,5 +855,43 @@ mod tests {
             }
         }
         assert_eq!(accumulated, "AB");
+    }
+
+    #[test]
+    fn test_finalize_block_text() {
+        let block = finalize_block(BlockAccumulator::Text("hello world".into()));
+        assert!(matches!(block, ContentBlock::Text { text } if text == "hello world"));
+    }
+
+    #[test]
+    fn test_finalize_block_tool_use() {
+        let block = finalize_block(BlockAccumulator::ToolUse {
+            id: "call_1".into(),
+            name: "read".into(),
+            input_json: r#"{"path":"foo.rs"}"#.into(),
+        });
+        match block {
+            ContentBlock::ToolUse { id, name, input } => {
+                assert_eq!(id, "call_1");
+                assert_eq!(name, "read");
+                assert_eq!(input["path"], "foo.rs");
+            }
+            _ => panic!("expected ToolUse"),
+        }
+    }
+
+    #[test]
+    fn test_finalize_block_tool_use_bad_json() {
+        let block = finalize_block(BlockAccumulator::ToolUse {
+            id: "call_2".into(),
+            name: "shell".into(),
+            input_json: "not json".into(),
+        });
+        match block {
+            ContentBlock::ToolUse { input, .. } => {
+                assert_eq!(input, serde_json::json!({}));
+            }
+            _ => panic!("expected ToolUse"),
+        }
     }
 }
