@@ -286,51 +286,45 @@ pub async fn run_tool_loop(
             });
         }
 
-        // Execute all tool calls
-        let mut tool_results = Vec::new();
-        let mut all_failed = true;
+        // Execute all tool calls in parallel
         for call in &tool_uses {
-            // Tap 3: Tool call dispatched
             debug!(
                 "[agent:{}] tool_call: tool={} id={} args={}",
                 ctx.exec_id, call.name, call.id, call.input
             );
-
             if let Some(tx) = event_tx {
                 let _ = tx.send(DaemonEvent::agent_tool_started(&ctx.exec_id, &call.name));
             }
+        }
 
-            let start = Instant::now();
-            let result: ToolResult = executor.execute(call, ctx).await;
-            let duration_ms = start.elapsed().as_millis() as u64;
+        let futures: Vec<_> = tool_uses
+            .iter()
+            .map(|call| async move {
+                let start = Instant::now();
+                let result: ToolResult = executor.execute(call, ctx).await;
+                let duration_ms = start.elapsed().as_millis() as u64;
+                (call, result, duration_ms)
+            })
+            .collect();
+        let results = futures::future::join_all(futures).await;
+
+        let mut tool_results = Vec::new();
+        let mut all_failed = true;
+        for (call, result, duration_ms) in results {
             total_tool_calls += 1;
-
             if !result.is_error {
                 all_failed = false;
             }
-
             let exit_code = if result.is_error { 1 } else { 0 };
-
-            // Tap 4: Tool result received
             debug!(
                 "[agent:{}] tool_result: tool={} is_error={} exit={} duration={}ms content_len={}",
-                ctx.exec_id,
-                call.name,
-                result.is_error,
-                exit_code,
-                duration_ms,
-                result.content.len()
+                ctx.exec_id, call.name, result.is_error, exit_code, duration_ms, result.content.len()
             );
-
             if let Some(tx) = event_tx {
                 let _ = tx.send(DaemonEvent::agent_tool_completed(
-                    &ctx.exec_id,
-                    &call.name,
-                    exit_code,
-                    duration_ms,
+                    &ctx.exec_id, &call.name, exit_code, duration_ms,
                 ));
             }
-
             tool_results.push(ContentBlock::ToolResult {
                 tool_use_id: call.id.clone(),
                 content: cap_tool_result(result.content),
