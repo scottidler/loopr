@@ -4840,7 +4840,8 @@ fn handle_chat_submit(
             llm.clone(),
         ));
         let cwd = stores.config.project.repo_path.clone();
-        let ctx = crate::tools::context::ToolContext::new(cwd, session_id.clone());
+        let ctx = crate::tools::context::ToolContext::new(cwd, session_id.clone())
+            .with_sandbox(false);
         let stores_clone = stores.clone();
         let session_id_clone = session_id.clone();
         let event_tx_clone = event_tx.clone();
