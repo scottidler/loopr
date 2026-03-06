@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use log::debug;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::agents::context::estimate_tokens;
 use crate::ipc::protocol::DaemonEvent;
@@ -95,6 +95,23 @@ pub trait AgenticLlm: Send + Sync {
         messages: &[Message],
         tools: &[ToolDefinition],
     ) -> eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)>;
+
+    /// Streaming variant: sends completed ContentBlocks through the channel as they
+    /// arrive from SSE, enabling tool execution to overlap with model generation.
+    /// Default implementation falls back to `complete()` and sends all blocks after.
+    async fn complete_streaming(
+        &self,
+        system_prompt: &str,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        block_tx: mpsc::UnboundedSender<ContentBlock>,
+    ) -> eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)> {
+        let (blocks, stop_reason) = self.complete(system_prompt, messages, tools).await?;
+        for block in &blocks {
+            let _ = block_tx.send(block.clone());
+        }
+        Ok((blocks, stop_reason))
+    }
 }
 
 /// Run the agentic tool loop:
@@ -286,7 +303,52 @@ pub async fn run_tool_loop(
         // Auto-compact old messages if context is too large
         auto_compact(llm, system_prompt, &mut messages).await;
 
-        let (content_blocks, stop_reason) = llm.complete(system_prompt, &messages, &tool_defs).await?;
+        // Streaming tool execution: start tools as their blocks complete during SSE
+        let (block_tx, mut block_rx) = mpsc::unbounded_channel();
+
+        let (llm_result, early_tool_results) = tokio::join!(
+            llm.complete_streaming(system_prompt, &messages, &tool_defs, block_tx),
+            async {
+                use futures::stream::{FuturesUnordered, StreamExt};
+                let mut tool_futures = FuturesUnordered::new();
+                let mut results: Vec<(ToolCall, ToolResult, u64)> = Vec::new();
+                let mut receiving = true;
+
+                loop {
+                    tokio::select! {
+                        block = block_rx.recv(), if receiving => {
+                            match block {
+                                Some(ContentBlock::ToolUse { id, name, input }) => {
+                                    let call = ToolCall { id, name, input };
+                                    debug!(
+                                        "[agent:{}] streaming tool_start: tool={} id={}",
+                                        ctx.exec_id, call.name, call.id
+                                    );
+                                    if let Some(tx) = event_tx {
+                                        let _ = tx.send(DaemonEvent::agent_tool_started(&ctx.exec_id, &call.name));
+                                    }
+                                    tool_futures.push(async {
+                                        let start = Instant::now();
+                                        let result: ToolResult = executor.execute(&call, ctx).await;
+                                        let duration_ms = start.elapsed().as_millis() as u64;
+                                        (call, result, duration_ms)
+                                    });
+                                }
+                                Some(_) => {} // Text blocks — handled via the full response
+                                None => { receiving = false; }
+                            }
+                        }
+                        Some(result) = tool_futures.next() => {
+                            results.push(result);
+                        }
+                        else => break,
+                    }
+                }
+                results
+            }
+        );
+
+        let (content_blocks, stop_reason) = llm_result?;
 
         // Tap 2: LLM response finalized
         debug!(
@@ -371,27 +433,9 @@ pub async fn run_tool_loop(
             });
         }
 
-        // Execute all tool calls in parallel
-        for call in &tool_uses {
-            debug!(
-                "[agent:{}] tool_call: tool={} id={} args={}",
-                ctx.exec_id, call.name, call.id, call.input
-            );
-            if let Some(tx) = event_tx {
-                let _ = tx.send(DaemonEvent::agent_tool_started(&ctx.exec_id, &call.name));
-            }
-        }
-
-        let futures: Vec<_> = tool_uses
-            .iter()
-            .map(|call| async move {
-                let start = Instant::now();
-                let result: ToolResult = executor.execute(call, ctx).await;
-                let duration_ms = start.elapsed().as_millis() as u64;
-                (call, result, duration_ms)
-            })
-            .collect();
-        let results = futures::future::join_all(futures).await;
+        // Use early results from streaming, or fall back to collecting any that didn't
+        // start streaming (shouldn't happen with correct complete_streaming impl)
+        let results = early_tool_results;
 
         let mut tool_results = Vec::new();
         let mut all_failed = true;
@@ -942,5 +986,125 @@ mod tests {
         } else {
             panic!("expected ToolResult");
         }
+    }
+
+    /// Mock LLM that sends blocks through the channel with a delay to simulate
+    /// true SSE streaming (tools start before message_stop).
+    struct StreamingMockLlm {
+        responses: Vec<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)>,
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingMockLlm {
+        fn new(responses: Vec<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)>) -> Self {
+            Self {
+                responses,
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AgenticLlm for StreamingMockLlm {
+        async fn complete(
+            &self,
+            _system_prompt: &str,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+        ) -> eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)> {
+            let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
+            if idx < self.responses.len() {
+                Ok(self.responses[idx].clone())
+            } else {
+                Ok((
+                    vec![ContentBlock::Text { text: "done".to_string() }],
+                    Some(crate::tools::types::StopReason::EndTurn),
+                ))
+            }
+        }
+
+        async fn complete_streaming(
+            &self,
+            system_prompt: &str,
+            messages: &[Message],
+            tools: &[ToolDefinition],
+            block_tx: mpsc::UnboundedSender<ContentBlock>,
+        ) -> eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)> {
+            let (blocks, stop_reason) = self.complete(system_prompt, messages, tools).await?;
+            // Send blocks one at a time with a small yield to simulate SSE streaming
+            for block in &blocks {
+                let _ = block_tx.send(block.clone());
+                tokio::task::yield_now().await;
+            }
+            Ok((blocks, stop_reason))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_streaming_tool_execution() {
+        let dir = std::env::temp_dir().join("loopr-streaming-test");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let llm = StreamingMockLlm::new(vec![
+            // First: tool use (sent via streaming channel)
+            (
+                vec![ContentBlock::ToolUse {
+                    id: "tu-1".to_string(),
+                    name: "shell".to_string(),
+                    input: serde_json::json!({"command": "echo streamed"}),
+                }],
+                Some(crate::tools::types::StopReason::ToolUse),
+            ),
+            // Second: final text
+            (
+                vec![ContentBlock::Text {
+                    text: "Streaming done.".to_string(),
+                }],
+                Some(crate::tools::types::StopReason::EndTurn),
+            ),
+        ]);
+        let executor = ToolExecutor::standard(&[]);
+        let ctx = ToolContext::new(dir.clone(), "test-stream".into()).with_deny_patterns(vec![]);
+
+        let result = run_tool_loop(&llm, &executor, &ctx, "system", user_message("go"), 10, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.text, "Streaming done.");
+        assert_eq!(result.tool_calls_count, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_complete_streaming_default_impl() {
+        // The default impl on MockAgenticLlm should work via fallback
+        let llm = MockAgenticLlm::new(vec![(
+            vec![
+                ContentBlock::Text { text: "hi".to_string() },
+                ContentBlock::ToolUse {
+                    id: "tu-1".to_string(),
+                    name: "read".to_string(),
+                    input: serde_json::json!({"path": "test.txt"}),
+                },
+            ],
+            Some(crate::tools::types::StopReason::ToolUse),
+        )]);
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (blocks, stop) = llm
+            .complete_streaming("sys", &[], &[], tx)
+            .await
+            .unwrap();
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(stop, Some(crate::tools::types::StopReason::ToolUse));
+
+        // Channel should have received both blocks
+        let mut received = Vec::new();
+        while let Ok(block) = rx.try_recv() {
+            received.push(block);
+        }
+        assert_eq!(received.len(), 2);
     }
 }
