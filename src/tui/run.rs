@@ -44,10 +44,19 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     let mut client = IpcClient::connect(socket_path)
         .await
         .map_err(|e| eyre::eyre!("Failed to connect to daemon: {e}"))?;
-    client
-        .handshake(env!("CARGO_PKG_VERSION"))
+    let handshake_resp = client
+        .handshake(crate::version())
         .await
         .map_err(|e| eyre::eyre!("Handshake failed: {e}"))?;
+
+    // Extract session_id from handshake response
+    let session_id = handshake_resp
+        .result
+        .as_ref()
+        .and_then(|r| r.get("session_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // Setup terminal
     enable_raw_mode()?;
@@ -59,6 +68,7 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     // Create app state
     let mut app = App::new();
     app.connection = ConnectionStatus::Connected;
+    app.session_id = session_id;
 
     // Run event loop; capture result so we always restore the terminal
     let result = event_loop(&mut terminal, &mut app, Some(client), socket_path).await;
@@ -73,11 +83,33 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
     result
 }
 
-/// Try to connect and handshake with the daemon.
-async fn try_connect(socket_path: &Path) -> Option<IpcClient> {
+/// Try to connect and handshake with the daemon. Returns client + session_id.
+async fn try_connect(socket_path: &Path) -> Option<(IpcClient, String)> {
     let mut client = IpcClient::connect(socket_path).await.ok()?;
-    client.handshake(env!("CARGO_PKG_VERSION")).await.ok()?;
-    Some(client)
+    let resp = client.handshake(crate::version()).await.ok()?;
+    // Reject version-mismatched daemons — stale daemon must be restarted
+    let version_match = resp
+        .result
+        .as_ref()
+        .and_then(|r| r.get("version_match"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !version_match {
+        log::warn!(
+            "Daemon version mismatch, refusing connection (ours={}, theirs={:?})",
+            crate::version(),
+            resp.result.as_ref().and_then(|r| r.get("server_version")),
+        );
+        return None;
+    }
+    let session_id = resp
+        .result
+        .as_ref()
+        .and_then(|r| r.get("session_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((client, session_id))
 }
 
 /// Chat session ID used for daemon-owned chat.
@@ -264,9 +296,10 @@ async fn event_loop(
                 }
             }
             _ = reconnect_timer.tick(), if client.is_none() => {
-                if let Some(new_client) = try_connect(socket_path).await {
+                if let Some((new_client, session_id)) = try_connect(socket_path).await {
                     info!("Reconnected to daemon");
                     app.connection = ConnectionStatus::Connected;
+                    app.session_id = session_id;
                     client = Some(new_client);
                 }
             }
@@ -471,6 +504,19 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             };
             spans.push(Span::styled(view.to_string(), style));
         }
+    }
+
+    // Calculate the width used by the left-side tabs
+    let left_width: usize = spans.iter().map(|s| s.width()).sum();
+    // Inner area = total area minus 2 for borders
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    if !app.session_id.is_empty() && inner_width > left_width + 2 {
+        let padding = inner_width.saturating_sub(left_width + app.session_id.len());
+        if padding > 0 {
+            spans.push(Span::raw(" ".repeat(padding)));
+        }
+        spans.push(Span::styled(&app.session_id, Style::default().fg(colors::DIM)));
     }
 
     let header_line = Line::from(spans);
@@ -772,6 +818,25 @@ mod tests {
         terminal.draw(|frame| draw(&app, frame)).unwrap();
     }
 
+    /// Build a mock handshake response that passes version checking.
+    fn mock_handshake(req: &crate::ipc::protocol::DaemonRequest) -> crate::ipc::protocol::DaemonResponse {
+        let client_version = req
+            .params
+            .get("client_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        crate::ipc::protocol::DaemonResponse::ok(
+            req.id,
+            serde_json::json!({
+                "protocol": "ndjson/1",
+                "server_version": client_version,
+                "client_version": client_version,
+                "version_match": true,
+                "session_id": "test-session",
+            }),
+        )
+    }
+
     #[test]
     fn test_reconnect_interval_is_reasonable() {
         // Reconnect interval should be between 1 and 10 seconds
@@ -788,9 +853,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_try_connect_succeeds_with_daemon() {
-        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::protocol::DaemonEvent;
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -806,7 +870,7 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    |req| DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"})),
+                    |req| mock_handshake(&req),
                     event_rx,
                 )
                 .await;
@@ -818,8 +882,9 @@ mod tests {
 
         let result = try_connect(&path).await;
         assert!(result.is_some());
+        let (_, session_id) = result.unwrap();
+        assert_eq!(session_id, "test-session");
 
-        drop(result);
         let _ = server_handle.await;
     }
 
@@ -827,9 +892,9 @@ mod tests {
     async fn test_reconnect_after_disconnect() {
         // Verify the app transitions from Disconnected back to Connected
         // when a new daemon becomes available
-        use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
+        use crate::ipc::protocol::DaemonEvent;
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
+        
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -851,7 +916,7 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    |req| DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"})),
+                    |req| mock_handshake(&req),
                     event_rx,
                 )
                 .await;
@@ -862,10 +927,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Simulate reconnect logic: try_connect succeeds → update app state
-        if let Some(_client) = try_connect(&path).await {
+        if let Some((_, session_id)) = try_connect(&path).await {
             app.connection = ConnectionStatus::Connected;
+            app.session_id = session_id;
         }
         assert_eq!(app.connection, ConnectionStatus::Connected);
+        assert_eq!(app.session_id, "test-session");
 
         let _ = server_handle.await;
     }
@@ -939,7 +1006,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else if req.method == "plan.list" {
                             DaemonResponse::ok(req.id, plans.clone())
                         } else {
@@ -995,7 +1062,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else if req.method == "work.list" {
                             DaemonResponse::ok(req.id, wis.clone())
                         } else {
@@ -1047,7 +1114,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, json!([]))
                         }
@@ -1219,7 +1286,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else if req.method == "bundle.list" {
                             DaemonResponse::ok(req.id, bundles.clone())
                         } else {
@@ -1273,7 +1340,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else if req.method == "tick.list" {
                             DaemonResponse::ok(req.id, ticks.clone())
                         } else {
@@ -1513,7 +1580,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             // Return a string instead of an array — will fail deserialization
                             DaemonResponse::ok(req.id, json!("not an array"))
@@ -1615,7 +1682,7 @@ mod tests {
     async fn test_refresh_collection_updates_specs() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
+        
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1637,7 +1704,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, specs.clone())
                         }
@@ -1667,7 +1734,7 @@ mod tests {
     async fn test_refresh_collection_updates_phases() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
+        
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1689,7 +1756,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, phases.clone())
                         }
@@ -1719,7 +1786,7 @@ mod tests {
     async fn test_refresh_collection_updates_learnings() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
+        
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1745,7 +1812,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, learnings.clone())
                         }
@@ -1775,7 +1842,7 @@ mod tests {
     async fn test_refresh_collection_updates_locks() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
+        
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1797,7 +1864,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, locks.clone())
                         }
@@ -1827,7 +1894,7 @@ mod tests {
     async fn test_refresh_collection_updates_agent_sessions() {
         use crate::ipc::protocol::{DaemonEvent, DaemonResponse};
         use crate::ipc::server::{IpcServer, handle_client};
-        use serde_json::json;
+        
 
         let dir = std::env::temp_dir().join("loopr-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1849,7 +1916,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, sessions.clone())
                         }
@@ -1896,7 +1963,7 @@ mod tests {
                     stream,
                     move |req| {
                         if req.method == "system.handshake" {
-                            DaemonResponse::ok(req.id, json!({"protocol": "ndjson/1"}))
+                            mock_handshake(&req)
                         } else {
                             // Return a non-array value that won't deserialize as Vec<T>
                             DaemonResponse::ok(req.id, json!({"not": "an array"}))

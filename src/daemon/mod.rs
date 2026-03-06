@@ -35,22 +35,47 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
         && let Ok(pid) = contents.trim().parse::<u32>()
         && std::path::Path::new(&format!("/proc/{pid}")).exists()
     {
-        // Daemon is running — check socket exists too
-        if socket_path.exists() {
-            return Ok(());
-        }
-        // PID alive but socket missing — daemon may still be starting up
-        eprintln!("Daemon process alive (pid={pid}) but socket not ready, waiting...");
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if socket_path.exists() {
-                return Ok(());
+        // Daemon is running — check version before accepting it
+        let version_path = pid_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("daemon.version");
+        let daemon_version = std::fs::read_to_string(&version_path).unwrap_or_default();
+        let our_version = crate::version();
+
+        if daemon_version.trim() != our_version {
+            eprintln!(
+                "Daemon version mismatch (daemon={}, ours={}), killing stale daemon (pid={pid})...",
+                daemon_version.trim(),
+                our_version,
+            );
+            unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+            // Wait for it to die
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                    break;
+                }
             }
+            // Clean up stale files
+            let _ = std::fs::remove_file(pid_path);
+            let _ = std::fs::remove_file(socket_path);
+        } else if socket_path.exists() {
+            return Ok(());
+        } else {
+            // PID alive but socket missing — daemon may still be starting up
+            eprintln!("Daemon process alive (pid={pid}) but socket not ready, waiting...");
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if socket_path.exists() {
+                    return Ok(());
+                }
+            }
+            return Err(eyre::eyre!(
+                "daemon process alive (pid={pid}) but socket never appeared at {}",
+                socket_path.display()
+            ));
         }
-        return Err(eyre::eyre!(
-            "daemon process alive (pid={pid}) but socket never appeared at {}",
-            socket_path.display()
-        ));
     }
 
     // No live daemon — double-fork daemonize
@@ -181,7 +206,7 @@ fn write_version_file(ctx: &DaemonContext) -> std::io::Result<()> {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     let version_path = runtime_dir.join("daemon.version");
-    std::fs::write(&version_path, env!("CARGO_PKG_VERSION"))?;
+    std::fs::write(&version_path, crate::version())?;
     info!("Wrote version file: {}", version_path.display());
     Ok(())
 }
@@ -714,7 +739,7 @@ mod tests {
         let version_path = runtime_dir.join("daemon.version");
         assert!(version_path.exists());
         let contents = std::fs::read_to_string(&version_path).unwrap();
-        assert_eq!(contents, env!("CARGO_PKG_VERSION"));
+        assert_eq!(contents, crate::version());
     }
 
     #[tokio::test]

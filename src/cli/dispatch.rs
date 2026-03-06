@@ -27,7 +27,7 @@ pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()
         .context("failed to connect to daemon — is it running?")?;
 
     // Perform handshake first
-    let handshake = client.handshake(env!("CARGO_PKG_VERSION")).await;
+    let handshake = client.handshake(crate::version()).await;
     if let Err(e) = handshake {
         bail!("handshake failed: {e}");
     }

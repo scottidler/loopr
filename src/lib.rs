@@ -28,6 +28,12 @@ mod integration_tests;
 pub mod test_util;
 
 use std::fs;
+
+/// Build-time version from `git describe --tags --always`.
+/// This is the single source of truth for version identity across TUI and daemon.
+pub fn version() -> &'static str {
+    env!("GIT_DESCRIBE")
+}
 use std::path::PathBuf;
 
 use eyre::Context;

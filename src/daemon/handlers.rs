@@ -144,7 +144,7 @@ pub fn dispatch(
     let method = req.method.clone();
     let params = req.params.clone();
     let resp = match req.method.as_str() {
-        "system.handshake" => handle_handshake(req),
+        "system.handshake" => handle_handshake(stores, req),
         "system.init" => handle_system_init(stores, req),
         "system.status" => handle_status(stores, req),
         "system.shutdown" => handle_shutdown(event_tx, req),
@@ -273,10 +273,10 @@ fn auto_start_agents(
     }
 }
 
-fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
+fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_handshake()");
-        let server_version = env!("CARGO_PKG_VERSION");
+        let server_version = crate::version();
         let client_version = req
             .params
             .get("client_version")
@@ -297,7 +297,8 @@ fn handle_handshake(req: DaemonRequest) -> DaemonResponse {
                 "server_version": server_version,
                 "client_version": client_version,
                 "version_match": version_match,
-                "protocol": "ndjson/1"
+                "protocol": "ndjson/1",
+                "session_id": stores.session_id,
             }),
         ))
     })
@@ -436,7 +437,7 @@ fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
         Ok(DaemonResponse::ok(
             req.id,
             json!({
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": crate::version(),
                 "pid": std::process::id(),
                 "counts": {
                     "plans": plans,
