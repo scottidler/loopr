@@ -65,9 +65,19 @@ pub async fn run_tui(socket_path: &Path) -> eyre::Result<()> {
         .map_err(|e| eyre::eyre!("Handshake failed: {e}"))?;
 
     // Extract session_id from handshake response
-    let session_id = handshake_resp
-        .result
-        .as_ref()
+    let handshake_result = handshake_resp.result.as_ref();
+    let version_match = handshake_result
+        .and_then(|r| r.get("version_match"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !version_match {
+        return Err(eyre::eyre!(
+            "daemon version mismatch (ours={}, theirs={:?})",
+            crate::version(),
+            handshake_result.and_then(|r| r.get("server_version")),
+        ));
+    }
+    let session_id = handshake_result
         .and_then(|r| r.get("session_id"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
