@@ -44,11 +44,7 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
         let our_version = crate::version();
 
         if daemon_version.trim() != our_version {
-            eprintln!(
-                "Daemon version mismatch (daemon={}, ours={}), killing stale daemon (pid={pid})...",
-                daemon_version.trim(),
-                our_version,
-            );
+            // Silent restart — this is normal after a rebuild
             unsafe { libc::kill(pid as i32, libc::SIGTERM); }
             // Wait for it to die
             for _ in 0..30 {
@@ -79,7 +75,6 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
     }
 
     // No live daemon — double-fork daemonize
-    eprintln!("Starting daemon...");
 
     // SAFETY: No Tokio runtime exists at this point (main is sync).
     // Fork is safe in a single-threaded process before any runtime setup.
