@@ -39,7 +39,15 @@ use super::views;
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Restore the terminal to normal mode. Called on both clean exit and panic.
+/// Uses raw escape sequences as a fallback to guarantee mouse tracking stops.
 fn restore_terminal() {
+    // Hard-disable all mouse tracking modes with raw escape sequences.
+    // This must happen BEFORE leaving raw mode so the sequences are sent properly.
+    let _ = io::Write::write_all(
+        &mut io::stdout(),
+        b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l",
+    );
+    let _ = io::Write::flush(&mut io::stdout());
     let _ = execute!(io::stdout(), DisableMouseCapture);
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
@@ -194,7 +202,8 @@ async fn event_loop(
     reconnect_timer.tick().await;
 
     loop {
-        // Check if pending chat submit needs to send IPC
+        // Fire-and-forget chat submit — never blocks the event loop.
+        // The daemon acks via streaming events, not a synchronous response.
         if let Some(ref submit_text) = app.pending_chat_submit.take() {
             if let Some(c) = client.as_mut() {
                 let is_draft_request = submit_text == "/draft";
@@ -213,22 +222,10 @@ async fn event_loop(
                     "is_draft_request": is_draft_request,
                 });
 
-                match c.request("chat.submit", params).await {
-                    Ok((resp, ipc_events)) => {
-                        // Process any events that arrived with the response
-                        for event in ipc_events {
-                            handle_daemon_event(app, &event);
-                        }
-                        if resp.is_error() {
-                            let msg = resp
-                                .error
-                                .map(|e| e.message)
-                                .unwrap_or_else(|| "unknown error".to_string());
-                            app.chat_history.push(ChatMessage::system(format!("Error: {msg}")));
-                        } else {
-                            app.chat_streaming = true;
-                            app.chat_response_buffer.clear();
-                        }
+                match c.send("chat.submit", params).await {
+                    Ok(_) => {
+                        app.chat_streaming = true;
+                        app.chat_response_buffer.clear();
                     }
                     Err(e) => {
                         app.chat_history.push(ChatMessage::system(format!("IPC error: {e}")));
@@ -248,10 +245,6 @@ async fn event_loop(
         }
 
         tokio::select! {
-            // Ctrl+C signal — always responsive, even if other arms are blocked
-            _ = tokio::signal::ctrl_c() => {
-                break;
-            }
             crossterm_event = events.next() => {
                 match crossterm_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
@@ -303,8 +296,14 @@ async fn event_loop(
                         app.connection = ConnectionStatus::Disconnected;
                         client = None;
                     }
-                    Ok(Some(IpcMessage::Response(_))) => {
-                        // Unsolicited response — ignore
+                    Ok(Some(IpcMessage::Response(resp))) => {
+                        // Async response (e.g., chat.submit ack) — check for errors
+                        if resp.is_error() {
+                            if let Some(err) = resp.error {
+                                app.chat_history.push(ChatMessage::system(format!("Error: {}", err.message)));
+                                app.chat_streaming = false;
+                            }
+                        }
                     }
                 }
             }
