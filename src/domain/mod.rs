@@ -7,6 +7,7 @@ pub mod coverage;
 pub mod decision;
 pub mod learning;
 pub mod lock;
+pub mod mailbox;
 pub mod phase;
 pub mod plan;
 #[allow(dead_code)]
