@@ -1,4 +1,4 @@
-# Loopr v3 — Claude Code Instructions
+# Loopr — Claude Code Instructions
 
 ## Project
 
