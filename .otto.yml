@@ -20,10 +20,9 @@ tasks:
       cargo clippy --all-targets --all-features -- -D warnings
       echo ""
       echo "=== Checking format ==="
-      cargo fmt
       cargo fmt --all --check
       echo ""
-      echo "All checks passed!"
+      echo "✅ All checks passed!"
 
   ensure:
     help: "Fail if no tests exist"
@@ -180,12 +179,18 @@ tasks:
 
   build:
     help: "Build release binary"
-    bash:
+    bash: |
       cargo build --release
-      echo "Release build complete"
+      echo "✅ Release build complete"
 
   clean:
     help: "Clean build artifacts"
     bash: |
       cargo clean
-      echo "Build artifacts cleaned"
+      echo "✅ Build artifacts cleaned"
+
+  install:
+    help: "Install binary locally via cargo"
+    bash: |
+      cargo install --path .
+      echo "✅ Binary installed to ~/.cargo/bin"
