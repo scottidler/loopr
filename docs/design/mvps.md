@@ -1,26 +1,42 @@
-# Loopr v3 — MVP Phases
+# Loopr v3 - Build Progression
 
-| | **MVP1** | **MVP2** | **MVP3** | **MVP4** |
-|---|---|---|---|---|
-| **Goal** | Prove the orchestration spine | Add read-only intelligence | LLM agents do the work (code level) | Full multi-level RWL — LLM at every level |
-| **LLM** | None. Zero. Human drives everything. | Doc Validator only (read-only, structured reports) | Implementer + Reviewer personas | + Coordinator + Researcher. Integrator is deterministic (no LLM). |
-| **Human Role** | Coordinator, Integrator, and Implementer — all hats worn by the human via TUI | Coordinator + Integrator; LLM validates docs | Coordinator oversees; LLM agents implement + review | Human sets goals and overrides; LLM Coordinator runs the pipeline |
-| **Pipeline** | Work → Bundle → Tick, fully manual | Same pipeline, LLM gates Spec/Phase/Plan quality | Same pipeline, LLM produces Bundles in worktrees | Full pipeline automated: Goal → Plan → Spec → Phase → Work → Bundle → Tick |
-| **What It Proves** | FSMs work. TaskStore works. Daemon-mediated correctness works. Worktree isolation works. TUI is usable. | LLM can be safely inserted without breaking the spine | Code-level RWL works. Agents produce Bundles in worktrees. | Full "dev team in a box" vision. Multi-level RWL with generation + validation. |
-| **FSMs** | 3 hand-rolled: Work, Bundle, Tick + HierarchyStatus for Plan/Spec/Phase | Same | Same + staleness cascade automation | Same + Role::Researcher |
-| **Parallelism** | Serial. One actor at a time. | Serial. Validator is synchronous gate. | Bounded: 2 Implementers, 2 Reviewers | + 1 Coordinator, 4 Researchers, 1 Integrator (deterministic) |
-| **Worktrees** | Create per-Work, human works in them manually | Same | LLM agents work in worktrees via tool execution | Same (Coordinator/Researcher/Integrator don't use worktrees) |
-| **Tool Execution** | None — human runs commands in a separate terminal | None — LLM validator is API-call only | OS subprocesses in worktrees (Light Loops, Heavy Tools) | Same + Researcher codebase search (read-only) |
-| **Persistence** | TaskStore (JSONL truth, SQLite cache, Git merge driver) | Same | Same | Same + CoordinatorGoal record, enriched Learnings |
-| **IPC** | NDJSON over Unix socket, daemon as single authority | Same | Same + streaming LLM output to TUI | Same + coordinator.set_goal/clear_goal |
-| **Key Principle** | "Your hardest problems are not LLM problems. Prove the system works first." | "Safest entry point for intelligence: read-only, can't break Tick semantics." | "Everything plugs into the backbone MVP1 built." | "RWL at every level. The Coordinator is the meta-Ralph." |
-| **Design Doc** | `design/2026-02-25-loopr-v3-mvp1.md` | `design/2026-02-26-loopr-v3-mvp2.md` | `design/2026-02-26-loopr-v3-mvp3.md` | `design/2026-02-26-loopr-v3-mvp4.md` |
+How Loopr was built, layer by layer. All layers below are implemented unless noted.
 
----
+## Layer 1: Orchestration Spine
+Daemon, FSMs (Work/Bundle/Tick), TaskStore, IPC, worktrees, TUI.
+- Design: `2026-02-25-orchestration-spine.md`
+- Principle: "Your hardest problems are not LLM problems. Prove the system works first."
 
-| | **MVP5** | **MVP6** | **MVP7** | **MVP8** | **MVP9** |
-|---|---|---|---|---|---|
-| **Goal** | Coordinator control loop & sequential phase execution | 12 structural fixes (bundle lifecycle, merge, convergence) | IPC type safety & lifecycle audit | Worktree isolation & implementer reliability | Semantic decomposition evaluation & collaborative Plan creation |
-| **What It Proves** | Coordinator sequences phases, enforces dependencies, converges | Multi-Tick builds work; merge conflicts handled | Typed IPC prevents silent data loss; Work reaches Done | Implementers produce valid Bundles reliably | Decomposition quality matches implementation quality — tight feedback loops at every level |
-| **Key Principle** | "Sequence work like a real dev team" | "Fix the pipeline — every edge case" | "Compile-time contracts across IPC boundaries" | "Exactly one valid worktree per Work" | "Pit of success: high-quality Plans recursively beget high-quality code" |
-| **Design Doc** | `design/2026-02-28-loopr-v3-mvp5-coordinator-sequencing.md` | `design/2026-02-28-loopr-v3-mvp6-structural-fixes.md` | `design/2026-02-28-loopr-v3-mvp7-type-safety-audit.md` | `design/2026-02-28-loopr-v3-mvp8-worktree-implementer-reliability.md` | `design/2026-03-03-loopr-v3-mvp9-semantic-decomposition.md` |
+## Layer 2: Read-Only Intelligence
+Doc Validator (sync LLM, structured reports, gates transitions).
+- Design: `2026-02-26-taskstore-doc-validator.md`
+- Principle: "Safest entry point for intelligence: read-only, can't break Tick semantics."
+
+## Layer 3: Code-Level Agents
+Implementer + Reviewer agents. Tool execution in worktrees. Streaming.
+- Design: `2026-02-26-implementer-reviewer-agents.md`
+- Principle: "Everything plugs into the backbone Layer 1 built."
+
+## Layer 4: Full Agent Roster
+Coordinator, Researcher, deterministic Integrator. Multi-level RWL. Context builder. Strategy knobs.
+- Design: `2026-02-26-multi-level-rwl.md`
+- Principle: "RWL at every level. The Coordinator is the meta-Ralph."
+
+## Layer 5: Pipeline Hardening
+Coordinator sequencing, structural fixes, type safety audit, worktree reliability. Agent self-correction. Pull-based work queue. SLA recovery.
+- Designs: `2026-02-28-coordinator-sequencing.md`, `2026-02-28-structural-fixes.md`, `2026-02-28-type-safety-audit.md`, `2026-02-28-worktree-implementer-reliability.md`, plus ~15 targeted fix docs.
+- Principle: "Fix every edge case. Compile-time contracts across IPC boundaries."
+
+## Layer 6: Chat + Agentic Tool Loop
+TUI Chat view. Unified Tool trait with 14+ builtins. Agentic loop with streaming, context compaction, delegation. Chat-to-Plan funnel.
+- Designs: `2026-03-03-tui-chat-view.md`, `2026-03-04-native-tool-use.md`, `2026-03-04-unified-tool-system.md`, `2026-03-05-chat-agentic-tool-loop.md`, `2026-03-06-chat-performance.md`
+- Principle: "The chat IS the interface. Orchestration grows from conversation."
+
+## Layer 7: Semantic Decomposition (Draft - Partial)
+Coverage Evaluator (done). Upward feedback / bubble-up (not wired). Collaborative Plan creation interview flow (FSM state exists, IPC flow incomplete).
+- Design: `2026-03-03-semantic-decomposition.md`
+- Principle: "Pit of success: high-quality Plans recursively beget high-quality code."
+
+## Remaining Work
+- `2026-03-01-file-touch-broadcasting.md` - file-touch advisory lock auto-acquisition (Draft - not started)
+- See `docs/design/remaining-gaps.md` for small gaps from audit/completion docs
