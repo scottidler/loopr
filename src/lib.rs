@@ -44,12 +44,12 @@ use crate::config::Config;
 /// Resolve the effective log level from the config < env < CLI hierarchy.
 ///
 /// Priority (highest wins):
-/// 1. `cli_log_level` — `--log-level` flag
-/// 2. `LOOPR_LOG_LEVEL` env var
-/// 3. `config.log_level` — from YAML config
-/// 4. Default → `Info`
+/// 1. `cli_log_level` - `--log-level` flag
+/// 2. `LOG_LEVEL` env var
+/// 3. `config.log_level` - from YAML config
+/// 4. Default - `Info`
 pub fn resolve_log_level(config: &Config, cli_log_level: Option<&str>) -> LevelFilter {
-    let env_level = std::env::var("LOOPR_LOG_LEVEL").ok();
+    let env_level = std::env::var("LOG_LEVEL").ok();
     resolve_log_level_from(config, cli_log_level, env_level.as_deref())
 }
 

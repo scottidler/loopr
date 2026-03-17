@@ -13,7 +13,7 @@ Add the minimum observability needed to debug a first real end-to-end orchestrat
 
 ### Background
 
-Loopr has per-agent log files (`AgentLogger`), session summaries, `loopr diagnose` CLI, and DaemonEvent streaming. Log levels are configurable via CLI > env (`LOOPR_LOG_LEVEL`) > config YAML > default (Info).
+Loopr has per-agent log files (`AgentLogger`), session summaries, `loopr diagnose` CLI, and DaemonEvent streaming. Log levels are configurable via CLI > env (`LOG_LEVEL`) > config YAML > default (Info).
 
 Session output is colocated by session ID:
 ```
@@ -216,7 +216,7 @@ Tests:
 ### Testing Strategy
 
 - Run `otto ci` - all existing tests pass
-- Manual: run with `LOOPR_LOG_LEVEL=debug`, verify `.iter-N.md` files appear in session agents directory with correct content
+- Manual: run with `LOG_LEVEL=debug`, verify `.iter-N.md` files appear in session agents directory with correct content
 
 ## Risks and Mitigations
 
