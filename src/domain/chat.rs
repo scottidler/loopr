@@ -32,6 +32,18 @@ produce a structured plan with: Title, Goal, Acceptance Criteria (numbered list)
 pub const PLAN_REFINE_PROMPT: &str = "The user wants to refine the plan draft. Apply their feedback and \
 output the revised plan in the same format. Only change what they asked for.";
 
+pub const EXECUTING_PROMPT: &str = "\
+You are monitoring an active orchestration pipeline in Loopr. \
+The Coordinator agent is decomposing a Plan into Specs, Phases, and Works, \
+then assigning Implementer agents to write code in isolated worktrees.\n\n\
+You can help the user understand progress, answer questions about the pipeline, \
+and relay intervention commands. The orchestration status is included below.\n\n\
+Available intervention commands the user can type:\n\
+- /pause - Pause the Coordinator (implementations in progress will complete)\n\
+- /stop - Stop all orchestration (cancel Coordinator and active agents)\n\
+- /status - Show detailed orchestration status\n\n\
+ORCHESTRATION STATUS:\n";
+
 // --- Funnel state ---
 
 /// Funnel state for Chat sessions. Drives system prompt selection and TUI UX.
@@ -51,7 +63,13 @@ pub enum FunnelState {
 }
 
 /// Build the system prompt for a Chat session based on funnel state.
-pub fn system_prompt_for_chat(funnel_state: FunnelState, is_draft_request: bool) -> String {
+/// When in Executing state, `orchestration_status` provides a live summary
+/// of the orchestration pipeline (built by the caller from Stores).
+pub fn system_prompt_for_chat(
+    funnel_state: FunnelState,
+    is_draft_request: bool,
+    orchestration_status: Option<&str>,
+) -> String {
     match funnel_state {
         FunnelState::Chat => CHAT_SYSTEM_PROMPT.to_string(),
         FunnelState::Interview => {
@@ -64,7 +82,10 @@ pub fn system_prompt_for_chat(funnel_state: FunnelState, is_draft_request: bool)
                 format!("{CHAT_SYSTEM_PROMPT}\n\n{PLAN_REFINE_PROMPT}")
             }
         }
-        FunnelState::Executing => CHAT_SYSTEM_PROMPT.to_string(),
+        FunnelState::Executing => {
+            let status = orchestration_status.unwrap_or("(no status available)");
+            format!("{CHAT_SYSTEM_PROMPT}\n\n{EXECUTING_PROMPT}{status}")
+        }
     }
 }
 
@@ -102,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_system_prompt_chat() {
-        let prompt = system_prompt_for_chat(FunnelState::Chat, false);
+        let prompt = system_prompt_for_chat(FunnelState::Chat, false, None);
         assert!(prompt.contains("AI assistant"));
         assert!(!prompt.contains("clarifying questions"));
         assert!(prompt.contains("MULTIPLE tools"));
@@ -112,26 +133,36 @@ mod tests {
 
     #[test]
     fn test_system_prompt_interview() {
-        let prompt = system_prompt_for_chat(FunnelState::Interview, false);
+        let prompt = system_prompt_for_chat(FunnelState::Interview, false, None);
         assert!(prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_plan_draft_request() {
-        let prompt = system_prompt_for_chat(FunnelState::PlanDraft, true);
+        let prompt = system_prompt_for_chat(FunnelState::PlanDraft, true, None);
         assert!(prompt.contains("structured plan"));
     }
 
     #[test]
     fn test_system_prompt_plan_draft_refine() {
-        let prompt = system_prompt_for_chat(FunnelState::PlanDraft, false);
+        let prompt = system_prompt_for_chat(FunnelState::PlanDraft, false, None);
         assert!(prompt.contains("refine the plan"));
     }
 
     #[test]
-    fn test_system_prompt_executing() {
-        let prompt = system_prompt_for_chat(FunnelState::Executing, false);
-        assert_eq!(prompt, CHAT_SYSTEM_PROMPT);
+    fn test_system_prompt_executing_with_status() {
+        let prompt = system_prompt_for_chat(FunnelState::Executing, false, Some("Works: 3 active"));
+        assert!(prompt.contains("orchestration pipeline"));
+        assert!(prompt.contains("/pause"));
+        assert!(prompt.contains("/stop"));
+        assert!(prompt.contains("Works: 3 active"));
+    }
+
+    #[test]
+    fn test_system_prompt_executing_no_status() {
+        let prompt = system_prompt_for_chat(FunnelState::Executing, false, None);
+        assert!(prompt.contains("orchestration pipeline"));
+        assert!(prompt.contains("no status available"));
     }
 
     #[test]

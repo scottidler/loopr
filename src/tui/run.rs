@@ -2175,37 +2175,37 @@ mod tests {
 
     #[test]
     fn test_system_prompt_chat_state() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::Chat, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::Chat, false, None);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(!prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_interview_state() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::Interview, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::Interview, false, None);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_draft_request() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, true);
+        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, true, None);
         assert!(prompt.contains("structured plan"));
         assert!(!prompt.contains("refine"));
     }
 
     #[test]
     fn test_system_prompt_plan_refine() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, false);
+        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, false, None);
         assert!(prompt.contains("refine"));
         assert!(!prompt.contains("structured plan"));
     }
 
     #[test]
     fn test_system_prompt_executing_state() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::Executing, false);
-        assert!(prompt.contains("Loopr development orchestrator"));
-        assert!(!prompt.contains("clarifying questions"));
+        let prompt = chat::system_prompt_for_chat(FunnelState::Executing, false, Some("2 Works active"));
+        assert!(prompt.contains("orchestration pipeline"));
+        assert!(prompt.contains("2 Works active"));
     }
 
     #[test]

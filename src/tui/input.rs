@@ -336,6 +336,21 @@ pub fn apply_action(app: &mut App, action: Action) {
                             "Use /draft first to generate a plan before accepting.".into(),
                         ));
                     }
+                    "/pause" if app.funnel_state == FunnelState::Executing => {
+                        app.pending_ipc = Some(IpcAction::PauseAgent("coordinator".to_string()));
+                        app.chat_history
+                            .push(ChatMessage::system("Pausing Coordinator...".into()));
+                    }
+                    "/stop" if app.funnel_state == FunnelState::Executing => {
+                        app.pending_ipc = Some(IpcAction::StopAgent("coordinator".to_string()));
+                        app.chat_history
+                            .push(ChatMessage::system("Stopping orchestration...".into()));
+                    }
+                    "/status" if app.funnel_state == FunnelState::Executing => {
+                        // Status is shown via orchestration events in chat + system prompt
+                        app.chat_history
+                            .push(ChatMessage::system("Status is shown in the orchestration events above. Send a message to ask the assistant for a summary.".into()));
+                    }
                     "/help" => {
                         let help = match app.funnel_state {
                             FunnelState::Chat => {

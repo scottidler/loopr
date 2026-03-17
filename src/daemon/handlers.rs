@@ -4801,7 +4801,77 @@ fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonRespon
 
 // --- Chat handlers ---
 
-/// Handle chat.submit — send a user message and start/resume the Chat agentic loop.
+/// Build a compact orchestration status string for the Executing chat system prompt.
+/// Reads Works, Bundles, and agent sessions from Stores to produce a summary.
+fn build_orchestration_status(stores: &Arc<Stores>) -> String {
+    let mut status = String::with_capacity(1024);
+
+    // Coordinator FSM state
+    if let Ok(states) = stores.read_coordinator_states()
+        && let Some(state) = states.values().find(|s| !s.fsm_state.is_terminal())
+    {
+        status.push_str(&format!("Coordinator: {:?}\n", state.fsm_state));
+    }
+
+    // Active Works
+    if let Ok(works) = stores.read_works() {
+        let active: Vec<_> = works
+            .values()
+            .filter(|w| {
+                !matches!(
+                    w.status,
+                    crate::domain::work::WorkStatus::Done | crate::domain::work::WorkStatus::Abandoned
+                )
+            })
+            .collect();
+        if !active.is_empty() {
+            status.push_str(&format!("Works ({} active):\n", active.len()));
+            for w in &active {
+                status.push_str(&format!("  {} [{}] {}\n", w.id, w.status, w.title));
+            }
+        }
+    }
+
+    // Recent Bundle activity
+    if let Ok(bundles) = stores.read_bundles() {
+        let active: Vec<_> = bundles
+            .values()
+            .filter(|b| {
+                !matches!(
+                    b.status,
+                    crate::domain::bundle::BundleStatus::Merged
+                        | crate::domain::bundle::BundleStatus::Rejected
+                        | crate::domain::bundle::BundleStatus::Superseded
+                )
+            })
+            .collect();
+        if !active.is_empty() {
+            status.push_str(&format!("Bundles ({} in flight):\n", active.len()));
+            for b in &active {
+                status.push_str(&format!("  {} [{}]\n", b.id, b.status));
+            }
+        }
+    }
+
+    // Running agents
+    if let Ok(sessions) = stores.read_agent_sessions() {
+        let running: Vec<_> = sessions.values().filter(|s| !s.status.is_terminal()).collect();
+        if !running.is_empty() {
+            status.push_str(&format!("Agents ({} running):\n", running.len()));
+            for s in &running {
+                status.push_str(&format!("  {} [{:?}] {:?}\n", s.id, s.status, s.agent_type));
+            }
+        }
+    }
+
+    if status.is_empty() {
+        status.push_str("No orchestration activity yet.");
+    }
+
+    status
+}
+
+/// Handle chat.submit - send a user message and start/resume the Chat agentic loop.
 /// Spawns a daemon-side Tokio task running run_tool_loop with per-iteration checkpointing.
 fn handle_chat_submit(
     stores: &Arc<Stores>,
@@ -4898,7 +4968,14 @@ fn handle_chat_submit(
                 }
             };
 
-        let system_prompt = crate::domain::chat::system_prompt_for_chat(funnel_state, is_draft_request);
+        // Build orchestration status for Executing state system prompt
+        let orch_status = if funnel_state == crate::domain::chat::FunnelState::Executing {
+            Some(build_orchestration_status(stores))
+        } else {
+            None
+        };
+        let system_prompt =
+            crate::domain::chat::system_prompt_for_chat(funnel_state, is_draft_request, orch_status.as_deref());
         let executor = std::sync::Arc::new(crate::tools::executor::ToolExecutor::chat_with_delegation(
             &stores.config.agents.tools,
             delegate_llm,
