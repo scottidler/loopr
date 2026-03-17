@@ -429,6 +429,82 @@ fn handle_daemon_event(app: &mut App, event: &DaemonEvent) {
         }
         app.chat_history.push(tool_msg);
     }
+
+    // Surface orchestration events in Chat when in Executing state
+    if app.funnel_state == FunnelState::Executing
+        && let Some(msg) = format_orchestration_event(event)
+    {
+        app.chat_history.push(ChatMessage::system(msg));
+    }
+}
+
+/// Format an orchestration DaemonEvent into a human-readable chat system message.
+/// Returns None for events that should not be surfaced in the chat.
+fn format_orchestration_event(event: &DaemonEvent) -> Option<String> {
+    let data = &event.data;
+    match event.event.as_str() {
+        "record.created" => {
+            let collection = data.get("collection")?.as_str()?;
+            let id = data.get("id")?.as_str().unwrap_or("?");
+            match collection {
+                "spec" => Some(format!("Created Spec: {id}")),
+                "phase" => Some(format!("Created Phase: {id}")),
+                "work" => Some(format!("Created Work: {id}")),
+                "bundle" => Some(format!("Bundle proposed: {id}")),
+                _ => None,
+            }
+        }
+        "record.updated" => {
+            let collection = data.get("collection")?.as_str()?;
+            let id = data.get("id")?.as_str().unwrap_or("?");
+            match collection {
+                "bundle" => {
+                    let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    match status {
+                        "Accepted" => Some(format!("Bundle accepted: {id}")),
+                        "Rejected" => Some(format!("Bundle rejected: {id} - retrying")),
+                        "Merged" => Some(format!("Bundle merged: {id}")),
+                        _ => None,
+                    }
+                }
+                "work" => {
+                    let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    match status {
+                        "Done" => Some(format!("Work complete: {id}")),
+                        "Abandoned" => Some(format!("Work abandoned: {id}")),
+                        _ => None,
+                    }
+                }
+                "tick" => {
+                    let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    if status == "Published" { Some(format!("Tick published: {id}")) } else { None }
+                }
+                _ => None,
+            }
+        }
+        "agent.status_changed" => {
+            let agent_type = data.get("agent_type").and_then(|v| v.as_str()).unwrap_or("");
+            let status = data.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let session_id = data.get("session_id").and_then(|v| v.as_str()).unwrap_or("?");
+            if status == "Running" {
+                match agent_type {
+                    "implementer" => Some(format!("Implementer started: {session_id}")),
+                    "reviewer" => Some(format!("Reviewer started: {session_id}")),
+                    "researcher" => Some(format!("Researcher started: {session_id}")),
+                    _ => None,
+                }
+            } else if status == "Completed" || status == "Failed" {
+                match agent_type {
+                    "implementer" | "reviewer" | "researcher" => Some(format!("{agent_type} {status}: {session_id}")),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        "coordinator.plan_accepted" => Some("Coordinator starting decomposition.".to_string()),
+        _ => None,
+    }
 }
 
 /// Send an IPC action to the daemon.
@@ -811,6 +887,7 @@ mod tests {
     use crate::domain::tick::Tick;
     use crate::domain::work::Work;
     use ratatui::backend::TestBackend;
+    use serde_json::json;
     use std::sync::Arc;
 
     fn test_terminal() -> Terminal<TestBackend> {
@@ -2326,5 +2403,145 @@ mod tests {
         assert_eq!(app.chat_history.len(), 1);
         assert_eq!(app.chat_history[0].role, ChatRole::System);
         assert!(app.chat_history[0].content.contains("maximum iterations"));
+    }
+
+    // --- format_orchestration_event tests ---
+
+    #[test]
+    fn test_orch_event_record_created_work() {
+        let event = DaemonEvent::new("record.created", json!({"collection": "work", "id": "wk-abc"}));
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Created Work: wk-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_record_created_spec() {
+        let event = DaemonEvent::new("record.created", json!({"collection": "spec", "id": "sp-xyz"}));
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Created Spec: sp-xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_record_created_phase() {
+        let event = DaemonEvent::new("record.created", json!({"collection": "phase", "id": "ph-123"}));
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Created Phase: ph-123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_record_created_bundle() {
+        let event = DaemonEvent::new("record.created", json!({"collection": "bundle", "id": "bu-999"}));
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Bundle proposed: bu-999".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_record_created_irrelevant() {
+        let event = DaemonEvent::new("record.created", json!({"collection": "learning", "id": "lr-1"}));
+        assert_eq!(format_orchestration_event(&event), None);
+    }
+
+    #[test]
+    fn test_orch_event_bundle_accepted() {
+        let event = DaemonEvent::new(
+            "record.updated",
+            json!({"collection": "bundle", "id": "bu-1", "status": "Accepted"}),
+        );
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Bundle accepted: bu-1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_bundle_rejected() {
+        let event = DaemonEvent::new(
+            "record.updated",
+            json!({"collection": "bundle", "id": "bu-2", "status": "Rejected"}),
+        );
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Bundle rejected: bu-2 - retrying".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_work_done() {
+        let event = DaemonEvent::new(
+            "record.updated",
+            json!({"collection": "work", "id": "wk-1", "status": "Done"}),
+        );
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Work complete: wk-1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_tick_published() {
+        let event = DaemonEvent::new(
+            "record.updated",
+            json!({"collection": "tick", "id": "tk-1", "status": "Published"}),
+        );
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Tick published: tk-1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_agent_running() {
+        let event = DaemonEvent::new(
+            "agent.status_changed",
+            json!({"agent_type": "implementer", "status": "Running", "session_id": "sess-1"}),
+        );
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Implementer started: sess-1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_agent_completed() {
+        let event = DaemonEvent::new(
+            "agent.status_changed",
+            json!({"agent_type": "reviewer", "status": "Completed", "session_id": "sess-2"}),
+        );
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("reviewer Completed: sess-2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_coordinator_status_ignored() {
+        let event = DaemonEvent::new(
+            "agent.status_changed",
+            json!({"agent_type": "coordinator", "status": "Running", "session_id": "sess-c"}),
+        );
+        assert_eq!(format_orchestration_event(&event), None);
+    }
+
+    #[test]
+    fn test_orch_event_plan_accepted() {
+        let event = DaemonEvent::new("coordinator.plan_accepted", json!({"plan_id": "pl-1"}));
+        assert_eq!(
+            format_orchestration_event(&event),
+            Some("Coordinator starting decomposition.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_orch_event_unknown_ignored() {
+        let event = DaemonEvent::new("system.shutting_down", json!({}));
+        assert_eq!(format_orchestration_event(&event), None);
     }
 }
