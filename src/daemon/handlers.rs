@@ -208,7 +208,9 @@ pub fn dispatch(
         "coordinator.get_state" => handle_coordinator_get_state(stores, req),
         "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
         "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
-        "coordinator.accept_plan" => handle_coordinator_accept_plan(stores, event_tx, req),
+        "coordinator.accept_plan" => {
+            handle_coordinator_accept_plan(stores, event_tx, worktree_mgr, integrator_config, req)
+        }
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "chat.submit" => handle_chat_submit(stores, event_tx, req),
         "chat.attach" => handle_chat_attach(stores, req),
@@ -4083,15 +4085,22 @@ fn handle_coordinator_interview_respond(
 fn handle_coordinator_accept_plan(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    worktree_mgr: &WorktreeManager,
+    integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_coordinator_accept_plan()");
 
         // Resolve plan_id: either from existing plan_id param, or by creating a new Plan from text
-        let plan_id = if let Some(id) = req.params.get("plan_id").and_then(|v| v.as_str()) {
-            // Existing plan_id takes priority
-            id.to_string()
+        let (plan_id, plan_title) = if let Some(id) = req.params.get("plan_id").and_then(|v| v.as_str()) {
+            // Existing plan_id takes priority - look up the title
+            let title = stores
+                .read_plans()?
+                .get(id)
+                .map(|p| p.title.clone())
+                .unwrap_or_else(|| "Accepted Plan".to_string());
+            (id.to_string(), title)
         } else if let Some(text) = req.params.get("plan").and_then(|v| v.as_str()) {
             // Create a Plan record from raw text
             let trimmed = text.trim();
@@ -4111,7 +4120,7 @@ fn handle_coordinator_accept_plan(
                 })
                 .unwrap_or_else(|| "Accepted Plan".to_string());
 
-            let plan = Plan::new(title, trimmed.to_string(), String::new());
+            let plan = Plan::new(title.clone(), trimmed.to_string(), String::new());
             let id = plan.id.clone();
 
             // Persist to TaskStore
@@ -4128,7 +4137,7 @@ fn handle_coordinator_accept_plan(
             stores.write_plans()?.insert(id.clone(), plan);
             let _ = event_tx.send(DaemonEvent::record_created("plan", &id));
 
-            id
+            (id, title)
         } else {
             return Ok(DaemonResponse::err(
                 req.id,
@@ -4136,7 +4145,7 @@ fn handle_coordinator_accept_plan(
             ));
         };
 
-        // Activate the Plan (Draft → Active)
+        // Activate the Plan (Draft -> Active)
         {
             let mut plans = stores.write_plans()?;
             match plans.get_mut(&plan_id) {
@@ -4158,32 +4167,69 @@ fn handle_coordinator_accept_plan(
             }
         }
 
-        // Update CoordinatorState: plan_approved = true, transition to Planning
+        // Create CoordinatorGoal (deactivate any existing active goals first)
         {
-            let mut states = stores.write_coordinator_states()?;
-            if let Some(state) = states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
-                state.plan_approved = true;
-                state.fsm_state = crate::domain::coordinator_state::CoordinatorFsmState::Planning;
-                state.updated_at = crate::id::now_millis();
-                if let Some(store_arc) = &stores.store
-                    && let Err(e) = store_arc
-                        .lock()
-                        .map_err(|_| eyre!("taskstore lock poisoned"))?
-                        .update(state.clone())
-                {
-                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+            let mut goals = stores.write_coordinator_goals()?;
+            for existing in goals.values_mut() {
+                if existing.active {
+                    existing.deactivate();
+                    if let Some(store) = &stores.store {
+                        let _ = store
+                            .lock()
+                            .map_err(|_| eyre!("taskstore lock poisoned"))?
+                            .update(existing.clone());
+                    }
                 }
             }
         }
 
+        let goal = CoordinatorGoal::new(plan_title);
+        let goal_id = goal.id.clone();
+
+        if let Some(store_arc) = &stores.store
+            && let Err(e) = store_arc
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(goal.clone())
+        {
+            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+        }
+        stores.write_coordinator_goals()?.insert(goal_id.clone(), goal);
+        let _ = event_tx.send(DaemonEvent::record_created("coordinator_goal", &goal_id));
+
+        // Start the Coordinator agent (best-effort: may fail if no Tokio runtime or already running)
+        let (coordinator_session_id, coordinator_already_running) = if tokio::runtime::Handle::try_current().is_ok() {
+            let start_req = DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
+            let start_resp = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+            let already_running = start_resp.is_error();
+            let session_id = start_resp
+                .result
+                .as_ref()
+                .and_then(|r| r.get("session_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            (session_id, already_running)
+        } else {
+            // No Tokio runtime (e.g. sync tests) - Goal is created, Coordinator can be started separately
+            debug!("No Tokio runtime available; Coordinator agent not auto-started");
+            (String::new(), false)
+        };
+
         let _ = event_tx.send(DaemonEvent::new(
             "coordinator.plan_accepted",
-            json!({ "plan_id": plan_id }),
+            json!({ "plan_id": plan_id, "goal_id": goal_id }),
         ));
 
         Ok(DaemonResponse::ok(
             req.id,
-            json!({ "accepted": true, "plan_id": plan_id }),
+            json!({
+                "accepted": true,
+                "plan_id": plan_id,
+                "goal_id": goal_id,
+                "coordinator_session_id": coordinator_session_id,
+                "coordinator_already_running": coordinator_already_running,
+            }),
         ))
     })
 }
@@ -13067,7 +13113,7 @@ mod tests {
         assert!(!resp.is_error());
         let plan_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // Accept with plan_id (backward compat)
+        // Accept with plan_id
         let resp = dispatch(
             &stores,
             &tx,
@@ -13079,10 +13125,16 @@ mod tests {
         let result = resp.result.unwrap();
         assert_eq!(result["accepted"], true);
         assert_eq!(result["plan_id"], plan_id);
+        // New: response includes goal_id
+        assert!(result["goal_id"].as_str().is_some());
 
         // Verify plan is now Active
         let plans = stores.read_plans().unwrap();
         assert_eq!(plans[&plan_id].status, HierarchyStatus::Active);
+
+        // Verify CoordinatorGoal was created
+        let goals = stores.read_coordinator_goals().unwrap();
+        assert!(goals.values().any(|g| g.active));
     }
 
     #[test]
@@ -13106,6 +13158,7 @@ mod tests {
         let result = resp.result.unwrap();
         assert_eq!(result["accepted"], true);
         let plan_id = result["plan_id"].as_str().unwrap();
+        let goal_id = result["goal_id"].as_str().unwrap();
 
         // Verify plan was created and activated
         let plans = stores.read_plans().unwrap();
@@ -13113,6 +13166,12 @@ mod tests {
         assert_eq!(plan.title, "My Plan Title");
         assert_eq!(plan.description, "My Plan Title\nGoal: Build auth");
         assert_eq!(plan.status, HierarchyStatus::Active);
+
+        // Verify CoordinatorGoal was created with plan title
+        let goals = stores.read_coordinator_goals().unwrap();
+        let goal = &goals[goal_id];
+        assert!(goal.active);
+        assert_eq!(goal.goal, "My Plan Title");
     }
 
     #[test]

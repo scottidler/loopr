@@ -315,7 +315,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                             .push(ChatMessage::system("Use /plan first to enter Plan mode.".into()));
                     }
                     "/accept" if app.funnel_state == FunnelState::PlanDraft => {
-                        // Same as Ctrl+a — extract plan and approve
+                        // Extract plan text and hand off to orchestration
                         let plan_text = app
                             .chat_history
                             .iter()
@@ -326,10 +326,9 @@ pub fn apply_action(app: &mut App, action: Action) {
                         if !plan_text.is_empty() {
                             app.pending_ipc = Some(IpcAction::AcceptPlan(plan_text));
                             app.funnel_state = FunnelState::Executing;
-                            app.current_view = super::app::View::Dashboard;
-                            app.input_mode = InputMode::Normal;
+                            // Stay on Chat view - orchestration events will stream here
                             app.chat_history
-                                .push(ChatMessage::system("Plan approved! Starting automation.".into()));
+                                .push(ChatMessage::system("Plan accepted! Starting orchestration.".into()));
                         }
                     }
                     "/accept" => {
@@ -348,7 +347,7 @@ pub fn apply_action(app: &mut App, action: Action) {
                             FunnelState::PlanDraft => {
                                 "Commands: /accept or Ctrl+a (accept plan), /chat (back to Chat), /help (this)"
                             }
-                            FunnelState::Executing => "Plan is executing. Use Dashboard view to monitor progress.",
+                            FunnelState::Executing => "Orchestration running. Commands: /status, /pause, /stop, /help",
                         };
                         app.chat_history.push(ChatMessage::system(help.into()));
                     }
@@ -446,10 +445,9 @@ pub fn apply_action(app: &mut App, action: Action) {
                 if !plan_text.is_empty() {
                     app.pending_ipc = Some(IpcAction::AcceptPlan(plan_text));
                     app.funnel_state = FunnelState::Executing;
-                    app.current_view = super::app::View::Dashboard;
-                    app.input_mode = InputMode::Normal;
+                    // Stay on Chat view - orchestration events will stream here
                     app.chat_history
-                        .push(ChatMessage::system("Plan approved! Starting automation.".into()));
+                        .push(ChatMessage::system("Plan accepted! Starting orchestration.".into()));
                 }
             }
         }
@@ -1040,8 +1038,9 @@ mod tests {
             Some(IpcAction::AcceptPlan("Title: My Plan\nGoal: Do stuff".into()))
         );
         assert_eq!(app.funnel_state, FunnelState::Executing);
-        assert_eq!(app.current_view, crate::tui::app::View::Dashboard);
-        assert!(app.chat_history.iter().any(|m| m.content.contains("approved")));
+        // Stays on Chat view (not Dashboard) - orchestration events stream here
+        assert_eq!(app.current_view, crate::tui::app::View::Chat);
+        assert!(app.chat_history.iter().any(|m| m.content.contains("orchestration")));
     }
 
     #[test]
