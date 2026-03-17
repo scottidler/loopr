@@ -764,6 +764,11 @@ fn sweep_integrated_to_done(
     bridge: &crate::agents::bridge::AgentIpcBridge,
     log: &AgentLogger,
 ) {
+    log::debug!(
+        "sweep_integrated_to_done(fsm={:?}, phase={:?})",
+        coord_state.fsm_state,
+        coord_state.current_phase_id,
+    );
     if coord_state.fsm_state != CoordinatorFsmState::Executing {
         return;
     }
@@ -1034,6 +1039,12 @@ fn check_fsm_transition(
     coord_state: &CoordinatorState,
     config: &CoordinatorConfig,
 ) -> Option<CoordinatorFsmState> {
+    log::debug!(
+        "check_fsm_transition(current={:?}, goal_id={}, plan_approved={})",
+        coord_state.fsm_state,
+        coord_state.goal_id,
+        coord_state.plan_approved,
+    );
     match coord_state.fsm_state {
         CoordinatorFsmState::Interviewing => {
             // Transition to Planning when plan_approved is set

@@ -814,6 +814,11 @@ impl IntegratorAgent {
 /// Gap #14: Merge bundle branches into the integration branch.
 /// Returns the HEAD SHA after all merges succeed.
 fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]) -> Result<String> {
+    log::debug!(
+        "merge_bundle_branches(repo={}, branches={:?})",
+        repo_path.display(),
+        bundle_branches,
+    );
     for branch in bundle_branches {
         let output = std::process::Command::new("git")
             .args([

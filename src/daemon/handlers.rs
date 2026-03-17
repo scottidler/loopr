@@ -4090,7 +4090,11 @@ fn handle_coordinator_accept_plan(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_coordinator_accept_plan()");
+        debug!(
+            "handle_coordinator_accept_plan(plan_id={:?}, plan_len={:?})",
+            req.params.get("plan_id"),
+            req.params.get("plan").and_then(|v| v.as_str()).map(|s| s.len()),
+        );
 
         // Resolve plan_id: either from existing plan_id param, or by creating a new Plan from text
         let (plan_id, plan_title) = if let Some(id) = req.params.get("plan_id").and_then(|v| v.as_str()) {
@@ -4276,7 +4280,12 @@ fn handle_agent_start(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_agent_start()");
+        debug!(
+            "handle_agent_start(agent_type={:?}, work_id={:?}, bundle_id={:?})",
+            req.params.get("agent_type"),
+            req.params.get("work_id"),
+            req.params.get("bundle_id"),
+        );
         let agent_type: AgentType = match req.params.get("agent_type") {
             Some(v) => match serde_json::from_value(v.clone()) {
                 Ok(t) => t,
@@ -4471,7 +4480,7 @@ fn handle_agent_stop(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_agent_stop()");
+        debug!("handle_agent_stop(params={})", req.params);
         let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
@@ -4879,7 +4888,12 @@ fn handle_chat_submit(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_chat_submit()");
+        debug!(
+            "handle_chat_submit(session_id={:?}, funnel_state={:?}, message_len={:?})",
+            req.params.get("session_id"),
+            req.params.get("funnel_state"),
+            req.params.get("message").and_then(|v| v.as_str()).map(|s| s.len()),
+        );
         let session_id = req
             .params
             .get("session_id")
