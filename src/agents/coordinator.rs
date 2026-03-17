@@ -1294,6 +1294,13 @@ impl CoordinatorAgent {
 
         let mut actions = loop {
             let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
+            self.ctx.log.write_iter_file(
+                iteration,
+                None,
+                &assembled.system_prompt,
+                &assembled.user_message,
+                &response,
+            );
             self.ctx.info(&format!(
                 "raw LLM response ({} chars): {}",
                 response.len(),

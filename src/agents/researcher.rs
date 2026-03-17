@@ -237,6 +237,13 @@ impl ResearcherAgent {
 
         let actions = loop {
             let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
+            self.ctx.log.write_iter_file(
+                iteration,
+                self.ctx.session.target_id.as_deref(),
+                &assembled.system_prompt,
+                &assembled.user_message,
+                &response,
+            );
 
             match implementer::parse_actions(&response, &self.ctx.log) {
                 Ok(actions) => break actions,

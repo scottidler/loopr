@@ -85,6 +85,53 @@ impl AgentLogger {
         log::error!("[{}:{}] {}", self.agent_type, self.session_id, msg);
     }
 
+    /// Write a per-iteration conversation file alongside the agent log.
+    /// Only writes when log level is DEBUG or lower. File is named
+    /// `{agent_id}.iter-{N}.md` in the same directory as the agent log.
+    pub fn write_iter_file(
+        &self,
+        iteration: u32,
+        work_id: Option<&str>,
+        system_prompt: &str,
+        user_message: &str,
+        response: &str,
+    ) {
+        if !log::log_enabled!(log::Level::Debug) {
+            return;
+        }
+        let iter_path = self.file_path.with_extension(format!("iter-{iteration}.md"));
+        let work_line = work_id.unwrap_or("(none)");
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+        let content = format!(
+            "# Agent: {}-{}\n# Type: {:?}\n# Work: {}\n# Iteration: {}\n# Timestamp: {}\n\n## System Prompt\n{}\n\n## User Message\n{}\n\n## Response\n{}\n",
+            self.agent_type,
+            self.session_id,
+            self.agent_type,
+            work_line,
+            iteration,
+            now,
+            system_prompt,
+            user_message,
+            response,
+        );
+        if let Err(e) = fs::write(&iter_path, content.as_bytes()) {
+            log::warn!(
+                "[{}:{}] failed to write iter file {}: {}",
+                self.agent_type,
+                self.session_id,
+                iter_path.display(),
+                e
+            );
+        } else {
+            self.debug(&format!(
+                "LLM exchange -> iter-{}.md ({} chars prompt, {} chars response)",
+                iteration,
+                system_prompt.len() + user_message.len(),
+                response.len()
+            ));
+        }
+    }
+
     fn write_line(&self, level: &str, msg: &str) {
         let now = chrono::Local::now();
         let line = format!(

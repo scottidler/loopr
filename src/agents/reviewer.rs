@@ -129,6 +129,13 @@ impl Agent for ReviewerAgent {
         let assembled = ctx_builder.build(&crate::prompts::store().reviewer);
 
         let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
+        self.ctx.log.write_iter_file(
+            0,
+            Some(&self.bundle_id),
+            &assembled.system_prompt,
+            &assembled.user_message,
+            &response,
+        );
         let review = parse_review_result(&response, &self.ctx.log)?;
 
         self.ctx.info(&format!(
