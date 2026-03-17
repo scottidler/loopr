@@ -21,6 +21,11 @@ const DEFAULT_COVERAGE_PLAN_SPECS: &str = include_str!("../prompts/coverage-plan
 const DEFAULT_COVERAGE_SPEC_PHASES: &str = include_str!("../prompts/coverage-spec-phases.pmt");
 const DEFAULT_COVERAGE_PHASE_WORKS: &str = include_str!("../prompts/coverage-phase-works.pmt");
 const DEFAULT_INTERVIEW: &str = include_str!("../prompts/interview.pmt");
+const DEFAULT_CHAT: &str = include_str!("../prompts/chat.pmt");
+const DEFAULT_CHAT_INTERVIEW: &str = include_str!("../prompts/chat-interview.pmt");
+const DEFAULT_CHAT_DRAFT: &str = include_str!("../prompts/chat-draft.pmt");
+const DEFAULT_CHAT_REFINE: &str = include_str!("../prompts/chat-refine.pmt");
+const DEFAULT_CHAT_EXECUTING: &str = include_str!("../prompts/chat-executing.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -40,6 +45,11 @@ pub struct PromptStore {
     pub coverage_spec_phases: String,
     pub coverage_phase_works: String,
     pub interview: String,
+    pub chat: String,
+    pub chat_interview: String,
+    pub chat_draft: String,
+    pub chat_refine: String,
+    pub chat_executing: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -87,6 +97,11 @@ pub fn init() {
         coverage_spec_phases: load("coverage-spec-phases.pmt", DEFAULT_COVERAGE_SPEC_PHASES),
         coverage_phase_works: load("coverage-phase-works.pmt", DEFAULT_COVERAGE_PHASE_WORKS),
         interview: load("interview.pmt", DEFAULT_INTERVIEW),
+        chat: load("chat.pmt", DEFAULT_CHAT),
+        chat_interview: load("chat-interview.pmt", DEFAULT_CHAT_INTERVIEW),
+        chat_draft: load("chat-draft.pmt", DEFAULT_CHAT_DRAFT),
+        chat_refine: load("chat-refine.pmt", DEFAULT_CHAT_REFINE),
+        chat_executing: load("chat-executing.pmt", DEFAULT_CHAT_EXECUTING),
     });
 }
 
@@ -110,6 +125,11 @@ pub fn init_defaults() {
         coverage_spec_phases: DEFAULT_COVERAGE_SPEC_PHASES.to_string(),
         coverage_phase_works: DEFAULT_COVERAGE_PHASE_WORKS.to_string(),
         interview: DEFAULT_INTERVIEW.to_string(),
+        chat: DEFAULT_CHAT.to_string(),
+        chat_interview: DEFAULT_CHAT_INTERVIEW.to_string(),
+        chat_draft: DEFAULT_CHAT_DRAFT.to_string(),
+        chat_refine: DEFAULT_CHAT_REFINE.to_string(),
+        chat_executing: DEFAULT_CHAT_EXECUTING.to_string(),
     });
 }
 

@@ -17,7 +17,6 @@ use tokio::time::Interval;
 
 use crate::agents::{AgentEvent, AgentSession};
 use crate::domain::bundle::Bundle;
-use crate::domain::chat::{self as chat};
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
@@ -243,7 +242,7 @@ async fn event_loop(
             if let Some(c) = client.as_mut() {
                 let is_draft_request = submit_text == "/draft";
                 let message = if is_draft_request {
-                    chat::DRAFT_PROMPT.to_string()
+                    crate::prompts::store().chat_draft.clone()
                 } else {
                     submit_text.clone()
                 };
@@ -2175,35 +2174,40 @@ mod tests {
 
     #[test]
     fn test_system_prompt_chat_state() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::Chat, false, None);
+        crate::prompts::init_defaults();
+        let prompt = crate::domain::chat::system_prompt_for_chat(FunnelState::Chat, false, None);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(!prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_interview_state() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::Interview, false, None);
+        crate::prompts::init_defaults();
+        let prompt = crate::domain::chat::system_prompt_for_chat(FunnelState::Interview, false, None);
         assert!(prompt.contains("Loopr development orchestrator"));
         assert!(prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_draft_request() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, true, None);
+        crate::prompts::init_defaults();
+        let prompt = crate::domain::chat::system_prompt_for_chat(FunnelState::PlanDraft, true, None);
         assert!(prompt.contains("structured plan"));
         assert!(!prompt.contains("refine"));
     }
 
     #[test]
     fn test_system_prompt_plan_refine() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::PlanDraft, false, None);
+        crate::prompts::init_defaults();
+        let prompt = crate::domain::chat::system_prompt_for_chat(FunnelState::PlanDraft, false, None);
         assert!(prompt.contains("refine"));
         assert!(!prompt.contains("structured plan"));
     }
 
     #[test]
     fn test_system_prompt_executing_state() {
-        let prompt = chat::system_prompt_for_chat(FunnelState::Executing, false, Some("2 Works active"));
+        crate::prompts::init_defaults();
+        let prompt = crate::domain::chat::system_prompt_for_chat(FunnelState::Executing, false, Some("2 Works active"));
         assert!(prompt.contains("orchestration pipeline"));
         assert!(prompt.contains("2 Works active"));
     }
@@ -2240,6 +2244,7 @@ mod tests {
 
     #[test]
     fn test_draft_request_appends_synthetic_user_message() {
+        crate::prompts::init_defaults();
         // Simulates the /draft flow with canonical_messages.
         // When canonical_messages ends with assistant, a synthetic user message is appended.
         let mut canonical = vec![
@@ -2263,7 +2268,7 @@ mod tests {
         // Apply the same logic as the event loop
         let is_draft_request = true;
         if canonical.last().map(|m| m.role.as_str()) != Some("user") {
-            let synthetic = if is_draft_request { chat::DRAFT_PROMPT } else { "fallback" };
+            let synthetic = if is_draft_request { &crate::prompts::store().chat_draft } else { "fallback" };
             canonical.push(crate::tools::types::Message {
                 role: "user".to_string(),
                 content: vec![crate::tools::types::ContentBlock::Text {

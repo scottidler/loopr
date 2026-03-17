@@ -2,48 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::types::Message;
 
-// --- System prompt constants ---
-
-pub const CHAT_SYSTEM_PROMPT: &str = "\
-You are an AI assistant embedded in the Loopr development orchestrator. \
-You help the user explore ideas, discuss architecture, and plan changes to their codebase. \
-When the user is ready to formalize a plan, they will type /plan.\n\n\
-You have tools available: read, write, edit, grep, glob, find, list, tree, shell, search, fetch, and delegate.\n\n\
-TOOL STRATEGY — READ CAREFULLY:\n\
-- You can call MULTIPLE tools in a SINGLE response. If you need to read 5 files, \
-  emit 5 read tool_use blocks in ONE response. They execute in parallel.\n\
-- You have a MAXIMUM of 3 tool iterations. Each time you call tools counts as one. \
-  Maximize every turn — batch ALL independent tool calls together.\n\
-- Use `delegate` for tasks requiring more than 5 tool calls or deep multi-step research. \
-  Delegate spawns a subagent with its own context window and 20 iterations.\n\
-- Do NOT step through files one at a time. Do NOT retry failed searches sequentially.\n\
-- Use `shell` for system commands when no built-in tool fits.\n\n\
-Be concise and direct. Act on user requests immediately using tools — don't ask for permission.";
-
-pub const INTERVIEW_PROMPT: &str = "You are helping the user coalesce around a concrete, actionable plan. \
-Your job is to ask clarifying questions until the goal, scope, and acceptance criteria are clear. \
-Do not propose a plan until the user signals they are ready by typing /draft. \
-Focus on understanding the problem, constraints, and desired outcome.";
-
-pub const DRAFT_PROMPT: &str = "The user is ready for a plan draft. Based on the conversation so far, \
-produce a structured plan with: Title, Goal, Acceptance Criteria (numbered list), and Phases \
-(if applicable). Output plain text, not markdown. Be concise.";
-
-pub const PLAN_REFINE_PROMPT: &str = "The user wants to refine the plan draft. Apply their feedback and \
-output the revised plan in the same format. Only change what they asked for.";
-
-pub const EXECUTING_PROMPT: &str = "\
-You are monitoring an active orchestration pipeline in Loopr. \
-The Coordinator agent is decomposing a Plan into Specs, Phases, and Works, \
-then assigning Implementer agents to write code in isolated worktrees.\n\n\
-You can help the user understand progress, answer questions about the pipeline, \
-and relay intervention commands. The orchestration status is included below.\n\n\
-Available intervention commands the user can type:\n\
-- /pause - Pause the Coordinator (implementations in progress will complete)\n\
-- /stop - Stop all orchestration (cancel Coordinator and active agents)\n\
-- /status - Show detailed orchestration status\n\n\
-ORCHESTRATION STATUS:\n";
-
 // --- Funnel state ---
 
 /// Funnel state for Chat sessions. Drives system prompt selection and TUI UX.
@@ -63,6 +21,7 @@ pub enum FunnelState {
 }
 
 /// Build the system prompt for a Chat session based on funnel state.
+/// Prompts are loaded from .pmt files via the PromptStore.
 /// When in Executing state, `orchestration_status` provides a live summary
 /// of the orchestration pipeline (built by the caller from Stores).
 pub fn system_prompt_for_chat(
@@ -70,21 +29,22 @@ pub fn system_prompt_for_chat(
     is_draft_request: bool,
     orchestration_status: Option<&str>,
 ) -> String {
+    let store = crate::prompts::store();
     match funnel_state {
-        FunnelState::Chat => CHAT_SYSTEM_PROMPT.to_string(),
+        FunnelState::Chat => store.chat.clone(),
         FunnelState::Interview => {
-            format!("{CHAT_SYSTEM_PROMPT}\n\n{INTERVIEW_PROMPT}")
+            format!("{}\n\n{}", store.chat, store.chat_interview)
         }
         FunnelState::PlanDraft => {
             if is_draft_request {
-                format!("{CHAT_SYSTEM_PROMPT}\n\n{DRAFT_PROMPT}")
+                format!("{}\n\n{}", store.chat, store.chat_draft)
             } else {
-                format!("{CHAT_SYSTEM_PROMPT}\n\n{PLAN_REFINE_PROMPT}")
+                format!("{}\n\n{}", store.chat, store.chat_refine)
             }
         }
         FunnelState::Executing => {
             let status = orchestration_status.unwrap_or("(no status available)");
-            format!("{CHAT_SYSTEM_PROMPT}\n\n{EXECUTING_PROMPT}{status}")
+            format!("{}\n\n{}{}", store.chat, store.chat_executing, status)
         }
     }
 }
@@ -121,8 +81,13 @@ impl ChatHistory {
 mod tests {
     use super::*;
 
+    fn ensure_prompts() {
+        crate::prompts::init_defaults();
+    }
+
     #[test]
     fn test_system_prompt_chat() {
+        ensure_prompts();
         let prompt = system_prompt_for_chat(FunnelState::Chat, false, None);
         assert!(prompt.contains("AI assistant"));
         assert!(!prompt.contains("clarifying questions"));
@@ -133,24 +98,28 @@ mod tests {
 
     #[test]
     fn test_system_prompt_interview() {
+        ensure_prompts();
         let prompt = system_prompt_for_chat(FunnelState::Interview, false, None);
         assert!(prompt.contains("clarifying questions"));
     }
 
     #[test]
     fn test_system_prompt_plan_draft_request() {
+        ensure_prompts();
         let prompt = system_prompt_for_chat(FunnelState::PlanDraft, true, None);
         assert!(prompt.contains("structured plan"));
     }
 
     #[test]
     fn test_system_prompt_plan_draft_refine() {
+        ensure_prompts();
         let prompt = system_prompt_for_chat(FunnelState::PlanDraft, false, None);
         assert!(prompt.contains("refine the plan"));
     }
 
     #[test]
     fn test_system_prompt_executing_with_status() {
+        ensure_prompts();
         let prompt = system_prompt_for_chat(FunnelState::Executing, false, Some("Works: 3 active"));
         assert!(prompt.contains("orchestration pipeline"));
         assert!(prompt.contains("/pause"));
@@ -160,6 +129,7 @@ mod tests {
 
     #[test]
     fn test_system_prompt_executing_no_status() {
+        ensure_prompts();
         let prompt = system_prompt_for_chat(FunnelState::Executing, false, None);
         assert!(prompt.contains("orchestration pipeline"));
         assert!(prompt.contains("no status available"));

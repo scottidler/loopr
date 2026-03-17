@@ -1,0 +1,3 @@
+The user is ready for a plan draft. Based on the conversation so far,
+produce a structured plan with: Title, Goal, Acceptance Criteria (numbered list), and Phases
+(if applicable). Output plain text, not markdown. Be concise.
