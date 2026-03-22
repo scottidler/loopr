@@ -335,4 +335,4 @@ In Skip mode, `CoordinatorState::new()` sets `plan_approved = true`. The `coordi
 - `src/agents/executor.rs` — `InterviewQuestion` and `ProposePlan` action handling
 - `src/config.rs` — `CoordinatorConfig`
 - `bin/test-run.sh` — headless E2E test script
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — Coordinator FSM design
+- `docs/design/2026-02-26-multi-level-rwl.md` — Coordinator FSM design

@@ -2,7 +2,7 @@
 
 **Author:** Claude (Opus 4.6)
 **Date:** 2026-02-27
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -1417,9 +1417,9 @@ None. Every gap has a specified fix.
 
 ## References
 
-- `docs/design/2026-02-25-loopr-v3-mvp1.md` — MVP1 design (orchestration spine)
-- `docs/design/2026-02-26-loopr-v3-mvp2.md` — MVP2 design (TaskStore + validator)
-- `docs/design/2026-02-26-loopr-v3-mvp3.md` — MVP3 design (agents + tools)
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — MVP4 design (full agent roster)
-- `docs/design/2026-02-27-loopr-v3-audit-fixes.md` — Previous audit fixes
-- `docs/design/2026-02-27-loopr-v3-e2e-blockers.md` — Previous e2e blockers
+- `docs/design/2026-02-25-orchestration-spine.md` — MVP1 design (orchestration spine)
+- `docs/design/2026-02-26-taskstore-doc-validator.md` — MVP2 design (TaskStore + validator)
+- `docs/design/2026-02-26-implementer-reviewer-agents.md` — MVP3 design (agents + tools)
+- `docs/design/2026-02-26-multi-level-rwl.md` — MVP4 design (full agent roster)
+- `docs/design/2026-02-27-audit-fixes.md` — Previous audit fixes
+- `docs/design/2026-02-27-e2e-blockers.md` — Previous e2e blockers

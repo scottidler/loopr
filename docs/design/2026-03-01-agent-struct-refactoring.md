@@ -360,7 +360,7 @@ No performance impact. This is a compile-time structural change. The runtime beh
 
 ## References
 
-- Prior MVP design docs: `docs/design/2026-02-25-loopr-v3-mvp1.md` through `mvp8`
+- Prior MVP design docs: `docs/design/2026-02-25-orchestration-spine.md` through `mvp8`
 - Logging refactor (just completed): commit `eb19488` — demonstrates the parameter-threading pain this refactor addresses
 - `src/agents/executor.rs` — current dispatch layer (lines 310-468: `run_agent_loop`)
 - `src/agents/mod.rs` — current `AgentType`, `AgentStatus`, `AgentSession` definitions

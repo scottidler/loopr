@@ -2,7 +2,7 @@
 
 **Author:** Scott Aidler + Claude
 **Date:** 2026-02-27
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -348,6 +348,6 @@ Each phase is a separate commit. `otto ci` after each. `otto cov` after Phase 4 
 ## References
 
 - Coverage baseline: `otto cov --details` (2026-02-27) — 91.9% lines, 92.6% functions
-- Design doc: `docs/design/2026-02-26-loopr-v3-mvp4.md` (source of truth)
-- Audit fixes: `docs/design/2026-02-27-loopr-v3-audit-fixes.md`
-- E2E blockers: `docs/design/2026-02-27-loopr-v3-e2e-blockers.md`
+- Design doc: `docs/design/2026-02-26-multi-level-rwl.md` (source of truth)
+- Audit fixes: `docs/design/2026-02-27-audit-fixes.md`
+- E2E blockers: `docs/design/2026-02-27-e2e-blockers.md`

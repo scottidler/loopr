@@ -428,8 +428,8 @@ No new crates. Multi-turn conversation is supported by the existing `AgentLlmCli
 - [Gemini CLI LoopDetectionService](https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/services/loopDetectionService.ts) — Multi-tier loop detection
 - [Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/html/2503.13657v1) — 14 failure modes including "format adherence" and "verification bottleneck"
 - `docs/design/2026-03-01-agent-runtime-bugs.md` — Circuit breaker (current parse failure handling)
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — Integrator as deterministic task, Bundle FSM
-- `docs/design/2026-02-26-loopr-v3-mvp3.md` — Reviewer agent, Bundle lifecycle
+- `docs/design/2026-02-26-multi-level-rwl.md` — Integrator as deterministic task, Bundle FSM
+- `docs/design/2026-02-26-implementer-reviewer-agents.md` — Reviewer agent, Bundle lifecycle
 - `src/agents/lifeguard.rs` — Current error tracking and escalation
 - `src/agents/implementer.rs` — Current `run_iteration()` flow
 - `src/domain/bundle.rs` — Bundle FSM transitions

@@ -1379,9 +1379,9 @@ The generate → validate → iterate cycle is where LLM quality matters most. T
 
 ## References
 
-- `docs/design/2026-02-25-loopr-v3-mvp1.md` — Orchestration spine
-- `docs/design/2026-02-26-loopr-v3-mvp2.md` — TaskStore + Doc Validator
-- `docs/design/2026-02-26-loopr-v3-mvp3.md` — Implementer + Reviewer agents
+- `docs/design/2026-02-25-orchestration-spine.md` — Orchestration spine
+- `docs/design/2026-02-26-taskstore-doc-validator.md` — TaskStore + Doc Validator
+- `docs/design/2026-02-26-implementer-reviewer-agents.md` — Implementer + Reviewer agents
 - `docs/v3-chatgpt-loopr-architecture-conversation.md` — Original vision (6 personas, swarms, multi-level RWL)
 - `docs/v3-claude-loopr-mvp-and-fsm-conversation.md` — FSM decisions, MVP phasing
 - `docs/v3-preplan-conversation.md` — IPC vs TaskStore-as-bus, daemon justification

@@ -259,7 +259,7 @@ Use `std::env::current_dir()` at TUI startup. This matches Claude Code behavior 
 
 ## References
 
-- Existing design docs: `docs/design/2026-02-26-loopr-v3-mvp3.md` (tool system), `docs/design/2026-03-04-loopr-tool-use.md` (unified tool design)
+- Existing design docs: `docs/design/2026-02-26-implementer-reviewer-agents.md` (tool system), `docs/design/2026-03-04-native-tool-use.md` (unified tool design)
 - `src/tools/agentic_loop.rs` — agentic loop implementation
 - `src/tui/run.rs` — current chat flow
 - `src/agents/llm_client.rs` — LLM client with new `AgenticLlm` impl

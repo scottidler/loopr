@@ -656,5 +656,5 @@ If the user's very first message contains a massive prompt (e.g., pasted file co
 - Existing shell output cap: `src/tools/shell.rs` — `MAX_OUTPUT = 16 * 1024`
 - Existing Researcher agent: `src/agents/researcher.rs` — closest existing subagent pattern
 - Anthropic API limits: `claude-sonnet-4-6` and `claude-opus-4-6` — 200K input token limit
-- MVP4 design doc: `docs/design/2026-02-26-loopr-v3-mvp4.md` — context builder and token budgeting
+- MVP4 design doc: `docs/design/2026-02-26-multi-level-rwl.md` — context builder and token budgeting
 - `~/pd/` test case: 50 .md files, 22K lines, 1.2 MB — representative bulk read scenario

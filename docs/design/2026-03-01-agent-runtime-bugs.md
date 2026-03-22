@@ -550,4 +550,4 @@ Single PR to `v3` branch. All changes are backward-compatible. The `string_or_ve
 - [SWE-agent agents.py](https://github.com/SWE-agent/SWE-agent/blob/main/sweagent/agent/agents.py) — `max_requeries=3`, consecutive timeout tracking, error template system
 - [Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/html/2503.13657v1) — 14 failure modes, "context exhaustion" pattern
 - Serde string-or-struct pattern: [serde.rs/string-or-struct](https://serde.rs/string-or-struct.html)
-- Loopr MVP4 design doc: `docs/design/2026-02-26-loopr-v3-mvp4.md`
+- Loopr MVP4 design doc: `docs/design/2026-02-26-multi-level-rwl.md`

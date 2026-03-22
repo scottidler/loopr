@@ -638,7 +638,7 @@ The `DocValidator` makes a blocking `ureq::post()` call. Since `dispatch()` runs
 
 ## References
 
-- `docs/design/2026-02-25-loopr-v3-mvp1.md` — MVP1 design doc (source of truth for spine architecture)
+- `docs/design/2026-02-25-orchestration-spine.md` — MVP1 design doc (source of truth for spine architecture)
 - `docs/mvps.md` — MVP phase comparison table
 - `scottidler/taskstore` — TaskStore crate (Record trait, Store, Filter, JSONL + SQLite)
 - Anthropic Messages API — `/v1/messages` endpoint for Doc Validator

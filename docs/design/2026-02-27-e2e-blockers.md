@@ -228,6 +228,6 @@ All tests use `MockLlm` (canned JSON responses) and `CapturingLlm` (captures pro
 
 ## References
 
-- Design doc: `docs/design/2026-02-26-loopr-v3-mvp4.md` (Coordinator loop, section on auto-restart)
-- Validation fixes: `docs/design/2026-02-27-loopr-v3-mvp4-validation.md`
+- Design doc: `docs/design/2026-02-26-multi-level-rwl.md` (Coordinator loop, section on auto-restart)
+- Validation fixes: `docs/design/2026-02-27-post-build-validation.md`
 - E2E test findings: commit `51037b2` (4 fixes from manual testing)

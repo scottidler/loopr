@@ -1113,8 +1113,8 @@ Agents are opt-in (`agents.enabled = false` by default). The human-driven workfl
 
 ## References
 
-- `docs/design/2026-02-25-loopr-v3-mvp1.md` — MVP1 design doc (orchestration spine)
-- `docs/design/2026-02-26-loopr-v3-mvp2.md` — MVP2 design doc (TaskStore + Doc Validator)
+- `docs/design/2026-02-25-orchestration-spine.md` — MVP1 design doc (orchestration spine)
+- `docs/design/2026-02-26-taskstore-doc-validator.md` — MVP2 design doc (TaskStore + Doc Validator)
 - `docs/mvps.md` — MVP phase comparison table
 - `docs/v3-chatgpt-loopr-architecture-conversation.md` — Original architecture conversation with ChatGPT
 - `docs/v3-claude-loopr-mvp-and-fsm-conversation.md` — FSM architecture discussion

@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler + Claude
 **Date:** 2026-03-01
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -448,7 +448,7 @@ Feature-flagged behind `pull_based_workers: bool` (default `false`). Existing pu
 ## References
 
 - `docs/design/2026-03-01-work-handback.md` — Implementer dedup guard (prevents duplicate assignment)
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — Coordinator loop and AssignAgent design
+- `docs/design/2026-02-26-multi-level-rwl.md` — Coordinator loop and AssignAgent design
 - `docs/design/2026-03-01-implementer-completion-and-parallel-execution.md` — Parallel execution improvements
 - `src/agents/executor.rs` — Current `run_agent_task()` logic
 - `src/daemon/handlers.rs` — `auto_start_agents()` hook

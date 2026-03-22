@@ -2,7 +2,7 @@
 
 **Author:** Scott Aidler + Claude
 **Date:** 2026-02-27
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -899,7 +899,7 @@ All 23 defects from the audit are addressed:
 
 ## References
 
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — MVP4 design doc (source of truth)
-- `docs/design/2026-02-26-loopr-v3-mvp3.md` — MVP3 design doc
-- `docs/design/2026-02-25-loopr-v3-mvp1.md` — MVP1 design doc
+- `docs/design/2026-02-26-multi-level-rwl.md` — MVP4 design doc (source of truth)
+- `docs/design/2026-02-26-implementer-reviewer-agents.md` — MVP3 design doc
+- `docs/design/2026-02-25-orchestration-spine.md` — MVP1 design doc
 - Audit conversation (this session) — defect discovery and triage

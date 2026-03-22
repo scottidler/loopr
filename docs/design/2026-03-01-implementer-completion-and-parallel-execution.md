@@ -354,8 +354,8 @@ Additional testing needed:
 ## References
 
 - `docs/design/2026-03-01-live-run-fixes.md` — First live-run bug fixes (validator, tools, supervisor, lifeguard)
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — MVP4 design (coordinator, multi-level RWL)
-- `docs/design/2026-02-26-loopr-v3-mvp3.md` — MVP3 design (implementer, reviewer agents)
+- `docs/design/2026-02-26-multi-level-rwl.md` — MVP4 design (coordinator, multi-level RWL)
+- `docs/design/2026-02-26-implementer-reviewer-agents.md` — MVP3 design (implementer, reviewer agents)
 - `prompts/implementer.pmt` — Implementer system prompt
 - `prompts/coordinator.pmt` — Coordinator system prompt
 - `prompts/generation-work.pmt` — Work generation instructions

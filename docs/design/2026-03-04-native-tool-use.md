@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-03-04
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -520,5 +520,5 @@ Adding `call_with_tools()` to the `LlmClient` trait requires updating all mock i
 - `docs/claudecode-tools-reference.md` — Claude Code built-in tools reference
 - `taskdaemon/td/docs/tools.md` — td tool system specification
 - `taskdaemon/td/src/tools/` — td tool implementation (source to port from)
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — current MVP4 design (action-based agents)
+- `docs/design/2026-02-26-multi-level-rwl.md` — current MVP4 design (action-based agents)
 - Anthropic Messages API — tool_use documentation

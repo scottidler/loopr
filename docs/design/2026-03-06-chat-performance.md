@@ -2,7 +2,7 @@
 
 **Author:** Claude (with architectural direction from Gemini)
 **Date:** 2026-03-06
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 3/5
 
 ## Summary
@@ -213,4 +213,4 @@ Each phase ships as its own version bump. Phase 1 is zero-config and backward co
 - [Anthropic Prompt Caching docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching)
 - Gemini architectural evaluation (conversation context, 2026-03-06)
 - Session logs: `20260306T015133`, `20260306T020106`, `20260306T022423`, `20260306T023437`, `20260306T024411`
-- Existing design docs: `docs/design/2026-02-26-loopr-v3-mvp3.md` (agent architecture)
+- Existing design docs: `docs/design/2026-02-26-implementer-reviewer-agents.md` (agent architecture)

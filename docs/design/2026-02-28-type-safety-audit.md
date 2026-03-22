@@ -850,8 +850,8 @@ Each phase includes unit tests. Key regression scenarios:
 
 ## References
 
-- [MVP4 Design Doc](2026-02-26-loopr-v3-mvp4.md) — multi-level RWL, Coordinator, Integrator
-- [MVP5 Design Doc](2026-02-28-loopr-v3-mvp5-coordinator-sequencing.md) — Coordinator control loop
-- [MVP6 Design Doc](2026-02-28-loopr-v3-mvp6-structural-fixes.md) — 12 structural fixes
-- [E2E Blockers](2026-02-27-loopr-v3-e2e-blockers.md) — pipeline integration fixes
-- [Audit Fixes](2026-02-27-loopr-v3-audit-fixes.md) — 23 defects found and fixed
+- [MVP4 Design Doc](2026-02-26-multi-level-rwl.md) — multi-level RWL, Coordinator, Integrator
+- [MVP5 Design Doc](2026-02-28-coordinator-sequencing.md) — Coordinator control loop
+- [MVP6 Design Doc](2026-02-28-structural-fixes.md) — 12 structural fixes
+- [E2E Blockers](2026-02-27-e2e-blockers.md) — pipeline integration fixes
+- [Audit Fixes](2026-02-27-audit-fixes.md) — 23 defects found and fixed

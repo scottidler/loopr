@@ -697,8 +697,8 @@ Respond with JSON:
 
 ## References
 
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — Multi-level RWL architecture (source of truth for current decomposition flow)
-- `docs/design/2026-02-28-loopr-v3-mvp5-coordinator-sequencing.md` — Coordinator FSM and phase gating
+- `docs/design/2026-02-26-multi-level-rwl.md` — Multi-level RWL architecture (source of truth for current decomposition flow)
+- `docs/design/2026-02-28-coordinator-sequencing.md` — Coordinator FSM and phase gating
 - `docs/how-top-engineers-stop-ai-agents-from-writing-slop.txt` — Jim West's anti-slop patterns (quality gates, never fix bad output, pit of success)
 - `docs/prompting-split-into-four-skills.txt` — Nate's four prompting disciplines (specification engineering, five primitives, evaluation design)
 - `docs/minions-stripes-one-shot-end-to-end-coding-agents.md` — Stripe Minions (interleaved agent + deterministic, shift feedback left, at most two CI rounds)

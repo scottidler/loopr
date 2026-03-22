@@ -526,8 +526,8 @@ No new external dependencies. All changes use existing crates (tokio, serde_json
 
 ## References
 
-- `docs/design/2026-02-26-loopr-v3-mvp4.md` — MVP4 design (promised supervisor, not implemented)
-- `docs/design/2026-02-26-loopr-v3-mvp3.md` — MVP3 design (Implementer/Reviewer agents, tool execution)
+- `docs/design/2026-02-26-multi-level-rwl.md` — MVP4 design (promised supervisor, not implemented)
+- `docs/design/2026-02-26-implementer-reviewer-agents.md` — MVP3 design (Implementer/Reviewer agents, tool execution)
 - `docs/design/2026-03-01-manual-test-findings.md` — Manual e2e test findings
 - `src/agents/lifeguard.rs` — Lifeguard loop detector
 - `src/agents/coordinator.rs` — Coordinator FSM and footer generation

@@ -652,12 +652,12 @@ Key behavioral differences from the broken run:
 
 ## References
 
-- [MVP1 Design Doc](2026-02-25-loopr-v3-mvp1.md) — orchestration spine
-- [MVP2 Design Doc](2026-02-26-loopr-v3-mvp2.md) — TaskStore + Doc Validator
-- [MVP3 Design Doc](2026-02-26-loopr-v3-mvp3.md) — Implementer + Reviewer agents
-- [MVP4 Design Doc](2026-02-26-loopr-v3-mvp4.md) — multi-level RWL, Coordinator, Integrator
-- [E2E Blockers](2026-02-27-loopr-v3-e2e-blockers.md) — pipeline integration fixes
-- [Audit Fixes](2026-02-27-loopr-v3-audit-fixes.md) — 23 defects found and fixed
+- [MVP1 Design Doc](2026-02-25-orchestration-spine.md) — orchestration spine
+- [MVP2 Design Doc](2026-02-26-taskstore-doc-validator.md) — TaskStore + Doc Validator
+- [MVP3 Design Doc](2026-02-26-implementer-reviewer-agents.md) — Implementer + Reviewer agents
+- [MVP4 Design Doc](2026-02-26-multi-level-rwl.md) — multi-level RWL, Coordinator, Integrator
+- [E2E Blockers](2026-02-27-e2e-blockers.md) — pipeline integration fixes
+- [Audit Fixes](2026-02-27-audit-fixes.md) — 23 defects found and fixed
 - [Vision: Architecture Conversation](../v3-chatgpt-loopr-architecture-conversation.md)
 - [Vision: MVP & FSM Conversation](../v3-claude-loopr-mvp-and-fsm-conversation.md)
 - [Vision: Pre-plan Conversation](../v3-preplan-conversation.md)

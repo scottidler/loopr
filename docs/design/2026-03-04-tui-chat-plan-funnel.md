@@ -344,8 +344,8 @@ All other transitions are local state changes within the TUI.
 
 ## References
 
-- [Loopr v3 MVP4 Design](2026-02-26-loopr-v3-mvp4.md) — Coordinator agent, multi-level RWL
-- [Loopr v3 MVP3 Design](2026-02-26-loopr-v3-mvp3.md) — Implementer + Reviewer agents
+- [Loopr v3 MVP4 Design](2026-02-26-multi-level-rwl.md) — Coordinator agent, multi-level RWL
+- [Loopr v3 MVP3 Design](2026-02-26-implementer-reviewer-agents.md) — Implementer + Reviewer agents
 - `src/tui/app.rs` — FunnelState, ChatMode, App struct
 - `src/tui/input.rs` — Slash command parsing and dispatch
 - `src/tui/views/chat.rs` — Border color logic

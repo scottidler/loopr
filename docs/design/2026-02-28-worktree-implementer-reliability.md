@@ -414,6 +414,6 @@ loopr agent output <session-id>  # NEW: debug individual agents
 ## References
 
 - End-to-end test results: TODO app build (2026-02-28 session)
-- MVP4 design doc: `docs/design/2026-02-26-loopr-v3-mvp4.md`
-- MVP3 design doc: `docs/design/2026-02-26-loopr-v3-mvp3.md` (Implementer + Reviewer agents)
+- MVP4 design doc: `docs/design/2026-02-26-multi-level-rwl.md`
+- MVP3 design doc: `docs/design/2026-02-26-implementer-reviewer-agents.md` (Implementer + Reviewer agents)
 - Post-implementation verification: `docs/verify-implementation.md`

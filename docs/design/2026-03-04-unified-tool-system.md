@@ -4,7 +4,7 @@
 **Date:** 2026-03-04
 **Status:** Implemented
 **Review Passes Completed:** 5/5
-**Supersedes:** `docs/design/2026-03-04-loopr-tool-use.md` (sections on ToolRunner/ToolExecutor coexistence)
+**Supersedes:** `docs/design/2026-03-04-native-tool-use.md` (sections on ToolRunner/ToolExecutor coexistence)
 
 ## Summary
 
@@ -14,7 +14,7 @@ Loopr currently has two parallel execution concepts: `ToolRunner` (project-speci
 
 ### Background
 
-The original tool-use design doc (`2026-03-04-loopr-tool-use.md`) proposes adding native Anthropic `tool_use` support with 14 built-in tools. It explicitly keeps the existing `ToolRunner` as a separate system and adds a `shell` built-in that "can delegate to ToolRunner for configured project tools." This creates two tool registries, two dispatch paths, and a wrapper-around-a-wrapper indirection.
+The original tool-use design doc (`2026-03-04-native-tool-use.md`) proposes adding native Anthropic `tool_use` support with 14 built-in tools. It explicitly keeps the existing `ToolRunner` as a separate system and adds a `shell` built-in that "can delegate to ToolRunner for configured project tools." This creates two tool registries, two dispatch paths, and a wrapper-around-a-wrapper indirection.
 
 Meanwhile, `ToolRunner` (`src/tools/mod.rs`) already does:
 - Registry: `HashMap<String, ToolEntry>` — name → command + timeout + worktree flag
@@ -543,7 +543,7 @@ The `worktree: bool` field on `ToolEntry` in `loopr.yml` currently controls whet
 
 ## References
 
-- `docs/design/2026-03-04-loopr-tool-use.md` — original tool-use design (this doc supersedes the two-system architecture)
+- `docs/design/2026-03-04-native-tool-use.md` — original tool-use design (this doc supersedes the two-system architecture)
 - `docs/architecture-process-vs-async-task.md` — current runtime architecture
 - `src/tools/mod.rs` — existing `ToolRunner` implementation
 - `src/agents/mod.rs` — `AgentAction` enum (the action system being migrated from)
