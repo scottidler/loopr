@@ -1197,4 +1197,245 @@ mod tests {
         apply_action(&mut app, Action::ChatSubmit);
         assert!(app.chat_history[0].content.contains("/accept"));
     }
+
+    // --- Event replay tests (keystroke-to-state pipeline via type_and_submit) ---
+
+    use crate::tui::app::ChatRole;
+    use crate::tui::test_utils::{press_key, type_and_submit};
+
+    #[test]
+    fn test_replay_chat_submit_flow() {
+        let mut app = App::new();
+
+        type_and_submit(&mut app, "hello world");
+
+        assert!(app.chat_input.is_empty());
+        assert_eq!(app.chat_cursor_pos, 0);
+        assert_eq!(app.chat_history.len(), 1);
+        assert_eq!(app.chat_history[0].content, "hello world");
+        assert_eq!(app.chat_history[0].role, ChatRole::User);
+        assert_eq!(app.pending_chat_submit, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_replay_plan_funnel_flow() {
+        let mut app = App::new();
+
+        // /plan transitions Chat -> Interview
+        type_and_submit(&mut app, "/plan");
+        assert_eq!(app.funnel_state, FunnelState::Interview);
+        assert_eq!(app.chat_mode, ChatMode::Plan);
+        assert!(app.chat_history.iter().any(|m| m.content.contains("Plan mode")));
+
+        // Regular message in interview goes to LLM
+        type_and_submit(&mut app, "Build a widget");
+        assert_eq!(app.pending_chat_submit, Some("Build a widget".to_string()));
+
+        // /draft transitions Interview -> PlanDraft
+        type_and_submit(&mut app, "/draft");
+        assert_eq!(app.funnel_state, FunnelState::PlanDraft);
+        assert_eq!(app.pending_chat_submit, Some("/draft".to_string()));
+    }
+
+    #[test]
+    fn test_replay_slash_wrong_state() {
+        let mut app = App::new();
+
+        // /draft without /plan first
+        type_and_submit(&mut app, "/draft");
+        assert_eq!(app.funnel_state, FunnelState::Chat);
+        assert!(app.chat_history.iter().any(|m| m.content.contains("/plan first")));
+
+        // /accept without /draft first
+        type_and_submit(&mut app, "/accept");
+        assert_eq!(app.funnel_state, FunnelState::Chat);
+        assert!(app.chat_history.iter().any(|m| m.content.contains("/draft first")));
+    }
+
+    #[test]
+    fn test_replay_clear_resets_state() {
+        let mut app = App::new();
+
+        type_and_submit(&mut app, "hello");
+        assert!(!app.chat_history.is_empty());
+
+        type_and_submit(&mut app, "/clear");
+        assert!(app.chat_history.is_empty());
+        assert!(app.canonical_messages.is_empty());
+    }
+
+    #[test]
+    fn test_replay_unknown_command() {
+        let mut app = App::new();
+
+        type_and_submit(&mut app, "/nonexistent");
+        assert!(app.chat_history.iter().any(|m| m.content.contains("Unknown command")));
+    }
+
+    #[test]
+    fn test_replay_empty_submit_is_noop() {
+        let mut app = App::new();
+
+        // Just press Enter with no input
+        press_key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.chat_history.is_empty());
+        assert!(app.pending_chat_submit.is_none());
+    }
+
+    #[test]
+    fn test_replay_cursor_movement() {
+        let mut app = App::new();
+
+        // Type "abcde"
+        for c in "abcde".chars() {
+            press_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        assert_eq!(app.chat_cursor_pos, 5);
+
+        // Home moves to start
+        press_key(&mut app, KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 0);
+
+        // End moves to end
+        press_key(&mut app, KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 5);
+
+        // Left moves back one
+        press_key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 4);
+
+        // Right moves forward one
+        press_key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 5);
+
+        // Right at end stays put
+        press_key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 5);
+    }
+
+    #[test]
+    fn test_replay_cursor_utf8() {
+        let mut app = App::new();
+
+        // Type "café" - é is multi-byte (2 bytes in UTF-8)
+        for c in "café".chars() {
+            press_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        assert_eq!(app.chat_input, "café");
+        assert_eq!(app.chat_cursor_pos, app.chat_input.len()); // 5
+
+        // Left moves back one char (past é) - cursor now before é
+        press_key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 3); // before the 2-byte é
+        assert!(app.chat_input.is_char_boundary(app.chat_cursor_pos));
+
+        // Delete removes char at cursor (é), not before it
+        press_key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        assert_eq!(app.chat_input, "caf");
+    }
+
+    #[test]
+    fn test_replay_view_cycling_syncs_input_mode() {
+        let mut app = App::new();
+        assert_eq!(app.current_view, crate::tui::app::View::Chat);
+        assert_eq!(app.input_mode, InputMode::ChatInput);
+
+        // Tab switches to Dashboard (Normal mode)
+        press_key(&mut app, KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(app.current_view, crate::tui::app::View::Dashboard);
+        assert_eq!(app.input_mode, InputMode::Normal);
+
+        // BackTab returns to Chat (ChatInput mode)
+        press_key(&mut app, KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!(app.current_view, crate::tui::app::View::Chat);
+        assert_eq!(app.input_mode, InputMode::ChatInput);
+    }
+
+    #[test]
+    fn test_replay_scroll_mode_and_exit() {
+        let mut app = App::new();
+
+        // Esc enters scroll mode
+        press_key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.input_mode, InputMode::ChatScroll);
+
+        // j scrolls down
+        press_key(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        // Any scroll action should set chat_scroll
+        // (scroll down from None does nothing meaningful but doesn't crash)
+
+        // Typing a printable char exits scroll mode and inserts
+        press_key(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(app.input_mode, InputMode::ChatInput);
+        assert_eq!(app.chat_input, "x");
+    }
+
+    #[test]
+    fn test_replay_backspace_on_empty_input() {
+        let mut app = App::new();
+        assert!(app.chat_input.is_empty());
+        assert_eq!(app.chat_cursor_pos, 0);
+
+        // Backspace on empty input should be a no-op
+        press_key(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        assert!(app.chat_input.is_empty());
+        assert_eq!(app.chat_cursor_pos, 0);
+    }
+
+    #[test]
+    fn test_replay_delete_at_end() {
+        let mut app = App::new();
+        for c in "abc".chars() {
+            press_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        assert_eq!(app.chat_cursor_pos, 3);
+
+        // Delete at end should be a no-op
+        press_key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        assert_eq!(app.chat_input, "abc");
+    }
+
+    #[test]
+    fn test_replay_delete_in_middle() {
+        let mut app = App::new();
+        for c in "abc".chars() {
+            press_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        // Move cursor to position 1 (before 'b')
+        press_key(&mut app, KeyCode::Home, KeyModifiers::NONE);
+        press_key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(app.chat_cursor_pos, 1);
+
+        // Delete should remove 'b'
+        press_key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        assert_eq!(app.chat_input, "ac");
+        assert_eq!(app.chat_cursor_pos, 1);
+    }
+
+    #[test]
+    fn test_replay_shift_enter_inserts_newline() {
+        let mut app = App::new();
+        for c in "line1".chars() {
+            press_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+
+        press_key(&mut app, KeyCode::Enter, KeyModifiers::SHIFT);
+
+        for c in "line2".chars() {
+            press_key(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+
+        assert_eq!(app.chat_input, "line1\nline2");
+        // Not submitted - still in input
+        assert!(app.chat_history.is_empty());
+    }
+
+    #[test]
+    fn test_replay_ctrl_c_quits() {
+        let mut app = App::new();
+        assert!(!app.should_quit);
+
+        press_key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.should_quit);
+    }
 }
