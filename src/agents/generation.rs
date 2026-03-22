@@ -2128,4 +2128,143 @@ mod tests {
 
         assert!(find_draft_needing_regeneration(&stores, 3).is_none());
     }
+
+    // --- Coverage evaluation helper tests ---
+
+    use crate::domain::coordinator_state::CoordinatorState;
+    use crate::domain::coverage::{CoverageGap, CoverageReport, CoverageReportParams, CoverageVerdict, GapSeverity};
+
+    fn make_coverage_report(parent_collection: &str, parent_id: &str, verdict: CoverageVerdict) -> CoverageReport {
+        CoverageReport::new(CoverageReportParams {
+            parent_collection: parent_collection.to_string(),
+            parent_id: parent_id.to_string(),
+            children_collection: "specs".to_string(),
+            children_ids: vec![],
+            verdict,
+            gaps: if verdict == CoverageVerdict::Incomplete {
+                vec![CoverageGap {
+                    parent_criterion: "test criterion".to_string(),
+                    description: "test gap".to_string(),
+                    severity: GapSeverity::Critical,
+                }]
+            } else {
+                vec![]
+            },
+            out_of_scope: vec![],
+            summary: "test summary".to_string(),
+            model_used: "test".to_string(),
+        })
+    }
+
+    #[test]
+    fn test_find_pending_coverage_check_no_plan() {
+        let dir = TestDir::new("loopr-cov-noplan");
+        let stores = test_stores(&dir);
+        assert!(find_pending_coverage_check(&stores).is_none());
+    }
+
+    #[test]
+    fn test_find_pending_coverage_check_plan_with_specs_no_report() {
+        let dir = TestDir::new("loopr-cov-noreport");
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        let check = find_pending_coverage_check(&stores);
+        assert!(check.is_some(), "should need coverage check when no report exists");
+        let check = check.unwrap();
+        assert_eq!(check.parent_collection, "plan");
+        assert_eq!(check.parent_id, plan_id);
+    }
+
+    #[test]
+    fn test_find_pending_coverage_check_complete_report() {
+        let dir = TestDir::new("loopr-cov-complete");
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        let report = make_coverage_report("plan", &plan_id, CoverageVerdict::Complete);
+        stores
+            .coverage_reports
+            .write()
+            .unwrap()
+            .insert(report.id.clone(), report);
+
+        // Complete report at plan level - no pending check at plan level
+        let check = find_pending_coverage_check(&stores);
+        // Should now check spec level (no phases, so no check needed)
+        assert!(check.is_none());
+    }
+
+    #[test]
+    fn test_find_incomplete_decomposition() {
+        let dir = TestDir::new("loopr-cov-incomplete");
+        let stores = test_stores(&dir);
+        let coord_state = CoordinatorState::new("goal-1".into(), crate::config::InterviewMode::Auto);
+
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let report = make_coverage_report("plan", &plan_id, CoverageVerdict::Incomplete);
+        stores
+            .coverage_reports
+            .write()
+            .unwrap()
+            .insert(report.id.clone(), report);
+
+        let result = find_incomplete_decomposition(&stores, &coord_state, 3);
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.parent_id, plan_id);
+        assert_eq!(result.attempt_count, 0);
+        assert!(!result.gap_descriptions.is_empty());
+    }
+
+    #[test]
+    fn test_is_decomposition_cap_reached() {
+        let dir = TestDir::new("loopr-cov-cap");
+        let stores = test_stores(&dir);
+        let mut coord_state = CoordinatorState::new("goal-1".into(), crate::config::InterviewMode::Auto);
+
+        let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        let report = make_coverage_report("plan", &plan_id, CoverageVerdict::Incomplete);
+        stores
+            .coverage_reports
+            .write()
+            .unwrap()
+            .insert(report.id.clone(), report);
+
+        // Not at cap yet
+        assert!(is_decomposition_cap_reached(&stores, &coord_state, 3).is_none());
+
+        // Increment to cap
+        coord_state.increment_decomposition_attempts(&plan_id);
+        coord_state.increment_decomposition_attempts(&plan_id);
+        coord_state.increment_decomposition_attempts(&plan_id);
+
+        let result = is_decomposition_cap_reached(&stores, &coord_state, 3);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), ("plan".to_string(), plan_id));
+    }
 }
