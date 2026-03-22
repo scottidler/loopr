@@ -1545,6 +1545,20 @@ impl CoordinatorAgent {
             match &result {
                 ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
                 ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
+                ActionResult::CoverageEvaluated { verdict, .. } => {
+                    if let AgentAction::EvaluateCoverage { parent_id, .. } = action_ref {
+                        if verdict == "incomplete" {
+                            let count = coord_state.increment_decomposition_attempts(parent_id);
+                            self.ctx.info(&format!(
+                                "coverage incomplete for {}, decomposition attempt {}",
+                                parent_id, count
+                            ));
+                        } else {
+                            coord_state.reset_decomposition_attempts(parent_id);
+                            self.ctx.info(&format!("coverage complete for {}", parent_id));
+                        }
+                    }
+                }
                 _ => {}
             }
             last_summary = summary;
