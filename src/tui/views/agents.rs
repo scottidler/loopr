@@ -75,21 +75,20 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use crate::agents::{AgentSession, AgentType};
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_empty_does_not_panic() {
+    fn test_render_empty_shows_title() {
         let app = App::new();
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Agents"));
     }
 
     #[test]
-    fn test_render_with_sessions_does_not_panic() {
+    fn test_render_with_sessions_shows_details() {
         let mut app = App::new();
         let mut s1 = AgentSession::new(AgentType::Implementer, "claude-sonnet-4-6".to_string());
         s1.work_id = Some("wi-abc123".to_string());
@@ -103,24 +102,25 @@ mod tests {
         let _ = s2.transition_to(AgentStatus::Completed);
         app.state.agent_sessions.push(s2);
 
-        // Researcher with target_id and query
         let mut s3 = AgentSession::new(AgentType::Researcher, "claude-sonnet-4-6".to_string());
         s3.target_id = Some("wi-xyz789".to_string());
         s3.query = Some("Investigate auth module".to_string());
         let _ = s3.transition_to(AgentStatus::Running);
         app.state.agent_sessions.push(s3);
 
-        // Coordinator with no target
         let s4 = AgentSession::new(AgentType::Coordinator, "claude-sonnet-4-6".to_string());
         app.state.agent_sessions.push(s4);
 
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "implementer"));
+        assert!(buffer_contains_text(buffer, "reviewer"));
+        assert!(buffer_contains_text(buffer, "researcher"));
+        assert!(buffer_contains_text(buffer, "coordinator"));
+        assert!(buffer_contains_text(buffer, "iter:3"));
+        assert!(buffer_contains_text(buffer, "Investigate auth"));
     }
 
     #[test]
@@ -146,9 +146,8 @@ mod tests {
         ];
         for (i, &terminal_status) in statuses.iter().enumerate() {
             let mut session = AgentSession::new(AgentType::Implementer, "m".to_string());
-            // Transition through valid path to reach desired status
             match terminal_status {
-                AgentStatus::Starting => {} // already there
+                AgentStatus::Starting => {}
                 AgentStatus::Running => {
                     let _ = session.transition_to(AgentStatus::Running);
                 }
@@ -169,12 +168,14 @@ mod tests {
             app.state.agent_sessions.push(session);
         }
 
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "starting"));
+        assert!(buffer_contains_text(buffer, "running"));
+        assert!(buffer_contains_text(buffer, "completed"));
+        assert!(buffer_contains_text(buffer, "failed"));
+        assert!(buffer_contains_text(buffer, "cancelled"));
     }
 }

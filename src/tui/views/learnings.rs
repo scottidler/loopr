@@ -41,21 +41,20 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use crate::domain::learning::{Learning, LearningScope};
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_empty_does_not_panic() {
+    fn test_render_empty_shows_title() {
         let app = App::new();
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Learnings"));
     }
 
     #[test]
-    fn test_render_with_learnings_does_not_panic() {
+    fn test_render_with_learnings_shows_content() {
         let mut app = App::new();
         app.state.learnings.push(Learning::new(
             "src1".into(),
@@ -63,12 +62,26 @@ mod tests {
             "Test learning content".into(),
         ));
 
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Test learning content"));
+    }
+
+    #[test]
+    fn test_render_promoted_learning() {
+        let mut app = App::new();
+        let mut learning = Learning::new("src1".into(), LearningScope::Work, "Promoted insight".into());
+        learning.promoted = true;
+
+        app.state.learnings.push(learning);
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "[promoted]"));
+        assert!(buffer_contains_text(buffer, "Promoted insight"));
     }
 }

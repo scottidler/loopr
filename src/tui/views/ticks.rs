@@ -35,31 +35,41 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use crate::domain::tick::Tick;
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_empty_does_not_panic() {
+    fn test_render_empty_shows_title() {
         let app = App::new();
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Ticks"));
     }
 
     #[test]
-    fn test_render_with_ticks_does_not_panic() {
+    fn test_render_with_ticks_shows_numbers() {
         let mut app = App::new();
         app.state.ticks.push(Tick::new(1));
         app.state.ticks.push(Tick::new(2));
 
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Tick #1"));
+        assert!(buffer_contains_text(buffer, "Tick #2"));
+    }
+
+    #[test]
+    fn test_render_shows_sha_none() {
+        let mut app = App::new();
+        app.state.ticks.push(Tick::new(1));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "SHA: none"));
     }
 }

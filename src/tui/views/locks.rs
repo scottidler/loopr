@@ -37,16 +37,32 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::lock::Lock;
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_empty_does_not_panic() {
+    fn test_render_empty_shows_title() {
         let app = App::new();
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Locks"));
+    }
+
+    #[test]
+    fn test_render_with_lock_shows_resource() {
+        let mut app = App::new();
+        app.state
+            .locks
+            .push(Lock::new("src/main.rs".into(), "wi-abc".into(), "coordinator".into()));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "src/main.rs"));
+        assert!(buffer_contains_text(buffer, "holder=wi-abc"));
+        assert!(buffer_contains_text(buffer, "granted_by=coordinator"));
     }
 }

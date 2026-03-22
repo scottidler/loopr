@@ -31,16 +31,33 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::bundle::Bundle;
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_empty_does_not_panic() {
+    fn test_render_empty_shows_title() {
         let app = App::new();
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Bundles"));
+    }
+
+    #[test]
+    fn test_render_with_bundles_shows_branch() {
+        let mut app = App::new();
+        app.state.bundles.push(Bundle::new(
+            "wi-1".into(),
+            None,
+            "feat/my-feature".into(),
+            vec!["implements widget".into()],
+        ));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "feat/my-feature"));
     }
 }
