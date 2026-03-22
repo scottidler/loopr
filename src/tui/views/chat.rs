@@ -455,4 +455,114 @@ mod tests {
         app.funnel_state = FunnelState::Executing;
         terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
     }
+
+    // --- Terminal size resilience tests ---
+
+    #[test]
+    fn test_render_various_terminal_sizes() {
+        let sizes = [(80, 24), (120, 40), (40, 10), (20, 6)];
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::user("hello".into()));
+        app.chat_history.push(ChatMessage::assistant("world".into()));
+
+        for (w, h) in sizes {
+            let mut terminal = test_terminal(w, h);
+            terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_render_wide_terminal_shows_full_content() {
+        let mut app = App::new();
+        app.chat_history
+            .push(ChatMessage::user("hello from the wide terminal".into()));
+
+        let mut terminal = test_terminal(120, 40);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "> hello from the wide terminal"));
+    }
+
+    #[test]
+    fn test_render_narrow_terminal_no_panic() {
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::user(
+            "this is a longer message that will need wrapping".into(),
+        ));
+        app.chat_streaming = true;
+        app.chat_response_buffer = "streaming content here".into();
+
+        let mut terminal = test_terminal(30, 8);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+        // Primary assertion: no panic. Content may be wrapped/truncated.
+    }
+
+    #[test]
+    fn test_render_minimal_terminal() {
+        // Absolute minimum: border takes 2 cols + 2 rows
+        let app = App::new();
+        let mut terminal = test_terminal(4, 4);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+    }
+
+    // --- Combined L2+L3 tests (replay then render) ---
+
+    use crate::tui::test_utils::type_and_submit;
+
+    #[test]
+    fn test_replay_submit_then_render_shows_message() {
+        let mut app = App::new();
+        type_and_submit(&mut app, "hello world");
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "> hello world"));
+        assert!(!buffer_contains_text(buffer, "Welcome to Loopr Chat"));
+    }
+
+    #[test]
+    fn test_replay_plan_mode_changes_title() {
+        let mut app = App::new();
+        type_and_submit(&mut app, "/plan");
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Plan"));
+        assert!(buffer_contains_text(buffer, "Plan mode"));
+    }
+
+    #[test]
+    fn test_replay_multiple_messages_render() {
+        let mut app = App::new();
+        type_and_submit(&mut app, "first message");
+        // Simulate assistant response
+        app.chat_history.push(ChatMessage::assistant("first reply".into()));
+        type_and_submit(&mut app, "second message");
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "> first message"));
+        assert!(buffer_contains_text(buffer, "first reply"));
+        assert!(buffer_contains_text(buffer, "> second message"));
+    }
+
+    #[test]
+    fn test_replay_clear_then_render_shows_welcome() {
+        let mut app = App::new();
+        type_and_submit(&mut app, "hello");
+        type_and_submit(&mut app, "/clear");
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Welcome to Loopr Chat"));
+    }
 }
