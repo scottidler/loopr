@@ -459,6 +459,20 @@ pub enum Command {
         #[command(subcommand)]
         cmd: DiagnoseCmd,
     },
+    /// Submit a goal and monitor until completion (headless mode)
+    Run {
+        /// Goal description
+        goal: String,
+        /// Timeout in seconds (default: 3600)
+        #[arg(long, default_value = "3600")]
+        timeout: u64,
+        /// Pre-written plan text (skips interview/drafting)
+        #[arg(long)]
+        plan: Option<String>,
+        /// Submit goal and exit immediately (no monitoring)
+        #[arg(long)]
+        no_monitor: bool,
+    },
 }
 
 /// Diagnose subcommands for querying session history and logs.

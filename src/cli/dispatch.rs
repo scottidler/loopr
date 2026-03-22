@@ -22,6 +22,17 @@ pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()
         return Ok(());
     }
 
+    // `loopr run` has its own flow - set goal, optionally accept plan, poll until done
+    if let Command::Run {
+        goal,
+        timeout,
+        plan,
+        no_monitor,
+    } = command
+    {
+        return run_headless(socket_path, goal, *timeout, plan.as_deref(), *no_monitor).await;
+    }
+
     let mut client = IpcClient::connect(socket_path)
         .await
         .context("failed to connect to daemon — is it running?")?;
@@ -91,9 +102,116 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         // SetRole writes to local config, not IPC — handled in dispatch_command
         Command::SetRole { .. } => unreachable!("role handled before IPC dispatch"),
 
-        // Tui, Daemon, and Diagnose are handled by main before dispatch
-        Command::Tui | Command::Daemon | Command::Diagnose { .. } => {
-            unreachable!("tui/daemon/diagnose handled before dispatch")
+        // Tui, Daemon, Diagnose, and Run are handled by main/run() before dispatch
+        Command::Tui | Command::Daemon | Command::Diagnose { .. } | Command::Run { .. } => {
+            unreachable!("tui/daemon/diagnose/run handled before dispatch")
+        }
+    }
+}
+
+/// Run a goal headlessly: set goal, optionally accept plan, poll until completion.
+async fn run_headless(
+    socket_path: &Path,
+    goal: &str,
+    timeout_secs: u64,
+    plan_text: Option<&str>,
+    no_monitor: bool,
+) -> Result<()> {
+    let mut client = IpcClient::connect(socket_path)
+        .await
+        .context("failed to connect to daemon - is it running?")?;
+    client.handshake(crate::version()).await.context("handshake failed")?;
+
+    // Step 1: Set the goal
+    let (resp, _) = client
+        .request("coordinator.set_goal", json!({ "goal": goal }))
+        .await
+        .context("failed to set goal")?;
+    if let Some(err) = resp.error {
+        bail!("set_goal error: {}", err.message);
+    }
+    let goal_id = resp
+        .result
+        .as_ref()
+        .and_then(|r| r.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    eprintln!("Goal set: {} ({})", goal, goal_id);
+
+    // Step 2: If plan text provided, accept it directly
+    if let Some(plan) = plan_text {
+        let (resp, _) = client
+            .request("coordinator.accept_plan", json!({ "plan": plan }))
+            .await
+            .context("failed to accept plan")?;
+        if let Some(err) = resp.error {
+            bail!("accept_plan error: {}", err.message);
+        }
+        eprintln!("Plan accepted, orchestration starting.");
+    }
+
+    // Step 3: If no-monitor, exit now
+    if no_monitor {
+        eprintln!("Goal ID: {goal_id}");
+        eprintln!("Use `loopr coordinator goal` to check status.");
+        return Ok(());
+    }
+
+    // Step 4: Poll until terminal state or timeout
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut last_status = String::new();
+
+    loop {
+        if start.elapsed() > timeout {
+            eprintln!("Timeout after {}s. Goal ID: {}", timeout_secs, goal_id);
+            std::process::exit(1);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+        let poll_result = client.request("coordinator.goal", json!({})).await;
+
+        match poll_result {
+            Ok((resp, _)) => {
+                if let Some(err) = resp.error {
+                    eprintln!("Poll error: {}", err.message);
+                    continue;
+                }
+                if let Some(result) = &resp.result {
+                    let active = result.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let status = result
+                        .get("coordinator_fsm_state")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    if status != last_status {
+                        let now = chrono::Local::now().format("%H:%M:%S");
+                        eprintln!("[{now}] Coordinator: {status}");
+                        last_status = status.clone();
+                    }
+
+                    // Terminal states
+                    if !active || status == "GoalComplete" {
+                        eprintln!("Goal complete.");
+                        std::process::exit(0);
+                    }
+                    if status == "NeedHelp" {
+                        eprintln!("Coordinator needs help. Goal ID: {}", goal_id);
+                        std::process::exit(2);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Connection lost: {e}. Retrying...");
+                // Try to reconnect
+                if let Ok(new_client) = IpcClient::connect(socket_path).await {
+                    client = new_client;
+                    let _ = client.handshake(crate::version()).await;
+                }
+            }
         }
     }
 }
