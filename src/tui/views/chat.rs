@@ -200,91 +200,138 @@ fn render_input(app: &App, frame: &mut Frame, area: Rect) {
 mod tests {
     use super::*;
     use crate::tui::app::{App, ChatMessage};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    fn test_terminal() -> Terminal<TestBackend> {
-        let backend = TestBackend::new(80, 24);
-        Terminal::new(backend).unwrap()
-    }
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_empty_chat() {
+    fn test_render_empty_chat_shows_welcome() {
         let app = App::new();
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Welcome to Loopr Chat"));
+        assert!(buffer_contains_text(buffer, "Type a message and press Enter"));
+        assert!(buffer_contains_text(buffer, "/plan"));
     }
 
     #[test]
-    fn test_render_with_messages() {
+    fn test_render_user_message_with_prefix() {
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::user("hello world".into()));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "> hello world"));
+        // Welcome message should be gone
+        assert!(!buffer_contains_text(buffer, "Welcome to Loopr Chat"));
+    }
+
+    #[test]
+    fn test_render_assistant_message() {
         let mut app = App::new();
         app.chat_history.push(ChatMessage::user("hello".into()));
         app.chat_history.push(ChatMessage::assistant("hi there".into()));
-        app.chat_history.push(ChatMessage::system("system message".into()));
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "> hello"));
+        assert!(buffer_contains_text(buffer, "hi there"));
     }
 
     #[test]
-    fn test_render_streaming() {
+    fn test_render_system_message() {
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::system("system message".into()));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "system message"));
+    }
+
+    #[test]
+    fn test_render_tool_invocation() {
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::user("do something".into()));
+        app.chat_history.push(ChatMessage::tool_invocation("bash", false));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "tool: bash"));
+    }
+
+    #[test]
+    fn test_render_streaming_shows_thinking() {
         let mut app = App::new();
         app.chat_history.push(ChatMessage::user("hello".into()));
         app.chat_streaming = true;
         app.chat_response_buffer = "partial response...".into();
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "partial response..."));
+        assert!(buffer_contains_text(buffer, "Thinking..."));
     }
 
     #[test]
-    fn test_render_with_input() {
+    fn test_render_streaming_empty_buffer_shows_thinking() {
+        let mut app = App::new();
+        app.chat_history.push(ChatMessage::user("hello".into()));
+        app.chat_streaming = true;
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Thinking..."));
+    }
+
+    #[test]
+    fn test_render_with_input_text() {
         let mut app = App::new();
         app.chat_input = "hello world".into();
         app.chat_cursor_pos = 5;
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // Input area shows the "> " prefix and the typed text
+        assert!(buffer_contains_text(buffer, "> hello world"));
     }
 
     #[test]
     fn test_render_small_terminal() {
         let app = App::new();
-        let backend = TestBackend::new(10, 5);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(10, 5);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+        // No panic is the primary assertion; small terminals may truncate content
     }
 
     #[test]
-    fn test_render_plan_mode() {
+    fn test_render_chat_mode_title() {
         let mut app = App::new();
+        let mut terminal = test_terminal(80, 24);
+
+        // Chat mode shows " Chat " title
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Chat"));
+
+        // Plan mode shows " Plan " title
         app.chat_mode = ChatMode::Plan;
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Plan"));
     }
 
     #[test]
@@ -296,12 +343,13 @@ mod tests {
             app.chat_history.push(ChatMessage::user(format!("message {i}")));
         }
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // With scroll offset, we should see earlier messages, not the latest ones
+        // message 49 is at the bottom; scrolling up 5 should hide it
+        assert!(!buffer_contains_text(buffer, "> message 49"));
     }
 
     #[test]
@@ -318,15 +366,16 @@ mod tests {
         ));
         app.chat_history.push(ChatMessage::user("Opt-in via config".into()));
         app.chat_history.push(ChatMessage::assistant(
-            "Title: Parallel Bundle Validation\n\nGoal: Add parallel validation\n\nAcceptance Criteria:\n1. Opt-in via config".into(),
+            "Title: Parallel Bundle Validation\n\nGoal: Add parallel validation\n\nAcceptance Criteria:\n1. Opt-in via config"
+                .into(),
         ));
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Parallel Bundle Validation"));
+        assert!(buffer_contains_text(buffer, "Opt-in via config"));
     }
 
     #[test]
@@ -335,12 +384,13 @@ mod tests {
         app.chat_history
             .push(ChatMessage::assistant("Line 1\nLine 2\nLine 3".into()));
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Line 1"));
+        assert!(buffer_contains_text(buffer, "Line 2"));
+        assert!(buffer_contains_text(buffer, "Line 3"));
     }
 
     #[test]
@@ -376,20 +426,17 @@ mod tests {
         app.chat_input = "line1\nline2".into();
         app.chat_cursor_pos = 11;
 
-        let mut terminal = test_terminal();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "line1"));
     }
 
     #[test]
     fn test_render_funnel_state_colors() {
-        use crate::tui::app::FunnelState;
-
         let mut app = App::new();
-        let mut terminal = test_terminal();
+        let mut terminal = test_terminal(80, 24);
 
         // Chat state
         app.funnel_state = FunnelState::Chat;

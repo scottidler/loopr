@@ -63,16 +63,84 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
-    fn test_render_does_not_panic() {
+    fn test_render_shows_status_labels() {
         let app = App::new();
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                render(&app, frame, frame.area());
-            })
-            .unwrap();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Role:"));
+        assert!(buffer_contains_text(buffer, "Connection:"));
+        assert!(buffer_contains_text(buffer, "Status"));
+        assert!(buffer_contains_text(buffer, "Overview"));
+    }
+
+    #[test]
+    fn test_render_shows_default_role() {
+        let app = App::new();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "coordinator"));
+    }
+
+    #[test]
+    fn test_render_shows_disconnected() {
+        let app = App::new();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Disconnected"));
+    }
+
+    #[test]
+    fn test_render_shows_connected() {
+        let mut app = App::new();
+        app.connection = crate::tui::app::ConnectionStatus::Connected;
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Connected"));
+    }
+
+    #[test]
+    fn test_render_shows_queue_counts() {
+        let app = App::new();
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Plans: 0"));
+        assert!(buffer_contains_text(buffer, "Specs: 0"));
+        assert!(buffer_contains_text(buffer, "Works: 0"));
+        assert!(buffer_contains_text(buffer, "Bundles: 0"));
+        assert!(buffer_contains_text(buffer, "Ticks: 0"));
+        assert!(buffer_contains_text(buffer, "Learnings: 0"));
+        assert!(buffer_contains_text(buffer, "Locks: 0"));
+    }
+
+    #[test]
+    fn test_render_shows_nonzero_counts() {
+        let mut app = App::new();
+        app.state
+            .works
+            .push(crate::domain::work::Work::new("ph1".into(), "t1".into(), "d1".into()));
+        app.state
+            .works
+            .push(crate::domain::work::Work::new("ph1".into(), "t2".into(), "d2".into()));
+        app.state.ticks.push(crate::domain::tick::Tick::new(1));
+
+        let mut terminal = test_terminal(80, 24);
+        terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        assert!(buffer_contains_text(buffer, "Works: 2"));
+        assert!(buffer_contains_text(buffer, "Ticks: 1"));
     }
 }
