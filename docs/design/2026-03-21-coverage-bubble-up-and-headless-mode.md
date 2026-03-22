@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-03-21
-**Status:** Implemented
+**Status:** Partial (Coverage bubble-up: Implemented, Headless run: Implemented, Clarity gate: Not started)
 **Review Passes Completed:** 5/5
 
 ## Summary
