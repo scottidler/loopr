@@ -310,7 +310,50 @@ fn build_generation_footer(
     max_validation_attempts: u32,
     guidance_section: Option<&str>,
     agent_log: &AgentLogger,
+    coord_state: Option<&crate::domain::coordinator_state::CoordinatorState>,
+    max_decomposition_attempts: Option<u32>,
 ) -> Option<String> {
+    // Case 0: Check if decomposition attempts are exhausted (needs bubble-up / NeedHelp)
+    if let (Some(cs), Some(max_da)) = (coord_state, max_decomposition_attempts)
+        && let Some((collection, parent_id)) = generation::is_decomposition_cap_reached(stores, cs, max_da)
+    {
+        agent_log.info(&format!(
+            "decomposition cap reached for {} {}, signaling need_help",
+            collection, parent_id
+        ));
+        return Some(format!(
+            "Coverage evaluation for {collection} ({parent_id}) has failed {max_da} times (the maximum). \
+             The decomposition cannot be fixed further. Respond with:\n\
+             [{{\"action\": \"need_help\", \"reason\": \"Coverage evaluation failed {max_da} times for {collection} {parent_id}, needs human review\"}}]"
+        ));
+    }
+
+    // Case 0b: Check if a parent has Incomplete coverage - re-decompose with gap feedback
+    if let (Some(cs), Some(max_da)) = (coord_state, max_decomposition_attempts)
+        && let Some(incomplete) = generation::find_incomplete_decomposition(stores, cs, max_da)
+    {
+        agent_log.info(&format!(
+            "re-decomposition needed: {} {} (attempt {}/{})",
+            incomplete.parent_collection,
+            incomplete.parent_id,
+            incomplete.attempt_count + 1,
+            max_da
+        ));
+        let gaps_text = incomplete.gap_descriptions.join("\n");
+        return Some(format!(
+            "## Re-decomposition Required (attempt {}/{})\n\n\
+             Coverage evaluation found gaps in {} ({}).\n\
+             First, abandon the existing children, then create NEW children that address ALL gaps:\n\n\
+             ### Coverage Gaps:\n{}\n\n\
+             Respond with a JSON array of actions to abandon old children and create new ones.",
+            incomplete.attempt_count + 1,
+            max_da,
+            incomplete.parent_collection,
+            incomplete.parent_id,
+            gaps_text,
+        ));
+    }
+
     // Case 1: Check if generation is needed at any level (no document exists)
     if let Some(level) = generation::determine_generation_level(stores) {
         let prompt = match level {
@@ -427,6 +470,19 @@ fn build_generation_footer(
                 draft_info.0, draft_info.1, draft_info.2
             ));
         }
+    }
+
+    // Case 4: Check if coverage evaluation is needed (all children exist but not yet evaluated)
+    if stores.evaluator.is_some()
+        && let Some(check) = generation::find_pending_coverage_check(stores)
+    {
+        agent_log.info(&format!("coverage evaluation needed: {}", check.description));
+        return Some(format!(
+            "Children exist but coverage has not been evaluated.\n\
+             Use EvaluateCoverage to check that children fully cover the parent's requirements.\n\
+             Parent collection: {}\nParent ID: {}\n\n{}",
+            check.parent_collection, check.parent_id, check.description
+        ));
     }
 
     None
@@ -829,9 +885,15 @@ fn build_fsm_footer(
         }
         CoordinatorFsmState::Planning => {
             // Use existing generation footer logic for Plan→Spec→Phase hierarchy
-            if let Some(gen_footer) =
-                build_generation_footer(stores, goal, config.max_validation_attempts, None, agent_log)
-            {
+            if let Some(gen_footer) = build_generation_footer(
+                stores,
+                goal,
+                config.max_validation_attempts,
+                None,
+                agent_log,
+                Some(coord_state),
+                Some(stores.config.strategy.max_decomposition_attempts),
+            ) {
                 gen_footer
             } else {
                 // All hierarchy levels exist — ready to transition to ActivatePhase
@@ -2301,7 +2363,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build an auth system", 3, None, &agent_log);
+        let footer = build_generation_footer(&stores, "Build an auth system", 3, None, &agent_log, None, None);
         assert!(footer.is_some(), "should return generation footer when no plan exists");
         let text = footer.unwrap();
         // The Plan-level generation prompt should mention creating a plan
@@ -2342,7 +2404,7 @@ mod tests {
         }
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log, None, None);
         assert!(footer.is_some(), "should return footer when validation cap is reached");
         let text = footer.unwrap();
         assert!(text.contains("need_help"), "should signal need_help when cap reached");
@@ -2376,7 +2438,7 @@ mod tests {
         }
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log, None, None);
         assert!(
             footer.is_some(),
             "should return regen footer when draft has failures below cap"
@@ -3355,7 +3417,7 @@ mod tests {
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log, None, None);
         assert!(footer.is_some(), "should emit footer for Draft activation");
         let footer_text = footer.unwrap();
         assert!(
@@ -3392,7 +3454,7 @@ mod tests {
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log, None, None);
         assert!(footer.is_some(), "should emit footer for Draft validation");
         let footer_text = footer.unwrap();
         assert!(

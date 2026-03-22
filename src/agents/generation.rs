@@ -10,6 +10,7 @@
 //! capped by `max_validation_attempts`.
 
 use crate::daemon::context::Stores;
+use crate::domain::coverage::{CoverageReport, CoverageVerdict};
 use crate::domain::phase::Phase;
 use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::domain::spec::Spec;
@@ -722,6 +723,189 @@ pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) 
     }
 
     false
+}
+
+/// Information about a parent that needs coverage evaluation.
+pub struct CoverageCheckNeeded {
+    /// The collection type of the parent ("plan", "spec", "phase")
+    pub parent_collection: String,
+    /// The parent record ID
+    pub parent_id: String,
+    /// Human-readable description for the LLM prompt
+    pub description: String,
+}
+
+/// Information about an incomplete coverage result that needs re-decomposition.
+pub struct IncompleteDecomposition {
+    /// The collection type of the parent
+    pub parent_collection: String,
+    /// The parent record ID
+    pub parent_id: String,
+    /// Current attempt count for this parent
+    pub attempt_count: u32,
+    /// Gap descriptions from the coverage report
+    pub gap_descriptions: Vec<String>,
+}
+
+/// Find the latest CoverageReport for a given parent, if any.
+pub fn find_latest_coverage_report(
+    stores: &Stores,
+    parent_collection: &str,
+    parent_id: &str,
+) -> Option<CoverageReport> {
+    let Ok(reports) = stores.read_coverage_reports() else {
+        return None;
+    };
+    reports
+        .values()
+        .filter(|r| r.parent_collection == parent_collection && r.parent_id == parent_id)
+        .max_by_key(|r| r.created_at)
+        .cloned()
+}
+
+/// Check if any hierarchy level needs coverage evaluation.
+///
+/// Returns Some if all children at a level exist (active) but no Complete coverage report
+/// exists for that parent. This tells the Coordinator to evaluate coverage before proceeding.
+pub fn find_pending_coverage_check(stores: &Stores) -> Option<CoverageCheckNeeded> {
+    // Check Plan -> Specs coverage
+    let plan = find_active_plan(stores)?;
+    let specs = find_active_specs_for_plan(stores, &plan.id);
+    if !specs.is_empty() {
+        match find_latest_coverage_report(stores, "plan", &plan.id) {
+            None => {
+                return Some(CoverageCheckNeeded {
+                    parent_collection: "plan".to_string(),
+                    parent_id: plan.id.clone(),
+                    description: format!(
+                        "Plan '{}' has {} Specs but no coverage evaluation",
+                        plan.title,
+                        specs.len()
+                    ),
+                });
+            }
+            Some(report) if report.verdict == CoverageVerdict::Incomplete => {
+                // Coverage was checked and found incomplete - handled by find_incomplete_decomposition
+            }
+            Some(_) => {
+                // Coverage is Complete at Plan->Specs level, check Spec->Phases
+            }
+        }
+    } else {
+        return None; // No specs yet, generation still needed
+    }
+
+    // Check Spec -> Phases coverage (for each active spec)
+    for spec in &specs {
+        let phases = find_active_phases_for_spec(stores, &spec.id);
+        if phases.is_empty() {
+            continue; // Phases not yet generated for this spec
+        }
+        match find_latest_coverage_report(stores, "spec", &spec.id) {
+            None => {
+                return Some(CoverageCheckNeeded {
+                    parent_collection: "spec".to_string(),
+                    parent_id: spec.id.clone(),
+                    description: format!(
+                        "Spec '{}' has {} Phases but no coverage evaluation",
+                        spec.title,
+                        phases.len()
+                    ),
+                });
+            }
+            Some(report) if report.verdict == CoverageVerdict::Incomplete => {}
+            Some(_) => {} // Complete, continue
+        }
+    }
+
+    None
+}
+
+/// Find a parent with Incomplete coverage that needs re-decomposition.
+///
+/// Returns Some if a coverage report with Incomplete verdict exists and the attempt count
+/// is below max_decomposition_attempts. The caller should re-decompose the children.
+pub fn find_incomplete_decomposition(
+    stores: &Stores,
+    coord_state: &crate::domain::coordinator_state::CoordinatorState,
+    max_attempts: u32,
+) -> Option<IncompleteDecomposition> {
+    // Check Plan -> Specs
+    if let Some(plan) = find_active_plan(stores)
+        && let Some(report) = find_latest_coverage_report(stores, "plan", &plan.id)
+        && report.verdict == CoverageVerdict::Incomplete
+    {
+        let attempts = coord_state.decomposition_attempts(&plan.id);
+        if attempts < max_attempts {
+            let gaps: Vec<String> = report
+                .gaps
+                .iter()
+                .map(|g| format!("[{}] {}: {}", g.severity, g.parent_criterion, g.description))
+                .collect();
+            return Some(IncompleteDecomposition {
+                parent_collection: "plan".to_string(),
+                parent_id: plan.id.clone(),
+                attempt_count: attempts,
+                gap_descriptions: gaps,
+            });
+        }
+    }
+
+    // Check Spec -> Phases
+    if let Some(plan) = find_active_plan(stores) {
+        for spec in find_active_specs_for_plan(stores, &plan.id) {
+            if let Some(report) = find_latest_coverage_report(stores, "spec", &spec.id)
+                && report.verdict == CoverageVerdict::Incomplete
+            {
+                let attempts = coord_state.decomposition_attempts(&spec.id);
+                if attempts < max_attempts {
+                    let gaps: Vec<String> = report
+                        .gaps
+                        .iter()
+                        .map(|g| format!("[{}] {}: {}", g.severity, g.parent_criterion, g.description))
+                        .collect();
+                    return Some(IncompleteDecomposition {
+                        parent_collection: "spec".to_string(),
+                        parent_id: spec.id.clone(),
+                        attempt_count: attempts,
+                        gap_descriptions: gaps,
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if decomposition attempts are exhausted for any parent (needs bubble-up).
+pub fn is_decomposition_cap_reached(
+    stores: &Stores,
+    coord_state: &crate::domain::coordinator_state::CoordinatorState,
+    max_attempts: u32,
+) -> Option<(String, String)> {
+    // Check Plan -> Specs
+    if let Some(plan) = find_active_plan(stores)
+        && let Some(report) = find_latest_coverage_report(stores, "plan", &plan.id)
+        && report.verdict == CoverageVerdict::Incomplete
+        && coord_state.decomposition_attempts(&plan.id) >= max_attempts
+    {
+        return Some(("plan".to_string(), plan.id.clone()));
+    }
+
+    // Check Spec -> Phases
+    if let Some(plan) = find_active_plan(stores) {
+        for spec in find_active_specs_for_plan(stores, &plan.id) {
+            if let Some(report) = find_latest_coverage_report(stores, "spec", &spec.id)
+                && report.verdict == CoverageVerdict::Incomplete
+                && coord_state.decomposition_attempts(&spec.id) >= max_attempts
+            {
+                return Some(("spec".to_string(), spec.id.clone()));
+            }
+        }
+    }
+
+    None
 }
 
 #[allow(clippy::unwrap_used)]
