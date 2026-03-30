@@ -873,17 +873,15 @@ fn build_fsm_footer(
 ) -> String {
     match coord_state.fsm_state {
         CoordinatorFsmState::Interviewing => {
-            let history = coord_state.format_interview_context();
-            let base = "## Interviewing\n\n\
+            // In Interviewing state, the Coordinator generates interview questions
+            // or proposes a Plan. This is handled by the interview IPC handlers;
+            // the FSM footer just signals the state.
+            "## Interviewing\n\n\
              You are in the Interviewing state. Generate interview questions to clarify the user's goal, \
              or propose a Plan if you have enough context.\n\n\
              Use InterviewQuestion to ask the user questions, or ProposePlan to propose a Plan draft.\n\n\
-             Respond with a JSON array of actions.";
-            if history.is_empty() {
-                base.to_string()
-            } else {
-                format!("{}\n\n{}", history, base)
-            }
+             Respond with a JSON array of actions."
+                .to_string()
         }
         CoordinatorFsmState::Planning => {
             // Use existing generation footer logic for Plan→Spec→Phase hierarchy

@@ -62,10 +62,6 @@ pub struct CoordinatorState {
     /// Interview context accumulated during the Interviewing state.
     #[serde(default)]
     pub interview_context: Vec<InterviewExchange>,
-    /// Questions from the most recent InterviewQuestion action, awaiting a user response.
-    /// Moved into the next InterviewExchange when interview_respond is called.
-    #[serde(default)]
-    pub pending_questions: Vec<String>,
     /// Whether the user has approved the Plan.
     #[serde(default)]
     pub plan_approved: bool,
@@ -97,7 +93,6 @@ impl CoordinatorState {
             goal_started_at: now,
             phases_completed: Vec::new(),
             interview_context: Vec::new(),
-            pending_questions: Vec::new(),
             plan_approved,
             created_at: now,
             updated_at: now,
@@ -168,25 +163,6 @@ impl CoordinatorState {
     pub fn reset_decomposition_attempts(&mut self, parent_id: &str) {
         self.decomposition_attempts.remove(parent_id);
         self.updated_at = id::now_millis();
-    }
-
-    /// Format interview context as markdown for prompt injection.
-    pub fn format_interview_context(&self) -> String {
-        if self.interview_context.is_empty() {
-            return String::new();
-        }
-        let mut s = String::from("### Interview History\n\n");
-        for (i, exchange) in self.interview_context.iter().enumerate() {
-            s.push_str(&format!("**Round {}:**\n", i + 1));
-            if !exchange.questions.is_empty() {
-                s.push_str("Questions:\n");
-                for q in &exchange.questions {
-                    s.push_str(&format!("- {}\n", q));
-                }
-            }
-            s.push_str(&format!("User response: {}\n\n", exchange.answer));
-        }
-        s
     }
 
     /// Get the wall-clock age in minutes since first assignment, or None if never assigned.
@@ -445,99 +421,5 @@ mod tests {
         let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Auto);
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
         assert!(!state.plan_approved);
-    }
-
-    // --- pending_questions tests ---
-
-    #[test]
-    fn test_pending_questions_empty_on_new() {
-        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        assert!(state.pending_questions.is_empty());
-    }
-
-    #[test]
-    fn test_pending_questions_serde_roundtrip() {
-        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        state.pending_questions = vec!["What is the scope?".to_string(), "Any constraints?".to_string()];
-
-        let json = serde_json::to_string(&state).unwrap();
-        let deserialized: CoordinatorState = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.pending_questions, state.pending_questions);
-    }
-
-    #[test]
-    fn test_pending_questions_backward_compat() {
-        // Old JSON without pending_questions should deserialize with empty Vec
-        let json = serde_json::json!({
-            "id": "test-id",
-            "goal_id": "goal-1",
-            "fsm_state": "Interviewing",
-            "current_phase_id": null,
-            "work_attempts": {},
-            "phase_activated_at": null,
-            "goal_started_at": 1000,
-            "phases_completed": [],
-            "created_at": 1000,
-            "updated_at": 1000
-        });
-        let state: CoordinatorState = serde_json::from_value(json).unwrap();
-        assert!(state.pending_questions.is_empty());
-    }
-
-    // --- format_interview_context tests ---
-
-    #[test]
-    fn test_format_interview_context_empty() {
-        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        assert_eq!(state.format_interview_context(), "");
-    }
-
-    #[test]
-    fn test_format_interview_context_single_round() {
-        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        state.interview_context.push(InterviewExchange {
-            questions: vec!["What is the scope?".to_string()],
-            answer: "Build a CLI tool".to_string(),
-            timestamp: 1000,
-        });
-        let result = state.format_interview_context();
-        assert!(result.contains("### Interview History"));
-        assert!(result.contains("**Round 1:**"));
-        assert!(result.contains("- What is the scope?"));
-        assert!(result.contains("User response: Build a CLI tool"));
-    }
-
-    #[test]
-    fn test_format_interview_context_multi_round() {
-        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        state.interview_context.push(InterviewExchange {
-            questions: vec!["What is the scope?".to_string()],
-            answer: "Build a CLI tool".to_string(),
-            timestamp: 1000,
-        });
-        state.interview_context.push(InterviewExchange {
-            questions: vec!["Language?".to_string(), "Timeline?".to_string()],
-            answer: "Rust, by Friday".to_string(),
-            timestamp: 2000,
-        });
-        let result = state.format_interview_context();
-        assert!(result.contains("**Round 1:**"));
-        assert!(result.contains("**Round 2:**"));
-        assert!(result.contains("- Language?"));
-        assert!(result.contains("- Timeline?"));
-        assert!(result.contains("User response: Rust, by Friday"));
-    }
-
-    #[test]
-    fn test_interview_exchange_serde_with_questions() {
-        let exchange = InterviewExchange {
-            questions: vec!["What is the goal?".to_string(), "Timeline?".to_string()],
-            answer: "Build a CLI tool by Friday".to_string(),
-            timestamp: 1000,
-        };
-        let json = serde_json::to_string(&exchange).unwrap();
-        let deserialized: InterviewExchange = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.questions, exchange.questions);
-        assert_eq!(deserialized.answer, exchange.answer);
     }
 }
