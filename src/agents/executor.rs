@@ -176,7 +176,10 @@ pub async fn run_agent_task(
                     persist_session(&stores, session);
                 }
                 debug!("[agent_status] {}: -> Failed (worktree creation)", session_id);
-                let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Failed));
+                let _ = event_tx.send(DaemonEvent::agent_status_failed(
+                    &session_id,
+                    Some(format!("worktree creation failed: {}", e)),
+                ));
                 return;
             }
         };
@@ -336,7 +339,12 @@ pub async fn run_agent_task(
     }
 
     debug!("[agent_status] {}: -> {:?} (terminal)", session_id, terminal_status);
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
+    if terminal_status == AgentStatus::Failed {
+        let error = result.as_ref().err().map(|e| e.to_string());
+        let _ = event_tx.send(DaemonEvent::agent_status_failed(&session_id, error));
+    } else {
+        let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
+    }
 
     agent_log.info(&format!("task finished → {:?}", terminal_status));
 }
