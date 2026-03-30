@@ -511,7 +511,7 @@ pub enum AgentAction {
         diagnostic: String,
     },
     InterviewQuestion {
-        #[serde(default, deserialize_with = "string_or_vec")]
+        #[serde(default, alias = "question", deserialize_with = "string_or_vec")]
         questions: Vec<String>,
     },
     ProposePlan {
@@ -1702,5 +1702,29 @@ mod tests {
         let json = r#"{"action": "override_work", "work_id": "wi-456", "target_status": "abandoned", "reason": "stuck in InProgress for 60min"}"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         assert!(matches!(action, AgentAction::OverrideWork { .. }));
+    }
+
+    // --- InterviewQuestion serde alias tests ---
+
+    #[test]
+    fn test_interview_question_plural_key() {
+        let json = r#"{"action": "interview_question", "questions": ["What is the scope?"]}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::InterviewQuestion { questions } = action {
+            assert_eq!(questions, vec!["What is the scope?"]);
+        } else {
+            panic!("expected InterviewQuestion");
+        }
+    }
+
+    #[test]
+    fn test_interview_question_singular_alias() {
+        let json = r#"{"action": "interview_question", "question": "What is the scope?"}"#;
+        let action: AgentAction = serde_json::from_str(json).unwrap();
+        if let AgentAction::InterviewQuestion { questions } = action {
+            assert_eq!(questions, vec!["What is the scope?"]);
+        } else {
+            panic!("expected InterviewQuestion");
+        }
     }
 }

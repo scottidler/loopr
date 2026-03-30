@@ -1114,7 +1114,20 @@ pub async fn execute_action(
                     "Based on the goal: \"{}\"\nRepository context: {}\nFile tree: {}",
                     goal_text, readme, file_tree
                 );
-                // Call interview_respond to record the exchange
+                // Store questions on state via interview_question (same path as Interactive mode)
+                let q_resp = bridge.request(
+                    "coordinator.interview_question",
+                    serde_json::json!({ "questions": questions }),
+                );
+                if q_resp.is_error() {
+                    let msg = q_resp
+                        .error
+                        .as_ref()
+                        .map(|e| e.message.clone())
+                        .unwrap_or_else(|| "interview question storage failed".to_string());
+                    return Ok(ActionResult::ActionError(msg));
+                }
+                // Record the exchange with the synthetic answer
                 let resp = bridge.request(
                     "coordinator.interview_respond",
                     serde_json::json!({ "answer": synthetic_answer }),

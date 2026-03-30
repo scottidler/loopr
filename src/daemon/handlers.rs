@@ -4048,9 +4048,9 @@ fn handle_coordinator_interview_respond(
             }
         };
 
-        // Record the exchange (questions were sent in a previous action)
+        // Record the exchange, pairing the pending questions with this answer
         let exchange = crate::domain::coordinator_state::InterviewExchange {
-            questions: vec![], // questions were already sent via InterviewQuestion action
+            questions: std::mem::take(&mut state.pending_questions),
             answer: answer.clone(),
             timestamp: crate::id::now_millis(),
         };
@@ -4239,7 +4239,7 @@ fn handle_coordinator_accept_plan(
 }
 
 fn handle_coordinator_interview_question(
-    _stores: &Arc<Stores>,
+    stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
@@ -4257,6 +4257,23 @@ fn handle_coordinator_interview_question(
                 ));
             }
         };
+
+        // Store questions on coordinator state so interview_respond can pair them with the answer
+        {
+            let mut states = stores.write_coordinator_states()?;
+            if let Some(state) = states.values_mut().find(|s| !s.fsm_state.is_terminal()) {
+                state.pending_questions = questions.clone();
+                state.updated_at = crate::id::now_millis();
+                if let Some(store_arc) = &stores.store
+                    && let Err(e) = store_arc
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .update(state.clone())
+                {
+                    return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+                }
+            }
+        }
 
         // Emit event for TUI to display
         let _ = event_tx.send(DaemonEvent::new(
