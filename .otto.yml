@@ -177,6 +177,11 @@ tasks:
 
       [ "$TEST_FAILED" = "1" ] || [ "$THRESHOLD_FAILED" = "1" ] && exit 1 || true
 
+  e2e:
+    help: "Run E2E persona funnel tests (requires ANTHROPIC_API_KEY; not part of ci)"
+    bash: |
+      cargo test --test funnel -- --ignored
+
   build:
     help: "Build release binary"
     bash: |

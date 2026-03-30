@@ -96,6 +96,50 @@ pub const VAGUE_USER: PersonaFixture = PersonaFixture {
     required_keywords: &["cli", "task"],
 };
 
+/// Scope Creeper: starts with a simple goal then redirects to a more complex architecture.
+///
+/// The Coordinator must track the user's evolving requirements (Postgres, Redis) and
+/// produce a plan that reflects the redirected architecture, not the original CSV-only request.
+pub const SCOPE_CREEPER: PersonaFixture = PersonaFixture {
+    name: "Scope Creeper",
+    initial_goal: "Build a simple Python CLI to read a CSV.",
+    responses: &[
+        "Actually, make it output to a Postgres database instead of CSV/JSON.",
+        "I'm not sure about the DB schema, just figure it out. Also add Redis caching.",
+        "That plan looks right to me.",
+    ],
+    fallback: "Just do whatever you think is best.",
+    required_keywords: &["postgres", "redis", "python"],
+};
+
+/// Pushback User: rejects the Coordinator's initial direction and redirects to a different stack.
+///
+/// The Coordinator must handle rejection gracefully, incorporate the new direction,
+/// and still produce a well-scoped plan within a reasonable number of turns.
+pub const PUSHBACK_USER: PersonaFixture = PersonaFixture {
+    name: "Pushback User",
+    initial_goal: "Build a web app for tracking expenses.",
+    responses: &[
+        "No, I don't want a web app. I'd rather have a CLI tool.",
+        "Right - just a terminal CLI. No browser, no server.",
+        "Yes, that looks good.",
+    ],
+    fallback: "Keep it simple, whatever you think is best.",
+    required_keywords: &["cli", "expense"],
+};
+
+/// Silent User: provides no scripted responses - every answer falls back to the generic fallback.
+///
+/// The Coordinator must not deadlock or loop indefinitely when the user is unresponsive.
+/// It must reach ProposePlan within the timeout using only the initial goal and its own judgment.
+pub const SILENT_USER: PersonaFixture = PersonaFixture {
+    name: "Silent User",
+    initial_goal: "Build a tool.",
+    responses: &[],
+    fallback: "I don't know, you decide.",
+    required_keywords: &["tool"],
+};
+
 // ---------------------------------------------------------------------------
 // Temp dir RAII
 // ---------------------------------------------------------------------------
@@ -382,13 +426,73 @@ async fn test_persona_vague_user() {
         .unwrap();
 }
 
+/// Scope Creeper: an evolving goal ending at Postgres + Redis architecture.
+///
+/// Asserts Tier 1: keywords "postgres", "redis", "python" present - confirming the
+/// Coordinator tracked the user's redirected requirements rather than the original CSV goal.
+#[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+async fn test_persona_scope_creeper() {
+    let temp_dir = TempTestDir::new("loopr-funnel");
+    let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
+    let plan_id = run_persona(&daemon.socket_path, &SCOPE_CREEPER).await.unwrap();
+    assert!(
+        !plan_id.is_empty(),
+        "expected non-empty plan_id from Scope Creeper interview"
+    );
+    assert_plan_tier1(&daemon.socket_path, &plan_id, &SCOPE_CREEPER)
+        .await
+        .unwrap();
+}
+
+/// Pushback User: initial web app request redirected to a CLI tool.
+///
+/// Asserts Tier 1: keywords "cli" and "expense" present - confirming the Coordinator
+/// incorporated the user's pushback and produced a CLI-focused plan.
+#[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+async fn test_persona_pushback_user() {
+    let temp_dir = TempTestDir::new("loopr-funnel");
+    let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
+    let plan_id = run_persona(&daemon.socket_path, &PUSHBACK_USER).await.unwrap();
+    assert!(
+        !plan_id.is_empty(),
+        "expected non-empty plan_id from Pushback User interview"
+    );
+    assert_plan_tier1(&daemon.socket_path, &plan_id, &PUSHBACK_USER)
+        .await
+        .unwrap();
+}
+
+/// Silent User: no scripted responses - every answer is the fallback string.
+///
+/// Asserts that the Coordinator does not deadlock and reaches ProposePlan within the
+/// timeout even when the user provides no useful guidance beyond the initial goal.
+/// Tier 1: non-empty title/description and keyword "tool" present.
+#[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+async fn test_persona_silent_user() {
+    let temp_dir = TempTestDir::new("loopr-funnel");
+    let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
+    let plan_id = run_persona(&daemon.socket_path, &SILENT_USER).await.unwrap();
+    assert!(
+        !plan_id.is_empty(),
+        "expected non-empty plan_id from Silent User interview"
+    );
+    assert_plan_tier1(&daemon.socket_path, &plan_id, &SILENT_USER)
+        .await
+        .unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Fast structural tests (always run - no LLM, no daemon required)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_persona_fixture_fields() {
-    for fixture in [&GOLDEN_PATH, &VAGUE_USER] {
+    // SILENT_USER intentionally has zero scripted responses (all-fallback code path).
+    // The invariant is: every persona must have a non-empty name, initial_goal, and fallback.
+    for fixture in [&GOLDEN_PATH, &VAGUE_USER, &SCOPE_CREEPER, &PUSHBACK_USER, &SILENT_USER] {
         assert!(!fixture.name.is_empty(), "{}: name must not be empty", fixture.name);
         assert!(
             !fixture.initial_goal.is_empty(),
@@ -400,17 +504,12 @@ fn test_persona_fixture_fields() {
             "{}: fallback must not be empty",
             fixture.name
         );
-        assert!(
-            !fixture.responses.is_empty(),
-            "{}: must have at least one scripted response",
-            fixture.name
-        );
     }
 }
 
 #[test]
 fn test_persona_fixture_required_keywords() {
-    for fixture in [&GOLDEN_PATH, &VAGUE_USER] {
+    for fixture in [&GOLDEN_PATH, &VAGUE_USER, &SCOPE_CREEPER, &PUSHBACK_USER, &SILENT_USER] {
         assert!(
             !fixture.required_keywords.is_empty(),
             "{}: required_keywords must not be empty - every persona needs at least one Tier 1 assertion",
