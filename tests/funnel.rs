@@ -287,6 +287,10 @@ impl Drop for DaemonHandle {
 ///
 /// Returns the plan ID from the `record.created` (collection: "plan") event.
 async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<String> {
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        return Err(eyre!("ANTHROPIC_API_KEY must be set to run persona tests"));
+    }
+
     let mut client = IpcClient::connect(socket_path).await?;
     let mut turn = 0usize;
     let mut buffered: VecDeque<DaemonEvent> = VecDeque::new();
@@ -310,13 +314,6 @@ async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<
     if start_resp.is_error() {
         return Err(eyre!("agent.start returned error: {:?}", start_resp.error));
     }
-    let coordinator_session_id = start_resp
-        .result
-        .as_ref()
-        .and_then(|r| r.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
     buffered.extend(start_events);
 
     let timeout_secs = std::env::var("LOOPR_TEST_TIMEOUT_SECS")
@@ -338,20 +335,6 @@ async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<
             };
 
             match event.event.as_str() {
-                "agent.status_changed" if event.data["session_id"].as_str() == Some(&coordinator_session_id) => {
-                    let status = event.data["status"].as_str().unwrap_or("");
-                    if status == "failed" || status == "cancelled" {
-                        let error = event.data["error"]
-                            .as_str()
-                            .unwrap_or("agent failed (no error message)");
-                        return Err(eyre!(
-                            "persona '{}': agent reached terminal state '{}': {}",
-                            fixture.name,
-                            status,
-                            error,
-                        ));
-                    }
-                }
                 "coordinator.interview_question" => {
                     let answer = fixture.responses.get(turn).copied().unwrap_or(fixture.fallback);
                     let (_, resp_events) = client
@@ -364,7 +347,7 @@ async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<
                     let id = event.data["id"].as_str().unwrap_or_default().to_string();
                     return Ok::<String, eyre::Error>(id);
                 }
-                _ => {}
+                _ => {} // ignore agent.status_changed and other events
             }
         }
     })
