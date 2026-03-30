@@ -231,7 +231,7 @@ impl DaemonHandle {
         std::fs::create_dir_all(&repo_path)?;
         std::fs::create_dir_all(&session_dir)?;
 
-        let config = Config {
+        let mut config = Config {
             daemon: DaemonConfig {
                 socket_path: socket_path.clone(),
                 pid_path,
@@ -242,6 +242,10 @@ impl DaemonHandle {
             },
             ..Config::default()
         };
+
+        // Accelerate FSM loop for tests
+        config.agents.coordinator.active_interval_secs = 1;
+        config.agents.coordinator.idle_interval_secs = 1;
 
         let session_id = format!("funnel-{}", test_id());
         let (ctx, _) = DaemonContext::shared(config, session_id, session_dir)?;
