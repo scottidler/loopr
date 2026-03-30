@@ -465,7 +465,7 @@ fn build_generation_footer(
             ));
             return Some(format!(
                 "A {} is in Draft status. Validation is disabled — activate it directly.\n\
-                 Use TransitionStatus to move it from Draft to Active.\n\
+                 Use Transition to move it from Draft to Active.\n\
                  ID: {}\nTitle: {}",
                 draft_info.0, draft_info.1, draft_info.2
             ));
@@ -3440,7 +3440,7 @@ mod tests {
             footer_text
         );
         assert!(
-            footer_text.contains("TransitionStatus"),
+            footer_text.contains("Use Transition to move it from Draft to Active"),
             "footer should instruct direct activation when validator disabled: {}",
             footer_text
         );

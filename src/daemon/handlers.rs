@@ -7,9 +7,10 @@ use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::agents::{AgentSession, AgentStatus, AgentType};
-use crate::config::IntegratorConfig;
+use crate::config::{IntegratorConfig, InterviewMode};
 use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
 use crate::domain::coordinator_goal::CoordinatorGoal;
+use crate::domain::coordinator_state::CoordinatorState;
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::lock::Lock;
 use crate::domain::phase::{Phase, PhaseStatus};
@@ -4200,6 +4201,21 @@ fn handle_coordinator_accept_plan(
         }
         stores.write_coordinator_goals()?.insert(goal_id.clone(), goal);
         let _ = event_tx.send(DaemonEvent::record_created("coordinator_goal", &goal_id));
+
+        // Pre-create CoordinatorState with plan_approved=true so the Coordinator
+        // skips Interviewing and starts directly in Planning.
+        // InterviewMode::Skip sets fsm_state=Planning + plan_approved=true.
+        {
+            let coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Skip);
+            let cs_id = coord_state.id.clone();
+            if let Some(store_arc) = &stores.store {
+                let _ = store_arc
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create(coord_state.clone());
+            }
+            stores.write_coordinator_states()?.insert(cs_id, coord_state);
+        }
 
         // Start the Coordinator agent (best-effort: may fail if no Tokio runtime or already running)
         let (coordinator_session_id, coordinator_already_running) = if tokio::runtime::Handle::try_current().is_ok() {
@@ -13263,6 +13279,19 @@ mod tests {
         let goal = &goals[goal_id];
         assert!(goal.active);
         assert_eq!(goal.goal, "My Plan Title");
+
+        // Verify CoordinatorState was pre-created with plan_approved=true
+        let states = stores.read_coordinator_states().unwrap();
+        let state = states
+            .values()
+            .find(|s| s.goal_id == goal_id)
+            .expect("CoordinatorState should exist for the new goal");
+        assert!(state.plan_approved, "plan_approved must be true after accept_plan");
+        assert_eq!(
+            state.fsm_state,
+            crate::domain::coordinator_state::CoordinatorFsmState::Planning,
+            "FSM should start in Planning after accept_plan"
+        );
     }
 
     #[test]
