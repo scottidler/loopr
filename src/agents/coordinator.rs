@@ -1234,8 +1234,7 @@ impl CoordinatorAgent {
                     self.previous_summary = Some(summary.clone());
                     // Use active interval for FSM states that need quick transitions
                     match coord_state.fsm_state {
-                        CoordinatorFsmState::Interviewing
-                        | CoordinatorFsmState::Planning
+                        CoordinatorFsmState::Planning
                         | CoordinatorFsmState::ActivatePhase
                         | CoordinatorFsmState::PhaseGate => self.config.active_interval_secs,
                         _ => self.config.idle_interval_secs,
