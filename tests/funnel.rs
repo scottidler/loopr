@@ -1,7 +1,7 @@
-//! Integration tests: Coordinator Interviewing FSM (Constrained Persona Matrix)
+//! Integration tests: Chat Funnel Persona Matrix
 //!
-//! Drive the Coordinator through its `Interviewing` FSM state using scripted,
-//! turn-indexed persona responses fed over Unix socket JSON-RPC IPC.
+//! Drive scripted persona conversations through the chat funnel via
+//! `chat.submit` IPC with driver-controlled `funnel_state` transitions.
 //!
 //! All LLM-driven tests are `#[ignore]` - they require a live ANTHROPIC_API_KEY
 //! and are slow (3-10 LLM calls each). Run them manually:
@@ -12,40 +12,28 @@
 //!
 //! Timeout is configurable via `LOOPR_TEST_TIMEOUT_SECS` (default: 120).
 //!
-//! # IPC Flow
+//! # IPC Flow (new chat funnel path)
 //!
-//! 1. `coordinator.set_goal`   - persists the goal (does NOT start the agent)
-//! 2. `agent.start`            - spawns the Coordinator agent task
-//! 3. `coordinator.interview_question` (event) - Coordinator asks a question
-//! 4. `coordinator.interview_respond`  - driver sends turn-indexed answer
-//! 5. Repeat 3-4 until `record.created` (collection: "plan") is received
+//! 1. `chat.submit(funnel_state="interview")` - LLM asks clarifying questions
+//! 2. Repeat with persona responses via `chat.submit(funnel_state="interview")`
+//! 3. `chat.submit(funnel_state="plan_draft", is_draft_request=true)` - LLM drafts plan
+//! 4. `coordinator.accept_plan(plan=plan_text)` - bridge creates Plan + Goal + starts Coordinator
 
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use loopr::config::{Config, DaemonConfig, ProjectConfig};
-use loopr::daemon::context::DaemonContext;
-use loopr::daemon::daemon_main;
 use loopr::ipc::client::IpcClient;
 use loopr::ipc::protocol::{DaemonEvent, IpcMessage};
 use reqwest::Client;
 use serde_json::json;
-use tokio::task::JoinHandle;
 
-// ---------------------------------------------------------------------------
-// Unique ID helper (no external deps)
-// ---------------------------------------------------------------------------
-
-fn test_id() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{}", std::process::id(), n)
-}
+use common::{DaemonHandle, TempTestDir, test_id};
 
 // ---------------------------------------------------------------------------
 // Persona fixture
@@ -53,15 +41,15 @@ fn test_id() -> String {
 
 /// A scripted interview persona with hardcoded turn-indexed responses.
 ///
-/// The `PersonaDriver` feeds `responses[turn]` as the answer to each
-/// `coordinator.interview_question` event, falling back to `fallback` once
+/// The `run_chat_persona` driver feeds `responses[turn]` as the answer to each
+/// interview turn via `chat.submit`, falling back to `fallback` once
 /// the scripted responses are exhausted.
 pub struct PersonaFixture {
     /// Human-readable name used in diagnostics and failure messages.
     pub name: &'static str,
-    /// Initial goal text sent via `coordinator.set_goal`.
+    /// Initial goal text sent as the first `chat.submit` message.
     pub initial_goal: &'static str,
-    /// Turn-indexed answers: `responses[0]` answers the first question, etc.
+    /// Turn-indexed answers: `responses[0]` answers the first LLM question, etc.
     pub responses: &'static [&'static str],
     /// Answer used for every question once `responses` is exhausted.
     pub fallback: &'static str,
@@ -172,193 +160,168 @@ pub const SILENT_USER: PersonaFixture = PersonaFixture {
 };
 
 // ---------------------------------------------------------------------------
-// Temp dir RAII
+// Chat persona driver
 // ---------------------------------------------------------------------------
 
-/// A temporary directory that is removed (with all contents) when dropped.
-struct TempTestDir(PathBuf);
-
-impl TempTestDir {
-    fn new(prefix: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("{}-{}", prefix, test_id()));
-        std::fs::create_dir_all(&path).expect("failed to create test temp dir");
-        Self(path)
-    }
-
-    fn path(&self) -> &PathBuf {
-        &self.0
-    }
-}
-
-impl Drop for TempTestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Test daemon handle
-// ---------------------------------------------------------------------------
-
-/// An in-process daemon spawned for integration testing.
-///
-/// Uses an isolated temp directory and socket path per test instance.
-/// The daemon Tokio task is aborted when this handle is dropped.
-///
-/// **Note:** The supervisor task spawned inside `daemon_main` is not
-/// automatically aborted. It will exit once its `Stores` Arc and broadcast
-/// channel sender are released after the `DaemonContext` is dropped.
-struct DaemonHandle {
-    pub socket_path: PathBuf,
-    task: JoinHandle<eyre::Result<()>>,
-    _temp_dir: TempTestDir,
-}
-
-impl DaemonHandle {
-    /// Spawn a fresh daemon in `temp_dir` and wait for its socket to appear.
-    ///
-    /// The config overrides socket_path, pid_path, and repo_path to the temp
-    /// directory. `auto_start_coordinator` and pull-based workers remain off
-    /// (Config::default) so the test drives startup explicitly via `agent.start`.
-    async fn spawn(temp_dir: TempTestDir) -> Result<Self> {
-        // Initialize prompts before starting daemon tasks
-        loopr::prompts::init_defaults();
-
-        let socket_path = temp_dir.path().join("daemon.sock");
-        let pid_path = temp_dir.path().join("daemon.pid");
-        let repo_path = temp_dir.path().join("repo");
-        let session_dir = temp_dir.path().join("session");
-        std::fs::create_dir_all(&repo_path)?;
-        std::fs::create_dir_all(&session_dir)?;
-
-        let config = Config {
-            daemon: DaemonConfig {
-                socket_path: socket_path.clone(),
-                pid_path,
-            },
-            project: ProjectConfig {
-                repo_path,
-                ..ProjectConfig::default()
-            },
-            ..Config::default()
-        };
-
-        let session_id = format!("funnel-{}", test_id());
-        let (ctx, _) = DaemonContext::shared(config, session_id, session_dir)?;
-        let task = tokio::spawn(async move { daemon_main(ctx).await });
-
-        // Wait for socket to appear (up to 5 seconds).
-        for _ in 0..50 {
-            if socket_path.exists() {
-                return Ok(Self {
-                    socket_path,
-                    task,
-                    _temp_dir: temp_dir,
-                });
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-
-        task.abort();
-        Err(eyre!("daemon socket never appeared at {}", socket_path.display()))
-    }
-}
-
-impl Drop for DaemonHandle {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Persona driver
-// ---------------------------------------------------------------------------
-
-/// Drive a `PersonaFixture` through the Coordinator interview via IPC.
-///
-/// Sends `coordinator.set_goal` + `agent.start`, then responds to each
-/// `coordinator.interview_question` event with the turn-indexed answer from
-/// `fixture.responses` (or `fixture.fallback` once exhausted).
-///
-/// Events collected as side-effects of `request()` calls are buffered and
-/// processed before reading further from the socket, preventing dropped events
-/// under race conditions where the Coordinator responds before the client's
-/// `recv()` loop is entered.
-///
-/// Returns the plan ID from the `record.created` (collection: "plan") event.
-async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<String> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        return Err(eyre!("ANTHROPIC_API_KEY must be set to run persona tests"));
-    }
-
-    let mut client = IpcClient::connect(socket_path).await?;
-    let mut turn = 0usize;
-    let mut buffered: VecDeque<DaemonEvent> = VecDeque::new();
-
-    // Set goal. Does NOT start the agent - that requires a separate agent.start call.
-    let (goal_resp, goal_events) = client
-        .request("coordinator.set_goal", json!({"goal": fixture.initial_goal}))
-        .await
-        .map_err(|e| eyre!("coordinator.set_goal failed: {e}"))?;
-    if goal_resp.is_error() {
-        return Err(eyre!("coordinator.set_goal returned error: {:?}", goal_resp.error));
-    }
-    buffered.extend(goal_events);
-
-    // Start the Coordinator agent. In sync test contexts auto-start is skipped
-    // (handlers.rs:4218), so agent.start must always be called explicitly.
-    let (start_resp, start_events) = client
-        .request("agent.start", json!({"agent_type": "coordinator"}))
-        .await
-        .map_err(|e| eyre!("agent.start failed: {e}"))?;
-    if start_resp.is_error() {
-        return Err(eyre!("agent.start returned error: {:?}", start_resp.error));
-    }
-    buffered.extend(start_events);
-
-    let timeout_secs = std::env::var("LOOPR_TEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(120);
-
-    let plan_id = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+/// Wait for the `agent.llm_output` event with `is_final: true` from the daemon,
+/// draining any buffered events first.
+async fn wait_for_final(client: &mut IpcClient, buffered: &mut VecDeque<DaemonEvent>, timeout: Duration) -> Result<()> {
+    tokio::time::timeout(timeout, async {
         loop {
-            // Drain buffered events (side-effects of request() calls) first.
             let event = if let Some(e) = buffered.pop_front() {
                 e
             } else {
                 match client.recv().await? {
                     Some(IpcMessage::Event(e)) => e,
-                    Some(IpcMessage::Response(_)) => continue, // stray response - skip
-                    None => return Err(eyre!("daemon disconnected before plan was created")),
+                    Some(IpcMessage::Response(_)) => continue,
+                    None => return Err(eyre!("daemon disconnected while waiting for llm_output")),
                 }
             };
 
-            match event.event.as_str() {
-                "coordinator.interview_question" => {
-                    let answer = fixture.responses.get(turn).copied().unwrap_or(fixture.fallback);
-                    let (_, resp_events) = client
-                        .request("coordinator.interview_respond", json!({"answer": answer}))
-                        .await?;
-                    buffered.extend(resp_events);
-                    turn += 1;
-                }
-                "record.created" if event.data["collection"].as_str() == Some("plan") => {
-                    let id = event.data["id"].as_str().unwrap_or_default().to_string();
-                    return Ok::<String, eyre::Error>(id);
-                }
-                _ => {} // ignore agent.status_changed and other events
+            if event.event == "agent.llm_output" && event.data["is_final"].as_bool() == Some(true) {
+                return Ok(());
             }
         }
     })
     .await
-    .map_err(|_| {
-        eyre!(
-            "persona '{}': timed out after {}s waiting for record.created (collection: plan)",
-            fixture.name,
-            timeout_secs,
+    .map_err(|_| eyre!("timed out waiting for agent.llm_output(is_final=true)"))?
+}
+
+/// Extract the last assistant message text from chat.history response.
+fn extract_last_assistant_text(messages: &serde_json::Value) -> Option<String> {
+    messages
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m["role"].as_str() == Some("assistant"))
+        .and_then(|m| {
+            m["content"].as_array().and_then(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|b| b["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .first()
+                    .map(|s| s.to_string())
+            })
+        })
+}
+
+/// Drive a `PersonaFixture` through the chat funnel via IPC.
+///
+/// Uses `chat.submit` with driver-controlled `funnel_state` transitions:
+/// 1. Submit initial goal with `funnel_state: "interview"`
+/// 2. For each scripted response, submit with `funnel_state: "interview"`
+/// 3. Submit draft request with `funnel_state: "plan_draft", is_draft_request: true`
+/// 4. Extract plan text from last assistant message
+/// 5. Call `coordinator.accept_plan` with the plan text
+///
+/// Returns the plan ID from the accept_plan response.
+async fn run_chat_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<String> {
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        return Err(eyre!("ANTHROPIC_API_KEY must be set to run persona tests"));
+    }
+
+    let session_id = format!("persona-{}", test_id());
+    let mut client = IpcClient::connect(socket_path).await?;
+    let mut buffered: VecDeque<DaemonEvent> = VecDeque::new();
+
+    let timeout_secs = std::env::var("LOOPR_TEST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(120);
+    let timeout = Duration::from_secs(timeout_secs);
+
+    // Step 1: Submit initial goal in interview state
+    let (resp, events) = client
+        .request(
+            "chat.submit",
+            json!({
+                "session_id": session_id,
+                "message": fixture.initial_goal,
+                "funnel_state": "interview",
+            }),
         )
-    })??;
+        .await
+        .map_err(|e| eyre!("chat.submit (initial) failed: {e}"))?;
+    if resp.is_error() {
+        return Err(eyre!("chat.submit (initial) returned error: {:?}", resp.error));
+    }
+    buffered.extend(events);
+    wait_for_final(&mut client, &mut buffered, timeout).await?;
+
+    // Step 2: Submit each scripted response in interview state
+    for (i, response) in fixture.responses.iter().enumerate() {
+        let (resp, events) = client
+            .request(
+                "chat.submit",
+                json!({
+                    "session_id": session_id,
+                    "message": *response,
+                    "funnel_state": "interview",
+                }),
+            )
+            .await
+            .map_err(|e| eyre!("chat.submit (response {i}) failed: {e}"))?;
+        if resp.is_error() {
+            return Err(eyre!("chat.submit (response {i}) returned error: {:?}", resp.error));
+        }
+        buffered.extend(events);
+        wait_for_final(&mut client, &mut buffered, timeout).await?;
+    }
+
+    // Step 3: Request plan draft
+    let (resp, events) = client
+        .request(
+            "chat.submit",
+            json!({
+                "session_id": session_id,
+                "message": "Please draft a plan based on our discussion.",
+                "funnel_state": "plan_draft",
+                "is_draft_request": true,
+            }),
+        )
+        .await
+        .map_err(|e| eyre!("chat.submit (draft) failed: {e}"))?;
+    if resp.is_error() {
+        return Err(eyre!("chat.submit (draft) returned error: {:?}", resp.error));
+    }
+    buffered.extend(events);
+    wait_for_final(&mut client, &mut buffered, timeout).await?;
+
+    // Step 4: Extract plan text from chat history
+    let (history_resp, _) = client
+        .request("chat.history", json!({ "session_id": session_id }))
+        .await
+        .map_err(|e| eyre!("chat.history failed: {e}"))?;
+    if history_resp.is_error() {
+        return Err(eyre!("chat.history returned error: {:?}", history_resp.error));
+    }
+
+    let result = history_resp
+        .result
+        .ok_or_else(|| eyre!("persona '{}': chat.history returned null result", fixture.name))?;
+    let plan_text = extract_last_assistant_text(&result["messages"])
+        .ok_or_else(|| eyre!("persona '{}': no assistant message found in chat history", fixture.name))?;
+
+    // Step 5: Accept the plan
+    let (accept_resp, _) = client
+        .request("coordinator.accept_plan", json!({ "plan": plan_text }))
+        .await
+        .map_err(|e| eyre!("coordinator.accept_plan failed: {e}"))?;
+    if accept_resp.is_error() {
+        return Err(eyre!(
+            "persona '{}': coordinator.accept_plan returned error: {:?}",
+            fixture.name,
+            accept_resp.error,
+        ));
+    }
+
+    let plan_id = accept_resp
+        .result
+        .as_ref()
+        .and_then(|r| r["plan_id"].as_str())
+        .ok_or_else(|| eyre!("persona '{}': accept_plan response missing plan_id", fixture.name))?
+        .to_string();
 
     Ok(plan_id)
 }
@@ -520,17 +483,12 @@ async fn assert_plan_tier2(plan_text: &str, fixture: &PersonaFixture) -> Result<
 // ---------------------------------------------------------------------------
 
 /// Golden Path: a well-scoped goal produces a coherent Draft Plan.
-///
-/// Tier 1: `record.created` received; non-empty title/description; keywords
-/// "rust" and "sqlite" present in plan text.
-/// Tier 2 (nightly, opt-in via `LOOPR_TIER2_EVAL=1`): LLM evaluator checks
-/// the plan scopes a Rust CLI todo app with SQLite, not a web app.
 #[tokio::test]
-#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+#[ignore = "requires ANTHROPIC_API_KEY and live LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_golden_path() {
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
-    let plan_id = run_persona(&daemon.socket_path, &GOLDEN_PATH).await.unwrap();
+    let plan_id = run_chat_persona(&daemon.socket_path, &GOLDEN_PATH).await.unwrap();
     assert!(
         !plan_id.is_empty(),
         "expected non-empty plan_id from Golden Path interview"
@@ -541,19 +499,13 @@ async fn test_persona_golden_path() {
     assert_plan_tier2(&plan_text, &GOLDEN_PATH).await.unwrap();
 }
 
-/// Vague User: an underspecified goal; Coordinator must extract a scoped plan.
-///
-/// Tier 1: non-empty title/description; keywords "cli" + "task" present -
-/// confirming the Coordinator absorbed the user's clarifications.
-/// Tier 2 (nightly): evaluator checks the plan is a scoped CLI task manager,
-/// not a vague "stuff manager".
+/// Vague User: an underspecified goal; LLM must extract a scoped plan.
 #[tokio::test]
-#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+#[ignore = "requires ANTHROPIC_API_KEY and live LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_vague_user() {
-    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
-    let plan_id = run_persona(&daemon.socket_path, &VAGUE_USER).await.unwrap();
+    let plan_id = run_chat_persona(&daemon.socket_path, &VAGUE_USER).await.unwrap();
     assert!(
         !plan_id.is_empty(),
         "expected non-empty plan_id from Vague User interview"
@@ -565,18 +517,12 @@ async fn test_persona_vague_user() {
 }
 
 /// Scope Creeper: an evolving goal ending at Postgres + Redis architecture.
-///
-/// Tier 1: keywords "postgres", "redis", "python" present - confirming the
-/// Coordinator tracked the redirected requirements, not the original CSV goal.
-/// Tier 2 (nightly): evaluator checks the plan reflects the Postgres/Redis
-/// architecture, not the original CSV-only request.
 #[tokio::test]
-#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+#[ignore = "requires ANTHROPIC_API_KEY and live LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_scope_creeper() {
-    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
-    let plan_id = run_persona(&daemon.socket_path, &SCOPE_CREEPER).await.unwrap();
+    let plan_id = run_chat_persona(&daemon.socket_path, &SCOPE_CREEPER).await.unwrap();
     assert!(
         !plan_id.is_empty(),
         "expected non-empty plan_id from Scope Creeper interview"
@@ -588,18 +534,12 @@ async fn test_persona_scope_creeper() {
 }
 
 /// Pushback User: initial web app request redirected to a CLI tool.
-///
-/// Tier 1: keywords "cli" and "expense" present - confirming the Coordinator
-/// incorporated the user's pushback and produced a CLI-focused plan.
-/// Tier 2 (nightly): evaluator checks the plan reflects CLI expense tracking,
-/// not the original web app.
 #[tokio::test]
-#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+#[ignore = "requires ANTHROPIC_API_KEY and live LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_pushback_user() {
-    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
-    let plan_id = run_persona(&daemon.socket_path, &PUSHBACK_USER).await.unwrap();
+    let plan_id = run_chat_persona(&daemon.socket_path, &PUSHBACK_USER).await.unwrap();
     assert!(
         !plan_id.is_empty(),
         "expected non-empty plan_id from Pushback User interview"
@@ -611,18 +551,12 @@ async fn test_persona_pushback_user() {
 }
 
 /// Silent User: no scripted responses - every answer is the fallback string.
-///
-/// Tier 1: non-empty title/description; keyword "tool" present - confirms
-/// the Coordinator does not deadlock and reaches ProposePlan within timeout.
-/// Tier 2 (nightly): evaluator checks the plan is coherent and self-contained
-/// given only the initial goal and the Coordinator's own judgment.
 #[tokio::test]
-#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+#[ignore = "requires ANTHROPIC_API_KEY and live LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_silent_user() {
-    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
-    let plan_id = run_persona(&daemon.socket_path, &SILENT_USER).await.unwrap();
+    let plan_id = run_chat_persona(&daemon.socket_path, &SILENT_USER).await.unwrap();
     assert!(
         !plan_id.is_empty(),
         "expected non-empty plan_id from Silent User interview"
