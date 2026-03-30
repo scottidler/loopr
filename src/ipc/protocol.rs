@@ -218,6 +218,16 @@ impl DaemonEvent {
         let event = AgentEvent::StatusChange {
             session_id: session_id.to_string(),
             status,
+            error: None,
+        };
+        Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
+    }
+
+    pub fn agent_status_failed(session_id: &str, error: Option<String>) -> Self {
+        let event = AgentEvent::StatusChange {
+            session_id: session_id.to_string(),
+            status: AgentStatus::Failed,
+            error,
         };
         Self::new("agent.status_changed", serde_json::to_value(event).unwrap_or_default())
     }

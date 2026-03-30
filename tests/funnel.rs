@@ -221,6 +221,9 @@ impl DaemonHandle {
     /// directory. `auto_start_coordinator` and pull-based workers remain off
     /// (Config::default) so the test drives startup explicitly via `agent.start`.
     async fn spawn(temp_dir: TempTestDir) -> Result<Self> {
+        // Initialize prompts before starting daemon tasks
+        loopr::prompts::init_defaults();
+
         let socket_path = temp_dir.path().join("daemon.sock");
         let pid_path = temp_dir.path().join("daemon.pid");
         let repo_path = temp_dir.path().join("repo");
@@ -284,6 +287,10 @@ impl Drop for DaemonHandle {
 ///
 /// Returns the plan ID from the `record.created` (collection: "plan") event.
 async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<String> {
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        return Err(eyre!("ANTHROPIC_API_KEY must be set to run persona tests"));
+    }
+
     let mut client = IpcClient::connect(socket_path).await?;
     let mut turn = 0usize;
     let mut buffered: VecDeque<DaemonEvent> = VecDeque::new();
@@ -543,6 +550,7 @@ async fn test_persona_golden_path() {
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_vague_user() {
+    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
     let plan_id = run_persona(&daemon.socket_path, &VAGUE_USER).await.unwrap();
@@ -565,6 +573,7 @@ async fn test_persona_vague_user() {
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_scope_creeper() {
+    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
     let plan_id = run_persona(&daemon.socket_path, &SCOPE_CREEPER).await.unwrap();
@@ -587,6 +596,7 @@ async fn test_persona_scope_creeper() {
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_pushback_user() {
+    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
     let plan_id = run_persona(&daemon.socket_path, &PUSHBACK_USER).await.unwrap();
@@ -609,6 +619,7 @@ async fn test_persona_pushback_user() {
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_silent_user() {
+    loopr::prompts::init_defaults();
     let temp_dir = TempTestDir::new("loopr-funnel");
     let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
     let plan_id = run_persona(&daemon.socket_path, &SILENT_USER).await.unwrap();

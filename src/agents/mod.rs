@@ -545,6 +545,8 @@ pub enum AgentEvent {
     StatusChange {
         session_id: String,
         status: AgentStatus,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     LlmOutput {
         session_id: String,
@@ -1453,12 +1455,44 @@ mod tests {
         let event = AgentEvent::StatusChange {
             session_id: "s1".to_string(),
             status: AgentStatus::Running,
+            error: None,
         };
         let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("error"), "error field should be skipped when None");
         let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
-        if let AgentEvent::StatusChange { session_id, status } = deserialized {
+        if let AgentEvent::StatusChange {
+            session_id,
+            status,
+            error,
+        } = deserialized
+        {
             assert_eq!(session_id, "s1");
             assert_eq!(status, AgentStatus::Running);
+            assert!(error.is_none());
+        } else {
+            panic!("expected StatusChange");
+        }
+    }
+
+    #[test]
+    fn test_agent_event_status_change_with_error_serde() {
+        let event = AgentEvent::StatusChange {
+            session_id: "s2".to_string(),
+            status: AgentStatus::Failed,
+            error: Some("API key not found".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("API key not found"));
+        let deserialized: AgentEvent = serde_json::from_str(&json).unwrap();
+        if let AgentEvent::StatusChange {
+            session_id,
+            status,
+            error,
+        } = deserialized
+        {
+            assert_eq!(session_id, "s2");
+            assert_eq!(status, AgentStatus::Failed);
+            assert_eq!(error.as_deref(), Some("API key not found"));
         } else {
             panic!("expected StatusChange");
         }

@@ -61,7 +61,7 @@ pub async fn run_supervisor(
         };
 
         let (session_id, status) = match agent_event {
-            AgentEvent::StatusChange { session_id, status } => (session_id, status),
+            AgentEvent::StatusChange { session_id, status, .. } => (session_id, status),
             _ => continue,
         };
 
