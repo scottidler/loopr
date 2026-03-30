@@ -182,6 +182,11 @@ tasks:
     bash: |
       cargo test --test funnel -- --ignored
 
+  e2e-nightly:
+    help: "Run E2E funnel tests with Tier 2 LLM evaluator (requires ANTHROPIC_API_KEY; nightly only)"
+    bash: |
+      LOOPR_TIER2_EVAL=1 cargo test --test funnel -- --ignored
+
   build:
     help: "Build release binary"
     bash: |

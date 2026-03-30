@@ -33,6 +33,7 @@ use loopr::daemon::context::DaemonContext;
 use loopr::daemon::daemon_main;
 use loopr::ipc::client::IpcClient;
 use loopr::ipc::protocol::{DaemonEvent, IpcMessage};
+use reqwest::Client;
 use serde_json::json;
 use tokio::task::JoinHandle;
 
@@ -66,6 +67,11 @@ pub struct PersonaFixture {
     pub fallback: &'static str,
     /// Tier 1 structural assertion: all keywords must appear in plan text (case-insensitive).
     pub required_keywords: &'static [&'static str],
+    /// Tier 2 LLM evaluator rubric (nightly only, opt-in via `LOOPR_TIER2_EVAL=1`).
+    ///
+    /// A short description of what the resulting plan must demonstrate to pass.
+    /// If `None`, Tier 2 is skipped for this persona.
+    pub rubric: Option<&'static str>,
 }
 
 /// Golden Path: a clear, well-scoped request that the Coordinator should
@@ -80,6 +86,11 @@ pub const GOLDEN_PATH: PersonaFixture = PersonaFixture {
     ],
     fallback: "That sounds fine, go ahead.",
     required_keywords: &["rust", "sqlite"],
+    rubric: Some(
+        "The plan must scope a Rust CLI todo app with SQLite persistence, \
+         covering add, list, and done subcommands. It should not propose a \
+         web app, database server, or sync mechanism.",
+    ),
 };
 
 /// Vague User: an underspecified goal that requires the Coordinator to ask
@@ -94,6 +105,11 @@ pub const VAGUE_USER: PersonaFixture = PersonaFixture {
     ],
     fallback: "Just keep it simple, whatever you think is best.",
     required_keywords: &["cli", "task"],
+    rubric: Some(
+        "The plan must scope a CLI task manager derived from the user's \
+         clarifications. It must not be a web app or a vague 'stuff manager'. \
+         The scope should be specific and actionable.",
+    ),
 };
 
 /// Scope Creeper: starts with a simple goal then redirects to a more complex architecture.
@@ -110,6 +126,11 @@ pub const SCOPE_CREEPER: PersonaFixture = PersonaFixture {
     ],
     fallback: "Just do whatever you think is best.",
     required_keywords: &["postgres", "redis", "python"],
+    rubric: Some(
+        "The plan must reflect the user's evolved requirements toward a \
+         Postgres/Redis architecture. The original CSV-only request must not \
+         dominate the plan - the user explicitly redirected toward a database backend.",
+    ),
 };
 
 /// Pushback User: rejects the Coordinator's initial direction and redirects to a different stack.
@@ -126,6 +147,11 @@ pub const PUSHBACK_USER: PersonaFixture = PersonaFixture {
     ],
     fallback: "Keep it simple, whatever you think is best.",
     required_keywords: &["cli", "expense"],
+    rubric: Some(
+        "The plan must reflect the user's redirect from a web app to a CLI tool \
+         for expense tracking. A web app, browser, or server must not appear \
+         as the primary deliverable.",
+    ),
 };
 
 /// Silent User: provides no scripted responses - every answer falls back to the generic fallback.
@@ -138,6 +164,11 @@ pub const SILENT_USER: PersonaFixture = PersonaFixture {
     responses: &[],
     fallback: "I don't know, you decide.",
     required_keywords: &["tool"],
+    rubric: Some(
+        "The plan must be a coherent, self-contained scope derived entirely \
+         from the initial goal. It must not deadlock or produce an empty plan. \
+         The Coordinator should make reasonable assumptions without user input.",
+    ),
 };
 
 // ---------------------------------------------------------------------------
@@ -335,7 +366,10 @@ async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<
 /// - `title` is non-empty
 /// - `description` is non-empty
 /// - All `fixture.required_keywords` appear in plan text (case-insensitive)
-async fn assert_plan_tier1(socket_path: &PathBuf, plan_id: &str, fixture: &PersonaFixture) -> Result<()> {
+///
+/// Returns the concatenated plan text (title + description + acceptance_criteria)
+/// for optional use by the Tier 2 evaluator.
+async fn assert_plan_tier1(socket_path: &PathBuf, plan_id: &str, fixture: &PersonaFixture) -> Result<String> {
     let mut client = IpcClient::connect(socket_path).await?;
 
     let (resp, _) = client
@@ -368,9 +402,9 @@ async fn assert_plan_tier1(socket_path: &PathBuf, plan_id: &str, fixture: &Perso
         return Err(eyre!("persona '{}': plan description is empty", fixture.name));
     }
 
-    let plan_text = format!("{} {} {}", title, description, acceptance_criteria).to_lowercase();
+    let plan_text = format!("{title} {description} {acceptance_criteria}");
     for keyword in fixture.required_keywords {
-        if !plan_text.contains(&keyword.to_lowercase()) {
+        if !plan_text.to_lowercase().contains(&keyword.to_lowercase()) {
             return Err(eyre!(
                 "persona '{}': required keyword '{}' not found in plan (title={:?})",
                 fixture.name,
@@ -378,6 +412,97 @@ async fn assert_plan_tier1(socket_path: &PathBuf, plan_id: &str, fixture: &Perso
                 title,
             ));
         }
+    }
+
+    Ok(plan_text)
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2 LLM evaluator (nightly only - opt-in via LOOPR_TIER2_EVAL=1)
+// ---------------------------------------------------------------------------
+
+/// Structured verdict returned by the Tier 2 evaluator LLM.
+#[derive(serde::Deserialize, Debug)]
+struct EvalResult {
+    passed: bool,
+    reason: String,
+}
+
+/// Tier 2: single-shot LLM evaluator using `claude-haiku-4-5-20251001`.
+///
+/// Gated by `LOOPR_TIER2_EVAL=1`. If the env var is not set (or is not "1"),
+/// returns `Ok(())` immediately so that the existing `#[ignore]` persona tests
+/// remain Tier-1-only unless the caller explicitly opts in. The `otto
+/// e2e-nightly` task sets this variable.
+///
+/// Uses a cheaper, independent model (haiku) rather than the Coordinator model
+/// to reduce grading bias and cost. The model is given the plan text and the
+/// persona rubric and asked for a binary JSON verdict.
+async fn assert_plan_tier2(plan_text: &str, fixture: &PersonaFixture) -> Result<()> {
+    // Opt-in gate: skip unless LOOPR_TIER2_EVAL=1
+    if std::env::var("LOOPR_TIER2_EVAL").ok().as_deref() != Some("1") {
+        return Ok(());
+    }
+
+    let rubric = match fixture.rubric {
+        Some(r) => r,
+        None => return Ok(()), // persona has no rubric - nothing to evaluate
+    };
+
+    let api_key = std::env::var("ANTHROPIC_API_KEY")
+        .map_err(|_| eyre!("ANTHROPIC_API_KEY not set (required for Tier 2 evaluation)"))?;
+
+    let system_prompt = "You are a plan quality evaluator. \
+        Given a draft plan and a rubric, decide whether the plan satisfies the rubric. \
+        Respond with ONLY valid JSON in this exact format, no other text: \
+        {\"passed\": true, \"reason\": \"one sentence\"} \
+        or {\"passed\": false, \"reason\": \"one sentence\"}.";
+
+    let user_message =
+        format!("Rubric:\n{rubric}\n\nPlan:\n{plan_text}\n\nDoes this plan satisfy the rubric? JSON only.");
+
+    let body = serde_json::json!({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 256,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_message}],
+    });
+
+    let client = Client::new();
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| eyre!("Tier 2 HTTP request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let err_body = response.text().await.unwrap_or_default();
+        return Err(eyre!("Tier 2 API error {status}: {err_body}"));
+    }
+
+    let resp_json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| eyre!("Tier 2 response parse failed: {e}"))?;
+
+    let text = resp_json["content"][0]["text"]
+        .as_str()
+        .ok_or_else(|| eyre!("Tier 2: no text in response: {:?}", resp_json))?;
+
+    let eval: EvalResult = serde_json::from_str(text.trim())
+        .map_err(|e| eyre!("Tier 2: failed to parse evaluator JSON ({e}): {text:?}"))?;
+
+    if !eval.passed {
+        return Err(eyre!(
+            "persona '{}': Tier 2 evaluator FAILED - {}",
+            fixture.name,
+            eval.reason,
+        ));
     }
 
     Ok(())
@@ -389,9 +514,10 @@ async fn assert_plan_tier1(socket_path: &PathBuf, plan_id: &str, fixture: &Perso
 
 /// Golden Path: a well-scoped goal produces a coherent Draft Plan.
 ///
-/// Phase 1 asserts `record.created` is received within timeout.
-/// Phase 2 adds Tier 1 structural assertions: non-empty title/description
-/// and required keywords ("rust", "sqlite") present in plan text.
+/// Tier 1: `record.created` received; non-empty title/description; keywords
+/// "rust" and "sqlite" present in plan text.
+/// Tier 2 (nightly, opt-in via `LOOPR_TIER2_EVAL=1`): LLM evaluator checks
+/// the plan scopes a Rust CLI todo app with SQLite, not a web app.
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_golden_path() {
@@ -402,15 +528,18 @@ async fn test_persona_golden_path() {
         !plan_id.is_empty(),
         "expected non-empty plan_id from Golden Path interview"
     );
-    assert_plan_tier1(&daemon.socket_path, &plan_id, &GOLDEN_PATH)
+    let plan_text = assert_plan_tier1(&daemon.socket_path, &plan_id, &GOLDEN_PATH)
         .await
         .unwrap();
+    assert_plan_tier2(&plan_text, &GOLDEN_PATH).await.unwrap();
 }
 
 /// Vague User: an underspecified goal; Coordinator must extract a scoped plan.
 ///
-/// Asserts Tier 1: non-empty title/description and keywords "cli" + "task"
-/// present - confirming the Coordinator absorbed the user's clarifications.
+/// Tier 1: non-empty title/description; keywords "cli" + "task" present -
+/// confirming the Coordinator absorbed the user's clarifications.
+/// Tier 2 (nightly): evaluator checks the plan is a scoped CLI task manager,
+/// not a vague "stuff manager".
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_vague_user() {
@@ -421,15 +550,18 @@ async fn test_persona_vague_user() {
         !plan_id.is_empty(),
         "expected non-empty plan_id from Vague User interview"
     );
-    assert_plan_tier1(&daemon.socket_path, &plan_id, &VAGUE_USER)
+    let plan_text = assert_plan_tier1(&daemon.socket_path, &plan_id, &VAGUE_USER)
         .await
         .unwrap();
+    assert_plan_tier2(&plan_text, &VAGUE_USER).await.unwrap();
 }
 
 /// Scope Creeper: an evolving goal ending at Postgres + Redis architecture.
 ///
-/// Asserts Tier 1: keywords "postgres", "redis", "python" present - confirming the
-/// Coordinator tracked the user's redirected requirements rather than the original CSV goal.
+/// Tier 1: keywords "postgres", "redis", "python" present - confirming the
+/// Coordinator tracked the redirected requirements, not the original CSV goal.
+/// Tier 2 (nightly): evaluator checks the plan reflects the Postgres/Redis
+/// architecture, not the original CSV-only request.
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_scope_creeper() {
@@ -440,15 +572,18 @@ async fn test_persona_scope_creeper() {
         !plan_id.is_empty(),
         "expected non-empty plan_id from Scope Creeper interview"
     );
-    assert_plan_tier1(&daemon.socket_path, &plan_id, &SCOPE_CREEPER)
+    let plan_text = assert_plan_tier1(&daemon.socket_path, &plan_id, &SCOPE_CREEPER)
         .await
         .unwrap();
+    assert_plan_tier2(&plan_text, &SCOPE_CREEPER).await.unwrap();
 }
 
 /// Pushback User: initial web app request redirected to a CLI tool.
 ///
-/// Asserts Tier 1: keywords "cli" and "expense" present - confirming the Coordinator
+/// Tier 1: keywords "cli" and "expense" present - confirming the Coordinator
 /// incorporated the user's pushback and produced a CLI-focused plan.
+/// Tier 2 (nightly): evaluator checks the plan reflects CLI expense tracking,
+/// not the original web app.
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_pushback_user() {
@@ -459,16 +594,18 @@ async fn test_persona_pushback_user() {
         !plan_id.is_empty(),
         "expected non-empty plan_id from Pushback User interview"
     );
-    assert_plan_tier1(&daemon.socket_path, &plan_id, &PUSHBACK_USER)
+    let plan_text = assert_plan_tier1(&daemon.socket_path, &plan_id, &PUSHBACK_USER)
         .await
         .unwrap();
+    assert_plan_tier2(&plan_text, &PUSHBACK_USER).await.unwrap();
 }
 
 /// Silent User: no scripted responses - every answer is the fallback string.
 ///
-/// Asserts that the Coordinator does not deadlock and reaches ProposePlan within the
-/// timeout even when the user provides no useful guidance beyond the initial goal.
-/// Tier 1: non-empty title/description and keyword "tool" present.
+/// Tier 1: non-empty title/description; keyword "tool" present - confirms
+/// the Coordinator does not deadlock and reaches ProposePlan within timeout.
+/// Tier 2 (nightly): evaluator checks the plan is coherent and self-contained
+/// given only the initial goal and the Coordinator's own judgment.
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_silent_user() {
@@ -479,9 +616,10 @@ async fn test_persona_silent_user() {
         !plan_id.is_empty(),
         "expected non-empty plan_id from Silent User interview"
     );
-    assert_plan_tier1(&daemon.socket_path, &plan_id, &SILENT_USER)
+    let plan_text = assert_plan_tier1(&daemon.socket_path, &plan_id, &SILENT_USER)
         .await
         .unwrap();
+    assert_plan_tier2(&plan_text, &SILENT_USER).await.unwrap();
 }
 
 // ---------------------------------------------------------------------------
