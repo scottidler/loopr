@@ -64,6 +64,8 @@ pub struct PersonaFixture {
     pub responses: &'static [&'static str],
     /// Answer used for every question once `responses` is exhausted.
     pub fallback: &'static str,
+    /// Tier 1 structural assertion: all keywords must appear in plan text (case-insensitive).
+    pub required_keywords: &'static [&'static str],
 }
 
 /// Golden Path: a clear, well-scoped request that the Coordinator should
@@ -77,6 +79,21 @@ pub const GOLDEN_PATH: PersonaFixture = PersonaFixture {
         "That plan looks good to me.",
     ],
     fallback: "That sounds fine, go ahead.",
+    required_keywords: &["rust", "sqlite"],
+};
+
+/// Vague User: an underspecified goal that requires the Coordinator to ask
+/// clarifying questions and extract a scoped, actionable plan.
+pub const VAGUE_USER: PersonaFixture = PersonaFixture {
+    name: "Vague User",
+    initial_goal: "Build something to manage my stuff.",
+    responses: &[
+        "I mean like tasks - things I need to do.",
+        "CLI would be fine, nothing fancy.",
+        "Rust would be great if that's easy.",
+    ],
+    fallback: "Just keep it simple, whatever you think is best.",
+    required_keywords: &["cli", "task"],
 };
 
 // ---------------------------------------------------------------------------
@@ -265,13 +282,72 @@ async fn run_persona(socket_path: &PathBuf, fixture: &PersonaFixture) -> Result<
 }
 
 // ---------------------------------------------------------------------------
+// Tier 1 structural assertion runner
+// ---------------------------------------------------------------------------
+
+/// Fetch the plan via `plan.get` and run Tier 1 structural assertions:
+///
+/// - Plan record exists and is retrievable
+/// - `title` is non-empty
+/// - `description` is non-empty
+/// - All `fixture.required_keywords` appear in plan text (case-insensitive)
+async fn assert_plan_tier1(socket_path: &PathBuf, plan_id: &str, fixture: &PersonaFixture) -> Result<()> {
+    let mut client = IpcClient::connect(socket_path).await?;
+
+    let (resp, _) = client
+        .request("plan.get", json!({"id": plan_id}))
+        .await
+        .map_err(|e| eyre!("plan.get failed: {e}"))?;
+
+    if resp.is_error() {
+        return Err(eyre!(
+            "persona '{}': plan.get returned error for id={}: {:?}",
+            fixture.name,
+            plan_id,
+            resp.error,
+        ));
+    }
+
+    let result = resp
+        .result
+        .ok_or_else(|| eyre!("persona '{}': plan.get returned null result", fixture.name))?;
+
+    let title = result["title"].as_str().unwrap_or("");
+    let description = result["description"].as_str().unwrap_or("");
+    let acceptance_criteria = result["acceptance_criteria"].as_str().unwrap_or("");
+
+    if title.is_empty() {
+        return Err(eyre!("persona '{}': plan title is empty", fixture.name));
+    }
+
+    if description.is_empty() {
+        return Err(eyre!("persona '{}': plan description is empty", fixture.name));
+    }
+
+    let plan_text = format!("{} {} {}", title, description, acceptance_criteria).to_lowercase();
+    for keyword in fixture.required_keywords {
+        if !plan_text.contains(&keyword.to_lowercase()) {
+            return Err(eyre!(
+                "persona '{}': required keyword '{}' not found in plan (title={:?})",
+                fixture.name,
+                keyword,
+                title,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Persona tests (ignored - require ANTHROPIC_API_KEY, 3-10 LLM calls each)
 // ---------------------------------------------------------------------------
 
-/// Phase 1 - Golden Path: assert `record.created` for plans within timeout.
+/// Golden Path: a well-scoped goal produces a coherent Draft Plan.
 ///
-/// This is the foundational plumbing test: does a well-scoped goal produce
-/// a plan record via the full interview -> ProposePlan -> record.created path?
+/// Phase 1 asserts `record.created` is received within timeout.
+/// Phase 2 adds Tier 1 structural assertions: non-empty title/description
+/// and required keywords ("rust", "sqlite") present in plan text.
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
 async fn test_persona_golden_path() {
@@ -282,6 +358,28 @@ async fn test_persona_golden_path() {
         !plan_id.is_empty(),
         "expected non-empty plan_id from Golden Path interview"
     );
+    assert_plan_tier1(&daemon.socket_path, &plan_id, &GOLDEN_PATH)
+        .await
+        .unwrap();
+}
+
+/// Vague User: an underspecified goal; Coordinator must extract a scoped plan.
+///
+/// Asserts Tier 1: non-empty title/description and keywords "cli" + "task"
+/// present - confirming the Coordinator absorbed the user's clarifications.
+#[tokio::test]
+#[ignore = "requires ANTHROPIC_API_KEY and live Coordinator LLM; run with: cargo test --test funnel -- --ignored"]
+async fn test_persona_vague_user() {
+    let temp_dir = TempTestDir::new("loopr-funnel");
+    let daemon = DaemonHandle::spawn(temp_dir).await.unwrap();
+    let plan_id = run_persona(&daemon.socket_path, &VAGUE_USER).await.unwrap();
+    assert!(
+        !plan_id.is_empty(),
+        "expected non-empty plan_id from Vague User interview"
+    );
+    assert_plan_tier1(&daemon.socket_path, &plan_id, &VAGUE_USER)
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -290,13 +388,54 @@ async fn test_persona_golden_path() {
 
 #[test]
 fn test_persona_fixture_fields() {
-    assert!(!GOLDEN_PATH.name.is_empty(), "name must not be empty");
-    assert!(!GOLDEN_PATH.initial_goal.is_empty(), "initial_goal must not be empty");
-    assert!(!GOLDEN_PATH.fallback.is_empty(), "fallback must not be empty");
-    assert!(
-        !GOLDEN_PATH.responses.is_empty(),
-        "GOLDEN_PATH must have at least one scripted response"
-    );
+    for fixture in [&GOLDEN_PATH, &VAGUE_USER] {
+        assert!(!fixture.name.is_empty(), "{}: name must not be empty", fixture.name);
+        assert!(
+            !fixture.initial_goal.is_empty(),
+            "{}: initial_goal must not be empty",
+            fixture.name
+        );
+        assert!(
+            !fixture.fallback.is_empty(),
+            "{}: fallback must not be empty",
+            fixture.name
+        );
+        assert!(
+            !fixture.responses.is_empty(),
+            "{}: must have at least one scripted response",
+            fixture.name
+        );
+    }
+}
+
+#[test]
+fn test_persona_fixture_required_keywords() {
+    for fixture in [&GOLDEN_PATH, &VAGUE_USER] {
+        assert!(
+            !fixture.required_keywords.is_empty(),
+            "{}: required_keywords must not be empty - every persona needs at least one Tier 1 assertion",
+            fixture.name,
+        );
+        for keyword in fixture.required_keywords {
+            assert!(
+                !keyword.is_empty(),
+                "{}: required_keywords must not contain empty strings",
+                fixture.name
+            );
+        }
+    }
+}
+
+#[test]
+fn test_tier1_keyword_matching() {
+    let plan_text = "A Rust CLI tool with SQLite persistence for managing todos";
+    for keyword in GOLDEN_PATH.required_keywords {
+        assert!(
+            plan_text.to_lowercase().contains(&keyword.to_lowercase()),
+            "keyword '{}' should match in plan_text",
+            keyword
+        );
+    }
 }
 
 #[test]
