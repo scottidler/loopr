@@ -51,21 +51,21 @@ Each loop gets its own worktree (a cheap git checkout on a feature branch), givi
 
 | Lane | Network | Slots | Timeout | Examples |
 |------|---------|-------|---------|----------|
-| `no-net` | Blocked | 10 | 30s | read_file, write_file, grep, glob |
+| `local` | Blocked | 10 | 30s | read_file, write_file, grep, glob |
 | `net` | Allowed | 5 | 60s | web_fetch, api_call |
 | `heavy` | Allowed | 1 | 10min | cargo build, npm test, otto ci |
 
 Runners are real OS processes because tools need things that tokio tasks cannot provide:
 
 - **Process groups** — a `cargo build` spawns rustc, linker, proc-macros. If it times out or the loop is cancelled, we `killpg()` the entire tree. You cannot do this to a tokio task.
-- **Sandboxing** — `runner-no-net` uses network namespaces or seccomp to block all network access. This is a per-process kernel mechanism.
+- **Sandboxing** — `runner-local` uses network namespaces or seccomp to block all network access. This is a per-process kernel mechanism.
 - **Isolation** — each tool execution is scoped to a worktree path. The runner validates that all file operations stay within the sandbox.
 - **Resource limits** — output size caps, timeouts, and slot-based concurrency prevent any single tool from starving the system.
 
 ```
 Daemon
     │
-    └── ToolRouter ──Unix socket──→ runner-no-net (10 slots, sandboxed)
+    └── ToolRouter ──Unix socket──→ runner-local (10 slots, sandboxed)
                    ──Unix socket──→ runner-net    (5 slots, network ok)
                    ──Unix socket──→ runner-heavy  (1 slot, builds/tests)
 ```

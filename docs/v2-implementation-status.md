@@ -51,7 +51,7 @@
 
 | Component | Status | Doc |
 |-----------|--------|-----|
-| Runner processes (no-net/net/heavy) | `src/runner/mod.rs` exists, types defined, but runners not spawned by daemon | [runners.md](runners.md) |
+| Runner processes (local/net/heavy) | `src/runner/mod.rs` exists, types defined, but runners not spawned by daemon | [runners.md](runners.md) |
 | Tool execution via runners | Tool router exists but uses local execution, not runner subprocess IPC | [tools.md](tools.md) |
 | Network sandboxing | Documented but not implemented | [runners.md](runners.md) |
 | Full loop execution cycle | Individual pieces exist but end-to-end loop iteration not wired | [loop.md](loop.md) |

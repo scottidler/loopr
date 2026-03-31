@@ -16,7 +16,7 @@ This document outlines the major outstanding projects for Loopr, ordered by prec
 
 Loopr's core insight is separating light LLM loops from heavy filesystem/build tools to ensure isolation, sandboxing, and killability.
 *   **Current:** Tools (like `cargo build`, `read`, `write`) are executed in-process via `tokio::process` directly from the daemon. A runaway build or blocking tool can hang the entire daemon.
-*   **Next:** Implement the three specialized, slot-limited OS subprocess runners (`no-net`, `net`, and `heavy`). Wire the `ToolRouter` to dispatch tool calls to these runners over Unix sockets, complete with process-group kill mechanisms (`killpg()`) and network sandboxing.
+*   **Next:** Implement the three specialized, slot-limited OS subprocess runners (`local`, `net`, and `heavy`). Wire the `ToolRouter` to dispatch tool calls to these runners over Unix sockets, complete with process-group kill mechanisms (`killpg()`) and network sandboxing.
 
 ## 3. Semantic Bubble-Up Logic
 **Primary Links:**
