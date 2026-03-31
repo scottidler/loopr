@@ -641,7 +641,34 @@ pub async fn execute_action(
             Ok(ActionResult::Committed(message.clone()))
         }
         AgentAction::ProposeBundle { description, claims } => {
-            // F2: Derive branch name deterministically from work_id — matches
+            // Auto-commit any pending changes before creating the bundle.
+            // The LLM may have called write_file/edit_file without an explicit
+            // commit. Without this, the branch has no new commits and the bundle
+            // is empty - the root cause of Bug #9.
+            let auto_commit = tokio::process::Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(worktree_path)
+                .output()
+                .await;
+            if let Ok(add_out) = auto_commit
+                && add_out.status.success()
+            {
+                let commit_out = tokio::process::Command::new("git")
+                    .args(["commit", "-m", &format!("impl: {}", description)])
+                    .current_dir(worktree_path)
+                    .output()
+                    .await;
+                match commit_out {
+                    Ok(out) if out.status.success() => {
+                        agent_log.info("Auto-committed pending changes before propose_bundle");
+                    }
+                    _ => {
+                        agent_log.info("No pending changes to auto-commit before propose_bundle");
+                    }
+                }
+            }
+
+            // F2: Derive branch name deterministically from work_id - matches
             // WorktreeManager::create() which uses format!("agent/{}", work_id).
             // This avoids relying on `git rev-parse` which can return "main" when
             // HEAD is detached or the worktree checkout didn't switch properly.

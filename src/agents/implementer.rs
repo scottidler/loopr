@@ -543,34 +543,27 @@ impl Agent for ImplementerAgent {
             }
         }
 
-        // F3(B): Force-propose if the loop exhausted without a proposal
+        // F3(B): Force-propose if the loop exhausted without a proposal.
+        // ProposeBundle auto-commits any pending changes, so no separate Commit needed.
         if !self.has_proposed {
             self.ctx.info("force-proposing at iteration cap");
-            // Commit whatever is in the worktree
-            let _ = execute_action(
-                &AgentAction::Commit {
-                    message: format!("WIP: auto-commit at iteration cap ({})", max_iterations),
-                    paths: vec![".".to_string()],
-                },
-                &self.ctx,
-                &self.worktree_path,
-                Some(&self.work_id),
-            )
-            .await;
-            // Propose the bundle
-            let _ = execute_action(
+            match execute_action(
                 &AgentAction::ProposeBundle {
                     description: format!(
                         "Auto-proposed at iteration cap ({}). Tests may not pass.",
                         max_iterations
                     ),
-                    claims: vec!["partial implementation — needs review".to_string()],
+                    claims: vec!["partial implementation - needs review".to_string()],
                 },
                 &self.ctx,
                 &self.worktree_path,
                 Some(&self.work_id),
             )
-            .await;
+            .await
+            {
+                Ok(result) => self.ctx.info(&format!("Force-propose result: {:?}", result)),
+                Err(e) => self.ctx.warn(&format!("Force-propose failed: {}", e)),
+            }
         }
 
         Err(eyre!("implementer reached max iterations ({})", max_iterations))
