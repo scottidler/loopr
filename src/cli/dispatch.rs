@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use eyre::{Context, Result, bail};
+use log::warn;
 use serde_json::json;
 
 use crate::clarity::{self, ClarityGate};
@@ -131,15 +132,27 @@ async fn run_headless(
     skip_clarity_gate: bool,
     clarity_gate_config: &ClarityGateConfig,
 ) -> Result<()> {
-    // --- Goal Clarity Gate ---
+    // --- Goal Clarity Gate (fail-open) ---
     // Skip when: --plan provided, --skip-clarity-gate, or gate disabled in config
     let should_skip = plan_text.is_some() || skip_clarity_gate || !clarity_gate_config.enabled;
     if !should_skip {
-        let gate = ClarityGate::new(clarity_gate_config.clone())?;
-        let verdict = gate.evaluate(goal).await?;
-        if !verdict.passes(clarity_gate_config.min_score) {
-            eprint!("{}", clarity::format_failure(goal, &verdict));
-            std::process::exit(3);
+        match ClarityGate::new(clarity_gate_config.clone()) {
+            Ok(gate) => match gate.evaluate(goal).await {
+                Ok(verdict) => {
+                    if !verdict.passes(clarity_gate_config.min_score) {
+                        eprint!("{}", clarity::format_failure(goal, &verdict));
+                        std::process::exit(3);
+                    }
+                }
+                Err(e) => {
+                    warn!("Clarity gate evaluation failed, skipping: {e}");
+                    eprintln!("Warning: clarity gate unavailable ({e}), proceeding anyway.");
+                }
+            },
+            Err(e) => {
+                warn!("Clarity gate init failed (API key missing?), skipping: {e}");
+                eprintln!("Warning: clarity gate unavailable ({e}), proceeding anyway.");
+            }
         }
     }
 

@@ -179,6 +179,7 @@ pub fn format_failure(goal: &str, verdict: &ClarityVerdict) -> String {
     out
 }
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +374,112 @@ mod tests {
         let output = format_failure("do stuff", &verdict);
         assert!(output.contains("Goal rejected"));
         assert!(!output.contains("Suggested goal:"));
+    }
+
+    // --- Phase 3: Edge case tests ---
+
+    #[test]
+    fn test_parse_malformed_json_missing_field() {
+        // Missing 'scope' field entirely - serde should fail
+        let json = r#"{
+            "specificity": { "score": 4, "reason": "Good" },
+            "acceptance": { "score": 4, "reason": "Good" }
+        }"#;
+        let result: Result<ClarityVerdict, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_malformed_json_garbage() {
+        let json = "this is not json at all";
+        let result: Result<ClarityVerdict, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_malformed_json_empty_object() {
+        let json = "{}";
+        let result: Result<ClarityVerdict, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_clamp_scores_already_in_range() {
+        let mut verdict = ClarityVerdict {
+            specificity: DimensionScore {
+                score: 1,
+                reason: "low".to_string(),
+            },
+            acceptance: DimensionScore {
+                score: 5,
+                reason: "high".to_string(),
+            },
+            scope: DimensionScore {
+                score: 3,
+                reason: "mid".to_string(),
+            },
+            improved_goal: None,
+        };
+        verdict.clamp_scores();
+        assert_eq!(verdict.specificity.score, 1);
+        assert_eq!(verdict.acceptance.score, 5);
+        assert_eq!(verdict.scope.score, 3);
+    }
+
+    #[test]
+    fn test_new_gate_fails_without_api_key() {
+        // Ensure the env var is not set for this test
+        let config = ClarityGateConfig {
+            enabled: true,
+            model: "claude-sonnet-4-6".to_string(),
+            min_score: 3,
+            api_key_env: "LOOPR_TEST_NONEXISTENT_KEY_12345".to_string(),
+        };
+        let result = ClarityGate::new(config);
+        assert!(result.is_err());
+        let err = format!("{}", result.err().unwrap());
+        assert!(err.contains("LOOPR_TEST_NONEXISTENT_KEY_12345"));
+    }
+
+    #[test]
+    fn test_verdict_passes_threshold_1() {
+        // With threshold 1, everything passes
+        let verdict = ClarityVerdict {
+            specificity: DimensionScore {
+                score: 1,
+                reason: "minimal".to_string(),
+            },
+            acceptance: DimensionScore {
+                score: 1,
+                reason: "minimal".to_string(),
+            },
+            scope: DimensionScore {
+                score: 1,
+                reason: "minimal".to_string(),
+            },
+            improved_goal: None,
+        };
+        assert!(verdict.passes(1));
+    }
+
+    #[test]
+    fn test_verdict_fails_threshold_5() {
+        // With threshold 5, only perfect scores pass
+        let verdict = ClarityVerdict {
+            specificity: DimensionScore {
+                score: 5,
+                reason: "perfect".to_string(),
+            },
+            acceptance: DimensionScore {
+                score: 4,
+                reason: "almost".to_string(),
+            },
+            scope: DimensionScore {
+                score: 5,
+                reason: "perfect".to_string(),
+            },
+            improved_goal: None,
+        };
+        assert!(!verdict.passes(5));
     }
 }
