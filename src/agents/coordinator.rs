@@ -304,6 +304,7 @@ pub struct CoordinatorAgent {
 /// 3. **Validation cap reached** — Draft has exceeded max_validation_attempts → NeedHelp signal.
 ///
 /// Returns None when no generation/re-generation is needed (normal iteration).
+#[allow(clippy::too_many_arguments)]
 fn build_generation_footer(
     stores: &Stores,
     goal: &str,
@@ -312,19 +313,60 @@ fn build_generation_footer(
     agent_log: &AgentLogger,
     coord_state: Option<&crate::domain::coordinator_state::CoordinatorState>,
     max_decomposition_attempts: Option<u32>,
+    max_bubble_up_depth: Option<u32>,
 ) -> Option<String> {
-    // Case 0: Check if decomposition attempts are exhausted (needs bubble-up / NeedHelp)
+    // Case 0: Check if decomposition attempts are exhausted (needs bubble-up or NeedHelp)
     if let (Some(cs), Some(max_da)) = (coord_state, max_decomposition_attempts)
         && let Some((collection, parent_id)) = generation::is_decomposition_cap_reached(stores, cs, max_da)
     {
+        let max_bud = max_bubble_up_depth.unwrap_or(2);
+
+        // Can't revise above Plan, and can't exceed bubble-up depth
+        if collection == "plan" || cs.bubble_up_count >= max_bud {
+            agent_log.info(&format!(
+                "bubble-up exhausted for {} {} (count={}, max={}), signaling need_help",
+                collection, parent_id, cs.bubble_up_count, max_bud
+            ));
+            let bubble_count = cs.bubble_up_count;
+            return Some(format!(
+                "Coverage evaluation for {collection} ({parent_id}) has failed {max_da} times. \
+                 Bubble-up depth exhausted ({bubble_count}/{max_bud}). Human review needed.\n\
+                 [{{\"action\": \"need_help\", \"reason\": \"Decomposition failed for {collection} {parent_id} after {max_da} attempts and {bubble_count} bubble-ups\"}}]",
+            ));
+        }
+
+        // Bubble up: emit ReviseParent prompt
+        let gaps = generation::get_coverage_gaps(stores, &collection, &parent_id);
+        let diagnostic = if gaps.is_empty() {
+            format!("Decomposition of {} {} failed {} times", collection, parent_id, max_da)
+        } else {
+            format!(
+                "Decomposition of {} {} failed {} times. Coverage gaps:\n{}",
+                collection,
+                parent_id,
+                max_da,
+                gaps.join("\n")
+            )
+        };
+        let diagnostic_escaped = diagnostic.replace('"', "\\\"");
+
         agent_log.info(&format!(
-            "decomposition cap reached for {} {}, signaling need_help",
-            collection, parent_id
+            "bubbling up: ReviseParent {} {} (bubble_up_count={}/{})",
+            collection,
+            parent_id,
+            cs.bubble_up_count + 1,
+            max_bud
         ));
+
         return Some(format!(
-            "Coverage evaluation for {collection} ({parent_id}) has failed {max_da} times (the maximum). \
-             The decomposition cannot be fixed further. Respond with:\n\
-             [{{\"action\": \"need_help\", \"reason\": \"Coverage evaluation failed {max_da} times for {collection} {parent_id}, needs human review\"}}]"
+            "## Bubble-Up Required\n\n\
+             Coverage evaluation for {collection} ({parent_id}) has failed {max_da} times.\n\
+             The children cannot fix this - the parent needs revision.\n\n\
+             ### Diagnostic:\n{diagnostic}\n\n\
+             Respond with:\n\
+             [{{\"action\": \"revise_parent\", \"collection\": \"{collection}\", \"id\": \"{parent_id}\", \
+             \"reason\": \"decomposition failed {max_da} times\", \
+             \"diagnostic\": \"{diagnostic_escaped}\"}}]"
         ));
     }
 
@@ -893,6 +935,7 @@ fn build_fsm_footer(
                 agent_log,
                 Some(coord_state),
                 Some(stores.config.strategy.max_decomposition_attempts),
+                Some(stores.config.strategy.max_bubble_up_depth),
             ) {
                 gen_footer
             } else {
@@ -1557,6 +1600,18 @@ impl CoordinatorAgent {
                             coord_state.reset_decomposition_attempts(parent_id);
                             self.ctx.info(&format!("coverage complete for {}", parent_id));
                         }
+                    }
+                }
+                ActionResult::Transitioned(_) => {
+                    // After ReviseParent succeeds: increment bubble-up count and reset
+                    // decomposition attempts so the revised parent gets fresh retries.
+                    if let AgentAction::ReviseParent { id, .. } = action_ref {
+                        let count = coord_state.increment_bubble_up();
+                        coord_state.reset_decomposition_attempts(id);
+                        self.ctx.info(&format!(
+                            "bubble-up complete for {}, reset decomposition attempts (bubble_up_count={})",
+                            id, count
+                        ));
                     }
                 }
                 _ => {}
@@ -2379,7 +2434,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build an auth system", 3, None, &agent_log, None, None);
+        let footer = build_generation_footer(&stores, "Build an auth system", 3, None, &agent_log, None, None, None);
         assert!(footer.is_some(), "should return generation footer when no plan exists");
         let text = footer.unwrap();
         // The Plan-level generation prompt should mention creating a plan
@@ -2420,7 +2475,7 @@ mod tests {
         }
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log, None, None);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log, None, None, None);
         assert!(footer.is_some(), "should return footer when validation cap is reached");
         let text = footer.unwrap();
         assert!(text.contains("need_help"), "should signal need_help when cap reached");
@@ -2454,7 +2509,7 @@ mod tests {
         }
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log, None, None);
+        let footer = build_generation_footer(&stores, "Build auth", 3, None, &agent_log, None, None, None);
         assert!(
             footer.is_some(),
             "should return regen footer when draft has failures below cap"
@@ -3433,7 +3488,7 @@ mod tests {
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log, None, None);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log, None, None, None);
         assert!(footer.is_some(), "should emit footer for Draft activation");
         let footer_text = footer.unwrap();
         assert!(
@@ -3470,7 +3525,7 @@ mod tests {
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
         let agent_log = test_agent_logger(&dir);
-        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log, None, None);
+        let footer = build_generation_footer(&stores, "Build a todo app", 3, None, &agent_log, None, None, None);
         assert!(footer.is_some(), "should emit footer for Draft validation");
         let footer_text = footer.unwrap();
         assert!(

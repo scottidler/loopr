@@ -908,6 +908,20 @@ pub fn is_decomposition_cap_reached(
     None
 }
 
+/// Extract coverage gap descriptions for a parent from the latest coverage report.
+/// Returns formatted gap strings suitable for inclusion in LLM prompts.
+pub fn get_coverage_gaps(stores: &Stores, collection: &str, parent_id: &str) -> Vec<String> {
+    find_latest_coverage_report(stores, collection, parent_id)
+        .map(|report| {
+            report
+                .gaps
+                .iter()
+                .map(|g| format!("[{}] {}: {}", g.severity, g.parent_criterion, g.description))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {

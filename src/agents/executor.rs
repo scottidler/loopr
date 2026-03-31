@@ -1380,7 +1380,13 @@ pub async fn execute_action(
                 )));
             }
 
-            // Create a diagnostic Learning
+            // Create a diagnostic Learning with scope derived from the collection
+            let scope = match collection.as_str() {
+                "plans" | "plan" => "plan",
+                "specs" | "spec" => "spec",
+                "phases" | "phase" => "phase",
+                _ => "plan",
+            };
             let learning_content = format!(
                 "Bubble-up revision for {}/{}: {}\nDiagnostic: {}",
                 collection, id, reason, diagnostic
@@ -1389,7 +1395,7 @@ pub async fn execute_action(
                 "learning.create",
                 serde_json::json!({
                     "content": learning_content,
-                    "scope": "plan",
+                    "scope": scope,
                     "source_id": id,
                 }),
             );
