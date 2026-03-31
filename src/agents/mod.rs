@@ -408,6 +408,11 @@ pub enum AgentAction {
         #[serde(default)]
         limit: Option<u64>,
     },
+    EditFile {
+        path: String,
+        old_string: String,
+        new_string: String,
+    },
     Commit {
         message: String,
         #[serde(default, alias = "files", deserialize_with = "string_or_vec")]

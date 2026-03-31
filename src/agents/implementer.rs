@@ -611,6 +611,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
             s
         }
         ActionResult::FileWritten(p) => format!("wrote {}", p),
+        ActionResult::FileEdited(p) => format!("edited {}", p),
         ActionResult::FileRead(content) => {
             let path = if let AgentAction::ReadFile { path, .. } = action {
                 path.as_str()

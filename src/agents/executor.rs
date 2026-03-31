@@ -507,6 +507,53 @@ pub async fn execute_action(
                 .map_err(|e| eyre!("write_file '{}': {}", path, e))?;
             Ok(ActionResult::FileWritten(path.clone()))
         }
+        AgentAction::EditFile {
+            path,
+            old_string,
+            new_string,
+        } => {
+            let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
+
+            if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
+                let lock_resp = bridge.request(
+                    "lock.list",
+                    serde_json::json!({ "resource": path, "active_only": true }),
+                );
+                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array())
+                    && !locks.is_empty()
+                {
+                    let holder = locks[0].get("holder_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    return Ok(ActionResult::ActionError(format!(
+                        "file '{}' locked by {} (policy: LockStrict)",
+                        path, holder
+                    )));
+                }
+            }
+
+            let content = tokio::fs::read_to_string(&full_path)
+                .await
+                .map_err(|e| eyre!("edit_file read '{}': {}", path, e))?;
+
+            let count = content.matches(old_string.as_str()).count();
+            if count == 0 {
+                return Ok(ActionResult::ActionError(format!(
+                    "edit_file '{}': old_string not found in file",
+                    path
+                )));
+            }
+            if count > 1 {
+                return Ok(ActionResult::ActionError(format!(
+                    "edit_file '{}': old_string found {} times (must be unique - provide more context)",
+                    path, count
+                )));
+            }
+
+            let updated = content.replacen(old_string.as_str(), new_string, 1);
+            tokio::fs::write(&full_path, &updated)
+                .await
+                .map_err(|e| eyre!("edit_file write '{}': {}", path, e))?;
+            Ok(ActionResult::FileEdited(path.clone()))
+        }
         AgentAction::ReadFile { path, offset, limit } => {
             let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
             let content = tokio::fs::read_to_string(&full_path)
@@ -1496,6 +1543,7 @@ pub async fn execute_action(
 pub enum ActionResult {
     ToolRun(ToolResult),
     FileWritten(String),
+    FileEdited(String),
     FileRead(String),
     Committed(String),
     BundleProposed(String),
