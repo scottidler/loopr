@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-03-01
-**Status:** Draft
+**Status:** Superseded by [2026-03-30-pipeline-hardening-locks-timeouts.md](2026-03-30-pipeline-hardening-locks-timeouts.md)
 **Review Passes Completed:** 5/5
 
 ## Summary

@@ -36,13 +36,12 @@ This document outlines the major outstanding projects for Loopr, ordered by prec
 
 **Result:** Implemented. Fixed `LockStrict` self-blocking bug. Added auto-acquisition of advisory locks on `WriteFile` and `EditFile`, with guaranteed release during `run_agent_task` cleanup. Added strict session wall-clock timeouts for agent tasks via `tokio::time::timeout`. Implemented BFS cycle detection to prevent circular dependencies at work item creation and update.
 
-## 5. Decompose the Handlers Monolith
+## ~~5. Decompose the Handlers Monolith~~ COMPLETE (2026-03-31)
 **Primary Links:**
+- [2026-03-31-handlers-decomposition.md](design/2026-03-31-handlers-decomposition.md) (design doc)
 - [2026-03-21-codebase-evaluation.md](2026-03-21-codebase-evaluation.md)
 
-Technical debt in the daemon RPC layer threatens maintainability.
-*   **Current:** `src/daemon/handlers.rs` is a single file containing over 13,000 lines of code, handling every IPC dispatch in the system.
-*   **Next:** Semantically decompose the monolith into specialized, modular files (e.g., `chat_handlers.rs`, `loop_handlers.rs`, `plan_handlers.rs`) to improve readability and reduce merge conflicts.
+**Result:** Implemented. Decomposed the 13,332-line `handlers.rs` monolith into a `handlers/` module directory with 16 files: `mod.rs` (dispatch + shared helpers, 521 lines), `common.rs`, `system.rs`, and 13 domain files (`plan.rs`, `spec.rs`, `phase.rs`, `work.rs`, `bundle.rs`, `tick.rs`, `learning.rs`, `lock.rs`, `worktree.rs`, `integrator.rs`, `coordinator.rs`, `agent.rs`, `chat.rs`). Each domain file is 217-1,501 lines with co-located tests. All 2,217 tests pass. Zero behavioral changes - pure structural refactor.
 
 ## 6. Nightly E2E Persona Test Automation
 **Primary Links:**

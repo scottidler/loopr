@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler + Claude
 **Date:** 2026-03-03
-**Status:** Draft
+**Status:** Superseded by [2026-03-30-semantic-bubble-up-wiring.md](2026-03-30-semantic-bubble-up-wiring.md)
 **Review Passes Completed:** 5/5
 
 ## Summary
