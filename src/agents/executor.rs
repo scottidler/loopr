@@ -1025,9 +1025,21 @@ pub async fn execute_action(
             let mut params = serde_json::json!({ "agent_type": agent_type });
             match agent_type.as_str() {
                 "implementer" => {
+                    if !target_id.starts_with("wk-") {
+                        return Ok(ActionResult::ActionError(format!(
+                            "assign_agent implementer: '{}' is not a work ID (expected wk-* prefix)",
+                            target_id
+                        )));
+                    }
                     params["work_id"] = serde_json::json!(target_id);
                 }
                 "reviewer" => {
+                    if !target_id.starts_with("bd-") {
+                        return Ok(ActionResult::ActionError(format!(
+                            "assign_agent reviewer: '{}' is not a bundle ID (expected bd-* prefix)",
+                            target_id
+                        )));
+                    }
                     params["bundle_id"] = serde_json::json!(target_id);
                 }
                 _ => {
@@ -1426,6 +1438,12 @@ pub async fn execute_action(
             Ok(ActionResult::LockReleased(lock_id.clone()))
         }
         AgentAction::TriageBundle { bundle_id } => {
+            if !bundle_id.starts_with("bd-") {
+                return Ok(ActionResult::ActionError(format!(
+                    "triage_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
+                    bundle_id
+                )));
+            }
             let resp = bridge.request(
                 "bundle.transition",
                 serde_json::json!({
@@ -1442,6 +1460,12 @@ pub async fn execute_action(
             Ok(ActionResult::Transitioned(format!("bundle/{} → Triaged", bundle_id)))
         }
         AgentAction::AcceptBundle { bundle_id } => {
+            if !bundle_id.starts_with("bd-") {
+                return Ok(ActionResult::ActionError(format!(
+                    "accept_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
+                    bundle_id
+                )));
+            }
             let resp = bridge.request(
                 "bundle.transition",
                 serde_json::json!({
@@ -3267,15 +3291,49 @@ mod tests {
         let dir = TestDir::new("loopr-exec-triagefull");
         let stores = test_stores(&dir);
 
-        // Triage a nonexistent bundle
+        // Triage a nonexistent bundle (with valid bd- prefix to pass validation)
         let action = AgentAction::TriageBundle {
-            bundle_id: "nonexistent-bundle".to_string(),
+            bundle_id: "bd-nonexistent".to_string(),
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("triage_bundle failed")),
             "expected triage error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_triage_bundle_rejects_work_id() {
+        let dir = TestDir::new("loopr-exec-triage-wkid");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let action = AgentAction::TriageBundle {
+            bundle_id: "wk-12345".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not a bundle ID")),
+            "expected prefix validation error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_accept_bundle_rejects_work_id() {
+        let dir = TestDir::new("loopr-exec-accept-wkid");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: "wk-12345".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not a bundle ID")),
+            "expected prefix validation error, got: {:?}",
             result
         );
     }

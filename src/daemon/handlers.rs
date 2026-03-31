@@ -264,6 +264,7 @@ fn auto_start_agents(
         && target == "Triaged"
         && stores.config.agents.auto_start_reviewer
         && let Some(bid) = params.get("id").and_then(|v| v.as_str())
+        && bid.starts_with("bd-")
     {
         let start_req = DaemonRequest::new(
             0,
