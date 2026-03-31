@@ -18,6 +18,7 @@ use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
+use crate::domain::learning::LearningScope;
 use crate::domain::lock::LockStatus;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
@@ -296,6 +297,42 @@ pub struct CoordinatorAgent {
     previous_summary: Option<String>,
 }
 
+/// Query learnings from stores filtered by scopes relevant to the given generation level.
+/// Returns content strings suitable for passing to prompt builders.
+///
+/// Scope hierarchy per level:
+/// - Plan: Plan + Global
+/// - Spec: Spec + Plan + Global
+/// - Phase: Phase + Spec + Plan + Global
+/// - Work: Work + Phase + Spec + Plan + Global
+fn query_learnings_for_level(stores: &Stores, level: GenerationLevel) -> Vec<String> {
+    let Ok(learnings) = stores.read_learnings() else {
+        return Vec::new();
+    };
+    let scopes: &[LearningScope] = match level {
+        GenerationLevel::Plan => &[LearningScope::Plan, LearningScope::Global],
+        GenerationLevel::Spec => &[LearningScope::Spec, LearningScope::Plan, LearningScope::Global],
+        GenerationLevel::Phase => &[
+            LearningScope::Phase,
+            LearningScope::Spec,
+            LearningScope::Plan,
+            LearningScope::Global,
+        ],
+        GenerationLevel::Work => &[
+            LearningScope::Work,
+            LearningScope::Phase,
+            LearningScope::Spec,
+            LearningScope::Plan,
+            LearningScope::Global,
+        ],
+    };
+    learnings
+        .values()
+        .filter(|l| scopes.contains(&l.scope))
+        .map(|l| l.content.clone())
+        .collect()
+}
+
 /// Build a generation-specific footer for the Coordinator's context message.
 ///
 /// Handles three cases:
@@ -398,22 +435,23 @@ fn build_generation_footer(
 
     // Case 1: Check if generation is needed at any level (no document exists)
     if let Some(level) = generation::determine_generation_level(stores) {
+        let learnings = query_learnings_for_level(stores, level);
         let prompt = match level {
-            GenerationLevel::Plan => build_plan_prompt(goal, &[], &[], guidance_section),
+            GenerationLevel::Plan => build_plan_prompt(goal, &learnings, &[], guidance_section),
             GenerationLevel::Spec => {
                 let plan = generation::find_active_plan(stores)?;
-                build_spec_prompt(&plan, &[], &[], &[], guidance_section)
+                build_spec_prompt(&plan, &learnings, &[], &[], guidance_section)
             }
             GenerationLevel::Phase => {
                 let plan = generation::find_active_plan(stores)?;
                 let specs = generation::find_active_specs_for_plan(stores, &plan.id);
                 let spec = specs.into_iter().next()?;
-                build_phase_prompt(&spec, &[], &[], guidance_section)
+                build_phase_prompt(&spec, &learnings, &[], guidance_section)
             }
             GenerationLevel::Work => {
                 let phase = generation::find_phase_needing_works(stores)?;
                 let existing = generation::find_works_for_phase(stores, &phase.id);
-                build_work_prompt(&phase, &existing, &[], &[], guidance_section)
+                build_work_prompt(&phase, &existing, &learnings, &[], guidance_section)
             }
         };
 
@@ -454,17 +492,18 @@ fn build_generation_footer(
             regen.attempt_count + 1,
             max_validation_attempts
         ));
+        let learnings = query_learnings_for_level(stores, regen.level);
         let prompt = match regen.level {
-            GenerationLevel::Plan => build_plan_prompt(goal, &[], &regen.accumulated_failures, guidance_section),
+            GenerationLevel::Plan => build_plan_prompt(goal, &learnings, &regen.accumulated_failures, guidance_section),
             GenerationLevel::Spec => {
                 let plan = generation::find_active_plan(stores)?;
-                build_spec_prompt(&plan, &[], &[], &regen.accumulated_failures, guidance_section)
+                build_spec_prompt(&plan, &learnings, &[], &regen.accumulated_failures, guidance_section)
             }
             GenerationLevel::Phase => {
                 let plan = generation::find_active_plan(stores)?;
                 let specs = generation::find_active_specs_for_plan(stores, &plan.id);
                 let spec = specs.into_iter().next()?;
-                build_phase_prompt(&spec, &[], &regen.accumulated_failures, guidance_section)
+                build_phase_prompt(&spec, &learnings, &regen.accumulated_failures, guidance_section)
             }
             // Works don't go through Draft→Active validation cycle
             GenerationLevel::Work => return None,
@@ -1123,7 +1162,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
         };
         let phase_failures: Vec<_> = learnings
             .values()
-            .filter(|l| l.scope == crate::domain::learning::LearningScope::Phase && wi_ids.contains(&l.source_id))
+            .filter(|l| l.scope == LearningScope::Phase && wi_ids.contains(&l.source_id))
             .collect();
 
         if !phase_failures.is_empty() {
@@ -3823,7 +3862,7 @@ mod tests {
         let learning = crate::domain::learning::Learning {
             id: crate::id::generate_id("ln"),
             source_id: wi1_id,
-            scope: crate::domain::learning::LearningScope::Phase,
+            scope: LearningScope::Phase,
             content: "Build failed due to missing dependency".to_string(),
             reinforcements: 0,
             contradictions: 0,
@@ -4146,6 +4185,280 @@ mod tests {
             check_fsm_transition(&stores, &coord_state, &config),
             Some(CoordinatorFsmState::PhaseGate),
             "FSM should advance to PhaseGate after sweep transitions all Works to Done"
+        );
+    }
+
+    // --- query_learnings_for_level tests ---
+
+    #[test]
+    fn test_query_learnings_for_level_scope_filtering() {
+        use crate::domain::learning::Learning;
+
+        let dir = TestDir::new("loopr-coord-learnscope");
+        let stores = test_stores(&dir);
+
+        // Populate learnings at every scope
+        let scoped = [
+            ("work-src", LearningScope::Work, "work insight"),
+            ("phase-src", LearningScope::Phase, "phase insight"),
+            ("spec-src", LearningScope::Spec, "spec insight"),
+            ("plan-src", LearningScope::Plan, "plan insight"),
+            ("global-src", LearningScope::Global, "global insight"),
+        ];
+        for (src, scope, content) in &scoped {
+            let l = Learning::new(src.to_string(), *scope, content.to_string());
+            stores.learnings.write().unwrap().insert(l.id.clone(), l);
+        }
+
+        // Plan level: Plan + Global
+        let plan_learnings = query_learnings_for_level(&stores, GenerationLevel::Plan);
+        assert_eq!(plan_learnings.len(), 2);
+        assert!(plan_learnings.contains(&"plan insight".to_string()));
+        assert!(plan_learnings.contains(&"global insight".to_string()));
+
+        // Spec level: Spec + Plan + Global
+        let spec_learnings = query_learnings_for_level(&stores, GenerationLevel::Spec);
+        assert_eq!(spec_learnings.len(), 3);
+        assert!(spec_learnings.contains(&"spec insight".to_string()));
+        assert!(spec_learnings.contains(&"plan insight".to_string()));
+        assert!(spec_learnings.contains(&"global insight".to_string()));
+
+        // Phase level: Phase + Spec + Plan + Global
+        let phase_learnings = query_learnings_for_level(&stores, GenerationLevel::Phase);
+        assert_eq!(phase_learnings.len(), 4);
+        assert!(phase_learnings.contains(&"phase insight".to_string()));
+        assert!(!phase_learnings.contains(&"work insight".to_string()));
+
+        // Work level: all 5 scopes
+        let work_learnings = query_learnings_for_level(&stores, GenerationLevel::Work);
+        assert_eq!(work_learnings.len(), 5);
+        assert!(work_learnings.contains(&"work insight".to_string()));
+    }
+
+    // --- Case 0 bubble-up decision tree tests ---
+
+    #[test]
+    fn test_build_generation_footer_case0_revise_parent() {
+        use crate::domain::coverage::{CoverageReport, CoverageReportParams, CoverageVerdict};
+
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-case0-revise");
+        let stores = test_stores(&dir);
+
+        // Active Plan
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Active Spec under plan (so decomposition target is spec, not plan)
+        let mut spec = Spec::new(plan_id, "Spec 1".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Incomplete coverage report for spec
+        let cr = CoverageReport::new(CoverageReportParams {
+            parent_collection: "spec".into(),
+            parent_id: spec_id.clone(),
+            children_collection: "phases".into(),
+            children_ids: vec![],
+            verdict: CoverageVerdict::Incomplete,
+            gaps: vec![],
+            out_of_scope: vec![],
+            summary: "Gaps found".into(),
+            model_used: "test".into(),
+        });
+        stores.coverage_reports.write().unwrap().insert(cr.id.clone(), cr);
+
+        // CoordinatorState with decomposition attempts >= max (3 >= 3)
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        for _ in 0..3 {
+            coord_state.increment_decomposition_attempts(&spec_id);
+        }
+        // bubble_up_count = 0 (under max_bubble_up_depth = 2)
+
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(
+            &stores,
+            "Build auth",
+            3,
+            None,
+            &agent_log,
+            Some(&coord_state),
+            Some(3),
+            Some(2),
+        );
+
+        assert!(footer.is_some(), "should emit revise_parent prompt");
+        let text = footer.unwrap();
+        assert!(
+            text.contains("revise_parent"),
+            "should contain revise_parent action: {}",
+            text
+        );
+        assert!(
+            text.contains("Bubble-Up Required"),
+            "should contain bubble-up header: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn test_build_generation_footer_case0_need_help_depth_exhausted() {
+        use crate::domain::coverage::{CoverageReport, CoverageReportParams, CoverageVerdict};
+
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-case0-depth");
+        let stores = test_stores(&dir);
+
+        // Active Plan
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Active Spec
+        let mut spec = Spec::new(plan_id, "Spec 1".into(), "desc".into());
+        spec.status = HierarchyStatus::Active;
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+        // Incomplete coverage report
+        let cr = CoverageReport::new(CoverageReportParams {
+            parent_collection: "spec".into(),
+            parent_id: spec_id.clone(),
+            children_collection: "phases".into(),
+            children_ids: vec![],
+            verdict: CoverageVerdict::Incomplete,
+            gaps: vec![],
+            out_of_scope: vec![],
+            summary: "Gaps found".into(),
+            model_used: "test".into(),
+        });
+        stores.coverage_reports.write().unwrap().insert(cr.id.clone(), cr);
+
+        // decomposition_attempts >= max
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        for _ in 0..3 {
+            coord_state.increment_decomposition_attempts(&spec_id);
+        }
+        // bubble_up_count >= max_bubble_up_depth (2 >= 2)
+        coord_state.increment_bubble_up();
+        coord_state.increment_bubble_up();
+
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(
+            &stores,
+            "Build auth",
+            3,
+            None,
+            &agent_log,
+            Some(&coord_state),
+            Some(3),
+            Some(2),
+        );
+
+        assert!(footer.is_some(), "should emit need_help prompt");
+        let text = footer.unwrap();
+        assert!(
+            text.contains("need_help"),
+            "should contain need_help when depth exhausted: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn test_build_generation_footer_case0_need_help_plan_level() {
+        use crate::domain::coverage::{CoverageReport, CoverageReportParams, CoverageVerdict};
+
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-case0-plan");
+        let stores = test_stores(&dir);
+
+        // Active Plan (the parent that has incomplete coverage)
+        let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
+        plan.status = HierarchyStatus::Active;
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+        // Incomplete coverage report for the plan itself
+        let cr = CoverageReport::new(CoverageReportParams {
+            parent_collection: "plan".into(),
+            parent_id: plan_id.clone(),
+            children_collection: "specs".into(),
+            children_ids: vec![],
+            verdict: CoverageVerdict::Incomplete,
+            gaps: vec![],
+            out_of_scope: vec![],
+            summary: "Gaps found".into(),
+            model_used: "test".into(),
+        });
+        stores.coverage_reports.write().unwrap().insert(cr.id.clone(), cr);
+
+        // decomposition_attempts >= max
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        for _ in 0..3 {
+            coord_state.increment_decomposition_attempts(&plan_id);
+        }
+        // bubble_up_count = 0 (under limit, but collection is "plan" so can't bubble up)
+
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(
+            &stores,
+            "Build auth",
+            3,
+            None,
+            &agent_log,
+            Some(&coord_state),
+            Some(3),
+            Some(2),
+        );
+
+        assert!(footer.is_some(), "should emit need_help for plan-level");
+        let text = footer.unwrap();
+        assert!(
+            text.contains("need_help"),
+            "should contain need_help when collection is plan (can't revise above plan): {}",
+            text
+        );
+    }
+
+    // --- Case 1 learning injection test ---
+
+    #[test]
+    fn test_build_generation_footer_case1_includes_learnings() {
+        use crate::domain::learning::Learning;
+
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-case1-learn");
+        let stores = test_stores(&dir);
+
+        // No plans exist -> generation needed at Plan level (Case 1)
+        // Add a Plan-scoped learning and a Global-scoped learning
+        let l1 = Learning::new(
+            "src-1".into(),
+            LearningScope::Plan,
+            "Plan-level diagnostic context".into(),
+        );
+        let l2 = Learning::new("src-2".into(), LearningScope::Global, "Global best practice".into());
+        stores.learnings.write().unwrap().insert(l1.id.clone(), l1);
+        stores.learnings.write().unwrap().insert(l2.id.clone(), l2);
+
+        let agent_log = test_agent_logger(&dir);
+        let footer = build_generation_footer(&stores, "Build auth system", 3, None, &agent_log, None, None, None);
+
+        assert!(footer.is_some(), "should generate Plan-level prompt");
+        let text = footer.unwrap();
+        assert!(
+            text.contains("Plan-level diagnostic context"),
+            "prompt should include Plan-scoped learning: {}",
+            text
+        );
+        assert!(
+            text.contains("Global best practice"),
+            "prompt should include Global-scoped learning: {}",
+            text
         );
     }
 }
