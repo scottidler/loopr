@@ -314,7 +314,7 @@ mod tests {
         init_defaults();
         let p = &store().reviewer;
         assert!(p.starts_with("You are a Reviewer agent in the Loopr development orchestrator."));
-        for criterion in ["Correctness", "Quality", "Tests", "Scope", "Safety"] {
+        for criterion in ["Acceptance Criteria", "Safety & Security", "Build & Tests", "Scope", "Quality & Style"] {
             assert!(p.contains(criterion), "reviewer.pmt missing criterion: {}", criterion);
         }
         assert!(p.contains("approve"));
@@ -639,7 +639,7 @@ mod tests {
     fn test_reviewer_pmt_has_expanded_criteria() {
         init_defaults();
         let p = &store().reviewer;
-        assert!(p.contains("Concurrency"));
+        assert!(p.contains("concurrency"));
         assert!(p.contains("Architecture"));
         assert!(p.contains("Verdict Thresholds"));
     }

@@ -738,9 +738,9 @@ mod tests {
         crate::prompts::init_defaults();
         let prompt = &crate::prompts::store().reviewer;
         assert!(prompt.contains("Reviewer agent"));
-        assert!(prompt.contains("Correctness"));
-        assert!(prompt.contains("Quality"));
-        assert!(prompt.contains("Tests"));
+        assert!(prompt.contains("Acceptance Criteria"));
+        assert!(prompt.contains("Safety & Security"));
+        assert!(prompt.contains("Quality & Style"));
         assert!(prompt.contains("verdict"));
         assert!(prompt.contains("approve"));
         assert!(prompt.contains("request_changes"));

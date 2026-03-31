@@ -66,9 +66,9 @@ Work 1: Create todo.py with TodoStore class
 - TodoStore manages a list of todo dicts with id, title, done fields
 - load() reads from todos.json, save() writes to todos.json
 - add(title) creates a new todo with a unique integer id, returns it
-- list_todos(filter=None) returns all todos, optionally filtered by done status ("all", "active", "done")
-- done(id) marks a todo as done, returns True if found
-- delete(id) removes a todo, returns True if found
+- list_todos(status_filter=None) returns all todos, optionally filtered by done status ("all", "active", "done")
+- done(todo_id) marks a todo as done, returns True if found
+- delete(todo_id) removes a todo, returns True if found
 - Use json module for persistence, no external dependencies
 - IMPORTANT: use .venv/bin/python for all python commands
 

@@ -188,7 +188,7 @@ pub fn build_state_summary_with_sla(
                 };
                 summary.push_str(&format!(
                     "- [{}] REJECTED (work: {} is InReview, reason: {}) \
-                     ACTION: use override_work on {} with target_status ready \
+                     ACTION: use override_work on {} with target_status Ready \
                      and reason 'bundle {} rejected'. \
                      The worker pool will auto-assign a new implementer.\n",
                     b.id, b.work_id, reason, b.work_id, b.id
