@@ -444,3 +444,277 @@ pub(super) fn handle_coordinator_interview_question(
         ))
     })
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::{
+        test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,
+    };
+    use crate::domain::plan::HierarchyStatus;
+    use crate::ipc::protocol::DaemonRequest;
+    use serde_json::json;
+
+    #[test]
+    fn test_coordinator_set_goal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "Build auth" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error(), "set_goal failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["goal"], "Build auth");
+        assert_eq!(result["active"], true);
+        assert!(!result["id"].as_str().unwrap().is_empty());
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert_eq!(goals.len(), 1);
+        let goal = goals.values().next().unwrap();
+        assert_eq!(goal.goal, "Build auth");
+        assert!(goal.active);
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_replaces_previous() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req1 = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "First goal" }));
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        assert!(!resp1.is_error());
+        let first_id = resp1.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let req2 = DaemonRequest::new(2, "coordinator.set_goal", json!({ "goal": "Second goal" }));
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp2.is_error());
+
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert_eq!(goals.len(), 2);
+        assert!(!goals[&first_id].active);
+        let active_count = goals.values().filter(|g| g.active).count();
+        assert_eq!(active_count, 1);
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_empty_rejected() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_coordinator_set_goal_missing_param() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.set_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_coordinator_clear_goal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req1 = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "Test goal" }));
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+
+        let req2 = DaemonRequest::new(2, "coordinator.clear_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["cleared"], 1);
+
+        let goals = stores.coordinator_goals.read().unwrap();
+        assert!(goals.values().all(|g| !g.active));
+    }
+
+    #[test]
+    fn test_coordinator_clear_goal_when_none() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.clear_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["cleared"], 0);
+    }
+
+    #[test]
+    fn test_coordinator_get_goal_returns_active() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req1 = DaemonRequest::new(1, "coordinator.set_goal", json!({ "goal": "Build auth" }));
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        let req2 = DaemonRequest::new(2, "coordinator.get_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["goal"], "Build auth");
+        assert_eq!(result["active"], true);
+    }
+
+    #[test]
+    fn test_coordinator_get_goal_when_none() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let req = DaemonRequest::new(1, "coordinator.get_goal", json!({}));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["active"], false);
+    }
+
+    #[test]
+    fn test_accept_plan_with_plan_id() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Test Plan", "description": "desc"})),
+        );
+        assert!(!resp.is_error());
+        let plan_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "coordinator.accept_plan", json!({"plan_id": plan_id})),
+        );
+        assert!(!resp.is_error(), "accept_plan failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["plan_id"], plan_id);
+        assert!(result["goal_id"].as_str().is_some());
+
+        let plans = stores.read_plans().unwrap();
+        assert_eq!(plans[&plan_id].status, HierarchyStatus::Active);
+
+        let goals = stores.read_coordinator_goals().unwrap();
+        assert!(goals.values().any(|g| g.active));
+    }
+
+    #[test]
+    fn test_accept_plan_with_text() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "coordinator.accept_plan",
+                json!({"plan": "My Plan Title\nGoal: Build auth"}),
+            ),
+        );
+        assert!(!resp.is_error(), "accept_plan with text failed: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["accepted"], true);
+        let plan_id = result["plan_id"].as_str().unwrap();
+        let goal_id = result["goal_id"].as_str().unwrap();
+
+        let plans = stores.read_plans().unwrap();
+        let plan = &plans[plan_id];
+        assert_eq!(plan.title, "My Plan Title");
+        assert_eq!(plan.description, "My Plan Title\nGoal: Build auth");
+        assert_eq!(plan.status, HierarchyStatus::Active);
+
+        let goals = stores.read_coordinator_goals().unwrap();
+        let goal = &goals[goal_id];
+        assert!(goal.active);
+        assert_eq!(goal.goal, "My Plan Title");
+
+        let states = stores.read_coordinator_states().unwrap();
+        let state = states
+            .values()
+            .find(|s| s.goal_id == goal_id)
+            .expect("CoordinatorState should exist for the new goal");
+        assert!(state.plan_approved, "plan_approved must be true after accept_plan");
+        assert_eq!(
+            state.fsm_state,
+            crate::domain::coordinator_state::CoordinatorFsmState::Planning,
+            "FSM should start in Planning after accept_plan"
+        );
+    }
+
+    #[test]
+    fn test_accept_plan_neither_param() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "coordinator.accept_plan", json!({})),
+        );
+        assert!(resp.is_error());
+        assert!(
+            resp.error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("plan_id or plan text is required")
+        );
+    }
+
+    #[test]
+    fn test_accept_plan_empty_text() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "coordinator.accept_plan", json!({"plan": "   "})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("plan text is empty"));
+    }
+
+    #[test]
+    fn test_accept_plan_title_extraction() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "coordinator.accept_plan",
+                json!({"plan": "\n\n  Auth Module  \nDetails here"}),
+            ),
+        );
+        assert!(!resp.is_error());
+        let plan_id = resp.result.as_ref().unwrap()["plan_id"].as_str().unwrap();
+        let plans = stores.read_plans().unwrap();
+        assert_eq!(plans[plan_id].title, "Auth Module");
+    }
+}

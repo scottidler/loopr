@@ -177,3 +177,258 @@ pub(super) fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: Daemo
         }
     })
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+    use tokio::sync::broadcast;
+
+    use crate::daemon::context::Stores;
+    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::{test_event_tx, test_integrator_config, test_stores, test_worktree_mgr};
+    use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
+    use crate::worktree::manager::WorktreeManager;
+
+    fn create_test_plan(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
+        );
+        resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    fn create_test_spec(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String) {
+        let plan_id = create_test_plan(stores, tx, wm);
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(10, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+        );
+        let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (plan_id, spec_id)
+    }
+
+    fn create_test_phase(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String, String) {
+        let (plan_id, spec_id) = create_test_spec(stores, tx, wm);
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                20,
+                "phase.create",
+                json!({"spec_id": spec_id, "title": "Parent Phase", "order": 1}),
+            ),
+        );
+        let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (plan_id, spec_id, phase_id)
+    }
+
+    fn create_test_work(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> (String, String) {
+        let (_, _, phase_id) = create_test_phase(stores, tx, wm);
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                30,
+                "work.create",
+                json!({"phase_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
+        );
+        let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        (phase_id, wi_id)
+    }
+
+    #[test]
+    fn test_worktree_create_missing_work_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.create", json!({})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
+    }
+
+    #[test]
+    fn test_worktree_create_work_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.create", json!({"work_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("not found"));
+    }
+
+    #[test]
+    fn test_worktree_create_validates_work_exists() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // Create a full hierarchy so work exists
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+        // This will fail at the git level (nonexistent repo path) but should
+        // pass the work validation
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "worktree.create", json!({"work_id": wi_id})),
+        );
+        // The error should be from git, not from "not found"
+        assert!(resp.is_error());
+        let msg = &resp.error.as_ref().unwrap().message;
+        assert!(
+            !msg.contains("not found"),
+            "error should be from git, not from validation: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_worktree_list_returns_response() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // list on nonexistent repo will error, but it routes correctly
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.list", json!(null)),
+        );
+        // Will be an error since the repo doesn't exist, but the method routes
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_worktree_cleanup_missing_work_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.cleanup", json!({})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
+    }
+
+    #[test]
+    fn test_worktree_cleanup_work_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.cleanup", json!({"work_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("not found"));
+    }
+
+    #[test]
+    fn test_worktree_refresh_missing_work_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.refresh", json!({})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
+    }
+
+    #[test]
+    fn test_worktree_refresh_nonexistent_worktree() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "worktree.refresh", json!({"work_id": "nonexistent"})),
+        );
+        // Will error since worktree path doesn't exist
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_worktree_dispatch_routes_all_methods() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        // Verify all 4 worktree methods are routed (not method_not_found)
+        for method in &[
+            "worktree.create",
+            "worktree.list",
+            "worktree.cleanup",
+            "worktree.refresh",
+        ] {
+            let resp = dispatch(
+                &stores,
+                &tx,
+                &wm,
+                &test_integrator_config(),
+                DaemonRequest::new(1, *method, json!({})),
+            );
+            // Even if they error, they should NOT be method_not_found (-32601)
+            if resp.is_error() {
+                assert_ne!(
+                    resp.error.as_ref().unwrap().code,
+                    -32601,
+                    "method {} should be routed",
+                    method
+                );
+            }
+        }
+    }
+}

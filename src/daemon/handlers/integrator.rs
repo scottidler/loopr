@@ -621,3 +621,656 @@ pub(super) fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         Ok(DaemonResponse::ok(req.id, json!({ "tools": tools })))
     })
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use crate::config::IntegratorConfig;
+    use crate::daemon::context::Stores;
+    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::{
+        test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_stores_with_validator,
+        test_worktree_mgr,
+    };
+    use crate::domain::validation::{ValidationReport, ValidationVerdict};
+    use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
+    use crate::worktree::manager::WorktreeManager;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+
+    fn create_sealing_tick(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        let tr = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "tick.transition",
+                json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
+            ),
+        );
+        assert!(!tr.is_error(), "transition failed: {:?}", tr.error);
+        tick_id
+    }
+
+    #[test]
+    fn test_integrator_validate_success() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+
+        let ic = IntegratorConfig {
+            validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
+        };
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+        );
+        assert!(!resp.is_error(), "unexpected error: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "Published");
+        assert!(!result["validation_log"].as_str().unwrap().is_empty());
+        assert!(result["integration_sha"].is_string());
+    }
+
+    #[test]
+    fn test_integrator_validate_failure() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+
+        let ic = IntegratorConfig {
+            validation_commands: vec!["false".to_string()],
+            ..Default::default()
+        };
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "Failed");
+        assert!(result["validation_log"].as_str().unwrap().contains("FAILED"));
+        assert!(result["integration_sha"].is_null());
+    }
+
+    #[test]
+    fn test_integrator_validate_wrong_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "integrator.validate", json!({"tick_id": tick_id})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("Sealing"));
+    }
+
+    #[test]
+    fn test_integrator_validate_not_found() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "integrator.validate", json!({"tick_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("not found"));
+    }
+
+    #[test]
+    fn test_integrator_validate_missing_tick_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "integrator.validate", json!({})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("tick_id"));
+    }
+
+    #[test]
+    fn test_integrator_validate_events() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let mut rx = tx.subscribe();
+        let wm = test_worktree_mgr();
+        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        while rx.try_recv().is_ok() {}
+
+        let ic = IntegratorConfig {
+            validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
+        };
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+        );
+        let event1 = rx.try_recv().unwrap();
+        assert_eq!(event1.event, "transition.completed");
+        let event2 = rx.try_recv().unwrap();
+        assert_eq!(event2.event, "validation.started");
+        let event3 = rx.try_recv().unwrap();
+        assert_eq!(event3.event, "validation.completed");
+        assert_eq!(event3.data["success"], true);
+        let event4 = rx.try_recv().unwrap();
+        assert_eq!(event4.event, "tick.published");
+    }
+
+    #[test]
+    fn test_integrator_publish_from_open() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let ic = IntegratorConfig {
+            validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
+        };
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(2, "integrator.publish", json!({"tick_id": tick_id})),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "Published");
+    }
+
+    #[test]
+    fn test_integrator_publish_from_sealing() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+
+        let ic = IntegratorConfig {
+            validation_commands: vec!["echo ok".to_string()],
+            ..Default::default()
+        };
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(3, "integrator.publish", json!({"tick_id": tick_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Published");
+    }
+
+    #[test]
+    fn test_integrator_publish_wrong_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+
+        dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "tick.transition",
+                json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
+            ),
+        );
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(4, "integrator.publish", json!({"tick_id": tick_id})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("Open or Sealing"));
+    }
+
+    #[test]
+    fn test_integrator_publish_validation_failure() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tick.create", json!({"number": 1})),
+        );
+        let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        let ic = IntegratorConfig {
+            validation_commands: vec!["false".to_string()],
+            ..Default::default()
+        };
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(2, "integrator.publish", json!({"tick_id": tick_id})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["status"], "Failed");
+    }
+
+    #[test]
+    fn test_integrator_dispatch_routes() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        for method in &["integrator.validate", "integrator.publish"] {
+            let resp = dispatch(
+                &stores,
+                &tx,
+                &wm,
+                &test_integrator_config(),
+                DaemonRequest::new(1, *method, json!({})),
+            );
+            if resp.is_error() {
+                assert_ne!(
+                    resp.error.as_ref().unwrap().code,
+                    -32601,
+                    "method {} should be routed",
+                    method
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_integrator_validate_multi_command_stops_on_first_failure() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+
+        let ic = IntegratorConfig {
+            validation_commands: vec![
+                "echo first".to_string(),
+                "false".to_string(),
+                "echo should-not-run".to_string(),
+            ],
+            ..Default::default()
+        };
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
+        );
+        let result = resp.result.unwrap();
+        assert_eq!(result["status"], "Failed");
+        let log = result["validation_log"].as_str().unwrap();
+        assert!(log.contains("first"));
+        assert!(log.contains("FAILED"));
+        assert!(!log.contains("should-not-run"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate() {
+        let (_dir, stores) = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"id": "plan-1"})),
+        );
+        assert!(resp.is_error());
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "validator.validate", json!({"collection": "plans"})),
+        );
+        assert!(resp.is_error());
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "validator.validate",
+                json!({"collection": "plans", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(4, "validator.validate", json!({"collection": "widgets", "id": "x"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("unsupported"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate_no_validator() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"collection": "plans", "id": "x"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("not enabled"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate_missing_params() {
+        let (_dir, stores) = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"id": "x"})),
+        );
+        assert!(resp.is_error());
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "validator.validate", json!({"collection": "plans"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_validator_validate_unknown_collection() {
+        let (_dir, stores) = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.validate", json!({"collection": "unknown", "id": "x"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("unsupported collection"));
+    }
+
+    #[test]
+    fn test_handle_validator_validate_not_found() {
+        let (_dir, stores) = test_stores_with_validator();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "validator.validate",
+                json!({"collection": "plans", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "validator.validate",
+                json!({"collection": "specs", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                3,
+                "validator.validate",
+                json!({"collection": "phases", "id": "nonexistent"}),
+            ),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_validator_report() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let report = ValidationReport::new(
+            "plans".into(),
+            "plan-1".into(),
+            ValidationVerdict::Pass,
+            vec![],
+            "All good".into(),
+            "test-model".into(),
+        );
+        let report_id = report.id.clone();
+        stores.store.as_ref().unwrap().lock().unwrap().create(report).unwrap();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.report", json!({"id": report_id})),
+        );
+        assert!(!resp.is_error(), "validator.report failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["verdict"], "pass");
+    }
+
+    #[test]
+    fn test_handle_validator_report_not_found() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.report", json!({"id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_validator_report_no_taskstore() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.report", json!({"id": "any"})),
+        );
+        assert!(resp.is_error());
+        assert!(resp.error.unwrap().message.contains("TaskStore"));
+    }
+
+    #[test]
+    fn test_handle_validator_reports() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let report1 = ValidationReport::new(
+            "plans".into(),
+            "plan-1".into(),
+            ValidationVerdict::Pass,
+            vec![],
+            "ok".into(),
+            "test-model".into(),
+        );
+        let report2 = ValidationReport::new(
+            "plans".into(),
+            "plan-2".into(),
+            ValidationVerdict::Fail,
+            vec![],
+            "bad".into(),
+            "test-model".into(),
+        );
+        stores.store.as_ref().unwrap().lock().unwrap().create(report1).unwrap();
+        stores.store.as_ref().unwrap().lock().unwrap().create(report2).unwrap();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.reports", json!({})),
+        );
+        assert!(!resp.is_error());
+        assert!(resp.result.unwrap().as_array().unwrap().len() >= 2);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "validator.reports", json!({"target_id": "plan-1"})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "validator.reports", json!({"target_collection": "plans"})),
+        );
+        assert!(!resp.is_error());
+        assert!(resp.result.unwrap().as_array().unwrap().len() >= 2);
+    }
+
+    #[test]
+    fn test_handle_validator_reports_no_taskstore() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "validator.reports", json!({})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_handle_tool_list() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "tool.list", json!({})),
+        );
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert!(result["tools"].is_array());
+    }
+}

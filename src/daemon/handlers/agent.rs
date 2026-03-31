@@ -546,3 +546,385 @@ pub(super) fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> D
         Ok(DaemonResponse::ok(req.id, serde_json::to_value(&output)?))
     })
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use crate::agents::{AgentSession, AgentStatus, AgentType};
+    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::{
+        test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,
+    };
+    use crate::ipc::protocol::DaemonRequest;
+    use serde_json::json;
+
+    #[test]
+    fn test_agent_start_max_pool_enforcement() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let session = crate::agents::AgentSession::new(AgentType::Coordinator, "model".to_string());
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(resp.is_error(), "expected max_pool rejection");
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32004);
+        assert!(err.message.contains("max_pool exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_agent_start_pool_allows_after_terminal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let mut session = crate::agents::AgentSession::new(AgentType::Coordinator, "model".to_string());
+        session.status = crate::agents::AgentStatus::Completed;
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_handle_agent_pause() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let _ = session.transition_to(crate::agents::AgentStatus::Running);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
+        );
+        assert!(!resp.is_error(), "agent.pause failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], "paused");
+    }
+
+    #[test]
+    fn test_handle_agent_pause_missing_session() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.pause", json!({"session_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_agent_pause_terminal_state() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let _ = session.transition_to(crate::agents::AgentStatus::Running);
+        let _ = session.transition_to(crate::agents::AgentStatus::Completed);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
+        );
+        assert!(resp.is_error(), "should reject pause on terminal agent");
+    }
+
+    #[test]
+    fn test_handle_agent_resume() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let _ = session.transition_to(crate::agents::AgentStatus::Running);
+        let _ = session.transition_to(crate::agents::AgentStatus::Paused);
+        let sid = session.id.clone();
+        stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.resume", json!({"session_id": sid})),
+        );
+        assert!(!resp.is_error(), "agent.resume failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["status"], "running");
+    }
+
+    #[test]
+    fn test_handle_agent_resume_missing_session() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.resume", json!({"session_id": "nonexistent"})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_handle_agent_output() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.output", json!({"session_id": "sess-1"})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
+
+        {
+            let event = crate::agents::AgentEvent::LlmOutput {
+                session_id: "sess-1".to_string(),
+                chunk: "hello world".to_string(),
+                is_final: false,
+            };
+            let mut events = stores.agent_events.write().unwrap();
+            events.entry("sess-1".to_string()).or_default().push_back(event);
+        }
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "agent.output", json!({"session_id": "sess-1", "since": 0})),
+        );
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_handle_agent_output_missing_session_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.output", json!({})),
+        );
+        assert!(resp.is_error());
+    }
+
+    #[test]
+    fn test_agent_session_model_from_config() {
+        use crate::config::Config;
+        let config = Config::default();
+        let cases: Vec<(AgentType, String)> = vec![
+            (AgentType::Coordinator, config.agents.coordinator.role.model.clone()),
+            (AgentType::Implementer, config.agents.implementer.model.clone()),
+            (AgentType::Reviewer, config.agents.reviewer.model.clone()),
+            (AgentType::Researcher, config.agents.researcher.model.clone()),
+            (AgentType::Integrator, "deterministic".to_string()),
+        ];
+        for (agent_type, expected_model) in cases {
+            let model = match agent_type {
+                AgentType::Coordinator => config.agents.coordinator.role.model.clone(),
+                AgentType::Implementer => config.agents.implementer.model.clone(),
+                AgentType::Reviewer => config.agents.reviewer.model.clone(),
+                AgentType::Researcher => config.agents.researcher.model.clone(),
+                AgentType::Integrator => "deterministic".to_string(),
+                AgentType::Chat => config.agents.implementer.model.clone(),
+            };
+            assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
+        }
+        assert_eq!(config.agents.coordinator.role.model, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn test_implementer_dedup_rejects_second_on_same_work() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.transition_to(AgentStatus::Running).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({"agent_type": "implementer", "work_id": "wi-1"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+
+        assert!(resp.is_error(), "should reject duplicate implementer");
+        let err_msg = resp.error.unwrap().message;
+        assert!(
+            err_msg.contains("non-terminal Implementer session already exists"),
+            "unexpected error: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_implementer_dedup_allows_after_terminal() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.transition_to(AgentStatus::Running).unwrap();
+        session.transition_to(AgentStatus::Completed).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({"agent_type": "implementer", "work_id": "wi-1"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+
+        if resp.is_error() {
+            let err_msg = &resp.error.as_ref().unwrap().message;
+            assert!(
+                !err_msg.contains("non-terminal Implementer session already exists"),
+                "should not reject after terminal session: {}",
+                err_msg
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_implementer_dedup_allows_different_work_id() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.transition_to(AgentStatus::Running).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let req = DaemonRequest::new(
+            1,
+            "agent.start",
+            json!({"agent_type": "implementer", "work_id": "wi-2"}),
+        );
+        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+
+        if resp.is_error() {
+            let err_msg = &resp.error.as_ref().unwrap().message;
+            assert!(
+                !err_msg.contains("non-terminal Implementer session already exists"),
+                "should not reject different work_id: {}",
+                err_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_agent_status_from_taskstore() {
+        let (_dir, stores) = test_stores_with_taskstore();
+        stores
+            .store
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .rebuild_indexes::<AgentSession>()
+            .unwrap();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session_id = session.id.clone();
+        stores.store.as_ref().unwrap().lock().unwrap().create(session).unwrap();
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
+        );
+        assert!(!resp.is_error(), "agent.status failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["id"], session_id);
+    }
+
+    #[test]
+    fn test_agent_status_fallback_to_hashmap() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
+        );
+        assert!(!resp.is_error(), "agent.status fallback failed: {:?}", resp.error);
+        assert_eq!(resp.result.unwrap()["id"], session_id);
+    }
+}
