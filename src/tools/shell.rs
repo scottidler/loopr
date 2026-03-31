@@ -3,6 +3,8 @@ use std::path::Path;
 use eyre::Result;
 use log::debug;
 
+use crate::tools::lane::Lane;
+use crate::tools::router::LaneRouter;
 use crate::tools::spawn::{MAX_INLINE_OUTPUT, shell_command, spawn_with_process_group};
 
 /// Maximum output size per stream (stdout/stderr) in bytes (~8K tokens).
@@ -36,6 +38,34 @@ pub async fn execute_shell_command(command: &str, working_dir: &Path, timeout_se
 
     let cmd = shell_command(command, working_dir);
     let result = spawn_with_process_group(cmd, timeout_secs).await?;
+
+    Ok(ShellOutput {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: result.exit_code,
+        duration_ms: result.duration_ms,
+        truncated: result.persisted_output_path.is_some(),
+        timed_out: result.timed_out,
+    })
+}
+
+/// Execute a shell command through the lane router with slot limiting and isolation.
+pub async fn execute_in_lane(
+    command: &str,
+    working_dir: &Path,
+    lane: Lane,
+    timeout_secs: u64,
+    router: &LaneRouter,
+) -> Result<ShellOutput> {
+    debug!(
+        "execute_in_lane(lane={}, command={}, working_dir={}, timeout={}s)",
+        lane,
+        command,
+        working_dir.display(),
+        timeout_secs
+    );
+
+    let result = router.spawn(command, working_dir, lane, Some(timeout_secs)).await?;
 
     Ok(ShellOutput {
         stdout: result.stdout,

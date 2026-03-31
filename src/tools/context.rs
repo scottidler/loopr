@@ -5,6 +5,8 @@ use std::sync::Arc;
 use eyre::{Result, eyre};
 use tokio::sync::Mutex;
 
+use crate::tools::router::LaneRouter;
+
 /// Execution context for tools — provides working directory, read tracking, and sandbox enforcement.
 ///
 /// The `working_dir` could be a git worktree, repo root, or CWD — the tool doesn't care.
@@ -16,6 +18,8 @@ pub struct ToolContext {
     read_files: Arc<Mutex<HashSet<PathBuf>>>,
     pub sandbox_enabled: bool,
     deny_patterns: Vec<String>,
+    /// Lane router for subprocess-spawning tools. Provides slot limiting and isolation.
+    pub router: Arc<LaneRouter>,
 }
 
 impl ToolContext {
@@ -26,7 +30,13 @@ impl ToolContext {
             read_files: Arc::new(Mutex::new(HashSet::new())),
             sandbox_enabled: true,
             deny_patterns: default_deny_patterns(),
+            router: Arc::new(LaneRouter::new()),
         }
+    }
+
+    pub fn with_router(mut self, router: Arc<LaneRouter>) -> Self {
+        self.router = router;
+        self
     }
 
     pub fn with_deny_patterns(mut self, patterns: Vec<String>) -> Self {

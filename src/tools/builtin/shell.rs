@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
-use crate::tools::shell::{execute_shell_command, format_shell_output};
+use crate::tools::lane::classify;
+use crate::tools::shell::{execute_in_lane, format_shell_output};
 use crate::tools::traits::{Tool, ToolResult};
 
 /// Generic shell tool for ad-hoc commands. Higher risk — the LLM controls the full command string.
@@ -47,7 +48,8 @@ impl Tool for ShellTool {
         };
         let timeout = input.get("timeout").and_then(|v| v.as_u64()).unwrap_or(120);
 
-        match execute_shell_command(command, &ctx.working_dir, timeout).await {
+        let lane = classify("shell");
+        match execute_in_lane(command, &ctx.working_dir, lane, timeout, &ctx.router).await {
             Ok(output) => ToolResult {
                 content: format_shell_output(&output),
                 is_error: output.exit_code != 0,

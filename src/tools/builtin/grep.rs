@@ -2,7 +2,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
-use crate::tools::shell::{execute_shell_command, format_shell_output};
+use crate::tools::lane::classify;
+use crate::tools::shell::{execute_in_lane, format_shell_output};
 use crate::tools::traits::{Tool, ToolResult};
 
 pub struct GrepTool;
@@ -58,10 +59,11 @@ impl Tool for GrepTool {
         // Limit output
         cmd = format!("{} | head -100", cmd);
 
-        match execute_shell_command(&cmd, &ctx.working_dir, 30).await {
+        let lane = classify("grep");
+        match execute_in_lane(&cmd, &ctx.working_dir, lane, 30, &ctx.router).await {
             Ok(output) => ToolResult {
                 content: format_shell_output(&output),
-                // grep returns exit 1 for no matches — that's not an error
+                // grep returns exit 1 for no matches - that's not an error
                 is_error: output.exit_code > 1,
             },
             Err(e) => ToolResult {

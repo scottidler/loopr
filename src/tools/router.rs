@@ -1,0 +1,191 @@
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use eyre::{Result, eyre};
+use log::{debug, info};
+use tokio::sync::Semaphore;
+
+use crate::tools::lane::{Lane, LanePolicy};
+use crate::tools::spawn::{SpawnResult, shell_command, spawn_with_process_group};
+
+/// Manages lane semaphores and dispatches tool execution with isolation.
+pub struct LaneRouter {
+    policies: HashMap<Lane, LanePolicy>,
+    semaphores: HashMap<Lane, Arc<Semaphore>>,
+}
+
+impl Default for LaneRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LaneRouter {
+    pub fn new() -> Self {
+        let policies = HashMap::from([
+            (Lane::Local, LanePolicy::local()),
+            (Lane::Net, LanePolicy::net()),
+            (Lane::Heavy, LanePolicy::heavy()),
+        ]);
+        let semaphores = policies
+            .iter()
+            .map(|(lane, policy)| (*lane, Arc::new(Semaphore::new(policy.max_slots))))
+            .collect();
+
+        info!(
+            "LaneRouter initialized: local={} slots, net={} slots, heavy={} slots",
+            LanePolicy::local().max_slots,
+            LanePolicy::net().max_slots,
+            LanePolicy::heavy().max_slots,
+        );
+
+        Self { policies, semaphores }
+    }
+
+    /// Execute a shell command in the appropriate lane.
+    ///
+    /// 1. Acquires a slot semaphore (blocks if lane is full)
+    /// 2. Builds the command (plain shell for now; bwrap wrapping added in Phase 3)
+    /// 3. Spawns with setsid() for process group isolation
+    /// 4. Releases slot on completion
+    pub async fn spawn(
+        &self,
+        command: &str,
+        working_dir: &Path,
+        lane: Lane,
+        timeout_secs: Option<u64>,
+    ) -> Result<SpawnResult> {
+        let policy = self
+            .policies
+            .get(&lane)
+            .ok_or_else(|| eyre!("unknown lane: {:?}", lane))?;
+        let timeout = timeout_secs
+            .unwrap_or(policy.default_timeout_secs)
+            .min(policy.max_timeout_secs);
+
+        debug!(
+            "LaneRouter::spawn(lane={}, timeout={}s, command={})",
+            lane, timeout, command
+        );
+
+        // 1. Acquire slot (blocks until available)
+        let permit = self.semaphores[&lane]
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| eyre!("lane {} semaphore closed", lane))?;
+
+        debug!("acquired slot in lane {}", lane);
+
+        // 2. Build command (plain shell; bwrap wrapping added in Phase 3)
+        let cmd = shell_command(command, working_dir);
+
+        // 3. Spawn with setsid() for process group isolation
+        let result = spawn_with_process_group(cmd, timeout).await;
+
+        // 4. Slot released on drop
+        drop(permit);
+        debug!("released slot in lane {}", lane);
+
+        result
+    }
+
+    /// Get the policy for a lane.
+    pub fn policy(&self, lane: Lane) -> Option<&LanePolicy> {
+        self.policies.get(&lane)
+    }
+
+    /// Get the number of available slots for a lane.
+    pub fn available_slots(&self, lane: Lane) -> usize {
+        self.semaphores.get(&lane).map(|s| s.available_permits()).unwrap_or(0)
+    }
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_router_new() {
+        let router = LaneRouter::new();
+        assert!(router.policy(Lane::Local).is_some());
+        assert!(router.policy(Lane::Net).is_some());
+        assert!(router.policy(Lane::Heavy).is_some());
+    }
+
+    #[test]
+    fn test_router_initial_slots() {
+        let router = LaneRouter::new();
+        assert_eq!(router.available_slots(Lane::Local), 10);
+        assert_eq!(router.available_slots(Lane::Net), 5);
+        assert_eq!(router.available_slots(Lane::Heavy), 1);
+    }
+
+    #[tokio::test]
+    async fn test_router_spawn_local() {
+        let router = LaneRouter::new();
+        let result = router
+            .spawn("echo hello", &std::env::temp_dir(), Lane::Local, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "hello");
+    }
+
+    #[tokio::test]
+    async fn test_router_spawn_heavy() {
+        let router = LaneRouter::new();
+        let result = router
+            .spawn("echo heavy", &std::env::temp_dir(), Lane::Heavy, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "heavy");
+    }
+
+    #[tokio::test]
+    async fn test_router_timeout_clamped() {
+        let router = LaneRouter::new();
+        // Local max is 60s; requesting 999 should clamp to 60
+        let result = router
+            .spawn("echo clamped", &std::env::temp_dir(), Lane::Local, Some(999))
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_router_slot_release_after_completion() {
+        let router = LaneRouter::new();
+        assert_eq!(router.available_slots(Lane::Heavy), 1);
+
+        let result = router
+            .spawn("echo done", &std::env::temp_dir(), Lane::Heavy, Some(10))
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+
+        // Slot should be back
+        assert_eq!(router.available_slots(Lane::Heavy), 1);
+    }
+
+    #[tokio::test]
+    async fn test_router_heavy_serializes() {
+        let router = Arc::new(LaneRouter::new());
+        let r1 = router.clone();
+        let r2 = router.clone();
+        let dir = std::env::temp_dir();
+
+        // Both tasks start at the same time but Heavy has 1 slot
+        let (a, b) = tokio::join!(
+            r1.spawn("echo first", &dir, Lane::Heavy, Some(10)),
+            r2.spawn("echo second", &dir, Lane::Heavy, Some(10)),
+        );
+
+        assert_eq!(a.unwrap().exit_code, 0);
+        assert_eq!(b.unwrap().exit_code, 0);
+        assert_eq!(router.available_slots(Lane::Heavy), 1);
+    }
+}

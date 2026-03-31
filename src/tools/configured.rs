@@ -3,7 +3,8 @@ use serde_json::json;
 
 use crate::config::ToolEntry;
 use crate::tools::context::ToolContext;
-use crate::tools::shell::{execute_shell_command, format_shell_output};
+use crate::tools::lane::classify;
+use crate::tools::shell::{execute_in_lane, format_shell_output};
 use crate::tools::traits::{Tool, ToolResult};
 
 /// A configured project tool (from `loopr.yml` or auto-detection) that implements the `Tool` trait.
@@ -53,7 +54,16 @@ impl Tool for ConfiguredTool {
             format!("{} {}", self.entry.command, args.join(" "))
         };
 
-        match execute_shell_command(&full_command, &ctx.working_dir, self.entry.timeout_secs).await {
+        let lane = classify(&self.entry.name);
+        match execute_in_lane(
+            &full_command,
+            &ctx.working_dir,
+            lane,
+            self.entry.timeout_secs,
+            &ctx.router,
+        )
+        .await
+        {
             Ok(output) => ToolResult {
                 content: format_shell_output(&output),
                 is_error: output.exit_code != 0,
