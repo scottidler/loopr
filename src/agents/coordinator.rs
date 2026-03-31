@@ -1623,6 +1623,23 @@ impl CoordinatorAgent {
                 }
             };
 
+            // Lifeguard: also catch ActionError results (validation failures from executor
+            // that return Ok(ActionError) rather than Err). Without this, the Lifeguard
+            // only monitors hard errors and misses tool validation loops.
+            if let ActionResult::ActionError(ref err_msg) = result {
+                let (verdict, warning) = guard.record_error(err_msg);
+                if let Some(w) = warning {
+                    self.ctx.warn(&w);
+                }
+                if let Verdict::Escalate(reason) = verdict {
+                    self.ctx.warn(&format!("lifeguard: {}", reason));
+                    return Ok(IterationOutcome::NeedHelp(format!(
+                        "lifeguard: tool validation loop (not a system failure): {}",
+                        reason
+                    )));
+                }
+            }
+
             // B4: Only count successful AgentSpawned as actual attempts.
             // DependencyNotMet and ActionError/other non-spawn results should not burn retry slots.
             if let AgentAction::AssignAgent {

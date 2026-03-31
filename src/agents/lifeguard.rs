@@ -340,6 +340,20 @@ mod tests {
     }
 
     #[test]
+    fn test_action_error_id_prefix_escalates() {
+        // Simulates the E2E failure: triage_bundle called with work ID instead of bundle ID
+        let mut lg = Lifeguard::new();
+        let err = "triage_bundle: 'wk-t4l5h' is not a bundle ID (expected bd-* prefix)";
+        assert_eq!(lg.record_error(err).0, Verdict::Continue);
+        assert_eq!(lg.record_error(err).0, Verdict::Continue);
+        let (verdict, _) = lg.record_error(err);
+        assert!(
+            matches!(verdict, Verdict::Escalate(_)),
+            "should escalate after 3 identical ID-prefix errors"
+        );
+    }
+
+    #[test]
     fn test_hash_action_deterministic() {
         let action = AgentAction::WriteFile {
             path: "src/main.rs".into(),
