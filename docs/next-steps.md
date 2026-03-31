@@ -27,18 +27,14 @@ This document outlines the major outstanding projects for Loopr, ordered by prec
 
 **Result:** Implemented. Connected the existing Coverage Evaluator into the `Coordinator` decision tree. When decomposition attempts are exhausted, the system emits `ReviseParent` (instead of `need_help`), transitioning the parent back to Draft. Extracted coverage gaps into a `diagnostic` Learning, injected that Learning into the prompt builder via `query_learnings_for_level()`, and added `bubble_up_count` tracking to prevent infinite loops. The system can now autonomously self-correct vague parent documents.
 
-## 4. Pipeline Hardening: Locks & Timeouts
+## ~~4. Pipeline Hardening: Locks & Timeouts~~ COMPLETE (2026-03-30)
 **Primary Links:**
+- [2026-03-30-pipeline-hardening-locks-timeouts.md](design/2026-03-30-pipeline-hardening-locks-timeouts.md) (design doc)
 - [2026-03-01-file-touch-broadcasting.md](design/2026-03-01-file-touch-broadcasting.md)
 - [remaining-gaps.md](design/remaining-gaps.md)
 - [2026-02-27-audit-fixes.md](design/2026-02-27-audit-fixes.md)
 
-Several low-level orchestration safety mechanisms identified during audits remain unimplemented.
-*   **Current:** `write.rs` and `edit.rs` tools modify files without advisory locks. Agent tasks do not have hard wall-clock bounds.
-*   **Next:**
-    - Implement file-touch advisory lock auto-acquisition before file modifications, with guaranteed lock cleanup on agent exit.
-    - Wrap `run_agent_task` in a strict `tokio::time::timeout` utilizing the existing `session_timeout_secs` config.
-    - Add BFS/DFS acyclic dependency checks for Work items.
+**Result:** Implemented. Fixed `LockStrict` self-blocking bug. Added auto-acquisition of advisory locks on `WriteFile` and `EditFile`, with guaranteed release during `run_agent_task` cleanup. Added strict session wall-clock timeouts for agent tasks via `tokio::time::timeout`. Implemented BFS cycle detection to prevent circular dependencies at work item creation and update.
 
 ## 5. Decompose the Handlers Monolith
 **Primary Links:**
