@@ -197,6 +197,15 @@ impl Agent for ReviewerAgent {
                 }
             }
             ReviewVerdict::RequestChanges => {
+                // Store rejection reason before transitioning so the coordinator
+                // and next implementer know why the bundle was rejected.
+                let _ = self.ctx.bridge.request(
+                    "bundle.update",
+                    serde_json::json!({
+                        "id": self.bundle_id,
+                        "verification": format!("Rejected: {}", review.summary),
+                    }),
+                );
                 let resp = self.ctx.bridge.request(
                     "bundle.transition",
                     serde_json::json!({
@@ -219,6 +228,15 @@ impl Agent for ReviewerAgent {
                 }
             }
             ReviewVerdict::Reject => {
+                // Store rejection reason before transitioning so the coordinator
+                // and next implementer know why the bundle was rejected.
+                let _ = self.ctx.bridge.request(
+                    "bundle.update",
+                    serde_json::json!({
+                        "id": self.bundle_id,
+                        "verification": format!("Rejected: {}", review.summary),
+                    }),
+                );
                 let resp = self.ctx.bridge.request(
                     "bundle.transition",
                     serde_json::json!({
@@ -574,6 +592,11 @@ mod tests {
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
         assert_eq!(bundle.status, BundleStatus::Rejected);
+        assert!(
+            bundle.verification.contains("Rejected: Fundamentally wrong"),
+            "verification should contain rejection reason: {}",
+            bundle.verification
+        );
     }
 
     #[tokio::test]
@@ -592,6 +615,11 @@ mod tests {
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
         assert_eq!(bundle.status, BundleStatus::Rejected);
+        assert!(
+            bundle.verification.contains("Rejected: Needs work"),
+            "verification should contain rejection reason: {}",
+            bundle.verification
+        );
     }
 
     #[test]
