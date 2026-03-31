@@ -132,7 +132,13 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
 
     // === Grandchild (daemon) only from here ===
     let session_id = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let log_path = crate::setup_logging(config, log_level, Some(&session_id)).expect("daemon: failed to setup logging");
+    let log_path = match crate::setup_logging(config, log_level, Some(&session_id)) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("daemon: failed to setup logging: {e}");
+            std::process::exit(1);
+        }
+    };
     let session_dir = log_path.parent().map(std::path::PathBuf::from).unwrap_or_default();
 
     info!(
@@ -141,7 +147,13 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
         std::process::id()
     );
 
-    let rt = tokio::runtime::Runtime::new().expect("daemon: failed to create Tokio runtime");
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("daemon: failed to create Tokio runtime: {e}");
+            std::process::exit(1);
+        }
+    };
     let result = rt.block_on(async {
         let (ctx, _) = DaemonContext::shared(config.clone(), session_id, session_dir)?;
         daemon_main(ctx).await

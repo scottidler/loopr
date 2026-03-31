@@ -18,9 +18,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
 
 use async_trait::async_trait;
 use eyre::Result;
+use log::warn;
 use serde::{Deserialize, Serialize};
 use taskstore::record::{IndexValue, Record};
 use tokio::sync::broadcast;
@@ -134,6 +136,18 @@ impl AgentContext {
             log,
             read_cache: Mutex::new(ReadCache::default()),
         })
+    }
+
+    /// Acquire the read_cache lock, recovering from poison by logging a warning.
+    /// Named `cache()` to avoid shadowing the `read_cache` field.
+    pub fn cache(&self) -> MutexGuard<'_, ReadCache> {
+        match self.read_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("read_cache lock was poisoned, recovering");
+                poisoned.into_inner()
+            }
+        }
     }
 
     pub fn info(&self, msg: &str) {
@@ -1717,5 +1731,45 @@ mod tests {
         let json = r#"{"action": "override_work", "work_id": "wi-456", "target_status": "abandoned", "reason": "stuck in InProgress for 60min"}"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         assert!(matches!(action, AgentAction::OverrideWork { .. }));
+    }
+
+    #[test]
+    fn test_cache_helper_returns_guard() {
+        let dir = make_test_dir("cache-helper");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Basic usage: acquire lock, record, check hit
+        let path = dir.join("test.txt");
+        let mtime = std::time::SystemTime::UNIX_EPOCH;
+        ctx.cache().record(&path, None, None, mtime, 42);
+        let hit = ctx.cache().check_hit(&path, None, None, mtime);
+        assert_eq!(hit, Some(42));
+    }
+
+    #[test]
+    fn test_cache_helper_recovers_from_poison() {
+        let dir = make_test_dir("cache-poison");
+        let stores = test_stores_with_dir(&dir);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Poison the mutex by panicking in another thread while holding it
+        let cache_ref = &ctx.read_cache;
+        let result = std::thread::scope(|s| {
+            s.spawn(|| {
+                let _guard = cache_ref.lock().unwrap();
+                panic!("intentional poison");
+            })
+            .join()
+        });
+        assert!(result.is_err(), "thread should have panicked");
+        assert!(ctx.read_cache.is_poisoned(), "mutex should be poisoned");
+
+        // cache() should recover without panicking
+        let path = dir.join("after-poison.txt");
+        let mtime = std::time::SystemTime::UNIX_EPOCH;
+        ctx.cache().record(&path, None, None, mtime, 10);
+        let hit = ctx.cache().check_hit(&path, None, None, mtime);
+        assert_eq!(hit, Some(10));
     }
 }

@@ -621,10 +621,7 @@ pub async fn execute_action(
             tokio::fs::write(&full_path, content)
                 .await
                 .map_err(|e| eyre!("write_file '{}': {}", path, e))?;
-            ctx.read_cache
-                .lock()
-                .expect("read_cache poisoned")
-                .invalidate(&full_path);
+            ctx.cache().invalidate(&full_path);
             Ok(ActionResult::FileWritten(path.clone()))
         }
         AgentAction::EditFile {
@@ -686,10 +683,7 @@ pub async fn execute_action(
             tokio::fs::write(&full_path, &updated)
                 .await
                 .map_err(|e| eyre!("edit_file write '{}': {}", path, e))?;
-            ctx.read_cache
-                .lock()
-                .expect("read_cache poisoned")
-                .invalidate(&full_path);
+            ctx.cache().invalidate(&full_path);
             Ok(ActionResult::FileEdited(path.clone()))
         }
         AgentAction::ReadFile { path, offset, limit } => {
@@ -703,12 +697,7 @@ pub async fn execute_action(
                 .unwrap_or(SystemTime::UNIX_EPOCH);
 
             // Dedup check BEFORE reading the file
-            if let Some(cached_lines) = ctx
-                .read_cache
-                .lock()
-                .expect("read_cache poisoned")
-                .check_hit(&full_path, *offset, *limit, mtime)
-            {
+            if let Some(cached_lines) = ctx.cache().check_hit(&full_path, *offset, *limit, mtime) {
                 let start = offset.unwrap_or(1).max(1);
                 let effective_limit = limit.unwrap_or(500);
                 let end = (start + effective_limit - 1).min(cached_lines as u64);
@@ -727,10 +716,7 @@ pub async fn execute_action(
             let lines: Vec<&str> = content.lines().collect();
 
             // Record in cache for future dedup
-            ctx.read_cache
-                .lock()
-                .expect("read_cache poisoned")
-                .record(&full_path, *offset, *limit, mtime, lines.len());
+            ctx.cache().record(&full_path, *offset, *limit, mtime, lines.len());
 
             let start = offset.unwrap_or(1).max(1) as usize - 1;
             let effective_limit = limit.unwrap_or(500) as usize;
