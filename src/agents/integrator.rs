@@ -989,6 +989,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         IntegratorAgent::new(ctx, intg_config)
     }
@@ -1017,6 +1018,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         (IntegratorAgent::new(ctx, intg_config), event_tx)
     }

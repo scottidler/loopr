@@ -1,5 +1,6 @@
 pub mod agent_logger;
 pub mod bridge;
+pub mod cache;
 pub mod context;
 pub mod coordinator;
 pub mod executor;
@@ -16,6 +17,7 @@ pub mod worker;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
 use eyre::Result;
@@ -25,6 +27,7 @@ use tokio::sync::broadcast;
 
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::cache::ReadCache;
 use crate::daemon::context::Stores;
 use crate::id;
 use crate::ipc::protocol::DaemonEvent;
@@ -91,6 +94,7 @@ pub struct AgentContext {
     pub tool_runner: Arc<ToolRunner>,
     pub tool_executor: Arc<ToolExecutor>,
     pub log: AgentLogger,
+    pub read_cache: Mutex<ReadCache>,
 }
 
 impl AgentContext {
@@ -128,6 +132,7 @@ impl AgentContext {
             tool_runner: stores.tool_runner.clone(),
             tool_executor: stores.tool_executor.clone(),
             log,
+            read_cache: Mutex::new(ReadCache::default()),
         })
     }
 
@@ -651,6 +656,7 @@ mod tests {
             tool_runner: stores.tool_runner.clone(),
             tool_executor: stores.tool_executor.clone(),
             log: agent_log,
+            read_cache: Mutex::new(ReadCache::default()),
         };
         (ctx, event_rx)
     }

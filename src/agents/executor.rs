@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use eyre::{Result, eyre};
 use log::{debug, error, info, warn};
@@ -505,6 +506,10 @@ pub async fn execute_action(
             tokio::fs::write(&full_path, content)
                 .await
                 .map_err(|e| eyre!("write_file '{}': {}", path, e))?;
+            ctx.read_cache
+                .lock()
+                .expect("read_cache poisoned")
+                .invalidate(&full_path);
             Ok(ActionResult::FileWritten(path.clone()))
         }
         AgentAction::EditFile {
@@ -552,14 +557,52 @@ pub async fn execute_action(
             tokio::fs::write(&full_path, &updated)
                 .await
                 .map_err(|e| eyre!("edit_file write '{}': {}", path, e))?;
+            ctx.read_cache
+                .lock()
+                .expect("read_cache poisoned")
+                .invalidate(&full_path);
             Ok(ActionResult::FileEdited(path.clone()))
         }
         AgentAction::ReadFile { path, offset, limit } => {
             let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
+
+            // Stat for mtime (single syscall, kernel-cached)
+            let mtime = tokio::fs::metadata(&full_path)
+                .await
+                .map_err(|e| eyre!("read_file '{}': {}", path, e))?
+                .modified()
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+
+            // Dedup check BEFORE reading the file
+            if let Some(cached_lines) = ctx
+                .read_cache
+                .lock()
+                .expect("read_cache poisoned")
+                .check_hit(&full_path, *offset, *limit, mtime)
+            {
+                let start = offset.unwrap_or(1).max(1);
+                let effective_limit = limit.unwrap_or(500);
+                let end = (start + effective_limit - 1).min(cached_lines as u64);
+                return Ok(ActionResult::FileRead(format!(
+                    "File unchanged since last read \
+                     (lines {}-{} of {}, use offset/limit for other sections, \
+                     or proceed with editing).",
+                    start, end, cached_lines
+                )));
+            }
+
+            // Cache miss - read the file
             let content = tokio::fs::read_to_string(&full_path)
                 .await
                 .map_err(|e| eyre!("read_file '{}': {}", path, e))?;
             let lines: Vec<&str> = content.lines().collect();
+
+            // Record in cache for future dedup
+            ctx.read_cache
+                .lock()
+                .expect("read_cache poisoned")
+                .record(&full_path, *offset, *limit, mtime, lines.len());
+
             let start = offset.unwrap_or(1).max(1) as usize - 1;
             let effective_limit = limit.unwrap_or(500) as usize;
             let end = (start + effective_limit).min(lines.len());
@@ -1765,6 +1808,7 @@ mod tests {
             tool_runner: stores.tool_runner.clone(),
             tool_executor: stores.tool_executor.clone(),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         (ctx, event_rx)
     }
@@ -1789,6 +1833,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(tool_entries)),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(tool_entries)),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         }
     }
 
@@ -1812,6 +1857,7 @@ mod tests {
             tool_runner: stores.tool_runner.clone(),
             tool_executor: stores.tool_executor.clone(),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         }
     }
 
@@ -3887,5 +3933,156 @@ mod tests {
         // No bundles → Blocked
         let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
         assert_eq!(result, Some("Blocked"));
+    }
+
+    // --- ReadFile dedup tests ---
+
+    #[tokio::test]
+    async fn test_read_file_dedup_returns_unchanged_on_second_read() {
+        let dir = TestDir::new("loopr-exec-dedup");
+        std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        // First read: returns file content
+        let r1 = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r1 {
+            assert!(content.contains("line1"), "first read should return content");
+        } else {
+            panic!("expected FileRead, got: {:?}", r1);
+        }
+
+        // Second read (same file, unchanged): returns dedup message
+        let r2 = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r2 {
+            assert!(
+                content.contains("File unchanged since last read"),
+                "second read should return dedup message, got: {}",
+                content
+            );
+            assert!(content.contains("3"), "should mention total lines");
+        } else {
+            panic!("expected FileRead, got: {:?}", r2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_dedup_invalidated_by_write() {
+        let dir = TestDir::new("loopr-exec-dedup-write");
+        std::fs::write(dir.join("target.rs"), "original\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let read_action = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        // First read: populate cache
+        execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+
+        // Write to the file: should invalidate cache
+        let write_action = AgentAction::WriteFile {
+            path: "target.rs".to_string(),
+            content: "updated\n".to_string(),
+        };
+        execute_action(&write_action, &ctx, &dir, None).await.unwrap();
+
+        // Third read: should return fresh content, not dedup
+        let r3 = execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r3 {
+            assert!(
+                content.contains("updated"),
+                "read after write should return fresh content, got: {}",
+                content
+            );
+            assert!(!content.contains("File unchanged"), "should not be dedup after write");
+        } else {
+            panic!("expected FileRead, got: {:?}", r3);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_dedup_invalidated_by_edit() {
+        let dir = TestDir::new("loopr-exec-dedup-edit");
+        std::fs::write(dir.join("target.rs"), "hello world\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let read_action = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        // First read: populate cache
+        execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+
+        // Edit the file: should invalidate cache
+        let edit_action = AgentAction::EditFile {
+            path: "target.rs".to_string(),
+            old_string: "hello".to_string(),
+            new_string: "goodbye".to_string(),
+        };
+        execute_action(&edit_action, &ctx, &dir, None).await.unwrap();
+
+        // Read again: should return fresh content
+        let r3 = execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r3 {
+            assert!(
+                content.contains("goodbye"),
+                "read after edit should return fresh content, got: {}",
+                content
+            );
+            assert!(!content.contains("File unchanged"), "should not be dedup after edit");
+        } else {
+            panic!("expected FileRead, got: {:?}", r3);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_dedup_different_offset_no_dedup() {
+        let dir = TestDir::new("loopr-exec-dedup-offset");
+        std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action1 = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+        let action2 = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: Some(1),
+            limit: None,
+        };
+
+        // Read with no offset
+        execute_action(&action1, &ctx, &dir, None).await.unwrap();
+
+        // Read with explicit offset=1: different cache key, should NOT dedup
+        let r2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r2 {
+            assert!(
+                !content.contains("File unchanged"),
+                "different offset should not dedup, got: {}",
+                content
+            );
+            assert!(content.contains("line1"));
+        } else {
+            panic!("expected FileRead, got: {:?}", r2);
+        }
     }
 }

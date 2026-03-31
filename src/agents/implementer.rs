@@ -796,6 +796,7 @@ mod tests {
             tool_runner,
             tool_executor,
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         ImplementerAgent::new(ctx, llm, config, wi_id, dir.to_path_buf())
     }
@@ -1244,6 +1245,7 @@ mod tests {
             tool_runner: stores.tool_runner.clone(),
             tool_executor: stores.tool_executor.clone(),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         let mut agent = ImplementerAgent::new(ctx, llm, config, wi_id, dir.to_path_buf());
 

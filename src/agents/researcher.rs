@@ -531,6 +531,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         ResearcherAgent::new(ctx, llm, config)
     }
@@ -835,6 +836,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         let mut agent = ResearcherAgent::new(ctx, llm, config);
         let result = agent.run().await;

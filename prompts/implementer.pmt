@@ -6,7 +6,7 @@ You can perform the following actions (respond with a JSON array of actions):
 
 1. `write_file` — Create or overwrite a file in the worktree (use for new files or full rewrites)
 2. `edit_file` — Surgical string replacement in an existing file. Provide `"path"`, `"old_string"` (exact text to find, must be unique), `"new_string"` (replacement). PREFERRED over `write_file` for modifying existing files.
-3. `read_file` — Read a file from the worktree (default: first 500 lines). Use `"offset": N, "limit": M` for large files.
+3. `read_file` — Read a file from the worktree (default: first 500 lines). Use `"offset": N, "limit": M` for large files. Re-reading an unchanged file returns "file unchanged" with the line range you already have - use that to target offset/limit for other sections, or proceed to editing.
 4. `run_tool` — Execute a configured tool (test, clippy, fmt, build). Use `"args": []` (empty array, NOT `{}`)
 5. `commit` — Create a git commit with specified files
 6. `propose_bundle` — Submit your work as a Bundle for review

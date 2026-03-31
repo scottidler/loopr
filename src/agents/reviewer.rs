@@ -386,6 +386,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         ReviewerAgent::new(ctx, llm, config).unwrap()
     }
@@ -611,6 +612,7 @@ mod tests {
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         let llm = Box::new(MockReviewLlm::new("{}"));
         let result = ReviewerAgent::new(ctx, llm, AgentRoleConfig::default_reviewer());

@@ -1796,6 +1796,7 @@ mod tests {
             tool_runner: stores.tool_runner.clone(),
             tool_executor: stores.tool_executor.clone(),
             log: agent_log,
+            read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         let llm = Box::new(MockLlm::new(responses));
         CoordinatorAgent::new(ctx, llm, config)
