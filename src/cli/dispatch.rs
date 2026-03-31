@@ -3,6 +3,8 @@ use std::path::Path;
 use eyre::{Context, Result, bail};
 use serde_json::json;
 
+use crate::clarity::{self, ClarityGate};
+use crate::config::ClarityGateConfig;
 use crate::domain::role::Role;
 use crate::ipc::client::IpcClient;
 
@@ -10,7 +12,7 @@ use super::{AgentCmd, BundleCmd, Command, CoordinatorCmd, CrudCmd, LearningCmd, 
 
 /// Connect to the daemon, send the IPC request for the given CLI command,
 /// print the result, and exit.
-pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()> {
+pub async fn run(command: &Command, socket_path: &Path, role: Role, clarity_gate: &ClarityGateConfig) -> Result<()> {
     // Gap #6: `loopr role` writes to local config, doesn't need daemon
     if let Command::SetRole { role: role_str } = command {
         let config_dir = dirs::config_dir()
@@ -38,6 +40,7 @@ pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()
             plan.as_deref(),
             *no_monitor,
             *skip_clarity_gate,
+            clarity_gate,
         )
         .await;
     }
@@ -126,9 +129,20 @@ async fn run_headless(
     plan_text: Option<&str>,
     no_monitor: bool,
     skip_clarity_gate: bool,
+    clarity_gate_config: &ClarityGateConfig,
 ) -> Result<()> {
-    // Clarity gate will be wired in Phase 2
-    let _ = skip_clarity_gate;
+    // --- Goal Clarity Gate ---
+    // Skip when: --plan provided, --skip-clarity-gate, or gate disabled in config
+    let should_skip = plan_text.is_some() || skip_clarity_gate || !clarity_gate_config.enabled;
+    if !should_skip {
+        let gate = ClarityGate::new(clarity_gate_config.clone())?;
+        let verdict = gate.evaluate(goal).await?;
+        if !verdict.passes(clarity_gate_config.min_score) {
+            eprint!("{}", clarity::format_failure(goal, &verdict));
+            std::process::exit(3);
+        }
+    }
+
     let mut client = IpcClient::connect(socket_path)
         .await
         .context("failed to connect to daemon - is it running?")?;
@@ -1498,5 +1512,38 @@ mod tests {
         let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
         assert_eq!(method, "coordinator.accept_plan");
         assert_eq!(params["plan"], "Build auth module");
+    }
+
+    // --- Clarity gate bypass tests ---
+
+    /// Helper: compute whether the clarity gate should be skipped.
+    fn should_skip_gate(plan_text: Option<&str>, skip_flag: bool, enabled: bool) -> bool {
+        plan_text.is_some() || skip_flag || !enabled
+    }
+
+    #[test]
+    fn test_gate_skip_when_plan_provided() {
+        assert!(should_skip_gate(Some("my plan"), false, true));
+    }
+
+    #[test]
+    fn test_gate_skip_when_flag_set() {
+        assert!(should_skip_gate(None, true, true));
+    }
+
+    #[test]
+    fn test_gate_skip_when_disabled_in_config() {
+        assert!(should_skip_gate(None, false, false));
+    }
+
+    #[test]
+    fn test_gate_runs_when_no_bypass() {
+        assert!(!should_skip_gate(None, false, true));
+    }
+
+    #[test]
+    fn test_gate_skip_all_bypass_conditions() {
+        // All bypass conditions active at once
+        assert!(should_skip_gate(Some("plan"), true, false));
     }
 }
