@@ -1,3 +1,8 @@
+IMPORTANT: If the Spec's description (inherited from the Plan) already defines
+specific phases, create those exact phases. Do NOT split a described phase into
+multiple phases, and do NOT merge described phases. The number and scope of
+phases should match what the plan specifies.
+
 Create ordered implementation Phases for this Spec. Each Phase should have:
 - A clear, actionable title starting with a verb (e.g., "Add JWT token generation and validation")
 - A concrete deliverables description — what files/modules are created or modified

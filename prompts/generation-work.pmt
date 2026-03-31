@@ -1,3 +1,16 @@
+IMPORTANT: If the Phase's description (inherited from the Plan) already specifies
+individual Work items (e.g., "Work 1: ...", "Work 2: ..."), create exactly those
+Work items with:
+- The titles and descriptions as specified in the plan
+- The dependencies as specified (e.g., "depends on Work 1" means use batch:0)
+- The resource_tags as specified (if file paths are mentioned)
+- The acceptance_criteria extracted from the description
+Do NOT split a described Work item into multiple smaller items.
+Do NOT create Work items that are not in the plan.
+Do NOT remove dependencies that the plan specifies.
+You may ONLY add Work items if they are strictly necessary prerequisites that
+the plan omitted. The plan was agreed upon with the user. Faithfully execute it.
+
 Create Works for this Phase. Each Work should be:
 - Small enough for an Implementer to complete in 5-10 iterations (one iteration = one LLM call producing actions)
 - Have a clear title starting with a verb (e.g., "Implement JWT signing utility")

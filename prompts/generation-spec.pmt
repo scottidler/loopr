@@ -1,3 +1,9 @@
+IMPORTANT: If the Plan's description already contains a detailed technical
+approach with phases and work items, create a Spec that faithfully represents
+that structure. Do NOT reinterpret, expand, or restructure the plan. The Plan
+was created collaboratively with the user and represents their agreed intent.
+Your job is to formalize it into a Spec, not reinvent it.
+
 Create a Spec for this Plan with:
 - A title describing the technical approach (e.g., "JWT auth with middleware + SQLite session store")
 - A description covering:
