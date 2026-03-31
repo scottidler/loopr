@@ -177,6 +177,9 @@ pub struct Bundle {
     pub verification: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// Total lines changed (insertions + deletions) from git diff --stat.
+    #[serde(default)]
+    pub loc_changed: Option<u32>,
     #[serde(default)]
     pub locks_used: Vec<String>,
     pub status: BundleStatus,
@@ -197,6 +200,7 @@ impl Bundle {
             claims,
             verification: String::new(),
             description: None,
+            loc_changed: None,
             locks_used: Vec::new(),
             status: BundleStatus::Proposed,
             created_at: now,

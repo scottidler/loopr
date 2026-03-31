@@ -106,19 +106,6 @@ impl Default for WorkSlaConfig {
     }
 }
 
-/// How strict the Coverage Evaluator is about minor gaps.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CoverageStrictness {
-    /// All children must fully cover the parent — no gaps allowed.
-    #[default]
-    RequireComplete,
-    /// Minor gaps are allowed; only critical gaps block activation.
-    AllowMinorGaps,
-    /// Coverage evaluation runs but results are advisory only — never blocks.
-    SuggestOnly,
-}
-
 /// Goal clarity gate configuration - LLM pre-validation for `loopr run`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -158,16 +145,10 @@ pub struct StrategyConfig {
     pub work_sla: WorkSlaConfig,
     /// Enable/disable coverage evaluation at decomposition boundaries.
     pub coverage_enabled: bool,
-    /// How strict the Coverage Evaluator is about minor gaps.
-    pub coverage_strictness: CoverageStrictness,
     /// Maximum decomposition attempts per parent before bubble-up.
     pub max_decomposition_attempts: u32,
     /// Maximum bubble-up depth to prevent infinite recursion.
     pub max_bubble_up_depth: u32,
-    /// Enable/disable the collaborative Plan interview.
-    pub plan_interview_enabled: bool,
-    /// Require explicit user approval of the Plan before decomposition.
-    pub plan_approval_required: bool,
     /// Goal clarity gate configuration.
     pub clarity_gate: ClarityGateConfig,
 }
@@ -184,11 +165,8 @@ impl Default for StrategyConfig {
             max_lock_ttl_minutes: 60,
             work_sla: WorkSlaConfig::default(),
             coverage_enabled: true,
-            coverage_strictness: CoverageStrictness::default(),
             max_decomposition_attempts: 3,
             max_bubble_up_depth: 2,
-            plan_interview_enabled: true,
-            plan_approval_required: true,
             clarity_gate: ClarityGateConfig::default(),
         }
     }
@@ -233,7 +211,6 @@ impl Default for CoordinatorConfig {
                 api_key_env: "ANTHROPIC_API_KEY".to_string(),
                 max_tokens: 8192,
                 max_iterations: u32::MAX,
-                min_pool: 1,
                 max_pool: 1,
                 temperature: 0.2,
                 session_timeout_secs: None, // Coordinator is long-lived
@@ -366,7 +343,6 @@ pub struct AgentRoleConfig {
     pub api_key_env: String,
     pub max_tokens: u32,
     pub max_iterations: u32,
-    pub min_pool: u32,
     pub max_pool: u32,
     pub temperature: f32,
     pub session_timeout_secs: Option<u64>,
@@ -387,7 +363,6 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 8192,
             max_iterations: 20,
-            min_pool: 2,
             max_pool: 6,
             temperature: 0.3,
             session_timeout_secs: Some(1800), // 30 min
@@ -401,7 +376,6 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 4096,
             max_iterations: 5,
-            min_pool: 1,
             max_pool: 2,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
@@ -415,7 +389,6 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 4096,
             max_iterations: 10,
-            min_pool: 1,
             max_pool: 4,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
@@ -562,7 +535,6 @@ impl Default for ProjectConfig {
 #[serde(default)]
 pub struct Config {
     pub name: String,
-    pub debug: bool,
     pub log_level: Option<String>,
     pub daemon: DaemonConfig,
     pub project: ProjectConfig,
@@ -578,7 +550,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             name: "loopr".to_string(),
-            debug: false,
             log_level: None,
             daemon: DaemonConfig::default(),
             project: ProjectConfig::default(),
@@ -652,7 +623,6 @@ mod tests {
     fn test_config_default() {
         let config = Config::default();
         assert_eq!(config.name, "loopr");
-        assert!(!config.debug);
     }
 
     #[test]
@@ -1053,54 +1023,40 @@ name: test
         assert!(config.log_level.is_none());
     }
 
-    // --- Coverage & Interview config tests ---
-
-    #[test]
-    fn test_coverage_strictness_default() {
-        assert_eq!(CoverageStrictness::default(), CoverageStrictness::RequireComplete);
-    }
-
-    #[test]
-    fn test_coverage_strictness_serde_roundtrip() {
-        for strictness in [
-            CoverageStrictness::RequireComplete,
-            CoverageStrictness::AllowMinorGaps,
-            CoverageStrictness::SuggestOnly,
-        ] {
-            let json = serde_json::to_string(&strictness).unwrap();
-            let deserialized: CoverageStrictness = serde_json::from_str(&json).unwrap();
-            assert_eq!(strictness, deserialized);
-        }
-    }
+    // --- Coverage config tests ---
 
     #[test]
     fn test_strategy_config_coverage_defaults() {
         let sc = StrategyConfig::default();
         assert!(sc.coverage_enabled);
-        assert_eq!(sc.coverage_strictness, CoverageStrictness::RequireComplete);
         assert_eq!(sc.max_decomposition_attempts, 3);
         assert_eq!(sc.max_bubble_up_depth, 2);
-        assert!(sc.plan_interview_enabled);
-        assert!(sc.plan_approval_required);
     }
 
     #[test]
     fn test_strategy_config_coverage_yaml() {
         let yaml = r#"
 coverage_enabled: false
-coverage_strictness: allow_minor_gaps
 max_decomposition_attempts: 5
 max_bubble_up_depth: 3
-plan_interview_enabled: false
-plan_approval_required: false
 "#;
         let sc: StrategyConfig = serde_yaml::from_str(yaml).expect("should parse coverage config");
         assert!(!sc.coverage_enabled);
-        assert_eq!(sc.coverage_strictness, CoverageStrictness::AllowMinorGaps);
         assert_eq!(sc.max_decomposition_attempts, 5);
         assert_eq!(sc.max_bubble_up_depth, 3);
-        assert!(!sc.plan_interview_enabled);
-        assert!(!sc.plan_approval_required);
+    }
+
+    #[test]
+    fn test_strategy_config_ignores_removed_fields() {
+        // Serde should silently ignore fields that no longer exist on the struct
+        let yaml = r#"
+coverage_strictness: allow_minor_gaps
+plan_interview_enabled: false
+plan_approval_required: false
+"#;
+        let sc: StrategyConfig = serde_yaml::from_str(yaml).expect("removed fields should be ignored");
+        // Should get defaults for everything
+        assert!(sc.coverage_enabled);
     }
 
     #[test]

@@ -132,19 +132,33 @@ pub(super) fn handle_bundle_create(
             bundle.touched_paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
 
+        // Parse loc_changed if provided
+        if let Some(loc) = req.params.get("loc_changed").and_then(|v| v.as_u64()) {
+            bundle.loc_changed = Some(loc as u32);
+        }
+
         // Gap #22: BundleSizePolicy enforcement on create
-        if !bundle.touched_paths.is_empty() {
-            let policy = &stores.config.strategy.bundle_size;
-            if bundle.touched_paths.len() as u32 > policy.max_files_touched {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::precondition_failed(&format!(
-                        "Bundle touches {} files, exceeds max_files_touched={}",
-                        bundle.touched_paths.len(),
-                        policy.max_files_touched
-                    )),
-                ));
-            }
+        let policy = &stores.config.strategy.bundle_size;
+        if !bundle.touched_paths.is_empty() && bundle.touched_paths.len() as u32 > policy.max_files_touched {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(&format!(
+                    "Bundle touches {} files, exceeds max_files_touched={}",
+                    bundle.touched_paths.len(),
+                    policy.max_files_touched
+                )),
+            ));
+        }
+        if let Some(loc) = bundle.loc_changed
+            && loc > policy.max_loc_changed
+        {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::precondition_failed(&format!(
+                    "Bundle changes {} lines, exceeds max_loc_changed={}",
+                    loc, policy.max_loc_changed
+                )),
+            ));
         }
 
         let bundle_json = match serde_json::to_value(&bundle) {
@@ -456,6 +470,20 @@ pub(super) fn handle_bundle_update(
                 ));
             }
             bundle.touched_paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        }
+        // Parse loc_changed if provided
+        if let Some(loc) = req.params.get("loc_changed").and_then(|v| v.as_u64()) {
+            let policy = &stores.config.strategy.bundle_size;
+            if loc as u32 > policy.max_loc_changed {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(&format!(
+                        "Bundle changes {} lines, exceeds max_loc_changed={}",
+                        loc, policy.max_loc_changed
+                    )),
+                ));
+            }
+            bundle.loc_changed = Some(loc as u32);
         }
         // M1: Parse claims as array (backward-compat: also accepts string)
         if let Some(claims_val) = req.params.get("claims") {
@@ -1451,5 +1479,80 @@ mod tests {
         assert_eq!(claims.len(), 2);
         assert_eq!(claims[0], "claim 1");
         assert_eq!(claims[1], "claim 2");
+    }
+
+    #[test]
+    fn test_handle_bundle_create_rejects_too_many_loc() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+        // Default max_loc_changed is 300, so 301 should be rejected
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "bundle.create",
+                json!({
+                    "work_id": wi_id,
+                    "branch_name": "feat/test",
+                    "claims": ["test claim"],
+                    "loc_changed": 301
+                }),
+            ),
+        );
+        assert!(resp.is_error(), "expected loc policy rejection");
+    }
+
+    #[test]
+    fn test_handle_bundle_create_accepts_loc_within_limit() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "bundle.create",
+                json!({
+                    "work_id": wi_id,
+                    "branch_name": "feat/test",
+                    "claims": ["test claim"],
+                    "loc_changed": 300
+                }),
+            ),
+        );
+        assert!(!resp.is_error(), "loc within limit should succeed: {:?}", resp.error);
+    }
+
+    #[test]
+    fn test_handle_bundle_update_rejects_too_many_loc() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                2,
+                "bundle.update",
+                json!({
+                    "id": bundle_id,
+                    "loc_changed": 301
+                }),
+            ),
+        );
+        assert!(resp.is_error(), "expected loc policy rejection on update");
     }
 }

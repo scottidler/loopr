@@ -555,6 +555,7 @@ fn build_generation_footer(
 
     // Case 4: Check if coverage evaluation is needed (all children exist but not yet evaluated)
     if stores.evaluator.is_some()
+        && stores.config.strategy.coverage_enabled
         && let Some(check) = generation::find_pending_coverage_check(stores)
     {
         agent_log.info(&format!("coverage evaluation needed: {}", check.description));

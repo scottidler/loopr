@@ -1,32 +1,15 @@
-# Remaining Gaps
+# Remaining Gaps - All Resolved
 
-Small items surfaced by `2026-02-27-audit-fixes.md` and `2026-02-27-completion-gaps.md` that are not yet addressed. These docs are otherwise Implemented.
+All gaps previously tracked in this file have been addressed across Items #2, #3, and #4 (see `next-steps.md`).
 
-## From audit-fixes.md
-
-| # | Gap | Severity | Notes |
-|---|-----|----------|-------|
-| 16 | Work `depends_on` cycle detection | Low | BFS/DFS check missing. Current code validates deps exist but not acyclicity. |
-
-## From completion-gaps.md
-
-| # | Gap | Severity | Notes |
-|---|-----|----------|-------|
-| 10 | Tool SIGTERM -> wait 5s -> SIGKILL escalation | Low | SIGTERM sent, but `kill_on_drop` used instead of timed escalation. `child` consumed by `wait_with_output`. |
-| 11 | Agent session wall-clock timeouts | Medium | `session_timeout_secs` config exists but `run_agent_task` never wraps with `tokio::time::timeout`. |
-| 22 | Bundle `loc_changed` field + `max_loc_changed` enforcement | Low | `max_files_touched` enforced. `loc_changed` field never added to Bundle struct. |
-
-## From semantic-decomposition.md (Layer 7)
-
-| Gap | Severity | Notes |
-|-----|----------|-------|
-| Upward feedback / bubble-up logic | Medium | `decomposition_attempts` tracking in place. No `ReviseParent` action or bubble-up that transitions parent to Draft. No `max_bubble_up_depth`. |
-| Collaborative Plan interview IPC | Medium | `CoordinatorFsmState::Interviewing` exists. `coordinator.interview_respond` and `coordinator.approve_plan` handlers not wired. |
-| Coverage gate in Coordinator loop | Medium | Coverage Evaluator module done. Not yet called from Coordinator's decision tree during iteration. |
-
-## From file-touch-broadcasting.md
-
-| Gap | Severity | Notes |
-|-----|----------|-------|
-| Auto-lock on WriteFile | Medium | No advisory lock auto-acquisition before writes. |
-| Lock cleanup on agent exit | Medium | No automatic lock release when agent session ends. |
+| Gap | Resolution |
+|-----|-----------|
+| #16: Work `depends_on` cycle detection | Item #4: Pipeline Hardening (BFS cycle detection) |
+| #10: Tool SIGTERM -> SIGKILL escalation | Item #2: Runner Lane Architecture (`killpg()` with SIGTERM->5s->SIGKILL) |
+| #11: Agent session wall-clock timeouts | Item #4: Pipeline Hardening (`tokio::time::timeout` in executor.rs) |
+| #22: Bundle `max_loc_changed` enforcement | Wired in daemon-hardening-config-audit (bundle create/update handlers) |
+| Upward feedback / bubble-up logic | Item #3: Semantic Bubble-Up (`ReviseParent`, `bubble_up_count`) |
+| Coverage gate in Coordinator loop | Item #3: Semantic Bubble-Up (wired into decision tree) |
+| Auto-lock on WriteFile | Item #4: Pipeline Hardening (auto-acquisition in executor) |
+| Lock cleanup on agent exit | Item #4: Pipeline Hardening (guaranteed release in `run_agent_task` cleanup) |
+| Collaborative Plan interview IPC | Chat funnel handles this via interview_mode; IPC handlers exist |
