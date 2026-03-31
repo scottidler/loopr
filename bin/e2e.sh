@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# e2e.sh - First autonomous E2E run per docs/design/2026-03-30-first-end-to-end-run.md
+# e2e.sh - Parameterized E2E test runner for loopr
 #
-# Builds loopr, scaffolds a disposable target in /tmp, runs the pipeline
-# headless, and reports the result.
+# Usage:
+#   bin/e2e.sh                        # default: rust-version
+#   bin/e2e.sh --target python-todo   # Python todo app
+#   bin/e2e.sh --target rust-version  # explicit Rust target
 
 LOOPR_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="/tmp/loopr-e2e-target"
-TIMEOUT="${TIMEOUT:-600}"
 DAEMON_PID=""
+
+# Parse args
+E2E_TARGET="rust-version"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --target) E2E_TARGET="$2"; shift 2 ;;
+        *) err "Unknown argument: $1"; exit 1 ;;
+    esac
+done
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,6 +43,26 @@ cleanup() {
 trap cleanup EXIT
 
 ###############################################################################
+# Load target definition
+###############################################################################
+
+TARGET_FILE="${LOOPR_ROOT}/bin/e2e-targets/${E2E_TARGET}.sh"
+if [[ ! -f "${TARGET_FILE}" ]]; then
+    err "Unknown target: ${E2E_TARGET}"
+    err "Available targets:"
+    for f in "${LOOPR_ROOT}"/bin/e2e-targets/*.sh; do
+        err "  $(basename "${f}" .sh)"
+    done
+    exit 1
+fi
+
+# shellcheck source=/dev/null
+source "${TARGET_FILE}"
+log "Target: ${E2E_TARGET}"
+
+TIMEOUT="${TIMEOUT:-${TARGET_TIMEOUT:-600}}"
+
+###############################################################################
 # Pre-flight
 ###############################################################################
 
@@ -42,7 +72,7 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
 fi
 
 ###############################################################################
-# Step 1: Build and install
+# Step 1: Build loopr
 ###############################################################################
 
 log "Building loopr (release)..."
@@ -56,24 +86,17 @@ fi
 ok "Binary: ${LOOPR}"
 
 ###############################################################################
-# Step 2: Scaffold target
+# Step 2: Scaffold target (delegated to target definition)
 ###############################################################################
 
 if [[ -d "${TARGET}" ]]; then
     log "Cleaning previous target..."
-    # Clean worktrees first to avoid git lock issues
     (cd "${TARGET}" && git worktree prune 2>/dev/null || true)
     rkvr rmrf "${TARGET}"
 fi
 
 log "Scaffolding target at ${TARGET}..."
-cargo init "${TARGET}" --name e2e-target
-(
-    cd "${TARGET}"
-    git add -A
-    git commit -q -m "init"
-)
-ok "Target ready: $(wc -l < "${TARGET}/src/main.rs") lines in src/main.rs"
+scaffold
 
 ###############################################################################
 # Step 3: Write config for the target
@@ -100,7 +123,7 @@ integrator:
   enabled: true
   interval_secs: 15
   validation_commands:
-    - "cargo test"
+$(target_validation_commands)
 
 validator:
   enabled: false
@@ -122,7 +145,7 @@ if [[ -f "${PID_FILE}" ]]; then
 fi
 
 ###############################################################################
-# Step 4: Start daemon from target directory
+# Step 5: Start daemon from target directory
 ###############################################################################
 
 DAEMON_LOG="${TARGET}/daemon.log"
@@ -146,22 +169,11 @@ if [[ ! -S "${SOCKET}" ]]; then
 fi
 
 ###############################################################################
-# Step 5: Run the E2E task
+# Step 6: Run the E2E task
 ###############################################################################
 
-GOAL="Add a --version flag to this CLI that prints the crate version from CARGO_PKG_VERSION to stdout."
-
-PLAN="Phase 1: Add --version flag
-
-Work 1: Add --version argument handling
-- In src/main.rs, add argument parsing that checks for --version
-- When --version is passed, print the version from env!(\"CARGO_PKG_VERSION\") and exit
-- When no --version flag, keep the existing Hello World behavior
-- Use std::env::args() for parsing (no external dependencies needed)
-
-Work 2: Add test for --version
-- Add a test that verifies the binary outputs the version when run with --version
-- The version should match the version in Cargo.toml (currently 0.1.0)"
+GOAL="$(target_goal)"
+PLAN="$(target_plan)"
 
 log "Starting E2E run (timeout: ${TIMEOUT}s)..."
 log "Goal: ${GOAL}"
@@ -176,10 +188,10 @@ EXIT_CODE=0
 echo ""
 
 ###############################################################################
-# Step 6: Collect results
+# Step 7: Collect results
 ###############################################################################
 
-echo -e "${BOLD}${CYAN}=== E2E Results ===${NC}"
+echo -e "${BOLD}${CYAN}=== E2E Results (${E2E_TARGET}) ===${NC}"
 
 case ${EXIT_CODE} in
     0)  ok "Exit code: 0 (GoalComplete)" ;;
@@ -208,57 +220,13 @@ echo ""
 log "Git log (target repo):"
 (cd "${TARGET}" && git log --oneline --all 2>/dev/null) || warn "git log failed"
 
+# Target-specific result collection
 echo ""
-log "Target src/main.rs:"
-cat "${TARGET}/src/main.rs"
+collect_results
 
 echo ""
 echo -e "${BOLD}${CYAN}=== Verification ===${NC}"
-
-# Check if the binary was modified
-if (cd "${TARGET}" && git diff --quiet HEAD -- src/main.rs 2>/dev/null) && \
-   (cd "${TARGET}" && git diff --quiet --cached HEAD -- src/main.rs 2>/dev/null); then
-    # Check agent branches for changes
-    AGENT_BRANCHES="$(cd "${TARGET}" && git branch | grep 'agent/' || true)"
-    if [[ -n "${AGENT_BRANCHES}" ]]; then
-        log "Agent branches found:"
-        echo "${AGENT_BRANCHES}"
-        # Check the first agent branch for changes
-        FIRST_BRANCH="$(echo "${AGENT_BRANCHES}" | head -1 | tr -d '* ')"
-        DIFF="$(cd "${TARGET}" && git diff main..."${FIRST_BRANCH}" -- src/main.rs 2>/dev/null || true)"
-        if [[ -n "${DIFF}" ]]; then
-            ok "Code changes found on ${FIRST_BRANCH}:"
-            echo "${DIFF}"
-        else
-            warn "No changes to src/main.rs on agent branches"
-        fi
-    else
-        warn "No agent branches found"
-    fi
-else
-    ok "src/main.rs was modified on main"
-fi
-
-# Try building and running --version
-echo ""
-if (cd "${TARGET}" && cargo build --quiet 2>/dev/null); then
-    VERSION_OUTPUT="$(cd "${TARGET}" && cargo run --quiet -- --version 2>&1 || true)"
-    if [[ -n "${VERSION_OUTPUT}" ]]; then
-        ok "--version output: ${VERSION_OUTPUT}"
-    else
-        warn "--version produced no output"
-    fi
-else
-    warn "cargo build failed on target"
-fi
-
-# Run tests
-echo ""
-if (cd "${TARGET}" && cargo test 2>&1 | /usr/bin/tail -5); then
-    ok "cargo test completed"
-else
-    warn "cargo test had failures"
-fi
+verify
 
 # Dump daemon log tail on failure
 if [[ ${EXIT_CODE} -ne 0 && -f "${DAEMON_LOG}" ]]; then
@@ -269,7 +237,8 @@ fi
 
 echo ""
 echo -e "${BOLD}${CYAN}=== Summary ===${NC}"
-echo -e "  Target:     ${TARGET}"
+echo -e "  Target:     ${E2E_TARGET}"
+echo -e "  Directory:  ${TARGET}"
 echo -e "  Exit code:  ${EXIT_CODE}"
 echo -e "  Daemon log: ${DAEMON_LOG}"
 echo -e "  Session:    ~/.local/share/loopr/sessions/latest/"
