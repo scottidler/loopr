@@ -252,6 +252,7 @@ pub fn build_work_prompt(
     existing_works: &[Work],
     learnings: &[String],
     findings: &[String],
+    plan_description: Option<&str>,
     guidance_section: Option<&str>,
 ) -> GenerationPrompt {
     log::debug!(
@@ -264,6 +265,14 @@ pub fn build_work_prompt(
     let mut msg = String::with_capacity(4096);
 
     msg.push_str("## Task: Generate Works\n\n");
+
+    // Include the original plan description so the LLM can see the full
+    // user-agreed structure when generating work items.
+    if let Some(plan_desc) = plan_description.filter(|d| !d.is_empty()) {
+        msg.push_str("### Original Plan (user-agreed - be faithful to this structure)\n");
+        msg.push_str(plan_desc);
+        msg.push_str("\n\n");
+    }
 
     msg.push_str("### Active Phase\n");
     msg.push_str(&format!("- **ID:** {}\n", phase.id));
@@ -1095,7 +1104,7 @@ mod tests {
     fn test_work_prompt_includes_phase_context() {
         init();
         let phase = Phase::new("spec-1".into(), "Foundation".into(), "Set up base".into(), 1);
-        let prompt = build_work_prompt(&phase, &[], &[], &[], None);
+        let prompt = build_work_prompt(&phase, &[], &[], &[], None, None);
         assert!(prompt.user_message.contains(&phase.id));
         assert!(prompt.user_message.contains("spec-1"));
         assert!(prompt.user_message.contains("Foundation"));
@@ -1108,7 +1117,7 @@ mod tests {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let wi = Work::new(phase.id.clone(), "Add login".into(), "Login endpoint".into());
-        let prompt = build_work_prompt(&phase, &[wi], &[], &[], None);
+        let prompt = build_work_prompt(&phase, &[wi], &[], &[], None, None);
         assert!(prompt.user_message.contains("Add login"));
         assert!(prompt.user_message.contains("Login endpoint"));
         assert!(!prompt.user_message.contains("None yet"));
@@ -1118,7 +1127,7 @@ mod tests {
     fn test_work_prompt_shows_none_when_no_existing() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let prompt = build_work_prompt(&phase, &[], &[], &[], None);
+        let prompt = build_work_prompt(&phase, &[], &[], &[], None, None);
         assert!(prompt.user_message.contains("None yet"));
     }
 
@@ -1126,7 +1135,7 @@ mod tests {
     fn test_work_prompt_includes_dependency_instructions() {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
-        let prompt = build_work_prompt(&phase, &[], &[], &[], None);
+        let prompt = build_work_prompt(&phase, &[], &[], &[], None, None);
         // Prompt should include batch dependency instructions
         assert!(
             prompt.user_message.contains("batch:0"),
@@ -1144,7 +1153,7 @@ mod tests {
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let mut wi = Work::new(phase.id.clone(), "WI 1".into(), "desc".into());
         wi.dependencies = vec!["dep-1".to_string()];
-        let prompt = build_work_prompt(&phase, &[wi], &[], &[], None);
+        let prompt = build_work_prompt(&phase, &[wi], &[], &[], None, None);
         assert!(prompt.user_message.contains("deps: dep-1"));
         assert!(prompt.user_message.contains("use the exact IDs above"));
     }
@@ -1154,7 +1163,7 @@ mod tests {
         init();
         let phase = Phase::new("spec-1".into(), "Phase".into(), "desc".into(), 1);
         let findings = vec!["src/auth/ directory has 5 modules".to_string()];
-        let prompt = build_work_prompt(&phase, &[], &[], &findings, None);
+        let prompt = build_work_prompt(&phase, &[], &[], &findings, None, None);
         assert!(prompt.user_message.contains("Codebase Context"));
         assert!(prompt.user_message.contains("src/auth/ directory has 5 modules"));
     }
@@ -2025,7 +2034,7 @@ mod tests {
         let learnings = vec!["Use generics".to_string()];
         let findings = vec!["Module at src/lib.rs".to_string()];
 
-        let prompt = build_work_prompt(&phase, &[], &learnings, &findings, None);
+        let prompt = build_work_prompt(&phase, &[], &learnings, &findings, None, None);
         assert_eq!(prompt.level, GenerationLevel::Work);
         assert!(prompt.user_message.contains("### Relevant Learnings"));
         assert!(prompt.user_message.contains("Use generics"));

@@ -490,7 +490,17 @@ fn build_generation_footer(
             GenerationLevel::Work => {
                 let phase = generation::find_phase_needing_works(stores)?;
                 let existing = generation::find_works_for_phase(stores, &phase.id);
-                build_work_prompt(&phase, &existing, &learnings, &[], guidance_section)
+                // Thread the original plan description through so the LLM can
+                // see the full plan context when generating work items.
+                let plan_description = generation::find_active_plan(stores).map(|p| p.description.clone());
+                build_work_prompt(
+                    &phase,
+                    &existing,
+                    &learnings,
+                    &[],
+                    plan_description.as_deref(),
+                    guidance_section,
+                )
             }
         };
 
@@ -1038,7 +1048,7 @@ fn build_fsm_footer(
                     if let Some(phase) = phase {
                         let existing = generation::find_works_for_phase(stores, &phase.id);
                         if existing.is_empty() {
-                            let prompt = build_work_prompt(&phase, &existing, &[], &[], None);
+                            let prompt = build_work_prompt(&phase, &existing, &[], &[], None, None);
                             format!(
                                 "## Activating Phase: {} (id: {})\n\n\
                                  Generate Works for this phase. Each Work should have clear \

@@ -314,7 +314,13 @@ mod tests {
         init_defaults();
         let p = &store().reviewer;
         assert!(p.starts_with("You are a Reviewer agent in the Loopr development orchestrator."));
-        for criterion in ["Acceptance Criteria", "Safety & Security", "Build & Tests", "Scope", "Quality & Style"] {
+        for criterion in [
+            "Acceptance Criteria",
+            "Safety & Security",
+            "Build & Tests",
+            "Scope",
+            "Quality & Style",
+        ] {
             assert!(p.contains(criterion), "reviewer.pmt missing criterion: {}", criterion);
         }
         assert!(p.contains("approve"));
@@ -545,7 +551,7 @@ mod tests {
     fn test_generation_work_prompt_contains_pmt_instructions() {
         init_defaults();
         let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), "d".into(), 1);
-        let prompt = crate::agents::generation::build_work_prompt(&phase, &[], &[], &[], None);
+        let prompt = crate::agents::generation::build_work_prompt(&phase, &[], &[], &[], None, None);
         let pmt = &store().generation_work;
         assert!(
             prompt.user_message.contains(pmt.trim()),
