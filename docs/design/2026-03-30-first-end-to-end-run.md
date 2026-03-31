@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler + Claude
 **Date:** 2026-03-30
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 **Supersedes:** `2026-03-21-first-end-to-end-run.md`
 
@@ -226,7 +226,29 @@ Bugs discovered during previous E2E attempts. These fix Loopr's orchestration ma
 | 8 | Reviewer received work IDs as bundle IDs | `724b4d4` | Added bd-* prefix validation on TriageBundle, AcceptBundle, and AssignAgent(reviewer); guarded post-dispatch hook |
 | 9 | Implementers produced zero code changes | `f565f9b` | ProposeBundle now auto-commits pending filesystem changes; force-propose logs failures instead of silently discarding |
 
-All 9 bugs are now fixed. The next run against `/tmp/loopr-e2e-target` will be the first clean attempt.
+| 10 | Integrator disabled by default | n/a (config) | `IntegratorConfig.enabled` defaults to `false`; e2e.sh now writes explicit config with `enabled: true` |
+
+All 10 bugs fixed. The first clean run succeeded on 2026-03-30.
+
+### First Successful Run (2026-03-30)
+
+**Result: GoalComplete** - full pipeline completed autonomously.
+
+| Stage | Agent | Iterations | Result |
+|-------|-------|-----------|--------|
+| Planning | Coordinator (`ag-qikke`) | FSM: Planning -> ActivatePhase -> Executing -> GoalComplete | 1 Work item created |
+| Implementation | Implementer (`ag-d05om`) | 4 | Wrote `src/main.rs` + `tests/version_test.rs` |
+| Review | Reviewer (`ag-0m9io`, `ag-ogwju`, `ag-2rzqv`) | 1 each | Approved with minor style notes |
+| Integration | Integrator (`ag-any47`) | deterministic | Merged bundle branch into main |
+
+**Target repo final state:**
+- `src/main.rs`: early-exit guard using `std::env::args()` + `env!("CARGO_PKG_VERSION")`
+- `tests/version_test.rs`: 2 integration tests (--version output + normal Hello World)
+- `cargo test`: 2 passed, 0 failed
+- `--version` output: `0.1.0`
+- Git log: `init` -> `Add --version flag` -> `impl: ...` -> `Merge bundle branch agent/wk-639ed`
+
+**Automated via `bin/e2e.sh`**: builds loopr, scaffolds target, writes config, starts daemon, runs headless, verifies results.
 
 ### State Recovery
 
@@ -295,19 +317,19 @@ This IS the testing strategy. Success = one task goes from Chat to GoalComplete 
 |------|------------|--------|------------|
 | LLM API rate limits or outages | Low | High | Run during off-peak; sufficient quota |
 | Coordinator infinite loop | Medium | Medium | Lifeguard escalation; `/stop` available |
-| Implementer exhausts iterations with no output | High | Medium | Already seen (Bug #9). Investigate root cause before next run |
+| Implementer exhausts iterations with no output | High | Medium | Fixed (Bug #9). ProposeBundle now auto-commits. Implementer completed in 4 iterations on successful run |
 | Reviewer rejects valid work | Medium | Low | Tune prompt if too aggressive |
 | Worktree cleanup fails in target repo | Low | Low | `git worktree prune` as fallback |
 | First run reveals many bugs | High | Low | Expected. Each fix is progress |
 
 ## Success Criteria
 
-The first E2E run is officially successful when:
+All criteria met on 2026-03-30:
 
-1. The `loopr` process reaches **GoalComplete** (visible in `loopr diagnose state`).
-2. Running the target binary with `--version` prints the crate version string.
-3. `cargo test` passes on the target repo.
-4. The fix-forward log documents every failure and its fix.
+1. [x] The `loopr` process reached **GoalComplete** (exit code 0).
+2. [x] Running the target binary with `--version` prints `0.1.0`.
+3. [x] `cargo test` passes: 2 passed, 0 failed.
+4. [x] Fix-forward log documents all 10 bugs and their fixes.
 
 ## Open Questions
 
@@ -324,4 +346,5 @@ The first E2E run is officially successful when:
 - Multi-level RWL: `docs/design/2026-02-26-multi-level-rwl.md`
 - Native tool use: `docs/design/2026-03-04-native-tool-use.md`
 - ReadFile dedup: `docs/design/2026-03-30-read-file-dedup.md`
+- E2E test script: `bin/e2e.sh`
 - Previous version: `docs/design/2026-03-21-first-end-to-end-run.md`

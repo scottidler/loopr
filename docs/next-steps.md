@@ -2,14 +2,12 @@
 
 This document outlines the major outstanding projects for Loopr, ordered by precedence. These items represent the remaining gaps between the current implementation and a fully hardened, autonomous "dev team in a box."
 
-## 1. First Autonomous E2E Run (The Proving Task)
+## ~~1. First Autonomous E2E Run (The Proving Task)~~ COMPLETE (2026-03-30)
 **Primary Links:**
 - [2026-03-30-first-end-to-end-run.md](design/2026-03-30-first-end-to-end-run.md) (supersedes 2026-03-21 version)
 - [2026-03-21-oracle-knowledge-extraction-next-steps.md](2026-03-21-oracle-knowledge-extraction-next-steps.md)
 
-Before building new features or refactoring, we must empirically prove the orchestration spine works on a real task.
-*   **Current:** The Chat -> Interview -> Plan -> Execute -> Merge pipeline is fully implemented, but has never successfully completed an autonomous run from start to finish.
-*   **Next:** Run Loopr on itself to implement the missing `/version` slash command in `src/tui/input.rs`. Document every failure, apply minimal fix-forwards, and establish a repeatable testing protocol for future runs.
+**Result:** GoalComplete. The full Chat -> Plan -> Coordinator -> Implementer -> Reviewer -> Integrator -> GoalComplete pipeline completed autonomously against a disposable `/tmp/loopr-e2e-target` scaffold repo. The Implementer added a `--version` flag in 4 iterations, the Reviewer approved, and the Integrator merged. 10 bugs were fixed during the fix-forward process. Automated via `bin/e2e.sh`.
 
 ## 2. The "Heavy" Runner Lane Architecture
 **Primary Links:**

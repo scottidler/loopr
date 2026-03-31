@@ -1,5 +1,8 @@
 # Loopr v3 - Claude Code Instructions
 
+## 🚨 CRITICAL WARNINGS 🚨
+- **DO NOT install git hooks (like `post-checkout`, `post-merge`, etc.) in the Loopr orchestrator repository itself.** Hooks like "Syncing database from JSONL files..." are meant exclusively for the TARGET repo being orchestrated. Conflating the Loopr codebase with the target repo is a fatal error.
+
 ## Project
 
 Loopr is a TUI-based "dev team in a box" orchestrator. The orchestration spine, persistence, all agent roles, chat with agentic tool loop, and streaming are implemented. Current focus: wiring the chat-to-orchestration bridge (chat funnel -> Plan creation -> autonomous execution) and getting a real end-to-end build working.
