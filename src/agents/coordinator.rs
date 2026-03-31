@@ -159,6 +159,45 @@ pub fn build_state_summary_with_sla(
         }
     }
 
+    // C3: Rejected Bundles whose parent Work is still InReview (needs rollback)
+    {
+        let Ok(bundles) = stores.read_bundles() else {
+            return summary;
+        };
+        let Ok(works) = stores.read_works() else {
+            return summary;
+        };
+        let mut rejected: Vec<_> = bundles
+            .values()
+            .filter(|b| b.status == BundleStatus::Rejected)
+            .filter(|b| {
+                works
+                    .get(&b.work_id)
+                    .map(|w| w.status == WorkStatus::InReview)
+                    .unwrap_or(false)
+            })
+            .collect();
+        rejected.sort_by_key(|b| b.created_at);
+        if !rejected.is_empty() {
+            summary.push_str("### Rejected Bundles (Work needs reset to Ready)\n");
+            for b in &rejected {
+                let reason = if b.verification.is_empty() {
+                    "bundle was rejected by reviewer".to_string()
+                } else {
+                    b.verification.clone()
+                };
+                summary.push_str(&format!(
+                    "- [{}] REJECTED (work: {} is InReview, reason: {}) \
+                     ACTION: use override_work on {} with target_status ready \
+                     and reason 'bundle {} rejected'. \
+                     The worker pool will auto-assign a new implementer.\n",
+                    b.id, b.work_id, reason, b.work_id, b.id
+                ));
+            }
+            summary.push('\n');
+        }
+    }
+
     // --- Active Agent Sessions ---
     {
         let Ok(sessions) = stores.read_agent_sessions() else {
@@ -3942,6 +3981,117 @@ mod tests {
         assert!(
             !summary.contains("Recently Merged Bundles"),
             "should NOT include merged bundles when WI is Done: {}",
+            summary
+        );
+    }
+
+    // --- C3: Rejected Bundles state summary tests ---
+
+    #[test]
+    fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() {
+        let dir = TestDir::new("loopr-coord-c3-rej");
+        let stores = test_stores(&dir);
+
+        // Create a WI in InReview status
+        let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+        wi.status = WorkStatus::InReview;
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        // Create a rejected bundle for that WI
+        let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
+        bundle.status = BundleStatus::Rejected;
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        assert!(
+            summary.contains("Rejected Bundles"),
+            "should include rejected bundles section: {}",
+            summary
+        );
+        assert!(
+            summary.contains(&bundle_id),
+            "should include the bundle ID: {}",
+            summary
+        );
+        assert!(summary.contains(&wi_id), "should include the work ID: {}", summary);
+        assert!(
+            summary.contains("override_work"),
+            "should include override_work directive: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_build_state_summary_rejected_bundle_includes_verification_reason() {
+        let dir = TestDir::new("loopr-coord-c3-reason");
+        let stores = test_stores(&dir);
+
+        let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+        wi.status = WorkStatus::InReview;
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
+        bundle.status = BundleStatus::Rejected;
+        bundle.verification = "Rejected: missing error handling".to_string();
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        assert!(
+            summary.contains("missing error handling"),
+            "should include rejection reason from verification: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
+        let dir = TestDir::new("loopr-coord-c3-noverify");
+        let stores = test_stores(&dir);
+
+        let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+        wi.status = WorkStatus::InReview;
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
+        bundle.status = BundleStatus::Rejected;
+        // verification left empty
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        assert!(
+            summary.contains("bundle was rejected by reviewer"),
+            "should use fallback reason when verification is empty: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
+        let dir = TestDir::new("loopr-coord-c3-noshow");
+        let stores = test_stores(&dir);
+
+        // Work already transitioned back to InProgress
+        let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+        wi.status = WorkStatus::InProgress;
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
+        bundle.status = BundleStatus::Rejected;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        assert!(
+            !summary.contains("Rejected Bundles"),
+            "should NOT show rejected bundles when work is not InReview: {}",
             summary
         );
     }
