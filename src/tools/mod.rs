@@ -7,6 +7,7 @@ pub mod error;
 pub mod executor;
 pub mod lane;
 pub mod router;
+pub mod sandbox;
 pub mod shell;
 pub mod spawn;
 pub mod traits;

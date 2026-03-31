@@ -7,12 +7,14 @@ use log::{debug, info};
 use tokio::sync::Semaphore;
 
 use crate::tools::lane::{Lane, LanePolicy};
+use crate::tools::sandbox::{bwrap_command, detect_bwrap, log_bwrap_status};
 use crate::tools::spawn::{SpawnResult, shell_command, spawn_with_process_group};
 
 /// Manages lane semaphores and dispatches tool execution with isolation.
 pub struct LaneRouter {
     policies: HashMap<Lane, LanePolicy>,
     semaphores: HashMap<Lane, Arc<Semaphore>>,
+    bwrap_available: bool,
 }
 
 impl Default for LaneRouter {
@@ -33,14 +35,22 @@ impl LaneRouter {
             .map(|(lane, policy)| (*lane, Arc::new(Semaphore::new(policy.max_slots))))
             .collect();
 
+        let bwrap_available = detect_bwrap();
+        log_bwrap_status();
+
         info!(
-            "LaneRouter initialized: local={} slots, net={} slots, heavy={} slots",
+            "LaneRouter initialized: local={} slots, net={} slots, heavy={} slots, bwrap={}",
             LanePolicy::local().max_slots,
             LanePolicy::net().max_slots,
             LanePolicy::heavy().max_slots,
+            bwrap_available,
         );
 
-        Self { policies, semaphores }
+        Self {
+            policies,
+            semaphores,
+            bwrap_available,
+        }
     }
 
     /// Execute a shell command in the appropriate lane.
@@ -78,8 +88,13 @@ impl LaneRouter {
 
         debug!("acquired slot in lane {}", lane);
 
-        // 2. Build command (plain shell; bwrap wrapping added in Phase 3)
-        let cmd = shell_command(command, working_dir);
+        // 2. Build command - bwrap for sandboxed lanes, plain shell otherwise
+        let cmd = if policy.sandbox_net && self.bwrap_available {
+            debug!("wrapping command with bwrap --unshare-net");
+            bwrap_command(command, working_dir)
+        } else {
+            shell_command(command, working_dir)
+        };
 
         // 3. Spawn with setsid() for process group isolation
         let result = spawn_with_process_group(cmd, timeout).await;
@@ -94,6 +109,11 @@ impl LaneRouter {
     /// Get the policy for a lane.
     pub fn policy(&self, lane: Lane) -> Option<&LanePolicy> {
         self.policies.get(&lane)
+    }
+
+    /// Whether bwrap sandboxing is available for the Local lane.
+    pub fn bwrap_available(&self) -> bool {
+        self.bwrap_available
     }
 
     /// Get the number of available slots for a lane.
