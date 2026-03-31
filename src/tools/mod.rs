@@ -6,6 +6,7 @@ pub mod detect;
 pub mod error;
 pub mod executor;
 pub mod shell;
+pub mod spawn;
 pub mod traits;
 pub mod types;
 
@@ -15,14 +16,13 @@ pub use types::{CompletionResponse, ContentBlock, Message, StopReason, ToolCall,
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
 
-use eyre::{Context, Result, eyre};
+use eyre::{Result, eyre};
 use log::debug;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 
 use crate::config::ToolEntry;
+use crate::tools::spawn::{shell_command, spawn_with_process_group};
 
 /// Built-in tool presets for JavaScript projects.
 fn js_preset() -> Vec<ToolEntry> {
@@ -87,7 +87,9 @@ pub struct ToolResult {
 }
 
 /// Maximum output size per stream (stdout/stderr) in bytes (~8K tokens).
-const MAX_OUTPUT: usize = 32_000;
+/// Used by tests; actual truncation is in spawn.rs.
+#[cfg(test)]
+const MAX_OUTPUT: usize = crate::tools::spawn::MAX_INLINE_OUTPUT;
 
 /// Executes configured tools as async subprocesses with timeout and output truncation.
 pub struct ToolRunner {
@@ -133,9 +135,8 @@ impl ToolRunner {
 
     /// Execute a tool in the given working directory.
     ///
-    /// The tool command is run via `sh -c` to support pipes and shell features.
-    /// If the tool has `worktree: true`, the command runs in `working_dir`.
-    /// Timeout is enforced: SIGTERM first, then SIGKILL after a grace period.
+    /// The tool command is run via `sh -c` in a new process group (`setsid()`).
+    /// On timeout: `killpg(SIGTERM)` -> 5s grace -> `killpg(SIGKILL)`.
     /// Output is truncated to MAX_OUTPUT bytes per stream.
     pub async fn run(&self, tool: &str, args: &[String], working_dir: &Path) -> Result<ToolResult> {
         debug!(
@@ -151,77 +152,25 @@ impl ToolRunner {
             format!("{} {}", entry.command, args.join(" "))
         };
 
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&full_command);
+        let effective_dir = if entry.worktree { working_dir } else { Path::new("/tmp") };
 
-        if entry.worktree {
-            cmd.current_dir(working_dir);
-        }
-
-        // Kill on drop ensures cleanup if we abandon the future
-        cmd.kill_on_drop(true);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        let timeout_dur = std::time::Duration::from_secs(entry.timeout_secs);
-        let start = Instant::now();
-
-        // Spawn child so we control the signal sequence (Gap #10)
-        let child = cmd.spawn().context(format!("failed to spawn tool: {}", tool))?;
-        #[cfg(unix)]
-        let child_pid = child.id();
-
-        let output = match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
-            Ok(result) => result.context(format!("failed to execute tool: {}", tool))?,
-            Err(_) => {
-                // Gap #10: SIGTERM → wait 5s → SIGKILL escalation
-                #[cfg(unix)]
-                if let Some(pid) = child_pid {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
-                    // Note: child is moved into wait_with_output above, so we can't call
-                    // child.wait() here. The kill_on_drop will send SIGKILL on drop.
-                }
-                let duration = start.elapsed();
-                return Ok(ToolResult {
-                    tool: tool.to_string(),
-                    exit_code: -1,
-                    stdout: String::new(),
-                    stderr: format!(
-                        "tool '{}' timed out after {}s (SIGTERM+SIGKILL)",
-                        tool, entry.timeout_secs
-                    ),
-                    duration_ms: duration.as_millis() as u64,
-                    truncated: false,
-                });
-            }
-        };
-
-        let duration = start.elapsed();
-
-        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let mut truncated = false;
-
-        if stdout.len() > MAX_OUTPUT {
-            stdout.truncate(MAX_OUTPUT);
-            stdout.push_str("\n... (truncated)");
-            truncated = true;
-        }
-        if stderr.len() > MAX_OUTPUT {
-            stderr.truncate(MAX_OUTPUT);
-            stderr.push_str("\n... (truncated)");
-            truncated = true;
-        }
+        let cmd = shell_command(&full_command, effective_dir);
+        let result = spawn_with_process_group(cmd, entry.timeout_secs).await?;
 
         Ok(ToolResult {
             tool: tool.to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout,
-            stderr,
-            duration_ms: duration.as_millis() as u64,
-            truncated,
+            exit_code: result.exit_code,
+            stdout: result.stdout,
+            stderr: if result.timed_out {
+                format!(
+                    "tool '{}' timed out after {}s (SIGTERM+SIGKILL)",
+                    tool, entry.timeout_secs
+                )
+            } else {
+                result.stderr
+            },
+            duration_ms: result.duration_ms,
+            truncated: result.persisted_output_path.is_some(),
         })
     }
 }
@@ -397,9 +346,13 @@ mod tests {
         let dir = std::env::temp_dir();
         let result = runner.run("big-output", &[], &dir).await.unwrap();
         assert!(result.truncated);
-        assert!(result.stdout.ends_with("... (truncated)"));
-        // Truncated output should be at most MAX_OUTPUT + the truncation marker
-        assert!(result.stdout.len() <= MAX_OUTPUT + 20);
+        assert!(
+            result.stdout.contains("truncated"),
+            "expected truncation marker in output: {}",
+            &result.stdout[result.stdout.len().saturating_sub(100)..]
+        );
+        // Truncated output should be bounded (inline portion + marker + path)
+        assert!(result.stdout.len() <= MAX_OUTPUT + 200);
     }
 
     #[test]

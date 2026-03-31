@@ -1,13 +1,12 @@
 use std::path::Path;
-use std::process::Output;
-use std::time::Instant;
 
-use eyre::{Context, Result};
+use eyre::Result;
 use log::debug;
-use tokio::process::Command;
+
+use crate::tools::spawn::{MAX_INLINE_OUTPUT, shell_command, spawn_with_process_group};
 
 /// Maximum output size per stream (stdout/stderr) in bytes (~8K tokens).
-pub const MAX_OUTPUT: usize = 32_000;
+pub const MAX_OUTPUT: usize = MAX_INLINE_OUTPUT;
 
 /// Result of a shell command execution with metadata.
 #[derive(Debug)]
@@ -22,8 +21,11 @@ pub struct ShellOutput {
 
 /// Execute a shell command in the given working directory with timeout.
 ///
+/// Uses `setsid()` to create a new process group, enabling `killpg()` cleanup
+/// on timeout (SIGTERM -> 5s grace -> SIGKILL).
+///
 /// This is the shared subprocess execution logic used by both `ConfiguredTool`
-/// and the `ShellTool` built-in. Extracts the core logic from `ToolRunner::run()`.
+/// and the `ShellTool` built-in.
 pub async fn execute_shell_command(command: &str, working_dir: &Path, timeout_secs: u64) -> Result<ShellOutput> {
     debug!(
         "execute_shell_command(command={}, working_dir={}, timeout={}s)",
@@ -32,72 +34,17 @@ pub async fn execute_shell_command(command: &str, working_dir: &Path, timeout_se
         timeout_secs
     );
 
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(command);
-    cmd.current_dir(working_dir);
-    cmd.kill_on_drop(true);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-
-    let timeout_dur = std::time::Duration::from_secs(timeout_secs);
-    let start = Instant::now();
-
-    let child = cmd.spawn().context(format!("failed to spawn command: {}", command))?;
-    #[cfg(unix)]
-    let child_pid = child.id();
-
-    let output = match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
-        Ok(result) => result.context(format!("failed to execute command: {}", command))?,
-        Err(_) => {
-            #[cfg(unix)]
-            if let Some(pid) = child_pid {
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
-                }
-            }
-            let duration = start.elapsed();
-            return Ok(ShellOutput {
-                stdout: String::new(),
-                stderr: format!("command timed out after {}s (SIGTERM+SIGKILL)", timeout_secs),
-                exit_code: -1,
-                duration_ms: duration.as_millis() as u64,
-                truncated: false,
-                timed_out: true,
-            });
-        }
-    };
-
-    let duration = start.elapsed();
-    let (stdout, stderr, truncated) = truncate_output(&output);
+    let cmd = shell_command(command, working_dir);
+    let result = spawn_with_process_group(cmd, timeout_secs).await?;
 
     Ok(ShellOutput {
-        stdout,
-        stderr,
-        exit_code: output.status.code().unwrap_or(-1),
-        duration_ms: duration.as_millis() as u64,
-        truncated,
-        timed_out: false,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exit_code: result.exit_code,
+        duration_ms: result.duration_ms,
+        truncated: result.persisted_output_path.is_some(),
+        timed_out: result.timed_out,
     })
-}
-
-/// Truncate stdout/stderr to MAX_OUTPUT bytes.
-fn truncate_output(output: &Output) -> (String, String, bool) {
-    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let mut truncated = false;
-
-    if stdout.len() > MAX_OUTPUT {
-        stdout.truncate(MAX_OUTPUT);
-        stdout.push_str("\n... (truncated)");
-        truncated = true;
-    }
-    if stderr.len() > MAX_OUTPUT {
-        stderr.truncate(MAX_OUTPUT);
-        stderr.push_str("\n... (truncated)");
-        truncated = true;
-    }
-
-    (stdout, stderr, truncated)
 }
 
 /// Format a ShellOutput into a human-readable string for tool results.
