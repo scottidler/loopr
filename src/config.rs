@@ -119,6 +119,31 @@ pub enum CoverageStrictness {
     SuggestOnly,
 }
 
+/// Goal clarity gate configuration - LLM pre-validation for `loopr run`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ClarityGateConfig {
+    /// Enable/disable the clarity gate (default: true).
+    pub enabled: bool,
+    /// Model for clarity evaluation.
+    pub model: String,
+    /// Minimum score per dimension to pass (default: 3).
+    pub min_score: u8,
+    /// API key env var.
+    pub api_key_env: String,
+}
+
+impl Default for ClarityGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: "claude-sonnet-4-6".to_string(),
+            min_score: 3,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+        }
+    }
+}
+
 /// Strategy knobs controlling system behavior.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -143,6 +168,8 @@ pub struct StrategyConfig {
     pub plan_interview_enabled: bool,
     /// Require explicit user approval of the Plan before decomposition.
     pub plan_approval_required: bool,
+    /// Goal clarity gate configuration.
+    pub clarity_gate: ClarityGateConfig,
 }
 
 impl Default for StrategyConfig {
@@ -162,6 +189,7 @@ impl Default for StrategyConfig {
             max_bubble_up_depth: 2,
             plan_interview_enabled: true,
             plan_approval_required: true,
+            clarity_gate: ClarityGateConfig::default(),
         }
     }
 }

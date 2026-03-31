@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used)]
 
 pub mod agents;
+pub mod clarity;
 pub mod cli;
 pub mod config;
 pub mod daemon;

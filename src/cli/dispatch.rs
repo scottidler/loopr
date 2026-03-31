@@ -28,9 +28,18 @@ pub async fn run(command: &Command, socket_path: &Path, role: Role) -> Result<()
         timeout,
         plan,
         no_monitor,
+        skip_clarity_gate,
     } = command
     {
-        return run_headless(socket_path, goal, *timeout, plan.as_deref(), *no_monitor).await;
+        return run_headless(
+            socket_path,
+            goal,
+            *timeout,
+            plan.as_deref(),
+            *no_monitor,
+            *skip_clarity_gate,
+        )
+        .await;
     }
 
     let mut client = IpcClient::connect(socket_path)
@@ -116,7 +125,10 @@ async fn run_headless(
     timeout_secs: u64,
     plan_text: Option<&str>,
     no_monitor: bool,
+    skip_clarity_gate: bool,
 ) -> Result<()> {
+    // Clarity gate will be wired in Phase 2
+    let _ = skip_clarity_gate;
     let mut client = IpcClient::connect(socket_path)
         .await
         .context("failed to connect to daemon - is it running?")?;

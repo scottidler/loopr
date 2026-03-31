@@ -472,6 +472,9 @@ pub enum Command {
         /// Submit goal and exit immediately (no monitoring)
         #[arg(long)]
         no_monitor: bool,
+        /// Skip the goal clarity gate
+        #[arg(long)]
+        skip_clarity_gate: bool,
     },
 }
 
@@ -1155,6 +1158,55 @@ mod tests {
                 assert!(failed);
             }
             _ => panic!("expected Diagnose Agents"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_run() {
+        let cli = Cli::parse_from(["loopr", "run", "Add a /version command"]);
+        match cli.command {
+            Some(Command::Run {
+                goal,
+                timeout,
+                plan,
+                no_monitor,
+                skip_clarity_gate,
+            }) => {
+                assert_eq!(goal, "Add a /version command");
+                assert_eq!(timeout, 3600);
+                assert!(plan.is_none());
+                assert!(!no_monitor);
+                assert!(!skip_clarity_gate);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_run_with_skip_clarity_gate() {
+        let cli = Cli::parse_from(["loopr", "run", "--skip-clarity-gate", "make things better"]);
+        match cli.command {
+            Some(Command::Run {
+                goal,
+                skip_clarity_gate,
+                ..
+            }) => {
+                assert_eq!(goal, "make things better");
+                assert!(skip_clarity_gate);
+            }
+            _ => panic!("expected Run with skip-clarity-gate"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_run_with_plan() {
+        let cli = Cli::parse_from(["loopr", "run", "Build feature", "--plan", "Step 1: do X"]);
+        match cli.command {
+            Some(Command::Run { goal, plan, .. }) => {
+                assert_eq!(goal, "Build feature");
+                assert_eq!(plan.as_deref(), Some("Step 1: do X"));
+            }
+            _ => panic!("expected Run with plan"),
         }
     }
 }
