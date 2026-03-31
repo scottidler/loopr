@@ -1895,6 +1895,11 @@ mod tests {
             .output()
             .expect("git init failed");
         std::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .expect("git config gpgsign failed");
+        std::process::Command::new("git")
             .args(["commit", "--allow-empty", "-m", "initial"])
             .current_dir(&dir)
             .output()

@@ -2635,6 +2635,12 @@ mod tests {
             .output()
             .await
             .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
 
         // Create a file to commit
         std::fs::write(dir.join("test.txt"), "hello").unwrap();
@@ -2676,6 +2682,12 @@ mod tests {
             .output()
             .await
             .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
 
         std::fs::write(dir.join("a.txt"), "aaa").unwrap();
         std::fs::write(dir.join("b.txt"), "bbb").unwrap();
@@ -2709,6 +2721,12 @@ mod tests {
             .unwrap();
         tokio::process::Command::new("git")
             .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
             .current_dir(&dir)
             .output()
             .await
@@ -2770,6 +2788,12 @@ mod tests {
             .unwrap();
         tokio::process::Command::new("git")
             .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
             .current_dir(&dir)
             .output()
             .await
@@ -3253,6 +3277,12 @@ mod tests {
             .unwrap();
         tokio::process::Command::new("git")
             .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
             .current_dir(&dir)
             .output()
             .await
@@ -3972,6 +4002,12 @@ mod tests {
             .output()
             .await
             .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
         std::fs::write(dir.join("init.txt"), "init").unwrap();
         tokio::process::Command::new("git")
             .args(["add", "."])
@@ -4045,6 +4081,11 @@ mod tests {
             .await;
         let _ = tokio::process::Command::new("git")
             .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
             .current_dir(&dir)
             .output()
             .await;

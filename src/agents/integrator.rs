@@ -1919,6 +1919,7 @@ mod tests {
         git(&dir, &["init"]);
         git(&dir, &["config", "user.email", "test@test.com"]);
         git(&dir, &["config", "user.name", "Test"]);
+        git(&dir, &["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.join("main.txt"), "main").unwrap();
         git(&dir, &["add", "."]);
         git(&dir, &["commit", "-m", "initial"]);
@@ -1961,6 +1962,7 @@ mod tests {
         git(&dir, &["init"]);
         git(&dir, &["config", "user.email", "test@test.com"]);
         git(&dir, &["config", "user.name", "Test"]);
+        git(&dir, &["config", "commit.gpgsign", "false"]);
         std::fs::write(dir.join("conflict.txt"), "main-content").unwrap();
         git(&dir, &["add", "."]);
         git(&dir, &["commit", "-m", "initial"]);
