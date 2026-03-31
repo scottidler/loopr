@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eyre::{Result, eyre};
-use log::{debug, info};
+use log::{debug, info, warn};
 use tokio::sync::Semaphore;
 
 use crate::tools::lane::{Lane, LanePolicy};
@@ -120,6 +120,79 @@ impl LaneRouter {
     pub fn available_slots(&self, lane: Lane) -> usize {
         self.semaphores.get(&lane).map(|s| s.available_permits()).unwrap_or(0)
     }
+
+    /// Start a tool in the background, returning immediately with a task handle.
+    ///
+    /// The agent can poll the output_path or await the handle for the result.
+    /// Slot acquisition happens inside the background task (via self.spawn).
+    pub fn spawn_background(
+        self: &Arc<Self>,
+        command: &str,
+        working_dir: &Path,
+        lane: Lane,
+        timeout_secs: Option<u64>,
+    ) -> BackgroundTask {
+        let task_id = format!(
+            "bg-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let output_dir = std::env::temp_dir().join("loopr-bg");
+        let _ = std::fs::create_dir_all(&output_dir);
+        let output_path = output_dir.join(format!("{}.log", task_id));
+
+        let router = Arc::clone(self);
+        let cmd = command.to_string();
+        let dir = working_dir.to_path_buf();
+        let out = output_path.clone();
+        let tid = task_id.clone();
+
+        let handle = tokio::spawn(async move {
+            debug!("background task {} starting", tid);
+            let result = router
+                .spawn(&cmd, &dir, lane, timeout_secs)
+                .await
+                .unwrap_or_else(|e| SpawnResult {
+                    stdout: String::new(),
+                    stderr: e.to_string(),
+                    exit_code: -1,
+                    duration_ms: 0,
+                    timed_out: false,
+                    persisted_output_path: None,
+                });
+
+            if let Err(e) = std::fs::write(
+                &out,
+                format!(
+                    "exit_code: {}\n---stdout---\n{}\n---stderr---\n{}",
+                    result.exit_code, result.stdout, result.stderr
+                ),
+            ) {
+                warn!("background task {} failed to write output: {}", tid, e);
+            }
+
+            debug!("background task {} completed: exit_code={}", tid, result.exit_code);
+            result
+        });
+
+        BackgroundTask {
+            task_id,
+            output_path,
+            handle,
+        }
+    }
+}
+
+/// Handle for a backgrounded tool execution.
+pub struct BackgroundTask {
+    /// Unique identifier for this background task.
+    pub task_id: String,
+    /// Path where the full output will be written on completion.
+    pub output_path: PathBuf,
+    /// Join handle to await the result.
+    pub handle: tokio::task::JoinHandle<SpawnResult>,
 }
 
 #[allow(clippy::unwrap_used)]
