@@ -8,7 +8,7 @@ use crate::tools::shell::{execute_in_lane, format_shell_output};
 use crate::tools::traits::{Tool, ToolResult};
 
 /// A configured project tool (from `loopr.yml` or auto-detection) that implements the `Tool` trait.
-/// Wraps a `ToolEntry` and delegates execution to `execute_shell_command()`.
+/// Wraps a `ToolEntry` and delegates execution to `execute_in_lane()`.
 pub struct ConfiguredTool {
     entry: ToolEntry,
 }
