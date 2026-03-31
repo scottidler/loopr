@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -1334,6 +1335,27 @@ fn handle_phase_transition(
 
 // --- Work handlers ---
 
+/// BFS cycle detection: returns true if adding `dependencies` to `new_id` would
+/// create a cycle in the dependency graph.
+fn detect_dependency_cycle(works: &HashMap<String, Work>, new_id: &str, dependencies: &[String]) -> bool {
+    let mut visited = HashSet::new();
+    let mut queue: VecDeque<&str> = dependencies.iter().map(|s| s.as_str()).collect();
+
+    while let Some(current) = queue.pop_front() {
+        if current == new_id {
+            return true;
+        }
+        if visited.insert(current)
+            && let Some(wi) = works.get(current)
+        {
+            for dep in &wi.dependencies {
+                queue.push_back(dep.as_str());
+            }
+        }
+    }
+    false
+}
+
 fn handle_work_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -1460,6 +1482,19 @@ fn handle_work_create(
         work.resource_tags = resource_tags;
         work.acceptance_criteria = acceptance_criteria.clone();
         work.dependencies = dependencies;
+
+        // Reject circular dependencies (including self-references)
+        if !work.dependencies.is_empty() {
+            let works = stores.read_works()?;
+            if detect_dependency_cycle(&works, &work.id, &work.dependencies) {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::precondition_failed(
+                        "Circular dependency detected: adding these dependencies would create a cycle",
+                    ),
+                ));
+            }
+        }
 
         let id = work.id.clone();
 
@@ -5320,6 +5355,28 @@ fn handle_work_update(
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
+
+        // Pre-validate dependency cycle before taking mutable borrow
+        if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
+            let new_deps: Vec<String> = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            if !new_deps.is_empty() {
+                let works = stores.read_works()?;
+                // Exclude self to avoid false positives from stale edges
+                let check_works: HashMap<String, Work> = works
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != id)
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                if detect_dependency_cycle(&check_works, &id, &new_deps) {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(
+                            "Circular dependency detected: updating dependencies would create a cycle",
+                        ),
+                    ));
+                }
+            }
+        }
 
         let mut works = stores.write_works()?;
         let wi = match works.get_mut(&id) {
@@ -13357,5 +13414,185 @@ mod tests {
         let plan_id = resp.result.as_ref().unwrap()["plan_id"].as_str().unwrap();
         let plans = stores.read_plans().unwrap();
         assert_eq!(plans[plan_id].title, "Auth Module");
+    }
+
+    // ── Phase 3: Cycle Detection tests ──────────────────────────────────
+
+    /// Helper: create a Work in the store and return its ID.
+    fn create_work(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+        phase_id: &str,
+        title: &str,
+        deps: &[&str],
+    ) -> String {
+        let mut params = json!({
+            "phase_id": phase_id,
+            "title": title,
+            "description": "test",
+            "resource_tags": ["src/"],
+            "acceptance_criteria": ["pass"],
+        });
+        if !deps.is_empty() {
+            params["dependencies"] = json!(deps);
+        }
+        let resp = dispatch(
+            stores,
+            tx,
+            wm,
+            &test_integrator_config(),
+            DaemonRequest::new(1, "work.create", params),
+        );
+        assert!(!resp.is_error(), "work.create failed: {:?}", resp.error);
+        resp.result.unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_detect_cycle_self_reference() {
+        let mut works = HashMap::new();
+        let w = Work::new("ph-1".into(), "A".into(), "desc".into());
+        let id = w.id.clone();
+        works.insert(id.clone(), w);
+        // A depends on itself
+        assert!(detect_dependency_cycle(&works, &id, std::slice::from_ref(&id)));
+    }
+
+    #[test]
+    fn test_detect_cycle_direct() {
+        let mut works = HashMap::new();
+        let mut a = Work::new("ph-1".into(), "A".into(), "desc".into());
+        let b = Work::new("ph-1".into(), "B".into(), "desc".into());
+        let a_id = a.id.clone();
+        let b_id = b.id.clone();
+        // A depends on B
+        a.dependencies = vec![b_id.clone()];
+        works.insert(a_id.clone(), a);
+        works.insert(b_id.clone(), b);
+        // Creating C with deps [A] is fine
+        assert!(!detect_dependency_cycle(&works, "wk-new", std::slice::from_ref(&a_id)));
+        // But if B tries to depend on A, it's a cycle
+        assert!(detect_dependency_cycle(&works, &b_id, std::slice::from_ref(&a_id)));
+    }
+
+    #[test]
+    fn test_detect_cycle_transitive() {
+        let mut works = HashMap::new();
+        let mut a = Work::new("ph-1".into(), "A".into(), "desc".into());
+        let mut b = Work::new("ph-1".into(), "B".into(), "desc".into());
+        let c = Work::new("ph-1".into(), "C".into(), "desc".into());
+        let a_id = a.id.clone();
+        let b_id = b.id.clone();
+        let c_id = c.id.clone();
+        // A -> B -> C
+        a.dependencies = vec![b_id.clone()];
+        b.dependencies = vec![c_id.clone()];
+        works.insert(a_id.clone(), a);
+        works.insert(b_id.clone(), b);
+        works.insert(c_id.clone(), c);
+        // C trying to depend on A creates transitive cycle
+        assert!(detect_dependency_cycle(&works, &c_id, std::slice::from_ref(&a_id)));
+    }
+
+    #[test]
+    fn test_detect_cycle_valid_chain() {
+        let mut works = HashMap::new();
+        let a = Work::new("ph-1".into(), "A".into(), "desc".into());
+        let mut b = Work::new("ph-1".into(), "B".into(), "desc".into());
+        let a_id = a.id.clone();
+        let b_id = b.id.clone();
+        b.dependencies = vec![a_id.clone()];
+        works.insert(a_id, a);
+        works.insert(b_id.clone(), b);
+        // C depends on B (linear chain A <- B <- C) - no cycle
+        assert!(!detect_dependency_cycle(&works, "wk-c", &[b_id]));
+    }
+
+    #[test]
+    fn test_detect_cycle_diamond_accepted() {
+        let mut works = HashMap::new();
+        let d = Work::new("ph-1".into(), "D".into(), "desc".into());
+        let mut b = Work::new("ph-1".into(), "B".into(), "desc".into());
+        let mut c = Work::new("ph-1".into(), "C".into(), "desc".into());
+        let d_id = d.id.clone();
+        let b_id = b.id.clone();
+        let c_id = c.id.clone();
+        // B -> D, C -> D (diamond: A -> B -> D, A -> C -> D)
+        b.dependencies = vec![d_id.clone()];
+        c.dependencies = vec![d_id.clone()];
+        works.insert(d_id, d);
+        works.insert(b_id.clone(), b);
+        works.insert(c_id.clone(), c);
+        // A depends on both B and C - diamond, no cycle
+        assert!(!detect_dependency_cycle(&works, "wk-a", &[b_id, c_id]));
+    }
+
+    #[test]
+    fn test_self_referencing_dependency_rejected_via_handler() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        // Create A first (no deps)
+        let a_id = create_work(&stores, &tx, &wm, &phase_id, "A", &[]);
+
+        // Try to update A to depend on itself
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(2, "work.update", json!({"id": a_id, "dependencies": [a_id]})),
+        );
+        assert!(resp.is_error(), "expected error for self-referencing dependency");
+        assert!(
+            resp.error.as_ref().unwrap().message.contains("Circular dependency"),
+            "expected cycle error, got: {:?}",
+            resp.error
+        );
+    }
+
+    #[test]
+    fn test_direct_cycle_rejected_at_update() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        let a_id = create_work(&stores, &tx, &wm, &phase_id, "A", &[]);
+        let b_id = create_work(&stores, &tx, &wm, &phase_id, "B", &[&a_id]);
+
+        // Update A to depend on B - creates cycle A -> B -> A
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(3, "work.update", json!({"id": a_id, "dependencies": [b_id]})),
+        );
+        assert!(resp.is_error(), "expected error for direct cycle");
+        assert!(
+            resp.error.as_ref().unwrap().message.contains("Circular dependency"),
+            "expected cycle error, got: {:?}",
+            resp.error
+        );
+    }
+
+    #[test]
+    fn test_valid_chain_accepted_via_handler() {
+        let stores = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm);
+
+        let a_id = create_work(&stores, &tx, &wm, &phase_id, "A", &[]);
+        let b_id = create_work(&stores, &tx, &wm, &phase_id, "B", &[&a_id]);
+        let c_id = create_work(&stores, &tx, &wm, &phase_id, "C", &[&b_id]);
+
+        // Verify all were created successfully (linear chain)
+        assert!(!a_id.is_empty());
+        assert!(!b_id.is_empty());
+        assert!(!c_id.is_empty());
     }
 }
