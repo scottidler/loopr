@@ -18,15 +18,14 @@ This document outlines the major outstanding projects for Loopr, ordered by prec
 
 **Result:** Implemented as spawn-policy-based lanes (simpler than the original Unix-socket runner subprocess design, validated by Claude Code's architecture). All subprocess-spawning tools now run in a new process group via `setsid()` with `killpg()` SIGTERM->5s->SIGKILL escalation. Three lanes with semaphore slot limiting: Local (10 slots, bwrap `--unshare-net` sandboxing), Net (5 slots), Heavy (1 slot). Shell builtin supports `run_in_background` for non-blocking builds. Large outputs persisted to disk.
 
-## 3. Semantic Bubble-Up Logic
+## ~~3. Semantic Bubble-Up Logic~~ COMPLETE (2026-03-30)
 **Primary Links:**
+- [2026-03-30-semantic-bubble-up-wiring.md](design/2026-03-30-semantic-bubble-up-wiring.md) (design doc)
 - [2026-03-03-semantic-decomposition.md](design/2026-03-03-semantic-decomposition.md)
 - [2026-03-21-coverage-bubble-up-and-headless-mode.md](design/2026-03-21-coverage-bubble-up-and-headless-mode.md)
 - [remaining-gaps.md](design/remaining-gaps.md)
 
-The system needs the ability to self-correct when higher-level plans produce inadequate or incomplete lower-level tasks.
-*   **Current:** The `Coordinator` successfully increments `decomposition_attempts` when coverage evaluation fails. However, when the maximum attempts are reached, it simply signals a `need_help` escalation.
-*   **Next:** Implement the full `ReviseParent` action. When a child's coverage fails repeatedly, the system should transition the parent (e.g., a `Spec`) back to `Draft`, appending diagnostic feedback of the gaps, and regenerate the parent automatically.
+**Result:** Implemented. Connected the existing Coverage Evaluator into the `Coordinator` decision tree. When decomposition attempts are exhausted, the system emits `ReviseParent` (instead of `need_help`), transitioning the parent back to Draft. Extracted coverage gaps into a `diagnostic` Learning, injected that Learning into the prompt builder via `query_learnings_for_level()`, and added `bubble_up_count` tracking to prevent infinite loops. The system can now autonomously self-correct vague parent documents.
 
 ## 4. Pipeline Hardening: Locks & Timeouts
 **Primary Links:**
