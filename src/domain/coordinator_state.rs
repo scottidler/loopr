@@ -57,6 +57,10 @@ pub struct CoordinatorState {
     /// Tracks how many times coverage evaluation has failed for children of a parent.
     #[serde(default)]
     pub decomposition_attempts: HashMap<String, u32>,
+    /// Number of times we've bubbled up (revised a parent due to child decomposition failure).
+    /// Guarded by config.strategy.max_bubble_up_depth. Reset on each new goal.
+    #[serde(default)]
+    pub bubble_up_count: u32,
     pub goal_started_at: i64,
     pub phases_completed: Vec<String>,
     /// Interview context accumulated during the Interviewing state.
@@ -90,6 +94,7 @@ impl CoordinatorState {
             work_first_assigned_at: HashMap::new(),
             phase_activated_at: None,
             decomposition_attempts: HashMap::new(),
+            bubble_up_count: 0,
             goal_started_at: now,
             phases_completed: Vec::new(),
             interview_context: Vec::new(),
@@ -162,6 +167,19 @@ impl CoordinatorState {
     /// Reset decomposition attempts for a parent (after bubble-up).
     pub fn reset_decomposition_attempts(&mut self, parent_id: &str) {
         self.decomposition_attempts.remove(parent_id);
+        self.updated_at = id::now_millis();
+    }
+
+    /// Increment the bubble-up counter. Returns the new count.
+    pub fn increment_bubble_up(&mut self) -> u32 {
+        self.bubble_up_count += 1;
+        self.updated_at = id::now_millis();
+        self.bubble_up_count
+    }
+
+    /// Reset the bubble-up counter (called on new goal).
+    pub fn reset_bubble_up(&mut self) {
+        self.bubble_up_count = 0;
         self.updated_at = id::now_millis();
     }
 
@@ -401,6 +419,52 @@ mod tests {
     }
 
     // --- InterviewMode tests ---
+
+    // --- Bubble-up tracking tests ---
+
+    #[test]
+    fn test_bubble_up_count_starts_at_zero() {
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        assert_eq!(state.bubble_up_count, 0);
+    }
+
+    #[test]
+    fn test_increment_bubble_up() {
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        assert_eq!(state.increment_bubble_up(), 1);
+        assert_eq!(state.increment_bubble_up(), 2);
+        assert_eq!(state.increment_bubble_up(), 3);
+        assert_eq!(state.bubble_up_count, 3);
+    }
+
+    #[test]
+    fn test_reset_bubble_up() {
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        state.increment_bubble_up();
+        state.increment_bubble_up();
+        assert_eq!(state.bubble_up_count, 2);
+        state.reset_bubble_up();
+        assert_eq!(state.bubble_up_count, 0);
+    }
+
+    #[test]
+    fn test_serde_backward_compat_without_bubble_up() {
+        // Old JSON without bubble_up_count should deserialize with default 0
+        let json = serde_json::json!({
+            "id": "test-id",
+            "goal_id": "goal-1",
+            "fsm_state": "Planning",
+            "current_phase_id": null,
+            "work_attempts": {},
+            "phase_activated_at": null,
+            "goal_started_at": 1000,
+            "phases_completed": [],
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let state: CoordinatorState = serde_json::from_value(json).unwrap();
+        assert_eq!(state.bubble_up_count, 0);
+    }
 
     #[test]
     fn test_new_with_skip_starts_in_planning() {
