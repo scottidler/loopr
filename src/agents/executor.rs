@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use eyre::{Result, eyre};
 use log::{debug, error, info, warn};
@@ -233,7 +233,29 @@ pub async fn run_agent_task(
     debug!("[agent_status] {}: -> Running", session_id);
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
 
-    let result = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log).await;
+    // Resolve session timeout from the agent's role config
+    let timeout_secs = match agent_type {
+        AgentType::Implementer => stores.config.agents.implementer.session_timeout_secs,
+        AgentType::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
+        AgentType::Researcher => stores.config.agents.researcher.session_timeout_secs,
+        AgentType::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
+        AgentType::Integrator => stores.config.integrator.session_timeout_secs,
+        AgentType::Chat => None,
+    };
+
+    let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log);
+
+    let result = if let Some(secs) = timeout_secs {
+        match tokio::time::timeout(Duration::from_secs(secs), loop_future).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                agent_log.warn(&format!("session timeout after {}s", secs));
+                Err(eyre!("session timed out after {}s", secs))
+            }
+        }
+    } else {
+        loop_future.await
+    };
 
     // Bundle-aware work handback (implementer only)
     if agent_type == AgentType::Implementer
@@ -4533,5 +4555,85 @@ mod tests {
             "expected ActionError for locked file, got: {:?}",
             result
         );
+    }
+
+    // ── Phase 2: Session Timeout tests ──────────────────────────────────
+
+    /// Helper: resolve session_timeout_secs from config for a given agent type,
+    /// matching the logic in run_agent_task().
+    fn resolve_timeout(config: &Config, agent_type: AgentType) -> Option<u64> {
+        match agent_type {
+            AgentType::Implementer => config.agents.implementer.session_timeout_secs,
+            AgentType::Reviewer => config.agents.reviewer.session_timeout_secs,
+            AgentType::Researcher => config.agents.researcher.session_timeout_secs,
+            AgentType::Coordinator => config.agents.coordinator.role.session_timeout_secs,
+            AgentType::Integrator => config.integrator.session_timeout_secs,
+            AgentType::Chat => None,
+        }
+    }
+
+    #[test]
+    fn test_session_timeout_defaults_per_agent_type() {
+        let config = Config::default();
+
+        assert_eq!(resolve_timeout(&config, AgentType::Implementer), Some(1800));
+        assert_eq!(resolve_timeout(&config, AgentType::Reviewer), Some(600));
+        assert_eq!(resolve_timeout(&config, AgentType::Researcher), Some(600));
+        assert_eq!(resolve_timeout(&config, AgentType::Integrator), Some(1200));
+        assert_eq!(resolve_timeout(&config, AgentType::Coordinator), None);
+        assert_eq!(resolve_timeout(&config, AgentType::Chat), None);
+    }
+
+    #[tokio::test]
+    async fn test_session_timeout_terminates_slow_future() {
+        let slow_future = async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok::<(), eyre::Report>(())
+        };
+
+        let result = match tokio::time::timeout(Duration::from_millis(50), slow_future).await {
+            Ok(inner) => inner,
+            Err(_) => Err(eyre!("session timed out")),
+        };
+
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("timed out"), "expected timeout error, got: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn test_session_timeout_none_allows_completion() {
+        let fast_future = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<(), eyre::Report>(())
+        };
+
+        let timeout_secs: Option<u64> = None;
+
+        let result = if let Some(secs) = timeout_secs {
+            match tokio::time::timeout(Duration::from_secs(secs), fast_future).await {
+                Ok(inner) => inner,
+                Err(_) => Err(eyre!("session timed out")),
+            }
+        } else {
+            fast_future.await
+        };
+
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_session_timeout_fast_future_completes_before_deadline() {
+        let fast_future = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<(), eyre::Report>(())
+        };
+
+        let result = match tokio::time::timeout(Duration::from_secs(5), fast_future).await {
+            Ok(inner) => inner,
+            Err(_) => Err(eyre!("session timed out")),
+        };
+
+        assert!(result.is_ok(), "fast future should complete before timeout");
     }
 }
