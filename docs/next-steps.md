@@ -9,14 +9,14 @@ This document outlines the major outstanding projects for Loopr, ordered by prec
 
 **Result:** GoalComplete. The full Chat -> Plan -> Coordinator -> Implementer -> Reviewer -> Integrator -> GoalComplete pipeline completed autonomously against a disposable `/tmp/loopr-e2e-target` scaffold repo. The Implementer added a `--version` flag in 4 iterations, the Reviewer approved, and the Integrator merged. 10 bugs were fixed during the fix-forward process. Automated via `bin/e2e.sh`.
 
-## 2. The "Heavy" Runner Lane Architecture
+## ~~2. The "Heavy" Runner Lane Architecture~~ COMPLETE (2026-03-30)
 **Primary Links:**
-- [v2-light-loops-heavy-tools.md](v2-light-loops-heavy-tools.md)
-- [2026-03-04-native-tool-use.md](design/2026-03-04-native-tool-use.md)
+- [2026-03-30-runner-lane-architecture.md](design/2026-03-30-runner-lane-architecture.md) (design doc)
+- [2026-03-30-claude-code-tool-architecture.md](research/2026-03-30-claude-code-tool-architecture.md) (Claude Code research)
+- [v2-light-loops-heavy-tools.md](v2-light-loops-heavy-tools.md) (original vision)
+- [2026-03-04-native-tool-use.md](design/2026-03-04-native-tool-use.md) (tool system)
 
-Loopr's core insight is separating light LLM loops from heavy filesystem/build tools to ensure isolation, sandboxing, and killability.
-*   **Current:** Tools (like `cargo build`, `read`, `write`) are executed in-process via `tokio::process` directly from the daemon. A runaway build or blocking tool can hang the entire daemon.
-*   **Next:** Implement the three specialized, slot-limited OS subprocess runners (`local`, `net`, and `heavy`). Wire the `ToolRouter` to dispatch tool calls to these runners over Unix sockets, complete with process-group kill mechanisms (`killpg()`) and network sandboxing.
+**Result:** Implemented as spawn-policy-based lanes (simpler than the original Unix-socket runner subprocess design, validated by Claude Code's architecture). All subprocess-spawning tools now run in a new process group via `setsid()` with `killpg()` SIGTERM->5s->SIGKILL escalation. Three lanes with semaphore slot limiting: Local (10 slots, bwrap `--unshare-net` sandboxing), Net (5 slots), Heavy (1 slot). Shell builtin supports `run_in_background` for non-blocking builds. Large outputs persisted to disk.
 
 ## 3. Semantic Bubble-Up Logic
 **Primary Links:**
