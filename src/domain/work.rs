@@ -40,6 +40,11 @@ pub fn work_transitions() -> Vec<TransitionRule<WorkStatus>> {
             role: Some(Role::Coordinator),
         },
         TransitionRule {
+            from: Ready,
+            to: Blocked,
+            role: Some(Role::Coordinator),
+        },
+        TransitionRule {
             from: InProgress,
             to: Blocked,
             role: None,

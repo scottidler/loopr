@@ -171,7 +171,7 @@ async fn run_headless(
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-        let poll_result = client.request("coordinator.goal", json!({})).await;
+        let poll_result = client.request("coordinator.get_state", json!({})).await;
 
         match poll_result {
             Ok((resp, _)) => {
@@ -180,12 +180,33 @@ async fn run_headless(
                     continue;
                 }
                 if let Some(result) = &resp.result {
-                    let active = result.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
                     let status = result
-                        .get("coordinator_fsm_state")
+                        .get("fsm_state")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
+                        .unwrap_or("")
                         .to_string();
+
+                    // No active coordinator state - check if goal is still active
+                    if status.is_empty() {
+                        if let Ok((gr, _)) = client.request("coordinator.get_goal", json!({})).await {
+                            let goal_active = gr
+                                .result
+                                .as_ref()
+                                .and_then(|r| r.get("active"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            if !goal_active {
+                                eprintln!("Goal complete.");
+                                std::process::exit(0);
+                            }
+                        }
+                        if last_status != "waiting" {
+                            let now = chrono::Local::now().format("%H:%M:%S");
+                            eprintln!("[{now}] Waiting for coordinator...");
+                            last_status = "waiting".to_string();
+                        }
+                        continue;
+                    }
 
                     if status != last_status {
                         let now = chrono::Local::now().format("%H:%M:%S");
@@ -194,7 +215,7 @@ async fn run_headless(
                     }
 
                     // Terminal states
-                    if !active || status == "GoalComplete" {
+                    if status == "GoalComplete" {
                         eprintln!("Goal complete.");
                         std::process::exit(0);
                     }

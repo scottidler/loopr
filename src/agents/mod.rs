@@ -403,6 +403,10 @@ pub enum AgentAction {
     },
     ReadFile {
         path: String,
+        #[serde(default)]
+        offset: Option<u64>,
+        #[serde(default)]
+        limit: Option<u64>,
     },
     Commit {
         message: String,

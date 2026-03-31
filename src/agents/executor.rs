@@ -507,12 +507,27 @@ pub async fn execute_action(
                 .map_err(|e| eyre!("write_file '{}': {}", path, e))?;
             Ok(ActionResult::FileWritten(path.clone()))
         }
-        AgentAction::ReadFile { path } => {
+        AgentAction::ReadFile { path, offset, limit } => {
             let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
             let content = tokio::fs::read_to_string(&full_path)
                 .await
                 .map_err(|e| eyre!("read_file '{}': {}", path, e))?;
-            Ok(ActionResult::FileRead(content))
+            let lines: Vec<&str> = content.lines().collect();
+            let start = offset.unwrap_or(1).max(1) as usize - 1;
+            let effective_limit = limit.unwrap_or(500) as usize;
+            let end = (start + effective_limit).min(lines.len());
+            let mut numbered: Vec<String> = lines[start..end]
+                .iter()
+                .enumerate()
+                .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
+                .collect();
+            if end < lines.len() && limit.is_none() {
+                numbered.push(format!(
+                    "\n... [{} more lines, use offset/limit to read specific sections]",
+                    lines.len() - end
+                ));
+            }
+            Ok(ActionResult::FileRead(numbered.join("\n")))
         }
         AgentAction::Commit { message, paths } => {
             // Stage specified paths (or all changes if empty)
@@ -1971,10 +1986,12 @@ mod tests {
 
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
+            offset: None,
+            limit: None,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = result {
-            assert_eq!(content, "file content");
+            assert!(content.contains("file content"));
         } else {
             panic!("expected FileRead result");
         }
@@ -2651,6 +2668,8 @@ mod tests {
 
         let action = AgentAction::ReadFile {
             path: "nonexistent.txt".to_string(),
+            offset: None,
+            limit: None,
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;

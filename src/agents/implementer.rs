@@ -612,7 +612,11 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
         }
         ActionResult::FileWritten(p) => format!("wrote {}", p),
         ActionResult::FileRead(content) => {
-            let path = if let AgentAction::ReadFile { path } = action { path.as_str() } else { "?" };
+            let path = if let AgentAction::ReadFile { path, .. } = action {
+                path.as_str()
+            } else {
+                "?"
+            };
             format!(
                 "read {} ({} bytes):\n```\n{}\n```",
                 path,

@@ -317,7 +317,7 @@ impl ResearcherAgent {
                         Err(e) => ActionResult::ActionError(e.to_string()),
                     }
                 }
-                AgentAction::ReadFile { path } => match validate_path(repo_root, path, &self.ctx.log) {
+                AgentAction::ReadFile { path, .. } => match validate_path(repo_root, path, &self.ctx.log) {
                     Ok(full_path) => match tokio::fs::read_to_string(&full_path).await {
                         Ok(content) => {
                             let lines: Vec<&str> = content.lines().take(2000).collect();
@@ -433,7 +433,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
                 let entry_count = content.lines().count();
                 format!("list_directory '{}': {} entries", path, entry_count)
             }
-            AgentAction::ReadFile { path } => format!("read_file '{}' ({} bytes)", path, content.len()),
+            AgentAction::ReadFile { path, .. } => format!("read_file '{}' ({} bytes)", path, content.len()),
             _ => format!("read: {} bytes", content.len()),
         },
         ActionResult::LearningCreated(c) => format!("learning: {}", c),
@@ -653,6 +653,8 @@ mod tests {
         }));
         assert!(is_allowed_researcher_action(&AgentAction::ReadFile {
             path: "src/main.rs".into(),
+            offset: None,
+            limit: None,
         }));
         assert!(is_allowed_researcher_action(&AgentAction::CreateLearning {
             content: "test".into(),
