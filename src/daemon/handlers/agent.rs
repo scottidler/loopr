@@ -87,9 +87,37 @@ pub(super) fn handle_agent_start(
             .map(|s| s.to_string());
         let query = req.params.get("query").and_then(|v| v.as_str()).map(|s| s.to_string());
 
-        // max_pool enforcement: reject if active sessions of this type >= max_pool
+        // Create agent session with model from config (before lock, no shared state)
+        let model = match agent_type {
+            AgentType::Coordinator => stores.config.agents.coordinator.role.model.clone(),
+            AgentType::Implementer => stores.config.agents.implementer.model.clone(),
+            AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
+            AgentType::Researcher => stores.config.agents.researcher.model.clone(),
+            AgentType::Integrator => "deterministic".to_string(),
+            AgentType::Chat => stores.config.agents.implementer.model.clone(),
+        };
+        let mut session = AgentSession::new(agent_type, model);
+        session.work_id = work_id;
+        session.bundle_id = bundle_id;
+        session.target_id = target_id;
+        session.query = query;
+        session.daemon_session_id = stores
+            .session_dir
+            .as_ref()
+            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()));
+
+        let session_json = match serde_json::to_value(&session) {
+            Ok(v) => v,
+            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
+        };
+
+        let id = session.id.clone();
+
+        // Atomic max_pool check + session insert under a single write lock.
+        // This prevents the race where two agent.start calls both read "0 active"
+        // before either writes its session (caused dual-coordinator in E2E).
         {
-            let sessions = stores.read_agent_sessions()?;
+            let mut sessions = stores.write_agent_sessions()?;
             let active_count = sessions
                 .values()
                 .filter(|s| s.agent_type == agent_type && !s.status.is_terminal())
@@ -136,7 +164,7 @@ pub(super) fn handle_agent_start(
 
             // Implementer dedup by work_id (mirrors Gap #26 Researcher dedup by target_id)
             if agent_type == AgentType::Implementer
-                && let Some(ref wi_id) = work_id
+                && let Some(wi_id) = session.work_id.as_deref()
             {
                 let has_existing = sessions.values().any(|s| {
                     s.agent_type == AgentType::Implementer
@@ -153,35 +181,12 @@ pub(super) fn handle_agent_start(
                     ));
                 }
             }
+
+            // Insert session while still holding write lock (atomic check-and-create)
+            sessions.insert(id.clone(), session.clone());
         }
 
-        // Create agent session with model from config
-        let model = match agent_type {
-            AgentType::Coordinator => stores.config.agents.coordinator.role.model.clone(),
-            AgentType::Implementer => stores.config.agents.implementer.model.clone(),
-            AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
-            AgentType::Researcher => stores.config.agents.researcher.model.clone(),
-            AgentType::Integrator => "deterministic".to_string(),
-            AgentType::Chat => stores.config.agents.implementer.model.clone(),
-        };
-        let mut session = AgentSession::new(agent_type, model);
-        session.work_id = work_id;
-        session.bundle_id = bundle_id;
-        session.target_id = target_id;
-        session.query = query;
-        session.daemon_session_id = stores
-            .session_dir
-            .as_ref()
-            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()));
-
-        let session_json = match serde_json::to_value(&session) {
-            Ok(v) => v,
-            Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
-        };
-
-        let id = session.id.clone();
-
-        // Persist to TaskStore
+        // Persist to TaskStore (outside lock - TaskStore has its own synchronization)
         if let Some(store) = &stores.store
             && let Err(e) = store
                 .lock()
@@ -190,8 +195,6 @@ pub(super) fn handle_agent_start(
         {
             return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
-
-        stores.write_agent_sessions()?.insert(id.clone(), session);
         let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
         debug!("[agent_status] {}: -> Starting (type={:?})", id, agent_type);
         let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));
