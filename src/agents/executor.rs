@@ -260,6 +260,14 @@ pub async fn run_agent_task(
         }
     }
 
+    // Release all advisory locks held by this agent's work ID
+    if let Ok(sessions) = stores.read_agent_sessions()
+        && let Some(session) = sessions.get(&session_id)
+        && let Some(ref wi_id) = session.work_id
+    {
+        release_agent_locks(&bridge, wi_id, &agent_log);
+    }
+
     // Clean up worktree after agent loop exits (only for non-thinking-plane agents)
     if let Some(ref key) = cleanup_key {
         if let Err(e) = cleanup_mgr.cleanup(key) {
@@ -455,6 +463,78 @@ async fn run_agent_loop(
     result
 }
 
+/// Auto-acquire an advisory lock before a file write/edit. Returns the lock ID if a new
+/// lock was created, or None if the holder already holds a lock on this resource.
+fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, holder_id: &str) -> Option<String> {
+    // Check if we already hold a lock on this resource
+    let check = bridge.request(
+        "lock.list",
+        serde_json::json!({ "resource": resource, "holder_id": holder_id, "active_only": true }),
+    );
+    let already_held = check
+        .result
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .is_some_and(|locks| !locks.is_empty());
+
+    if already_held {
+        return None; // Already locked by us
+    }
+
+    // Check if another agent already holds a lock (advisory warning)
+    let existing = bridge.request(
+        "lock.list",
+        serde_json::json!({ "resource": resource, "active_only": true }),
+    );
+    if let Some(locks) = existing.result.as_ref().and_then(|v| v.as_array()) {
+        for lock in locks {
+            if let Some(other) = lock.get("holder_id").and_then(|v| v.as_str())
+                && other != holder_id
+            {
+                log::warn!(
+                    "advisory lock contention: {} already holds lock on {}, acquiring concurrent lock for {}",
+                    other,
+                    resource,
+                    holder_id
+                );
+            }
+        }
+    }
+
+    // Acquire new lock
+    let resp = bridge.request(
+        "lock.create",
+        serde_json::json!({
+            "resource": resource,
+            "holder_id": holder_id,
+            "granted_by": holder_id,
+        }),
+    );
+    resp.result
+        .as_ref()
+        .and_then(|v| v.get("id"))
+        .and_then(|id| id.as_str())
+        .map(String::from)
+}
+
+/// Release all advisory locks held by a given holder (work ID). Called at agent exit.
+fn release_agent_locks(bridge: &AgentIpcBridge, holder_id: &str, agent_log: &AgentLogger) {
+    let resp = bridge.request(
+        "lock.list",
+        serde_json::json!({ "holder_id": holder_id, "active_only": true }),
+    );
+    if let Some(locks) = resp.result.as_ref().and_then(|v| v.as_array()) {
+        for lock in locks {
+            if let Some(lock_id) = lock.get("id").and_then(|v| v.as_str()) {
+                let _ = bridge.request("lock.release", serde_json::json!({ "id": lock_id }));
+            }
+        }
+        if !locks.is_empty() {
+            agent_log.info(&format!("released {} advisory lock(s)", locks.len()));
+        }
+    }
+}
+
 /// Execute a single agent action. Used by the agent loop to process parsed LLM responses.
 ///
 /// `ctx.session.agent_type` is used for role inference on Transition actions (when role is None).
@@ -481,20 +561,33 @@ pub async fn execute_action(
             // Validate path stays within worktree (sandbox)
             let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
 
-            // Advisory lock check: under LockStrict, reject writes to locked resources
+            // Auto-acquire advisory lock for write operations
+            if let Some(wi_id) = work_id {
+                auto_acquire_write_lock(bridge, path, wi_id);
+            }
+
+            // Advisory lock check: under LockStrict, reject writes if another agent holds the lock
             if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
                 let lock_resp = bridge.request(
                     "lock.list",
                     serde_json::json!({ "resource": path, "active_only": true }),
                 );
-                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array())
-                    && !locks.is_empty()
-                {
-                    let holder = locks[0].get("holder_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    return Ok(ActionResult::ActionError(format!(
-                        "file '{}' locked by {} (policy: LockStrict)",
-                        path, holder
-                    )));
+                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array()) {
+                    let held_by_other = locks
+                        .iter()
+                        .any(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id);
+                    if held_by_other {
+                        let holder = locks
+                            .iter()
+                            .find(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id)
+                            .and_then(|l| l.get("holder_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        return Ok(ActionResult::ActionError(format!(
+                            "file '{}' locked by {} (policy: LockStrict)",
+                            path, holder
+                        )));
+                    }
                 }
             }
 
@@ -519,19 +612,33 @@ pub async fn execute_action(
         } => {
             let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
 
+            // Auto-acquire advisory lock for edit operations
+            if let Some(wi_id) = work_id {
+                auto_acquire_write_lock(bridge, path, wi_id);
+            }
+
+            // Advisory lock check: under LockStrict, reject edits if another agent holds the lock
             if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
                 let lock_resp = bridge.request(
                     "lock.list",
                     serde_json::json!({ "resource": path, "active_only": true }),
                 );
-                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array())
-                    && !locks.is_empty()
-                {
-                    let holder = locks[0].get("holder_id").and_then(|v| v.as_str()).unwrap_or("unknown");
-                    return Ok(ActionResult::ActionError(format!(
-                        "file '{}' locked by {} (policy: LockStrict)",
-                        path, holder
-                    )));
+                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array()) {
+                    let held_by_other = locks
+                        .iter()
+                        .any(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id);
+                    if held_by_other {
+                        let holder = locks
+                            .iter()
+                            .find(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id)
+                            .and_then(|l| l.get("holder_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        return Ok(ActionResult::ActionError(format!(
+                            "file '{}' locked by {} (policy: LockStrict)",
+                            path, holder
+                        )));
+                    }
                 }
             }
 
@@ -2068,7 +2175,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_write_file_lock_strict_blocks() {
+    async fn test_write_file_lock_strict_blocks_other_agent() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
         let dir = TestDir::new("loopr-exec-lockstrict");
@@ -2083,22 +2190,58 @@ mod tests {
         };
         let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
 
-        // Create a lock on "src/main.rs"
+        // Create a lock on "src/main.rs" held by agent-1
         let lock_resp = ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
         assert!(!lock_resp.is_error());
 
-        // Attempt to write to locked path
+        // Agent-2 attempts to write to locked path — should be blocked
         let action = AgentAction::WriteFile {
             path: "src/main.rs".to_string(),
             content: "should be blocked".to_string(),
         };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        let result = execute_action(&action, &ctx, &dir, Some("agent-2")).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
             "expected ActionError for locked file, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lock_strict_allows_holder_rewrite() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-lockholderrewrite");
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        // Create a lock on "src/main.rs" held by wi-abc
+        let lock_resp = ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-abc", "granted_by": "wi-abc" }),
+        );
+        assert!(!lock_resp.is_error());
+
+        // Same holder (wi-abc) writes to the locked path — should succeed, not self-block
+        let action = AgentAction::WriteFile {
+            path: "src/main.rs".to_string(),
+            content: "holder can rewrite".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("wi-abc")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::FileWritten(_)),
+            "expected FileWritten (holder should not self-block), got: {:?}",
             result
         );
     }
@@ -4175,5 +4318,220 @@ mod tests {
         } else {
             panic!("expected FileRead, got: {:?}", r2);
         }
+    }
+
+    // --- Phase 1: Auto-Lock tests ---
+
+    #[tokio::test]
+    async fn test_write_file_auto_acquires_lock() {
+        let dir = TestDir::new("loopr-exec-autolock-write");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "hello".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, Some("wi-100")).await.unwrap();
+
+        // Verify a lock was auto-acquired
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-100", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock, got {}", locks.len());
+        assert_eq!(locks[0]["holder_id"].as_str().unwrap(), "wi-100");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_auto_acquires_lock() {
+        let dir = TestDir::new("loopr-exec-autolock-edit");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "old content").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::EditFile {
+            path: "src/lib.rs".to_string(),
+            old_string: "old content".to_string(),
+            new_string: "new content".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, Some("wi-200")).await.unwrap();
+
+        // Verify a lock was auto-acquired
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-200", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_reuses_existing_lock() {
+        let dir = TestDir::new("loopr-exec-autolock-reuse");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        // Write same file twice with same work_id
+        let action = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "first".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, Some("wi-300")).await.unwrap();
+        let action2 = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "second".to_string(),
+        };
+        execute_action(&action2, &ctx, &dir, Some("wi-300")).await.unwrap();
+
+        // Should still be only 1 lock (no duplicates)
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-300", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(locks.len(), 1, "expected 1 lock (reused), got {}", locks.len());
+    }
+
+    #[tokio::test]
+    async fn test_no_auto_lock_without_work_id() {
+        let dir = TestDir::new("loopr-exec-autolock-none");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let action = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "hello".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        // No lock should exist (work_id was None)
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert!(locks.is_empty(), "expected no locks when work_id is None");
+    }
+
+    #[test]
+    fn test_release_agent_locks_cleans_up() {
+        let dir = TestDir::new("loopr-exec-rellock-cleanup");
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
+
+        // Create multiple locks for the same holder
+        bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/a.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
+        );
+        bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/b.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
+        );
+
+        // Verify locks exist
+        let check = bridge.request(
+            "lock.list",
+            serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
+        );
+        assert_eq!(check.result.as_ref().unwrap().as_array().unwrap().len(), 2);
+
+        // Release
+        release_agent_locks(&bridge, "wi-rel", &agent_log);
+
+        // Verify all released
+        let after = bridge.request(
+            "lock.list",
+            serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
+        );
+        let remaining = after.result.as_ref().unwrap().as_array().unwrap();
+        assert!(
+            remaining.is_empty(),
+            "expected 0 active locks after release, got {}",
+            remaining.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_lock_strict_allows_holder() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-editlock-holder");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "original").unwrap();
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        // Create a lock held by wi-edit
+        ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-edit", "granted_by": "wi-edit" }),
+        );
+
+        // Same holder edits the file — should succeed
+        let action = AgentAction::EditFile {
+            path: "src/main.rs".to_string(),
+            old_string: "original".to_string(),
+            new_string: "modified".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("wi-edit")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::FileEdited(_)),
+            "expected FileEdited (holder should not self-block on edit), got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_lock_strict_blocks_other_agent() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-editlock-other");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "original").unwrap();
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        // Lock held by agent-1
+        ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+
+        // agent-2 tries to edit — should be blocked
+        let action = AgentAction::EditFile {
+            path: "src/main.rs".to_string(),
+            old_string: "original".to_string(),
+            new_string: "modified".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("agent-2")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
+            "expected ActionError for locked file, got: {:?}",
+            result
+        );
     }
 }
