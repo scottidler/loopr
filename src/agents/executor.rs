@@ -1639,6 +1639,26 @@ pub async fn execute_action(
             target_status,
             reason,
         } => {
+            // Guard: reject override-to-Ready if any bundle is Merged or Integrating
+            if target_status == "Ready" {
+                let bundles = bridge.stores().read_bundles()?;
+                let blocking = bundles.values().find(|b| {
+                    b.work_id == *work_id && matches!(b.status, BundleStatus::Merged | BundleStatus::Integrating)
+                });
+                let blocked = blocking.map(|b| (b.id.clone(), b.status));
+                drop(bundles);
+                if let Some((bundle_id, status)) = blocked {
+                    let msg = format!(
+                        "Cannot override Work {} to Ready: bundle {} is {:?}. \
+                         Code is merged or merge is in flight. \
+                         Do not retry this override - let the Integrator finish.",
+                        work_id, bundle_id, status
+                    );
+                    agent_log.warn(&format!("OverrideWork: {}", msg));
+                    return Ok(ActionResult::ActionError(msg));
+                }
+            }
+
             // Kill any active agent sessions on this Work
             {
                 let sessions = bridge.stores().read_agent_sessions()?;
@@ -4711,5 +4731,256 @@ mod tests {
             }
             other => panic!("expected ActionError, got: {:?}", other),
         }
+    }
+
+    // --- Merged Bundle Override Guard tests ---
+
+    /// Helper: create Work at InReview with a bundle at the given status.
+    /// Returns (work_id, bundle_id).
+    fn create_work_at_inreview_with_bundle(
+        bridge: &AgentIpcBridge,
+        stores: &Arc<Stores>,
+        bundle_status: &str,
+    ) -> (String, String) {
+        let (_, _, _, wi_id) = create_test_hierarchy(bridge);
+
+        // Ready -> InProgress (needs assignee, use override with assignee)
+        bridge.request(
+            "work.transition",
+            serde_json::json!({
+                "id": wi_id,
+                "target_status": "InProgress",
+                "role": "coordinator",
+                "assignee": "test-impl",
+            }),
+        );
+
+        // Create a bundle for this work
+        let bundle_resp = bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/guard-test",
+                "description": "guard test bundle",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        // InProgress -> InReview (implementer, requires active bundle)
+        bridge.request(
+            "work.transition",
+            serde_json::json!({
+                "id": wi_id,
+                "target_status": "InReview",
+                "role": "implementer",
+            }),
+        );
+
+        // Transition bundle to desired status through the chain
+        let chain: Vec<(&str, &str)> = match bundle_status {
+            "Proposed" => vec![],
+            "Triaged" => vec![("Triaged", "coordinator")],
+            "Reviewed" => vec![("Triaged", "coordinator"), ("Reviewed", "reviewer")],
+            "Accepted" => vec![
+                ("Triaged", "coordinator"),
+                ("Reviewed", "reviewer"),
+                ("Accepted", "coordinator"),
+            ],
+            "Integrating" => vec![
+                ("Triaged", "coordinator"),
+                ("Reviewed", "reviewer"),
+                ("Accepted", "coordinator"),
+                ("Integrating", "integrator"),
+            ],
+            "Merged" => vec![
+                ("Triaged", "coordinator"),
+                ("Reviewed", "reviewer"),
+                ("Accepted", "coordinator"),
+                ("Integrating", "integrator"),
+                ("Merged", "integrator"),
+            ],
+            "Rejected" => vec![("Triaged", "coordinator"), ("Rejected", "coordinator")],
+            _ => vec![],
+        };
+
+        for (status, role) in chain {
+            let mut params = serde_json::json!({
+                "id": bundle_id,
+                "target_status": status,
+                "role": role,
+            });
+            if status == "Reviewed" {
+                params["verification"] = serde_json::json!("tests passed");
+            }
+            bridge.request("bundle.transition", params);
+        }
+
+        // Force-write bundle status directly for statuses that may have
+        // side-effect preconditions we can't easily satisfy in test
+        {
+            let mut bundles = stores.write_bundles().unwrap();
+            if let Some(b) = bundles.get_mut(&bundle_id) {
+                b.status = match bundle_status {
+                    "Merged" => BundleStatus::Merged,
+                    "Integrating" => BundleStatus::Integrating,
+                    "Rejected" => BundleStatus::Rejected,
+                    _ => b.status,
+                };
+            }
+        }
+
+        (wi_id, bundle_id)
+    }
+
+    #[tokio::test]
+    async fn test_override_guard_merged_blocks_ready() {
+        let dir = TestDir::new("loopr-exec-guard-merged");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (wi_id, bundle_id) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
+
+        let action = AgentAction::OverrideWork {
+            work_id: wi_id.clone(),
+            target_status: "Ready".to_string(),
+            reason: "stale rejection".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        match result {
+            ActionResult::ActionError(msg) => {
+                assert!(
+                    msg.contains(&bundle_id),
+                    "error should name the blocking bundle: {}",
+                    msg
+                );
+                assert!(msg.contains("Merged"), "error should mention Merged status: {}", msg);
+                assert!(
+                    msg.contains("Do not retry"),
+                    "error should tell LLM to back off: {}",
+                    msg
+                );
+            }
+            other => panic!("expected ActionError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_override_guard_integrating_blocks_ready() {
+        let dir = TestDir::new("loopr-exec-guard-integrating");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (wi_id, bundle_id) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Integrating");
+
+        let action = AgentAction::OverrideWork {
+            work_id: wi_id.clone(),
+            target_status: "Ready".to_string(),
+            reason: "stale rejection".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        match result {
+            ActionResult::ActionError(msg) => {
+                assert!(
+                    msg.contains(&bundle_id),
+                    "error should name the blocking bundle: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("Integrating"),
+                    "error should mention Integrating status: {}",
+                    msg
+                );
+            }
+            other => panic!("expected ActionError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_override_guard_rejected_allows_ready() {
+        let dir = TestDir::new("loopr-exec-guard-rejected");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Rejected");
+
+        let action = AgentAction::OverrideWork {
+            work_id: wi_id.clone(),
+            target_status: "Ready".to_string(),
+            reason: "no valid bundle".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        assert!(
+            matches!(result, ActionResult::Transitioned(_)),
+            "override to Ready should succeed with only Rejected bundles, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_override_guard_merged_allows_abandoned() {
+        let dir = TestDir::new("loopr-exec-guard-abandoned");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
+
+        let action = AgentAction::OverrideWork {
+            work_id: wi_id.clone(),
+            target_status: "Abandoned".to_string(),
+            reason: "pruning dead end".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        assert!(
+            matches!(result, ActionResult::Transitioned(_)),
+            "override to Abandoned should bypass guard even with Merged bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_override_guard_mixed_bundles_merged_blocks() {
+        let dir = TestDir::new("loopr-exec-guard-mixed");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
+
+        // Create a second bundle that is Rejected
+        let bundle2_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/guard-test-2",
+                "description": "second bundle",
+            }),
+        );
+        let bundle2_id = bundle2_resp.result.as_ref().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // Force the second bundle to Rejected
+        {
+            let mut bundles = stores.write_bundles().unwrap();
+            if let Some(b) = bundles.get_mut(&bundle2_id) {
+                b.status = BundleStatus::Rejected;
+            }
+        }
+
+        let action = AgentAction::OverrideWork {
+            work_id: wi_id.clone(),
+            target_status: "Ready".to_string(),
+            reason: "stale rejection".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        assert!(
+            matches!(result, ActionResult::ActionError(_)),
+            "Merged bundle should block even when a Rejected bundle also exists, got: {:?}",
+            result
+        );
     }
 }
