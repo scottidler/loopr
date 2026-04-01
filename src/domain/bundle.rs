@@ -184,6 +184,10 @@ pub struct Bundle {
     pub loc_changed: Option<u32>,
     #[serde(default)]
     pub locks_used: Vec<String>,
+    /// If set, this bundle is a no-op: the Implementer claims the work is already
+    /// complete without code changes. The Reviewer must verify the codebase state.
+    #[serde(default)]
+    pub noop_reason: Option<String>,
     pub status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -204,6 +208,7 @@ impl Bundle {
             description: None,
             loc_changed: None,
             locks_used: Vec::new(),
+            noop_reason: None,
             status: BundleStatus::Proposed,
             created_at: now,
             updated_at: now,
@@ -702,5 +707,34 @@ mod tests {
         let json = serde_json::to_string(&b).unwrap();
         let restored: Bundle = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.claims, vec!["claim1".to_string(), "claim2".to_string()]);
+    }
+
+    #[test]
+    fn test_noop_reason_serde_roundtrip() {
+        let mut b = Bundle::new("wi-1".into(), None, String::new(), vec!["already done".into()]);
+        b.noop_reason = Some("Phase 1 over-delivered".to_string());
+        let json = serde_json::to_string(&b).unwrap();
+        let restored: Bundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.noop_reason.as_deref(), Some("Phase 1 over-delivered"));
+        assert!(restored.branch_name.is_empty());
+    }
+
+    #[test]
+    fn test_noop_reason_absent_deserializes_as_none() {
+        // Backward compat: old bundles without noop_reason should deserialize fine
+        let json = r#"{
+            "id": "bd-test",
+            "work_id": "wi-1",
+            "base_tick_id": null,
+            "branch_name": "agent/wi-1",
+            "touched_paths": [],
+            "claims": ["claim"],
+            "verification": "",
+            "status": "Proposed",
+            "created_at": 0,
+            "updated_at": 0
+        }"#;
+        let b: Bundle = serde_json::from_str(json).unwrap();
+        assert!(b.noop_reason.is_none());
     }
 }

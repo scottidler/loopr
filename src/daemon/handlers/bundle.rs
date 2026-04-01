@@ -62,6 +62,12 @@ pub(super) fn handle_bundle_create(
             }
         }
 
+        let noop_reason = req
+            .params
+            .get("noop_reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let branch_name = req
             .params
             .get("branch_name")
@@ -69,7 +75,8 @@ pub(super) fn handle_bundle_create(
             .unwrap_or("")
             .to_string();
 
-        if branch_name.is_empty() {
+        // branch_name is required for normal bundles but optional for noop bundles
+        if branch_name.is_empty() && noop_reason.is_none() {
             return Ok(DaemonResponse::err(
                 req.id,
                 RpcError::invalid_params("branch_name is required"),
@@ -124,6 +131,7 @@ pub(super) fn handle_bundle_create(
 
         let mut bundle = Bundle::new(work_id, base_tick_id, branch_name, claims);
         bundle.description = description;
+        bundle.noop_reason = noop_reason;
 
         // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
         let touched_paths_val = req

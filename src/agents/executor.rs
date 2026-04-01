@@ -756,40 +756,53 @@ pub async fn execute_action(
             }
             Ok(ActionResult::Committed(message.clone()))
         }
-        AgentAction::ProposeBundle { description, claims } => {
-            // Auto-commit any pending changes before creating the bundle.
-            // The LLM may have called write_file/edit_file without an explicit
-            // commit. Without this, the branch has no new commits and the bundle
-            // is empty - the root cause of Bug #9.
-            let auto_commit = tokio::process::Command::new("git")
-                .args(["add", "-A"])
-                .current_dir(worktree_path)
-                .output()
-                .await;
-            if let Ok(add_out) = auto_commit
-                && add_out.status.success()
-            {
-                let commit_out = tokio::process::Command::new("git")
-                    .args(["commit", "-m", &format!("impl: {}", description)])
+        AgentAction::ProposeBundle {
+            description,
+            claims,
+            noop_reason,
+        } => {
+            let is_noop = noop_reason.is_some();
+            let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
+
+            // For normal bundles: auto-commit any pending changes before creating
+            // the bundle. Skip for noop bundles (no changes to commit).
+            if !is_noop {
+                let auto_commit = tokio::process::Command::new("git")
+                    .args(["add", "-A"])
                     .current_dir(worktree_path)
                     .output()
                     .await;
-                match commit_out {
-                    Ok(out) if out.status.success() => {
-                        agent_log.info("Auto-committed pending changes before propose_bundle");
-                    }
-                    _ => {
-                        agent_log.info("No pending changes to auto-commit before propose_bundle");
+                if let Ok(add_out) = auto_commit
+                    && add_out.status.success()
+                {
+                    let commit_out = tokio::process::Command::new("git")
+                        .args(["commit", "-m", &format!("impl: {}", description)])
+                        .current_dir(worktree_path)
+                        .output()
+                        .await;
+                    match commit_out {
+                        Ok(out) if out.status.success() => {
+                            agent_log.info("Auto-committed pending changes before propose_bundle");
+                        }
+                        _ => {
+                            agent_log.info("No pending changes to auto-commit before propose_bundle");
+                        }
                     }
                 }
             }
 
             // F2: Derive branch name deterministically from work_id - matches
             // WorktreeManager::create() which uses format!("agent/{}", work_id).
-            // This avoids relying on `git rev-parse` which can return "main" when
-            // HEAD is detached or the worktree checkout didn't switch properly.
-            let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
-            let branch_name = format!("agent/{}", wi_id);
+            // For noop bundles, use empty branch_name (Integrator skips merge).
+            let branch_name = if is_noop {
+                agent_log.info(&format!(
+                    "Noop bundle: {}",
+                    noop_reason.as_deref().unwrap_or("(no reason)")
+                ));
+                String::new()
+            } else {
+                format!("agent/{}", wi_id)
+            };
 
             // Fix #1: Resolve base_tick_id from latest Published Tick
             let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
@@ -800,6 +813,9 @@ pub async fn execute_action(
                 "claims": claims,
                 "description": description,
             });
+            if let Some(reason) = noop_reason {
+                params["noop_reason"] = serde_json::Value::String(reason.clone());
+            }
             if let Some(tick_id) = &base_tick_id {
                 params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
             }
@@ -2777,6 +2793,7 @@ mod tests {
         let action = AgentAction::ProposeBundle {
             description: "My bundle".to_string(),
             claims: vec!["Implemented feature X".to_string()],
+            noop_reason: None,
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -2833,6 +2850,7 @@ mod tests {
         let action = AgentAction::ProposeBundle {
             description: "My bundle".to_string(),
             claims: vec![],
+            noop_reason: None,
         };
         // work_id = None should fail
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
@@ -4067,6 +4085,7 @@ mod tests {
         let action = AgentAction::ProposeBundle {
             description: "Bundle with base tick".to_string(),
             claims: vec!["claim".to_string()],
+            noop_reason: None,
         };
         // The call succeeds — bundle.create receives base_tick_id and accepts it
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
@@ -4128,6 +4147,7 @@ mod tests {
         let action = AgentAction::ProposeBundle {
             description: "Test bundle".to_string(),
             claims: vec!["implemented feature".to_string()],
+            noop_reason: None,
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         // The bundle should be created with branch_name "agent/<wi_id>"
@@ -4982,5 +5002,96 @@ mod tests {
             "Merged bundle should block even when a Rejected bundle also exists, got: {:?}",
             result
         );
+    }
+
+    // --- Noop Bundle Pathway tests ---
+
+    #[tokio::test]
+    async fn test_noop_propose_bundle_creates_empty_branch() {
+        let dir = TestDir::new("loopr-exec-noop-branch");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Work already complete".to_string(),
+            claims: vec!["criteria satisfied".to_string()],
+            noop_reason: Some("Phase 1 already implemented this".to_string()),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref d) if d == "Work already complete"),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+
+        // Verify the bundle has empty branch_name and noop_reason set
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles
+            .values()
+            .find(|b| b.work_id == wi_id)
+            .expect("should have bundle");
+        assert!(
+            bundle.branch_name.is_empty(),
+            "noop bundle should have empty branch_name"
+        );
+        assert_eq!(bundle.noop_reason.as_deref(), Some("Phase 1 already implemented this"));
+    }
+
+    #[tokio::test]
+    async fn test_noop_bundle_handler_rejects_empty_branch_without_noop() {
+        let dir = TestDir::new("loopr-exec-noop-reject");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        // Try creating a bundle with empty branch_name but no noop_reason
+        let resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "",
+                "description": "should fail",
+            }),
+        );
+        assert!(resp.is_error(), "empty branch_name without noop_reason should fail");
+        let err_msg = resp.error.as_ref().unwrap().message.clone();
+        assert!(
+            err_msg.contains("branch_name"),
+            "error should mention branch_name: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_noop_bundle_handler_allows_empty_branch_with_noop() {
+        let dir = TestDir::new("loopr-exec-noop-allow");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        // Create a bundle with empty branch_name and noop_reason
+        let resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "",
+                "noop_reason": "already done by phase 1",
+                "description": "noop bundle",
+            }),
+        );
+        assert!(
+            !resp.is_error(),
+            "empty branch_name with noop_reason should succeed: {:?}",
+            resp.error
+        );
+        let bundle_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap();
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.get(bundle_id).expect("bundle should exist");
+        assert!(bundle.branch_name.is_empty());
+        assert_eq!(bundle.noop_reason.as_deref(), Some("already done by phase 1"));
     }
 }

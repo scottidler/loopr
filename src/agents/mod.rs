@@ -447,6 +447,8 @@ pub enum AgentAction {
         description: String,
         #[serde(default, deserialize_with = "string_or_vec")]
         claims: Vec<String>,
+        #[serde(default)]
+        noop_reason: Option<String>,
     },
     Transition {
         collection: String,
@@ -1227,12 +1229,19 @@ mod tests {
         let action = AgentAction::ProposeBundle {
             description: "Add error handling".to_string(),
             claims: vec!["src/error.rs".to_string()],
+            noop_reason: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        if let AgentAction::ProposeBundle { description, claims } = deserialized {
+        if let AgentAction::ProposeBundle {
+            description,
+            claims,
+            noop_reason,
+        } = deserialized
+        {
             assert_eq!(description, "Add error handling");
             assert_eq!(claims, vec!["src/error.rs"]);
+            assert!(noop_reason.is_none());
         } else {
             panic!("expected ProposeBundle");
         }

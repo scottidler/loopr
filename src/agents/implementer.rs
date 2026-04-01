@@ -554,6 +554,7 @@ impl Agent for ImplementerAgent {
                         max_iterations
                     ),
                     claims: vec!["partial implementation - needs review".to_string()],
+                    noop_reason: None,
                 },
                 &self.ctx,
                 &self.worktree_path,

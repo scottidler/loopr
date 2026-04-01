@@ -689,6 +689,7 @@ mod tests {
         assert!(!is_allowed_researcher_action(&AgentAction::ProposeBundle {
             description: "d".into(),
             claims: vec![],
+            noop_reason: None,
         }));
     }
 
