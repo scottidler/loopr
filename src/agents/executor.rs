@@ -403,20 +403,19 @@ async fn run_agent_loop(
 
     let mut ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
 
-    // Per-session tool detection: if the agent has a worktree, detect project type
-    // from marker files and use appropriate tool presets instead of global defaults.
+    // Per-session tool resolution: 3-layer priority stack
+    //   Layer 1: config tools (from loopr.yml)
+    //   Layer 2: runtime tools (from tools.register IPC)
+    //   Layer 3: detected tools (from marker files)
     if let Some(ref wt_path) = ctx.session.worktree_path {
         let worktree = std::path::Path::new(wt_path);
-        ctx.tool_runner = Arc::new(crate::tools::ToolRunner::detect_or_default(
-            worktree,
-            &stores.config.agents.tools,
-        ));
-        ctx.tool_executor = Arc::new(crate::tools::ToolExecutor::detect_or_configured(
-            worktree,
-            &stores.config.agents.tools,
-        ));
+        let runtime_tools = stores.read_runtime_tools()?;
+        let resolved = crate::tools::resolve_tools(&stores.config.agents.tools, &runtime_tools, Some(worktree));
+        drop(runtime_tools);
+        ctx.tool_runner = Arc::new(crate::tools::ToolRunner::new(&resolved));
+        ctx.tool_executor = Arc::new(crate::tools::ToolExecutor::standard(&resolved));
         agent_log.info(&format!(
-            "Session tool executor: {} tools (detected from {})",
+            "Session tool executor: {} tools (resolved from {})",
             ctx.tool_executor.available_tools().len(),
             wt_path
         ));

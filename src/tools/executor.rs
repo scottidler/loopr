@@ -59,8 +59,8 @@ impl ToolExecutor {
     }
 
     /// Auto-detect project type and register appropriate configured tools.
-    pub fn detect_or_configured(worktree: &Path, configured: &[ToolEntry]) -> Self {
-        let project_tools = detect_project_tools(worktree, configured);
+    pub fn detect_or_configured(worktree: &Path) -> Self {
+        let project_tools = detect_project_tools(worktree);
         Self::standard(&project_tools)
     }
 
@@ -181,25 +181,19 @@ mod tests {
         let dir = TestDir::new("loopr-exec-js");
         std::fs::write(dir.join("package.json"), "{}").unwrap();
 
-        let exec = ToolExecutor::detect_or_configured(&dir, &[]);
+        let exec = ToolExecutor::detect_or_configured(&dir);
         let tools = exec.available_tools();
         assert!(tools.contains(&"test"));
         assert!(tools.contains(&"lint"));
     }
 
     #[test]
-    fn test_executor_detect_no_markers() {
+    fn test_executor_detect_no_markers_returns_builtins_only() {
         let dir = TestDir::new("loopr-exec-none");
 
-        let configured = vec![ToolEntry {
-            name: "custom".into(),
-            command: "echo custom".into(),
-            timeout_secs: 10,
-            worktree: true,
-        }];
-
-        let exec = ToolExecutor::detect_or_configured(&dir, &configured);
-        assert!(exec.available_tools().contains(&"custom"));
+        let exec = ToolExecutor::detect_or_configured(&dir);
+        // Only builtins, no configured tools
+        assert_eq!(exec.available_tools().len(), BUILTIN_COUNT);
     }
 
     #[test]

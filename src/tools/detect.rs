@@ -56,21 +56,21 @@ fn python_preset() -> Vec<ToolEntry> {
 const MARKER_ORDER: &[&str] = &["package.json", "pyproject.toml", "Cargo.toml"];
 
 /// Detect project type from marker files and return appropriate tool entries.
-/// Falls back to `configured` if no markers found or if Cargo.toml is detected.
-pub fn detect_project_tools(worktree: &Path, configured: &[ToolEntry]) -> Vec<ToolEntry> {
+/// Returns empty if no markers found - fallback logic is in `resolve_tools()`.
+pub fn detect_project_tools(worktree: &Path) -> Vec<ToolEntry> {
     for marker in MARKER_ORDER {
         if worktree.join(marker).exists() {
             let tools = match *marker {
                 "package.json" => js_preset(),
                 "pyproject.toml" => python_preset(),
-                "Cargo.toml" => return configured.to_vec(),
+                "Cargo.toml" => return Vec::new(),
                 _ => continue,
             };
             debug!("Detected project marker '{}', using {} tools", marker, tools.len());
             return tools;
         }
     }
-    configured.to_vec()
+    Vec::new()
 }
 
 #[allow(clippy::unwrap_used)]
@@ -84,7 +84,7 @@ mod tests {
         let dir = TestDir::new("loopr-detect-js");
         std::fs::write(dir.join("package.json"), "{}").unwrap();
 
-        let tools = detect_project_tools(&dir, &[]);
+        let tools = detect_project_tools(&dir);
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"test"));
         assert!(names.contains(&"lint"));
@@ -97,39 +97,28 @@ mod tests {
         let dir = TestDir::new("loopr-detect-py");
         std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
 
-        let tools = detect_project_tools(&dir, &[]);
+        let tools = detect_project_tools(&dir);
         assert!(tools.iter().any(|t| t.command.contains("pytest")));
     }
 
     #[test]
-    fn test_detect_rust_project_uses_config() {
+    fn test_detect_rust_project_returns_empty() {
         let dir = TestDir::new("loopr-detect-rs");
         std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
 
-        let configured = vec![ToolEntry {
-            name: "custom-test".into(),
-            command: "cargo test".into(),
-            timeout_secs: 300,
-            worktree: true,
-        }];
-
-        let tools = detect_project_tools(&dir, &configured);
-        assert!(tools.iter().any(|t| t.name == "custom-test"));
+        let tools = detect_project_tools(&dir);
+        assert!(
+            tools.is_empty(),
+            "Cargo.toml detection should return empty, not fallback"
+        );
     }
 
     #[test]
-    fn test_detect_no_markers_uses_config() {
+    fn test_detect_no_markers_returns_empty() {
         let dir = TestDir::new("loopr-detect-none");
 
-        let configured = vec![ToolEntry {
-            name: "make-test".into(),
-            command: "make test".into(),
-            timeout_secs: 300,
-            worktree: true,
-        }];
-
-        let tools = detect_project_tools(&dir, &configured);
-        assert!(tools.iter().any(|t| t.name == "make-test"));
+        let tools = detect_project_tools(&dir);
+        assert!(tools.is_empty(), "No markers should return empty");
     }
 
     #[test]
@@ -138,7 +127,7 @@ mod tests {
         std::fs::write(dir.join("package.json"), "{}").unwrap();
         std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
 
-        let tools = detect_project_tools(&dir, &[]);
+        let tools = detect_project_tools(&dir);
         assert!(tools.iter().any(|t| t.command.contains("npm")));
     }
 }

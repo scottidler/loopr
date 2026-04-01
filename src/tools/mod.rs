@@ -21,62 +21,52 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use eyre::{Result, eyre};
-use log::debug;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ToolEntry;
 use crate::tools::spawn::{shell_command, spawn_with_process_group};
 
-/// Built-in tool presets for JavaScript projects.
-fn js_preset() -> Vec<ToolEntry> {
-    vec![
-        ToolEntry {
-            name: "test".into(),
-            command: "npm test".into(),
-            timeout_secs: 300,
-            worktree: true,
-        },
-        ToolEntry {
-            name: "lint".into(),
-            command: "npm run lint".into(),
-            timeout_secs: 120,
-            worktree: true,
-        },
-        ToolEntry {
-            name: "build".into(),
-            command: "npm run build".into(),
-            timeout_secs: 300,
-            worktree: true,
-        },
-    ]
-}
+/// Resolve tools using the 3-layer priority stack:
+///   Layer 1 (highest): explicit config from loopr.yml
+///   Layer 2: runtime agent-discovered tools (via tools.register IPC)
+///   Layer 3 (lowest): detection heuristics from marker files
+pub fn resolve_tools(
+    config_tools: &[ToolEntry],
+    runtime_tools: &HashMap<String, ToolEntry>,
+    worktree: Option<&Path>,
+) -> Vec<ToolEntry> {
+    let mut resolved: HashMap<String, ToolEntry> = HashMap::new();
 
-/// Built-in tool presets for Python projects.
-fn python_preset() -> Vec<ToolEntry> {
-    vec![
-        ToolEntry {
-            name: "test".into(),
-            command: "pytest".into(),
-            timeout_secs: 300,
-            worktree: true,
-        },
-        ToolEntry {
-            name: "lint".into(),
-            command: "ruff check .".into(),
-            timeout_secs: 120,
-            worktree: true,
-        },
-        ToolEntry {
-            name: "fmt-check".into(),
-            command: "ruff format --check .".into(),
-            timeout_secs: 30,
-            worktree: true,
-        },
-    ]
-}
+    // Layer 3 (lowest): detection heuristics
+    if let Some(wt) = worktree {
+        for tool in detect::detect_project_tools(wt) {
+            resolved.insert(tool.name.clone(), tool);
+        }
+    }
 
-/// Marker files checked in priority order. First match wins.
-const MARKER_ORDER: &[&str] = &["package.json", "pyproject.toml", "Cargo.toml"];
+    // Layer 2: runtime agent-discovered tools (overrides detection)
+    for (name, tool) in runtime_tools {
+        resolved.insert(name.clone(), tool.clone());
+    }
+
+    // Layer 1 (highest): explicit config (overrides everything)
+    for tool in config_tools {
+        resolved.insert(tool.name.clone(), tool.clone());
+    }
+
+    if resolved.is_empty()
+        && let Some(wt) = worktree
+    {
+        warn!(
+            "No project tools detected at {:?}. Configure tools in loopr.yml \
+             or use a Researcher agent with RegisterTool to bootstrap.",
+            wt
+        );
+    }
+
+    resolved.into_values().collect()
+}
 
 /// Result of executing a tool subprocess.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,22 +98,10 @@ impl ToolRunner {
     }
 
     /// Detect project type from marker files and return appropriate tools.
-    /// Falls back to `configured` if no markers found.
-    pub fn detect_or_default(worktree: &Path, configured: &[ToolEntry]) -> Self {
-        for marker in MARKER_ORDER {
-            if worktree.join(marker).exists() {
-                let tools = match *marker {
-                    "package.json" => js_preset(),
-                    "pyproject.toml" => python_preset(),
-                    // Cargo.toml → use config defaults (already Rust)
-                    "Cargo.toml" => return Self::new(configured),
-                    _ => continue,
-                };
-                debug!("Detected project marker '{}', using {} tools", marker, tools.len());
-                return Self::new(&tools);
-            }
-        }
-        Self::new(configured)
+    /// Returns empty runner if no markers found - fallback logic is in resolve_tools().
+    pub fn detect_or_default(worktree: &Path) -> Self {
+        let tools = detect::detect_project_tools(worktree);
+        Self::new(&tools)
     }
 
     /// List available tool names.
@@ -403,12 +381,11 @@ mod tests {
         let dir = TestDir::new("loopr-tool-js");
         std::fs::write(dir.join("package.json"), "{}").unwrap();
 
-        let runner = ToolRunner::detect_or_default(&dir, &[]);
+        let runner = ToolRunner::detect_or_default(&dir);
         let tools = runner.available_tools();
         assert!(tools.contains(&"test"), "JS preset should have 'test' tool");
         assert!(tools.contains(&"lint"), "JS preset should have 'lint' tool");
         assert!(tools.contains(&"build"), "JS preset should have 'build' tool");
-        // Verify it's npm, not cargo
         let test_tool = runner.get_tool("test").unwrap();
         assert!(
             test_tool.command.contains("npm"),
@@ -422,7 +399,7 @@ mod tests {
         let dir = TestDir::new("loopr-tool-py");
         std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
 
-        let runner = ToolRunner::detect_or_default(&dir, &[]);
+        let runner = ToolRunner::detect_or_default(&dir);
         let tools = runner.available_tools();
         assert!(tools.contains(&"test"), "Python preset should have 'test' tool");
         let test_tool = runner.get_tool("test").unwrap();
@@ -434,59 +411,120 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_rust_project_uses_config() {
+    fn test_detect_rust_returns_empty() {
         let dir = TestDir::new("loopr-tool-rs");
         std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
 
-        let configured = vec![ToolEntry {
-            name: "custom-test".into(),
-            command: "cargo test".into(),
-            timeout_secs: 300,
-            worktree: true,
-        }];
-
-        let runner = ToolRunner::detect_or_default(&dir, &configured);
-        let tools = runner.available_tools();
+        let runner = ToolRunner::detect_or_default(&dir);
         assert!(
-            tools.contains(&"custom-test"),
-            "Cargo.toml should use config defaults: {:?}",
-            tools
+            runner.available_tools().is_empty(),
+            "Cargo.toml detection should return empty runner"
         );
     }
 
     #[test]
-    fn test_detect_no_markers_uses_config() {
+    fn test_detect_no_markers_returns_empty() {
         let dir = TestDir::new("loopr-tool-none");
 
-        let configured = vec![ToolEntry {
-            name: "make-test".into(),
-            command: "make test".into(),
-            timeout_secs: 300,
-            worktree: true,
-        }];
-
-        let runner = ToolRunner::detect_or_default(&dir, &configured);
-        let tools = runner.available_tools();
+        let runner = ToolRunner::detect_or_default(&dir);
         assert!(
-            tools.contains(&"make-test"),
-            "No markers should fall back to config: {:?}",
-            tools
+            runner.available_tools().is_empty(),
+            "No markers should return empty runner"
         );
     }
 
     #[test]
     fn test_detect_priority_order_js_over_python() {
         let dir = TestDir::new("loopr-tool-priority");
-        // Both markers exist — package.json has higher priority
         std::fs::write(dir.join("package.json"), "{}").unwrap();
         std::fs::write(dir.join("pyproject.toml"), "[project]").unwrap();
 
-        let runner = ToolRunner::detect_or_default(&dir, &[]);
+        let runner = ToolRunner::detect_or_default(&dir);
         let test_tool = runner.get_tool("test").unwrap();
         assert!(
             test_tool.command.contains("npm"),
             "package.json should win over pyproject.toml: {}",
             test_tool.command
         );
+    }
+
+    // --- resolve_tools tests ---
+
+    #[test]
+    fn test_resolve_tools_config_overrides_runtime_overrides_detection() {
+        let dir = TestDir::new("loopr-resolve-priority");
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+
+        // Detection provides "test" = "npm test"
+        // Runtime overrides with "busted"
+        let mut runtime = HashMap::new();
+        runtime.insert(
+            "test".into(),
+            ToolEntry {
+                name: "test".into(),
+                command: "busted".into(),
+                timeout_secs: 300,
+                worktree: true,
+            },
+        );
+
+        // Config overrides with "cargo test"
+        let config = vec![ToolEntry {
+            name: "test".into(),
+            command: "cargo test".into(),
+            timeout_secs: 300,
+            worktree: true,
+        }];
+
+        let resolved = resolve_tools(&config, &runtime, Some(&dir));
+        let test_tool = resolved.iter().find(|t| t.name == "test").unwrap();
+        assert_eq!(
+            test_tool.command, "cargo test",
+            "Config should win over runtime and detection"
+        );
+    }
+
+    #[test]
+    fn test_resolve_tools_empty_returns_empty() {
+        let resolved = resolve_tools(&[], &HashMap::new(), None);
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_tools_runtime_overrides_detection() {
+        let dir = TestDir::new("loopr-resolve-rt");
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+
+        let mut runtime = HashMap::new();
+        runtime.insert(
+            "test".into(),
+            ToolEntry {
+                name: "test".into(),
+                command: "custom-runner".into(),
+                timeout_secs: 300,
+                worktree: true,
+            },
+        );
+
+        let resolved = resolve_tools(&[], &runtime, Some(&dir));
+        let test_tool = resolved.iter().find(|t| t.name == "test").unwrap();
+        assert_eq!(test_tool.command, "custom-runner", "Runtime should win over detection");
+    }
+
+    #[test]
+    fn test_resolve_tools_config_wins_over_detection() {
+        let dir = TestDir::new("loopr-resolve-cfg");
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+
+        let config = vec![ToolEntry {
+            name: "test".into(),
+            command: "my-custom-test".into(),
+            timeout_secs: 300,
+            worktree: true,
+        }];
+
+        let resolved = resolve_tools(&config, &HashMap::new(), Some(&dir));
+        let test_tool = resolved.iter().find(|t| t.name == "test").unwrap();
+        assert_eq!(test_tool.command, "my-custom-test", "Config should win over detection");
     }
 }
