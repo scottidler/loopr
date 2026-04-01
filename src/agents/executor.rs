@@ -162,7 +162,7 @@ pub async fn run_agent_task(
     if let Some(ref key) = worktree_key {
         let base_ref = resolve_worktree_base(&stores);
         info!("Agent {} using worktree base: {}", session_id, base_ref);
-        let worktree_path = match worktree_mgr.get_or_create(key, &base_ref) {
+        let worktree_path = match worktree_mgr.get_or_create_branch(key, &base_ref) {
             Ok(path) => path,
             Err(e) => {
                 error!("Agent {} worktree creation failed: {}", session_id, e);

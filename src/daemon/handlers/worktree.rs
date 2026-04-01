@@ -64,7 +64,7 @@ pub(super) fn handle_worktree_create(
             ));
         }
 
-        match worktree_mgr.create(&work_id, &base_ref) {
+        match worktree_mgr.create_branch(&work_id, &base_ref) {
             Ok(path) => {
                 let _ = event_tx.send(DaemonEvent::new(
                     "worktree.created",

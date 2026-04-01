@@ -56,7 +56,7 @@ impl WorktreeManager {
     /// If the branch `agent/<work_id>` already exists (from a previous implementer
     /// session), the worktree is created on the existing branch, preserving its
     /// commits. Otherwise a fresh branch is created from `base_ref`.
-    pub fn create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
+    pub fn create_branch(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
         debug!("WorktreeManager::create(key={}, base_ref={})", work_id, base_ref);
         let path = self.worktree_dir.join(work_id);
         if path.exists() {
@@ -110,8 +110,11 @@ impl WorktreeManager {
 
     /// Idempotent worktree creation — returns the existing worktree path if one
     /// exists, or creates a new one. Handles TOCTOU races between concurrent agents.
-    pub fn get_or_create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
-        debug!("WorktreeManager::get_or_create(key={}, base_ref={})", work_id, base_ref);
+    pub fn get_or_create_branch(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
+        debug!(
+            "WorktreeManager::get_or_create_branch(key={}, base_ref={})",
+            work_id, base_ref
+        );
         let path = self.worktree_dir.join(work_id);
         if path.exists() {
             // Verify it's a valid git worktree by checking for .git file
@@ -125,7 +128,7 @@ impl WorktreeManager {
         // create() may fail with GitCommand if the branch "agent/<work_id>" already
         // exists (TOCTOU race with another agent). If the path now exists after the
         // failed create (the other agent won), just return it.
-        match self.create(work_id, base_ref) {
+        match self.create_branch(work_id, base_ref) {
             Ok(p) => Ok(p),
             Err(WorktreeError::AlreadyExists(_)) => Ok(path),
             Err(e) => {
@@ -401,7 +404,7 @@ branch refs/heads/agent/wi-001
         let test_id = "worktree-test-exists";
         let test_path = mgr.worktree_dir.join(test_id);
         std::fs::create_dir_all(&test_path).ok();
-        let result = mgr.create(test_id, "HEAD");
+        let result = mgr.create_branch(test_id, "HEAD");
         assert!(matches!(result, Err(WorktreeError::AlreadyExists(_))));
         std::fs::remove_dir(&test_path).ok();
     }
@@ -421,7 +424,7 @@ branch refs/heads/agent/wi-001
     }
 
     #[test]
-    fn test_get_or_create_returns_existing_valid_worktree() {
+    fn test_get_or_create_branch_returns_existing_valid_worktree() {
         // Simulate a valid worktree: directory with a .git file inside
         let temp = std::env::temp_dir().join("loopr-test-get-or-create-valid");
         let _ = std::fs::remove_dir_all(&temp);
@@ -434,7 +437,7 @@ branch refs/heads/agent/wi-001
         std::fs::write(wt_path.join(".git"), "gitdir: /repo/.git/worktrees/wi-existing").unwrap();
 
         let mgr = WorktreeManager::new(temp.clone(), worktree_dir);
-        let result = mgr.get_or_create("wi-existing", "HEAD");
+        let result = mgr.get_or_create_branch("wi-existing", "HEAD");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), wt_path);
 
@@ -442,8 +445,8 @@ branch refs/heads/agent/wi-001
     }
 
     #[test]
-    fn test_get_or_create_cleans_invalid_dir_without_git_file() {
-        // Directory exists but has no .git file — get_or_create should remove it
+    fn test_get_or_create_branch_cleans_invalid_dir_without_git_file() {
+        // Directory exists but has no .git file — get_or_create_branch should remove it
         // and attempt create (which will fail since we're not in a real repo,
         // but the cleanup logic is what we're testing)
         let temp = std::env::temp_dir().join("loopr-test-get-or-create-invalid");
@@ -456,7 +459,7 @@ branch refs/heads/agent/wi-001
         // No .git file — should be cleaned up
 
         let mgr = WorktreeManager::new(temp.clone(), worktree_dir);
-        let result = mgr.get_or_create("wi-invalid", "HEAD");
+        let result = mgr.get_or_create_branch("wi-invalid", "HEAD");
         // create() will fail (not a real git repo), but the invalid dir should be removed
         assert!(result.is_err());
         assert!(
@@ -468,13 +471,13 @@ branch refs/heads/agent/wi-001
     }
 
     #[test]
-    fn test_get_or_create_absent_dir_attempts_create() {
-        // When no directory exists, get_or_create should attempt create
+    fn test_get_or_create_branch_absent_dir_attempts_create() {
+        // When no directory exists, get_or_create_branch should attempt create
         let mgr = WorktreeManager::new(
             PathBuf::from("/nonexistent/repo"),
             PathBuf::from("/nonexistent/worktrees"),
         );
-        let result = mgr.get_or_create("wi-new", "HEAD");
+        let result = mgr.get_or_create_branch("wi-new", "HEAD");
         // Will fail because /nonexistent/repo isn't a real git repo
         assert!(result.is_err());
     }
@@ -505,7 +508,7 @@ branch refs/heads/agent/wi-001
         let mgr = WorktreeManager::new(repo.clone(), wt_dir);
 
         // Create first worktree and commit a file
-        let path1 = mgr.create("wi-001", "HEAD").unwrap();
+        let path1 = mgr.create_branch("wi-001", "HEAD").unwrap();
         std::fs::write(path1.join("hello.txt"), "world").unwrap();
         Command::new("git")
             .args(["add", "-A"])
@@ -539,7 +542,7 @@ branch refs/heads/agent/wi-001
         assert_eq!(commit_sha, branch_sha, "branch should retain the commit after cleanup");
 
         // Create second worktree on same work (simulates retry)
-        let path2 = mgr.create("wi-001", "HEAD").unwrap();
+        let path2 = mgr.create_branch("wi-001", "HEAD").unwrap();
 
         // Verify the file from the first session is still there
         assert!(
@@ -560,7 +563,7 @@ branch refs/heads/agent/wi-001
         let mgr = WorktreeManager::new(repo.clone(), wt_dir);
 
         // No branch exists yet - should create fresh
-        let path = mgr.create("wi-002", "HEAD").unwrap();
+        let path = mgr.create_branch("wi-002", "HEAD").unwrap();
         assert!(path.exists());
 
         // Verify the branch was created
@@ -583,7 +586,7 @@ branch refs/heads/agent/wi-001
         let mgr = WorktreeManager::new(repo.clone(), wt_dir);
 
         // Create and cleanup a worktree (leaves branch alive)
-        let path = mgr.create("wi-003", "HEAD").unwrap();
+        let path = mgr.create_branch("wi-003", "HEAD").unwrap();
         std::fs::write(path.join("test.txt"), "data").unwrap();
         Command::new("git")
             .args(["add", "-A"])
