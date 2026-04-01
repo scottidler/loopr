@@ -3,19 +3,31 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
-use loopr_derive::FlexibleEnum;
+use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
 pub enum WorkStatus {
+    #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
     Draft,
+    #[transitions(InProgress(Coordinator), Blocked(Coordinator), Abandoned(Coordinator))]
     Ready,
+    #[transitions(
+        Blocked,
+        InReview(Implementer),
+        Abandoned(Coordinator),
+    )]
+    #[overrides(Ready(Coordinator), InReview(Coordinator))]
     InProgress,
+    #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
     Blocked,
+    #[transitions(InProgress(Coordinator), Integrated(Integrator), Abandoned(Coordinator))]
+    #[overrides(Ready(Coordinator))]
     InReview,
+    #[transitions(Done(Coordinator, Integrator), Abandoned(Coordinator))]
     Integrated,
     Done,
     Abandoned,

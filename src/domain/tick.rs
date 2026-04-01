@@ -3,25 +3,22 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
-use loopr_derive::FlexibleEnum;
+use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FlexibleEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FlexibleEnum, Fsm)]
 pub enum TickStatus {
+    #[transitions(Sealing(Integrator), Failed(Integrator))]
     Open,
+    #[transitions(Validating(Integrator), Failed(Integrator))]
     Sealing,
+    #[transitions(Published(Integrator), Failed(Integrator))]
     Validating,
     Published,
     Failed,
-}
-
-impl TickStatus {
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, TickStatus::Published | TickStatus::Failed)
-    }
 }
 
 impl std::fmt::Display for TickStatus {

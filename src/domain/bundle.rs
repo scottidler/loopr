@@ -3,18 +3,44 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
-use loopr_derive::FlexibleEnum;
+use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
 pub enum BundleStatus {
+    #[transitions(
+        Triaged(Coordinator),
+        Rejected(Coordinator, Reviewer),
+        Superseded(Coordinator),
+    )]
     Proposed,
+    #[transitions(
+        Reviewed(Coordinator, Reviewer),
+        Accepted(Coordinator),
+        Rejected(Coordinator, Reviewer),
+        Superseded(Coordinator),
+    )]
     Triaged,
+    #[transitions(
+        Accepted(Coordinator),
+        Rejected(Coordinator, Reviewer),
+        Superseded(Coordinator),
+    )]
     Reviewed,
+    #[transitions(
+        Integrating(Integrator),
+        Rejected(Integrator),
+        Superseded(Coordinator),
+    )]
     Accepted,
+    #[transitions(
+        Merged(Integrator),
+        Rejected(Integrator),
+        Superseded(Coordinator),
+    )]
     Integrating,
     Merged,
     Rejected,

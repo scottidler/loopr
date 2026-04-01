@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use taskstore::record::{IndexValue, Record};
 
-use loopr_derive::FlexibleEnum;
+use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
@@ -11,12 +11,14 @@ use crate::id;
 
 /// Shared status enum for Plan, Spec, and Phase records.
 /// All three use the same four-state machine with Coordinator-only transitions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
 #[serde(rename_all = "lowercase")]
 pub enum HierarchyStatus {
     #[serde(alias = "Draft")]
+    #[transitions(Active(Coordinator), Abandoned(Coordinator))]
     Draft,
     #[serde(alias = "Active")]
+    #[transitions(Complete(Coordinator), Abandoned(Coordinator))]
     Active,
     #[serde(alias = "Complete")]
     Complete,
