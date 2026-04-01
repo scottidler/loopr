@@ -41,6 +41,8 @@ pub struct ManifestPhase {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default, rename = "validation-commands")]
+    pub validation_commands: Vec<String>,
     pub works: Vec<ManifestWork>,
 }
 
@@ -91,12 +93,13 @@ pub fn parse_manifest(yaml: &str) -> eyre::Result<ResolvedManifest> {
     let mut key_to_id: HashMap<String, String> = HashMap::new();
 
     for (order, manifest_phase) in manifest.plan.spec.phases.iter().enumerate() {
-        let phase = Phase::new(
+        let mut phase = Phase::new(
             spec.id.clone(),
             manifest_phase.title.clone(),
             manifest_phase.description.clone(),
             (order + 1) as u32,
         );
+        phase.validation_commands = manifest_phase.validation_commands.clone();
 
         // First pass: create Work records and build the key -> ID map
         for mw in &manifest_phase.works {
@@ -223,5 +226,30 @@ plan:
         // Cross-phase dependency resolves
         assert_eq!(resolved.works[1].dependencies.len(), 1);
         assert_eq!(resolved.works[1].dependencies[0], resolved.works[0].id);
+    }
+
+    #[test]
+    fn test_parse_manifest_with_validation_commands() {
+        let yaml = r#"
+goal: "Test validation"
+plan:
+  title: "Plan"
+  spec:
+    title: "Spec"
+    phases:
+      - title: "Phase 1"
+        validation-commands:
+          - "python -c 'import todo'"
+        works:
+          - key: "a"
+            title: "Work A"
+      - title: "Phase 2"
+        works:
+          - key: "b"
+            title: "Work B"
+"#;
+        let resolved = parse_manifest(yaml).unwrap();
+        assert_eq!(resolved.phases[0].validation_commands, vec!["python -c 'import todo'"]);
+        assert!(resolved.phases[1].validation_commands.is_empty());
     }
 }

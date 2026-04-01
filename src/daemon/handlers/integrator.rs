@@ -6,6 +6,7 @@ use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;
 use crate::domain::tick::TickStatus;
 use crate::domain::validation::ValidationReport;
@@ -81,8 +82,8 @@ pub(super) fn handle_integrator_validate(
             }
         };
 
-        // Verify tick exists and is in Sealing state
-        {
+        // Verify tick exists and is in Sealing state; capture bundle_ids for phase validation
+        let bundle_ids = {
             let ticks = stores.read_ticks()?;
             let tick = match ticks.get(&tick_id) {
                 Some(t) => t,
@@ -97,7 +98,8 @@ pub(super) fn handle_integrator_validate(
                     )),
                 ));
             }
-        }
+            tick.bundle_ids.clone()
+        };
 
         // Transition to Validating
         {
@@ -130,8 +132,9 @@ pub(super) fn handle_integrator_validate(
         // Emit validation.started event
         let _ = event_tx.send(DaemonEvent::validation_started(&tick_id));
 
-        // Run validation commands
-        let (all_passed, validation_log) = run_validation_commands(&integrator_config.validation_commands);
+        // Run validation commands (global + phase-scoped, deduplicated)
+        let effective_cmds = effective_validation_commands(&integrator_config.validation_commands, &bundle_ids, stores);
+        let (all_passed, validation_log) = run_validation_commands(&effective_cmds);
 
         // Emit validation.completed event
         let _ = event_tx.send(DaemonEvent::validation_completed(&tick_id, all_passed, &validation_log));

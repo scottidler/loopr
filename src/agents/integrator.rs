@@ -4,6 +4,7 @@
 //! seal it, run validation commands, then publish or fail. Every decision is an
 //! if/then/else on data from the stores — no prompts, no parsing, no temperature.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -11,6 +12,7 @@ use eyre::{Result, eyre};
 
 use crate::agents::{Agent, AgentContext, AgentType};
 use crate::config::IntegratorConfig;
+use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
@@ -597,7 +599,9 @@ impl IntegratorAgent {
             .bridge
             .event_tx()
             .send(DaemonEvent::validation_started(&tick_id));
-        let (passed, validation_log) = run_validation_commands(&self.config.validation_commands);
+        let effective_cmds =
+            effective_validation_commands(&self.config.validation_commands, &valid_bundle_ids, &self.ctx.stores);
+        let (passed, validation_log) = run_validation_commands(&effective_cmds);
         let _ = self
             .ctx
             .bridge
@@ -851,6 +855,41 @@ fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]
         .map_err(|e| eyre!("git rev-parse HEAD failed: {}", e))?;
 
     Ok(String::from_utf8_lossy(&sha_output.stdout).trim().to_string())
+}
+
+/// Resolve effective validation commands: global + phase-scoped (deduplicated).
+pub fn effective_validation_commands(
+    global_commands: &[String],
+    bundle_ids: &[String],
+    stores: &Stores,
+) -> Vec<String> {
+    let mut commands: Vec<String> = global_commands.to_vec();
+    let mut seen: HashSet<String> = commands.iter().cloned().collect();
+
+    let Ok(bundles) = stores.read_bundles() else {
+        return commands;
+    };
+    let Ok(works) = stores.read_works() else {
+        return commands;
+    };
+    let Ok(phases) = stores.read_phases() else {
+        return commands;
+    };
+
+    for bid in bundle_ids {
+        if let Some(bundle) = bundles.get(bid)
+            && let Some(work) = works.get(&bundle.work_id)
+            && let Some(phase) = phases.get(&work.phase_id)
+        {
+            for cmd in &phase.validation_commands {
+                if seen.insert(cmd.clone()) {
+                    commands.push(cmd.clone());
+                }
+            }
+        }
+    }
+
+    commands
 }
 
 /// Run validation commands synchronously (same pattern as handlers.rs).
@@ -1994,5 +2033,94 @@ mod tests {
             !dir.join(".git/MERGE_HEAD").exists(),
             "MERGE_HEAD should not exist after cleanup"
         );
+    }
+
+    // --- effective_validation_commands tests ---
+
+    #[test]
+    fn test_effective_validation_commands_global_only() {
+        let dir = TestDir::new("loopr-int-evc-global");
+        let stores = test_stores(&dir);
+        let global = vec!["echo global".to_string()];
+        let result = effective_validation_commands(&global, &[], &stores);
+        assert_eq!(result, vec!["echo global"]);
+    }
+
+    #[test]
+    fn test_effective_validation_commands_with_phase() {
+        use crate::domain::phase::Phase;
+
+        let dir = TestDir::new("loopr-int-evc-phase");
+        let stores = test_stores(&dir);
+
+        // Create phase with validation commands
+        let mut phase = Phase::new("spec-1".into(), "P1".into(), "".into(), 1);
+        phase.validation_commands = vec!["echo phase".to_string()];
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+        // Create work in that phase
+        let work = Work::new(phase_id, "W1".into(), "".into());
+        let work_id = work.id.clone();
+        stores.works.write().unwrap().insert(work.id.clone(), work);
+
+        // Create bundle for that work
+        let bundle = Bundle::new(work_id, None, "feature/test".into(), vec![]);
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let global = vec!["echo global".to_string()];
+        let result = effective_validation_commands(&global, &[bundle_id], &stores);
+        assert_eq!(result, vec!["echo global", "echo phase"]);
+    }
+
+    #[test]
+    fn test_effective_validation_commands_deduplicates() {
+        use crate::domain::phase::Phase;
+
+        let dir = TestDir::new("loopr-int-evc-dedup");
+        let stores = test_stores(&dir);
+
+        let mut phase = Phase::new("spec-1".into(), "P1".into(), "".into(), 1);
+        phase.validation_commands = vec!["echo global".to_string(), "echo phase".to_string()];
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+        let work = Work::new(phase_id, "W1".into(), "".into());
+        let work_id = work.id.clone();
+        stores.works.write().unwrap().insert(work.id.clone(), work);
+
+        let bundle = Bundle::new(work_id, None, "feature/test".into(), vec![]);
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let global = vec!["echo global".to_string()];
+        let result = effective_validation_commands(&global, &[bundle_id], &stores);
+        // "echo global" should not be duplicated
+        assert_eq!(result, vec!["echo global", "echo phase"]);
+    }
+
+    #[test]
+    fn test_effective_validation_commands_empty_phase() {
+        use crate::domain::phase::Phase;
+
+        let dir = TestDir::new("loopr-int-evc-empty");
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "P1".into(), "".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+        let work = Work::new(phase_id, "W1".into(), "".into());
+        let work_id = work.id.clone();
+        stores.works.write().unwrap().insert(work.id.clone(), work);
+
+        let bundle = Bundle::new(work_id, None, "feature/test".into(), vec![]);
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let global = vec!["echo global".to_string()];
+        let result = effective_validation_commands(&global, &[bundle_id], &stores);
+        assert_eq!(result, vec!["echo global"]);
     }
 }

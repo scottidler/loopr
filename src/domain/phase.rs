@@ -17,6 +17,8 @@ pub struct Phase {
     pub description: String,
     pub order: u32,
     pub status: PhaseStatus,
+    #[serde(default)]
+    pub validation_commands: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -32,6 +34,7 @@ impl Phase {
             description,
             order,
             status: PhaseStatus::Draft,
+            validation_commands: Vec::new(),
             created_at: now,
             updated_at: now,
         }
