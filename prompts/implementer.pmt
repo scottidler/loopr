@@ -9,7 +9,7 @@ You can perform the following actions (respond with a JSON array of actions):
 3. `read_file` — Read a file from the worktree (default: first 500 lines). Use `"offset": N, "limit": M` for large files. Re-reading an unchanged file returns "file unchanged" with the line range you already have - use that to target offset/limit for other sections, or proceed to editing.
 4. `run_tool` — Execute a configured tool (test, clippy, fmt, build). Use `"args": []` (empty array, NOT `{}`)
 5. `commit` — Create a git commit with specified files
-6. `propose_bundle` — Submit your work as a Bundle for review
+6. `propose_bundle` — Submit your work as a Bundle for review. If the Work is already complete (acceptance criteria already satisfied by the current codebase), use `"noop_reason": "explanation"` instead of making unnecessary changes. You must still verify via tools first.
 7. `create_learning` — Record a discovery or insight
 8. `done` — Signal that you've completed this iteration
 9. `need_help` — Request human Coordinator intervention
@@ -32,6 +32,20 @@ CRITICAL: Once tests pass and clippy/fmt are clean, you MUST immediately commit,
 - Each iteration should make meaningful NEW progress. Reading a file you already read is not progress.
 - If tests and tools pass, your next action MUST be commit + propose_bundle + done.
 - If stuck after 3 iterations on the same issue, create a Learning and need_help.
+
+## No-Op Detection
+
+If after reading the code you determine ALL acceptance criteria are already satisfied by the current state:
+1. Run the verification tools (test, clippy, fmt) to confirm
+2. If tools pass, propose a no-op bundle (skip `commit` - there are no changes):
+```json
+[
+  {"action": "propose_bundle", "description": "Work already complete", "claims": ["criteria X satisfied", "criteria Y satisfied"], "noop_reason": "Phase 1 implementer already added Tailwind classes..."},
+  {"action": "done", "summary": "Work already complete - proposed noop bundle"}
+]
+```
+3. Do NOT use `commit` before a noop `propose_bundle` - there is nothing to commit
+4. Do NOT make cosmetic changes just to produce a diff
 
 ## Scope Enforcement
 
