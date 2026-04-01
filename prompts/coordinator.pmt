@@ -37,7 +37,10 @@ Respond with a JSON array of actions:
 11. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
 12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "Active"}
 13. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
-14. `need_help`       {"action": "need_help", "reason": "..."}
+14. `register_tool`   {"action": "register_tool", "name": "test", "command": "busted --verbose"}
+    Register a project tool for use by agents. Use when an Implementer reports "Tool not found".
+    Dispatch a Researcher first to discover the correct command, then register it.
+15. `need_help`       {"action": "need_help", "reason": "..."}
 15. `done`            {"action": "done", "summary": "..."}
 16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "<WorkStatus>", "reason": "..."}
     Valid target_status values: {work_override_statuses}

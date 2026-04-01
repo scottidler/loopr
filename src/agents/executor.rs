@@ -579,6 +579,30 @@ pub async fn execute_action(
                 .map_err(|e| eyre!("run_tool '{}': {}", tool, e))?;
             Ok(ActionResult::ToolRun(tool_result))
         }
+        AgentAction::RegisterTool {
+            name,
+            command,
+            timeout_secs,
+            worktree,
+        } => {
+            let params = serde_json::json!({
+                "name": name,
+                "command": command,
+                "timeout_secs": timeout_secs,
+                "worktree": worktree,
+            });
+            let resp = bridge.request("tools.register", params);
+            if resp.is_error() {
+                let msg = resp
+                    .error
+                    .map(|e| e.message)
+                    .unwrap_or_else(|| "unknown error".to_string());
+                return Ok(ActionResult::ActionError(format!("register_tool '{}': {}", name, msg)));
+            }
+            // The tools.register IPC rebuilds the stores' tool_runner/tool_executor.
+            // Newly spawned agents will pick up the registered tool automatically.
+            Ok(ActionResult::ToolRegistered(name.clone()))
+        }
         AgentAction::WriteFile { path, content } => {
             // Validate path stays within worktree (sandbox)
             let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
@@ -1803,6 +1827,8 @@ pub enum ActionResult {
     BundleProposed(String),
     Transitioned(String),
     LearningCreated(String),
+    /// Tool registered via tools.register IPC — contains tool name.
+    ToolRegistered(String),
     /// Lock acquired — contains lock_id.
     LockAcquired(String),
     /// Lock released — contains lock_id.
@@ -2387,6 +2413,35 @@ mod tests {
         };
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"), "Expected 'not found' in: {err}");
+        assert!(err.contains("register_tool"), "Expected 'register_tool' hint in: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_execute_register_tool() {
+        let dir = TestDir::new("loopr-exec-regtool");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Researcher);
+
+        let action = AgentAction::RegisterTool {
+            name: "lua-test".to_string(),
+            command: "busted --verbose".to_string(),
+            timeout_secs: 300,
+            worktree: true,
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ToolRegistered(ref n) if n == "lua-test"),
+            "Expected ToolRegistered, got: {:?}",
+            result
+        );
+
+        // Verify the tool is now in runtime_tools
+        let rt = stores.read_runtime_tools().unwrap();
+        assert!(rt.contains_key("lua-test"));
+        assert_eq!(rt["lua-test"].command, "busted --verbose");
     }
 
     #[tokio::test]

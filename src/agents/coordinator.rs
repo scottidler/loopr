@@ -1932,6 +1932,7 @@ fn format_action_summary(result: &ActionResult) -> String {
         ActionResult::BundleProposed(d) => format!("proposed bundle: {}", d),
         ActionResult::Transitioned(d) => format!("transitioned: {}", d),
         ActionResult::LearningCreated(c) => format!("learning: {}", c),
+        ActionResult::ToolRegistered(n) => format!("registered tool: {}", n),
         ActionResult::LockAcquired(id) => format!("lock acquired: {}", id),
         ActionResult::LockReleased(id) => format!("lock released: {}", id),
         ActionResult::DocumentValidated {

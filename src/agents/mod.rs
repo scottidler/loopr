@@ -38,6 +38,14 @@ use crate::tools::ToolExecutor;
 use crate::tools::ToolRunner;
 use crate::worktree::manager::WorktreeManager;
 
+fn default_tool_timeout() -> u64 {
+    300
+}
+
+fn default_tool_worktree() -> bool {
+    true
+}
+
 /// Deserialize a JSON value that is either a single string or an array of strings
 /// into a Vec<String>. Handles LLM deviations where a string is sent instead of an array.
 fn string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
@@ -475,6 +483,14 @@ pub enum AgentAction {
     },
     NeedHelp {
         reason: String,
+    },
+    RegisterTool {
+        name: String,
+        command: String,
+        #[serde(default = "default_tool_timeout")]
+        timeout_secs: u64,
+        #[serde(default = "default_tool_worktree")]
+        worktree: bool,
     },
 
     // === Coordinator-only actions ===
