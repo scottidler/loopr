@@ -53,7 +53,9 @@ impl WorktreeManager {
 
     /// Create a worktree for a work.
     ///
-    /// Runs: `git worktree add <path> -b agent/<work_id> <base_ref>`
+    /// If the branch `agent/<work_id>` already exists (from a previous implementer
+    /// session), the worktree is created on the existing branch, preserving its
+    /// commits. Otherwise a fresh branch is created from `base_ref`.
     pub fn create(&self, work_id: &str, base_ref: &str) -> Result<PathBuf, WorktreeError> {
         debug!("WorktreeManager::create(key={}, base_ref={})", work_id, base_ref);
         let path = self.worktree_dir.join(work_id);
@@ -63,16 +65,27 @@ impl WorktreeManager {
 
         let branch = format!("agent/{}", work_id);
 
-        // Delete stale branch from a previous failed run if it exists
-        let _ = Command::new("git")
-            .args(["branch", "-D", &branch])
+        // Check if the branch already exists (from a previous implementer session).
+        // If so, reuse it to preserve commits that haven't been integrated yet.
+        let branch_exists = Command::new("git")
+            .args(["rev-parse", "--verify", &format!("refs/heads/{}", branch)])
             .current_dir(&self.repo_path)
-            .output();
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
-        let output = Command::new("git")
-            .args(["worktree", "add", &path.to_string_lossy(), "-b", &branch, base_ref])
-            .current_dir(&self.repo_path)
-            .output()?;
+        let output = if branch_exists {
+            debug!("branch {} exists, creating worktree on existing branch", branch);
+            Command::new("git")
+                .args(["worktree", "add", &path.to_string_lossy(), &branch])
+                .current_dir(&self.repo_path)
+                .output()?
+        } else {
+            Command::new("git")
+                .args(["worktree", "add", &path.to_string_lossy(), "-b", &branch, base_ref])
+                .current_dir(&self.repo_path)
+                .output()?
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -168,6 +181,27 @@ impl WorktreeManager {
         // Keep the agent branch alive — the Integrator needs it for merging.
         // Branch cleanup happens after Tick publishes.
 
+        Ok(())
+    }
+
+    /// Delete the agent branch for a work item. Called by the Integrator
+    /// after a Tick is published (commits are safely on main), or by the
+    /// Coordinator when work is abandoned.
+    pub fn delete_branch(&self, work_id: &str) -> Result<(), WorktreeError> {
+        let branch = format!("agent/{}", work_id);
+        debug!("WorktreeManager::delete_branch(branch={})", branch);
+        let output = Command::new("git")
+            .args(["branch", "-D", &branch])
+            .current_dir(&self.repo_path)
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Branch may already be deleted - not an error
+            if !stderr.contains("not found") {
+                return Err(WorktreeError::GitCommand(stderr.to_string()));
+            }
+        }
         Ok(())
     }
 
@@ -443,5 +477,159 @@ branch refs/heads/agent/wi-001
         let result = mgr.get_or_create("wi-new", "HEAD");
         // Will fail because /nonexistent/repo isn't a real git repo
         assert!(result.is_err());
+    }
+
+    /// Helper: create a temporary git repo with an initial commit.
+    fn init_test_repo(name: &str) -> PathBuf {
+        let temp = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git").args(args).current_dir(&temp).output().unwrap();
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(temp.join("README.md"), "init").unwrap();
+        run(&["add", "-A"]);
+        run(&["commit", "-m", "init"]);
+        temp
+    }
+
+    #[test]
+    fn test_create_preserves_existing_branch_commits() {
+        let repo = init_test_repo("loopr-wt-preserve-branch");
+        let wt_dir = repo.join(".worktrees");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let mgr = WorktreeManager::new(repo.clone(), wt_dir);
+
+        // Create first worktree and commit a file
+        let path1 = mgr.create("wi-001", "HEAD").unwrap();
+        std::fs::write(path1.join("hello.txt"), "world").unwrap();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&path1)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add hello.txt"])
+            .current_dir(&path1)
+            .output()
+            .unwrap();
+
+        // Record the commit SHA
+        let sha_out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&path1)
+            .output()
+            .unwrap();
+        let commit_sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
+
+        // Cleanup the worktree (simulates implementer finishing)
+        mgr.cleanup("wi-001").unwrap();
+
+        // Verify branch still exists with the commit
+        let branch_sha = Command::new("git")
+            .args(["rev-parse", "agent/wi-001"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        let branch_sha = String::from_utf8_lossy(&branch_sha.stdout).trim().to_string();
+        assert_eq!(commit_sha, branch_sha, "branch should retain the commit after cleanup");
+
+        // Create second worktree on same work (simulates retry)
+        let path2 = mgr.create("wi-001", "HEAD").unwrap();
+
+        // Verify the file from the first session is still there
+        assert!(
+            path2.join("hello.txt").exists(),
+            "hello.txt from first session should persist on the reused branch"
+        );
+
+        // Cleanup
+        mgr.cleanup("wi-001").unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_create_fresh_branch_when_none_exists() {
+        let repo = init_test_repo("loopr-wt-fresh-branch");
+        let wt_dir = repo.join(".worktrees");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let mgr = WorktreeManager::new(repo.clone(), wt_dir);
+
+        // No branch exists yet - should create fresh
+        let path = mgr.create("wi-002", "HEAD").unwrap();
+        assert!(path.exists());
+
+        // Verify the branch was created
+        let branch_check = Command::new("git")
+            .args(["rev-parse", "--verify", "refs/heads/agent/wi-002"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(branch_check.status.success());
+
+        mgr.cleanup("wi-002").unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_delete_branch_removes_branch() {
+        let repo = init_test_repo("loopr-wt-delete-branch");
+        let wt_dir = repo.join(".worktrees");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let mgr = WorktreeManager::new(repo.clone(), wt_dir);
+
+        // Create and cleanup a worktree (leaves branch alive)
+        let path = mgr.create("wi-003", "HEAD").unwrap();
+        std::fs::write(path.join("test.txt"), "data").unwrap();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "add test.txt"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        mgr.cleanup("wi-003").unwrap();
+
+        // Branch should exist
+        let check = Command::new("git")
+            .args(["rev-parse", "--verify", "refs/heads/agent/wi-003"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(check.status.success(), "branch should exist before delete");
+
+        // Delete it
+        mgr.delete_branch("wi-003").unwrap();
+
+        // Branch should be gone
+        let check = Command::new("git")
+            .args(["rev-parse", "--verify", "refs/heads/agent/wi-003"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(!check.status.success(), "branch should be gone after delete");
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_delete_branch_idempotent_on_missing() {
+        let repo = init_test_repo("loopr-wt-delete-missing");
+        let wt_dir = repo.join(".worktrees");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let mgr = WorktreeManager::new(repo.clone(), wt_dir);
+
+        // Deleting a branch that doesn't exist should succeed
+        let result = mgr.delete_branch("wi-nonexistent");
+        assert!(result.is_ok(), "deleting missing branch should be Ok");
+
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

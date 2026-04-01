@@ -832,6 +832,35 @@ fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]
         bundle_branches,
     );
     for branch in bundle_branches {
+        // Verify the branch has commits beyond the merge base.
+        // Without this, `git merge --no-ff` on a branch pointing to the same
+        // commit as HEAD silently succeeds (exit 0, "Already up to date")
+        // with no merge commit - a no-op that passes but produces no changes.
+        let merge_base = std::process::Command::new("git")
+            .args(["merge-base", "HEAD", branch])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| eyre!("git merge-base HEAD {} failed: {}", branch, e))?;
+
+        let branch_head = std::process::Command::new("git")
+            .args(["rev-parse", branch])
+            .current_dir(repo_path)
+            .output()
+            .map_err(|e| eyre!("git rev-parse {} failed: {}", branch, e))?;
+
+        if merge_base.status.success() && branch_head.status.success() {
+            let base_sha = String::from_utf8_lossy(&merge_base.stdout).trim().to_string();
+            let head_sha = String::from_utf8_lossy(&branch_head.stdout).trim().to_string();
+            if base_sha == head_sha {
+                return Err(eyre!(
+                    "branch {} has no commits beyond merge base (both at {}). \
+                     The implementer's commits may have been lost.",
+                    branch,
+                    base_sha
+                ));
+            }
+        }
+
         let output = std::process::Command::new("git")
             .args([
                 "merge",

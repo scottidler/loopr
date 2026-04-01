@@ -188,6 +188,10 @@ pub struct Bundle {
     /// complete without code changes. The Reviewer must verify the codebase state.
     #[serde(default)]
     pub noop_reason: Option<String>,
+    /// SHA of the worktree HEAD at bundle proposal time. Used for audit
+    /// and pre-merge verification that the branch still has the expected commits.
+    #[serde(default)]
+    pub head_commit: Option<String>,
     pub status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -209,6 +213,7 @@ impl Bundle {
             loc_changed: None,
             locks_used: Vec::new(),
             noop_reason: None,
+            head_commit: None,
             status: BundleStatus::Proposed,
             created_at: now,
             updated_at: now,
@@ -332,6 +337,40 @@ mod tests {
         assert_eq!(b.claims, deserialized.claims);
         assert_eq!(b.verification, deserialized.verification);
         assert_eq!(b.status, deserialized.status);
+    }
+
+    #[test]
+    fn test_bundle_serde_roundtrip_with_head_commit() {
+        let mut b = Bundle::new(
+            "wi-hc".to_string(),
+            None,
+            "agent/wi-hc".to_string(),
+            vec!["test claim".into()],
+        );
+        b.head_commit = Some("abc123def456".to_string());
+
+        let json = serde_json::to_string(&b).unwrap();
+        let deserialized: Bundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.head_commit, Some("abc123def456".to_string()));
+    }
+
+    #[test]
+    fn test_bundle_serde_backward_compat_without_head_commit() {
+        // Old JSON without head_commit should deserialize with None
+        let json = serde_json::json!({
+            "id": "bd-test",
+            "work_id": "wi-1",
+            "base_tick_id": null,
+            "branch_name": "agent/wi-1",
+            "touched_paths": [],
+            "claims": [],
+            "verification": "",
+            "status": "Proposed",
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let bundle: Bundle = serde_json::from_value(json).unwrap();
+        assert!(bundle.head_commit.is_none());
     }
 
     #[test]

@@ -828,6 +828,20 @@ pub async fn execute_action(
                 format!("agent/{}", wi_id)
             };
 
+            // Capture the current HEAD SHA for audit and pre-merge verification
+            let head_commit = if !is_noop {
+                tokio::process::Command::new("git")
+                    .args(["rev-parse", "HEAD"])
+                    .current_dir(worktree_path)
+                    .output()
+                    .await
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            };
+
             // Fix #1: Resolve base_tick_id from latest Published Tick
             let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
 
@@ -837,6 +851,9 @@ pub async fn execute_action(
                 "claims": claims,
                 "description": description,
             });
+            if let Some(ref sha) = head_commit {
+                params["head_commit"] = serde_json::Value::String(sha.clone());
+            }
             if let Some(reason) = noop_reason {
                 params["noop_reason"] = serde_json::Value::String(reason.clone());
             }

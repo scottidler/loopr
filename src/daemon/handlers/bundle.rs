@@ -129,9 +129,16 @@ pub(super) fn handle_bundle_create(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let head_commit = req
+            .params
+            .get("head_commit")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let mut bundle = Bundle::new(work_id, base_tick_id, branch_name, claims);
         bundle.description = description;
         bundle.noop_reason = noop_reason;
+        bundle.head_commit = head_commit;
 
         // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
         let touched_paths_val = req
