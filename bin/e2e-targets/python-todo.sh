@@ -22,6 +22,15 @@ scaffold() {
 pytest
 REQ
 
+    cat > "${TARGET}/pyproject.toml" <<'PYPROJECT'
+[project]
+name = "todo-app"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+PYPROJECT
+
     cat > "${TARGET}/README.md" <<'README'
 # Todo App
 

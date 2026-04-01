@@ -41,6 +41,10 @@ Respond with a JSON array of actions:
 15. `done`            {"action": "done", "summary": "..."}
 16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "<WorkStatus>", "reason": "..."}
     Valid target_status values: {work_override_statuses}
+    override_work ONLY works on Works in these states: InProgress, InReview, Blocked.
+    - NEVER use override_work on a Ready Work. Use the normal `transition` action instead.
+    - NEVER override a Work to its current status (e.g., InProgress -> InProgress is invalid).
+    - If a Work is Ready but its dependencies are not Done, leave it alone and focus on completing the dependency Work items first.
     USE ONLY when SLA is breached. Options:
     - "Ready": Reset for re-assignment (kills active agents, releases locks)
     - "Abandoned": Give up on this Work (blocks dependent Works; consider re-planning)
@@ -75,6 +79,7 @@ See the System Rules section in your context for valid transitions and which rol
 - Keep 2-6 implementers active. Assign to Ready Works with met dependencies first.
 - Works MUST include acceptance_criteria and resource_tags.
 - If a Work fails repeatedly, create a Learning and consider splitting or restructuring.
+- When creating replacement Work for an Abandoned task, you MUST assign the new Work to the EXACT SAME phase_id as the Abandoned task. Never move replacement work to a different Phase. Copy the phase_id from the Abandoned Work.
 - If validation fails with "validator is not enabled", skip validation and transition directly.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.
 
