@@ -3,7 +3,7 @@ use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::ContextBuilder;
-use crate::agents::implementer::LlmClient;
+use crate::agents::implementer::{ChatMessage, LlmClient};
 use crate::agents::{Agent, AgentContext, AgentType};
 use crate::config::AgentRoleConfig;
 use crate::domain::role::Role;
@@ -128,15 +128,45 @@ impl Agent for ReviewerAgent {
         let work_title = ctx_builder.work_title().unwrap_or("unknown").to_string();
         let assembled = ctx_builder.build(&crate::prompts::store().reviewer)?;
 
-        let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
-        self.ctx.log.write_iter_file(
-            0,
-            Some(&self.bundle_id),
-            &assembled.system_prompt,
-            &assembled.user_message,
-            &response,
-        );
-        let review = parse_review_result(&response, &self.ctx.log)?;
+        let review = {
+            let mut messages = vec![ChatMessage::user(&assembled.user_message)];
+            let mut requeries = 0u32;
+
+            loop {
+                let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
+                self.ctx.log.write_iter_file(
+                    requeries,
+                    Some(&self.bundle_id),
+                    &assembled.system_prompt,
+                    &assembled.user_message,
+                    &response,
+                );
+
+                match parse_review_result(&response, &self.ctx.log) {
+                    Ok(result) => break result,
+                    Err(parse_err) => {
+                        requeries += 1;
+                        if requeries > self.config.max_requeries {
+                            return Err(parse_err.wrap_err("reviewer exhausted parse retries"));
+                        }
+                        self.ctx.warn(&format!(
+                            "parse attempt {}/{} failed: {}",
+                            requeries, self.config.max_requeries, parse_err
+                        ));
+                        let truncated: String = response.chars().take(200).collect();
+                        messages.push(ChatMessage::assistant(&truncated));
+                        messages.push(ChatMessage::user(&format!(
+                            "Your response (starting with: {:?}...) could not be parsed \
+                             as valid JSON. Error: {}\n\n\
+                             Respond with ONLY a valid JSON object matching the schema \
+                             in the system prompt. No markdown, no prose.",
+                            &truncated[..truncated.len().min(100)],
+                            parse_err,
+                        )));
+                    }
+                }
+            }
+        };
 
         self.ctx.info(&format!(
             "verdict: {} ({} issues) — {}",
@@ -320,6 +350,38 @@ mod tests {
     impl LlmClient for FailingReviewLlm {
         async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
             Err(eyre!("LLM call failed"))
+        }
+    }
+
+    /// Mock LLM that returns a sequence of responses, one per call.
+    struct SequentialReviewLlm {
+        responses: StdMutex<Vec<String>>,
+    }
+
+    impl SequentialReviewLlm {
+        fn new(responses: Vec<&str>) -> Self {
+            Self {
+                responses: StdMutex::new(responses.into_iter().map(String::from).collect()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmClient for SequentialReviewLlm {
+        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                return Err(eyre!("no more responses"));
+            }
+            Ok(responses.remove(0))
+        }
+
+        async fn call_with_history(&self, _system_prompt: &str, _messages: &[ChatMessage]) -> Result<String> {
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                return Err(eyre!("no more responses"));
+            }
+            Ok(responses.remove(0))
         }
     }
 
@@ -664,10 +726,55 @@ mod tests {
         let dir = TestDir::new("loopr-rev-bad");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
+        // With retry, bad response must exhaust all retries before failing
         let llm = Box::new(MockReviewLlm::new("Not valid JSON"));
         let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_err());
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(
+            err_msg.contains("exhausted parse retries"),
+            "expected parse retry exhaustion, got: {}",
+            err_msg
+        );
+    }
+
+    // --- Parse retry tests ---
+
+    #[tokio::test]
+    async fn test_reviewer_parse_retry_succeeds_on_second_attempt() {
+        let dir = TestDir::new("loopr-rev-retry-ok");
+        let (stores, bundle_id) = setup_stores_with_bundle(&dir);
+
+        let llm = Box::new(SequentialReviewLlm::new(vec![
+            "Not valid JSON",
+            r#"{"verdict": "approve", "issues": [], "summary": "LGTM after retry"}"#,
+        ]));
+        let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
+        let result = agent.run().await;
+        assert!(result.is_ok(), "retry should succeed: {:?}", result.err());
+
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.get(&bundle_id).unwrap();
+        assert_eq!(bundle.status, BundleStatus::Reviewed);
+    }
+
+    #[tokio::test]
+    async fn test_reviewer_parse_retry_exhaustion() {
+        let dir = TestDir::new("loopr-rev-retry-fail");
+        let (stores, bundle_id) = setup_stores_with_bundle(&dir);
+
+        // 4 bad responses: 1 initial + 3 retries (max_requeries=3) -> exhaustion
+        let llm = Box::new(SequentialReviewLlm::new(vec!["bad 1", "bad 2", "bad 3", "bad 4"]));
+        let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
+        let result = agent.run().await;
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.err().unwrap());
+        assert!(
+            err_msg.contains("exhausted parse retries"),
+            "expected exhaustion error, got: {}",
+            err_msg
+        );
     }
 
     // --- Advisory review race condition tests ---
