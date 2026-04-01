@@ -590,6 +590,7 @@ pub async fn execute_action(
                 "command": command,
                 "timeout_secs": timeout_secs,
                 "worktree": worktree,
+                "context_dir": worktree_path.to_string_lossy(),
             });
             let resp = bridge.request("tools.register", params);
             if resp.is_error() {
@@ -2426,22 +2427,22 @@ mod tests {
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Researcher);
 
         let action = AgentAction::RegisterTool {
-            name: "lua-test".to_string(),
-            command: "busted --verbose".to_string(),
+            name: "my-echo".to_string(),
+            command: "echo hello".to_string(),
             timeout_secs: 300,
             worktree: true,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
-            matches!(result, ActionResult::ToolRegistered(ref n) if n == "lua-test"),
+            matches!(result, ActionResult::ToolRegistered(ref n) if n == "my-echo"),
             "Expected ToolRegistered, got: {:?}",
             result
         );
 
         // Verify the tool is now in runtime_tools
         let rt = stores.read_runtime_tools().unwrap();
-        assert!(rt.contains_key("lua-test"));
-        assert_eq!(rt["lua-test"].command, "busted --verbose");
+        assert!(rt.contains_key("my-echo"));
+        assert_eq!(rt["my-echo"].command, "echo hello");
     }
 
     #[tokio::test]

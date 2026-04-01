@@ -995,6 +995,39 @@ fn sweep_integrated_to_done(
     }
 }
 
+/// Check if the current phase requires validation tools but none are registered.
+/// Returns a warning string for the coordinator prompt, or empty string if tools are available.
+fn phase_missing_test_tool(stores: &Stores, coord_state: &CoordinatorState) -> String {
+    let phase_id = match &coord_state.current_phase_id {
+        Some(id) => id,
+        None => return String::new(),
+    };
+    let phase = {
+        let Ok(phases) = stores.read_phases() else {
+            return String::new();
+        };
+        match phases.get(phase_id) {
+            Some(p) => p.clone(),
+            None => return String::new(),
+        }
+    };
+    if phase.validation_commands.is_empty() {
+        return String::new();
+    }
+    // Phase has validation_commands - check if a test tool exists
+    let has_test_tool = stores
+        .read_tool_runner()
+        .ok()
+        .is_some_and(|runner| runner.get_tool("test").is_some());
+    if has_test_tool {
+        return String::new();
+    }
+    "**WARNING: This phase has validation-commands but no 'test' tool is registered.** \
+     Do NOT dispatch implementers until a valid test tool is registered. \
+     If all researchers have failed to register a test tool, escalate this phase to NeedHelp.\n\n"
+        .to_string()
+}
+
 /// Determine the FSM state footer — state-specific instructions for the LLM.
 fn build_fsm_footer(
     stores: &Stores,
@@ -1078,13 +1111,17 @@ fn build_fsm_footer(
         CoordinatorFsmState::Executing => {
             // Build executing context — monitor works, assign agents, triage bundles
             let phase_status = build_phase_status(stores, coord_state);
+
+            // Phase-level tool guard: warn if validation tools are required but missing
+            let tool_warning = phase_missing_test_tool(stores, coord_state);
+
             format!(
-                "## Executing Phase\n\n{}\n\n\
+                "## Executing Phase\n\n{}\n\n{}\
                  Monitor Work statuses. Assign implementers to Ready Works whose dependencies are all Done. \
                  Triage proposed Bundles. Accept reviewed Bundles. \
                  If a Work is Blocked or has failed, consider retrying.\n\n\
                  Respond with a JSON array of actions.",
-                phase_status
+                phase_status, tool_warning
             )
         }
         CoordinatorFsmState::PhaseGate => {
@@ -4846,5 +4883,71 @@ mod tests {
             .insert(session.id.clone(), session);
 
         assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
+    }
+
+    // --- phase_missing_test_tool tests ---
+
+    #[test]
+    fn test_phase_missing_test_tool_no_validation_commands() {
+        let dir = TestDir::new("loopr-coord-toolguard-novc");
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        coord_state.current_phase_id = Some(phase_id);
+
+        let warning = phase_missing_test_tool(&stores, &coord_state);
+        assert!(warning.is_empty(), "no warning when phase has no validation_commands");
+    }
+
+    #[test]
+    fn test_phase_missing_test_tool_warns_when_no_tool() {
+        let dir = TestDir::new("loopr-coord-toolguard-warn");
+        let stores = test_stores(&dir);
+
+        let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        phase.validation_commands = vec!["cargo test".to_string()];
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        coord_state.current_phase_id = Some(phase_id);
+
+        let warning = phase_missing_test_tool(&stores, &coord_state);
+        assert!(
+            !warning.is_empty(),
+            "should warn when validation_commands exist but no test tool"
+        );
+        assert!(warning.contains("WARNING"));
+        assert!(warning.contains("NeedHelp"));
+    }
+
+    #[test]
+    fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
+        let dir = TestDir::new("loopr-coord-toolguard-ok");
+        let stores = test_stores(&dir);
+
+        let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        phase.validation_commands = vec!["cargo test".to_string()];
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        // Register a test tool in the runner
+        let tool = crate::config::ToolEntry {
+            name: "test".into(),
+            command: "echo ok".into(),
+            timeout_secs: 300,
+            worktree: true,
+        };
+        *stores.tool_runner.write().unwrap() = Arc::new(crate::tools::ToolRunner::new(&[tool]));
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        coord_state.current_phase_id = Some(phase_id);
+
+        let warning = phase_missing_test_tool(&stores, &coord_state);
+        assert!(warning.is_empty(), "no warning when test tool is registered");
     }
 }
