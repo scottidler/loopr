@@ -1,0 +1,92 @@
+goal: "Build a React todo web application using Vite and Tailwind CSS. The app should support: add, list, toggle done, delete, and filter (all/active/done) todos. Persist todos to localStorage. All React code goes in src/App.tsx. Style with Tailwind utility classes. The app must compile with npm run build."
+plan:
+  title: "React Todo App"
+  description: "Build a Vite + React + Tailwind todo web app with localStorage persistence, served from Docker."
+  spec:
+    title: "Todo App Implementation"
+    description: "React components with Tailwind styling and Docker deployment"
+    phases:
+      - title: "Core todo components"
+        description: "Working todo app with add, list, toggle, delete, and localStorage persistence"
+        validation-commands:
+          - "npm run build"
+        works:
+          - key: "app-component"
+            title: "Create src/App.tsx with todo state and components"
+            description: |
+              Replace the placeholder App component in src/App.tsx with a full todo application.
+
+              Type definition:
+              - TodoItem: { id: number, title: string, done: boolean }
+
+              State management (React useState):
+              - todos: TodoItem[] - initialized from localStorage('todos') or empty array
+              - newTitle: string - controlled input for new todo title
+              - filter: 'all' | 'active' | 'done' - current filter selection
+
+              Functions:
+              - addTodo(): create a new TodoItem with Date.now() as id, add to state, save to localStorage
+              - toggleTodo(id): flip the done boolean for the matching todo, save to localStorage
+              - deleteTodo(id): remove the matching todo from state, save to localStorage
+              - filteredTodos(): return todos filtered by current filter value
+
+              localStorage persistence:
+              - On state change, save JSON.stringify(todos) to localStorage key 'todos'
+              - On mount, load from localStorage key 'todos' with JSON.parse, default to []
+              - Use a useEffect hook to sync todos to localStorage whenever todos changes
+
+              UI structure (use basic HTML elements, Tailwind styling comes in Phase 2):
+              - h1 heading "Todo App"
+              - Input field bound to newTitle + "Add" button that calls addTodo()
+              - Three filter buttons: All, Active, Done - highlight the active filter
+              - List of filteredTodos(), each showing: title text, done status, toggle button, delete button
+              - Done items should have line-through text decoration
+
+              IMPORTANT:
+              - Export App as default export
+              - All code in a single src/App.tsx file
+              - Use npm commands for any build/test operations
+              - The existing src/main.tsx imports App and renders it - do not modify main.tsx
+            resource_tags: ["src/App.tsx"]
+            acceptance_criteria:
+              - "App renders with a heading, input, and add button"
+              - "Adding a todo shows it in the list"
+              - "Toggling a todo changes its done state"
+              - "Deleting a todo removes it from the list"
+              - "Filter buttons show all, active, or done todos"
+              - "Todos persist to localStorage and survive page reload"
+              - "npm run build succeeds without errors"
+      - title: "Tailwind styling and polish"
+        description: "Add Tailwind CSS utility classes for a polished UI"
+        validation-commands:
+          - "npm run build"
+        works:
+          - key: "tailwind-styling"
+            title: "Add Tailwind CSS styling to src/App.tsx"
+            description: |
+              Add Tailwind CSS utility classes to the existing App component in src/App.tsx.
+              Do NOT change any functionality - only add className attributes with Tailwind classes.
+
+              Styling requirements:
+              - Container: centered, max-w-md, mx-auto, p-6
+              - Heading: text-2xl, font-bold, mb-4
+              - Input: border, rounded, px-3, py-2, flex-1
+              - Add button: bg-blue-500, text-white, px-4, py-2, rounded, hover:bg-blue-600
+              - Input + button row: flex, gap-2, mb-4
+              - Filter buttons: px-3, py-1, rounded, active filter gets bg-blue-500 text-white, inactive gets bg-gray-200
+              - Filter row: flex, gap-2, mb-4
+              - Todo items: flex, items-center, justify-between, p-2, border-b
+              - Done items: line-through, text-gray-400
+              - Delete button: text-red-500, hover:text-red-700
+
+              IMPORTANT:
+              - Only modify className attributes and add Tailwind classes
+              - Do not change component logic, state management, or event handlers
+              - Do not modify any other files
+              - Use npm commands for any build/test operations
+            resource_tags: ["src/App.tsx"]
+            dependencies: ["app-component"]
+            acceptance_criteria:
+              - "All UI elements have Tailwind utility classes"
+              - "Layout is centered and responsive"
+              - "npm run build succeeds without errors"
