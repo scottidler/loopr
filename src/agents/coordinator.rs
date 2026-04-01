@@ -108,16 +108,11 @@ pub fn build_state_summary_with_sla(
         };
         let mut pending: Vec<_> = bundles
             .values()
-            .filter(|b| {
-                !matches!(
-                    b.status,
-                    BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
-                )
-            })
+            .filter(|b| matches!(b.status, BundleStatus::Proposed | BundleStatus::Reviewed))
             .collect();
         pending.sort_by_key(|b| b.created_at);
         if !pending.is_empty() {
-            summary.push_str("### Bundles\n");
+            summary.push_str("### Bundles (actionable)\n");
             for b in &pending {
                 summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_id));
             }
