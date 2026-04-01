@@ -4,9 +4,9 @@ use eyre::eyre;
 use log::debug;
 use tokio::sync::broadcast;
 
-use crate::domain::plan::{HierarchyStatus, Plan, PlanStatus, hierarchy_transitions};
+use crate::domain::plan::{HierarchyStatus, Plan, PlanStatus};
 use crate::domain::role::Role;
-use crate::domain::transition::validate_transition;
+use crate::domain::transition::Transition;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 use crate::daemon::context::Stores;
@@ -189,20 +189,25 @@ pub(super) fn handle_plan_transition(
         };
 
         let from = plan.status;
-        let rules = hierarchy_transitions();
-        if let Err(e) = validate_transition(from, target_status, role, &rules) {
-            let _ = event_tx.send(DaemonEvent::transition_rejected(
-                "plans",
-                &id,
-                &format!("{:?}", from),
-                &format!("{:?}", target_status),
-                &role.to_string(),
-                &e.to_string(),
-            ));
-            return Ok(DaemonResponse::err(
-                req.id,
-                RpcError::transition_rejected(&e.to_string()),
-            ));
+        match from.validate_transition(target_status, role) {
+            Err(e) => {
+                let _ = event_tx.send(DaemonEvent::transition_rejected(
+                    "plans",
+                    &id,
+                    &format!("{:?}", from),
+                    &format!("{:?}", target_status),
+                    &role.to_string(),
+                    &e.to_string(),
+                ));
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::transition_rejected(&e.to_string()),
+                ));
+            }
+            Ok(Transition::Unchanged) => {
+                return Ok(DaemonResponse::ok(req.id, serde_json::Value::Null));
+            }
+            Ok(Transition::Changed) => {}
         }
 
         // Validation gate: Draft → Active requires passing validation report

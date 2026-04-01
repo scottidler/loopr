@@ -5,8 +5,8 @@ use log::debug;
 use tokio::sync::broadcast;
 
 use crate::domain::role::Role;
-use crate::domain::tick::{Tick, TickStatus, tick_transitions};
-use crate::domain::transition::validate_transition;
+use crate::domain::tick::{Tick, TickStatus};
+use crate::domain::transition::Transition;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 use taskstore::{Filter, FilterOp, IndexValue};
@@ -188,20 +188,25 @@ pub(super) fn handle_tick_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &id))),
         };
 
-        let rules = tick_transitions();
-        if let Err(e) = validate_transition(from, target_status, role, &rules) {
-            let _ = event_tx.send(DaemonEvent::transition_rejected(
-                "ticks",
-                &id,
-                &format!("{:?}", from),
-                &format!("{:?}", target_status),
-                &role.to_string(),
-                &e.to_string(),
-            ));
-            return Ok(DaemonResponse::err(
-                req.id,
-                RpcError::transition_rejected(&e.to_string()),
-            ));
+        match from.validate_transition(target_status, role) {
+            Err(e) => {
+                let _ = event_tx.send(DaemonEvent::transition_rejected(
+                    "ticks",
+                    &id,
+                    &format!("{:?}", from),
+                    &format!("{:?}", target_status),
+                    &role.to_string(),
+                    &e.to_string(),
+                ));
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::transition_rejected(&e.to_string()),
+                ));
+            }
+            Ok(Transition::Unchanged) => {
+                return Ok(DaemonResponse::ok(req.id, serde_json::Value::Null));
+            }
+            Ok(Transition::Changed) => {}
         }
 
         // Gap #16: Only one Tick in Sealing/Validating at a time

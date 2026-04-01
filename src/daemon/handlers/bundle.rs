@@ -4,10 +4,10 @@ use eyre::eyre;
 use log::debug;
 use tokio::sync::broadcast;
 
-use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
+use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::role::Role;
 use crate::domain::tick::{Tick, TickStatus};
-use crate::domain::transition::validate_transition;
+use crate::domain::transition::Transition;
 use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
@@ -327,20 +327,25 @@ pub(super) fn handle_bundle_transition(
             verification = v.to_string();
         }
 
-        let rules = bundle_transitions();
-        if let Err(e) = validate_transition(from, target_status, role, &rules) {
-            let _ = event_tx.send(DaemonEvent::transition_rejected(
-                "bundles",
-                &id,
-                &format!("{:?}", from),
-                &format!("{:?}", target_status),
-                &role.to_string(),
-                &e.to_string(),
-            ));
-            return Ok(DaemonResponse::err(
-                req.id,
-                RpcError::transition_rejected(&e.to_string()),
-            ));
+        match from.validate_transition(target_status, role) {
+            Err(e) => {
+                let _ = event_tx.send(DaemonEvent::transition_rejected(
+                    "bundles",
+                    &id,
+                    &format!("{:?}", from),
+                    &format!("{:?}", target_status),
+                    &role.to_string(),
+                    &e.to_string(),
+                ));
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::transition_rejected(&e.to_string()),
+                ));
+            }
+            Ok(Transition::Unchanged) => {
+                return Ok(DaemonResponse::ok(req.id, serde_json::Value::Null));
+            }
+            Ok(Transition::Changed) => {}
         }
 
         // #18: At most one Accepted Bundle per Work
