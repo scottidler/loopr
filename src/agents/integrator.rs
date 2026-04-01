@@ -509,6 +509,14 @@ impl IntegratorAgent {
         // Gap #14: Merge bundle branches into integration branch
         let branches: Vec<String> = {
             let bundles = self.ctx.stores.read_bundles()?;
+            let noop_count = valid_bundle_ids
+                .iter()
+                .filter(|id| bundles.get(id.as_str()).is_some_and(|b| b.noop_reason.is_some()))
+                .count();
+            if noop_count > 0 {
+                self.ctx
+                    .info(&format!("Skipping merge for {} noop bundle(s)", noop_count));
+            }
             valid_bundle_ids
                 .iter()
                 .filter_map(|id| bundles.get(id.as_str()))
