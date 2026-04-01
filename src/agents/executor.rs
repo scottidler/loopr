@@ -1157,7 +1157,10 @@ pub async fn execute_action(
                     }
                     other => {
                         return Ok(ActionResult::ActionError(format!(
-                            "cannot assign implementer to work {} in state '{}'",
+                            "INVALID: Work '{}' is in state '{}' and cannot be assigned an agent. \
+                             Only Draft, Ready, or InProgress works are assignable. \
+                             You MUST NOT assign agents to completed or abandoned work. \
+                             Review the Actionable Works list and assign agents to Ready tasks instead.",
                             target_id, other
                         )));
                     }
@@ -4663,5 +4666,50 @@ mod tests {
         };
 
         assert!(result.is_ok(), "fast future should complete before timeout");
+    }
+
+    #[tokio::test]
+    async fn test_assign_agent_to_done_work_returns_directive_error() {
+        let dir = TestDir::new("loopr-exec-assigndone");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        // Dual-injection: set work to Done in both HashMap AND TaskStore
+        // to keep the dual-read-path in sync (work.get reads TaskStore first,
+        // work.transition reads HashMap).
+        {
+            let mut works = stores.works.write().unwrap();
+            if let Some(wi) = works.get_mut(&wi_id) {
+                wi.status = crate::domain::work::WorkStatus::Done;
+                let wi_clone = wi.clone();
+                if let Some(store) = &stores.store {
+                    let _ = store.lock().unwrap().update(wi_clone);
+                }
+            }
+        }
+
+        let action = AgentAction::AssignAgent {
+            agent_type: "implementer".to_string(),
+            target_id: wi_id,
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        match result {
+            ActionResult::ActionError(msg) => {
+                assert!(msg.contains("INVALID"), "error should be directive: {}", msg);
+                assert!(
+                    msg.contains("MUST NOT assign"),
+                    "error should instruct LLM not to assign: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("Ready tasks instead"),
+                    "error should redirect to Ready tasks: {}",
+                    msg
+                );
+            }
+            other => panic!("expected ActionError, got: {:?}", other),
+        }
     }
 }

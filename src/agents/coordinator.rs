@@ -1151,55 +1151,82 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
     };
     let phase_wis: Vec<_> = works.values().filter(|w| &w.phase_id == phase_id).collect();
 
-    let mut status_counts = std::collections::HashMap::new();
+    // Split into actionable vs terminal so the LLM can clearly distinguish
+    // which works need attention and which are finished.
+    let mut actionable = Vec::new();
+    let mut terminal = Vec::new();
     for wi in &phase_wis {
-        *status_counts.entry(format!("{}", wi.status)).or_insert(0u32) += 1;
+        if matches!(wi.status, WorkStatus::Done | WorkStatus::Abandoned) {
+            terminal.push(*wi);
+        } else {
+            actionable.push(*wi);
+        }
     }
 
     let mut summary = format!(
-        "Phase: {} (id: {})\nWorks: {} total\n",
+        "Phase: {} (id: {})\nWorks: {} total ({} actionable, {} terminal)\n\n",
         phase_title,
         phase_id,
-        phase_wis.len()
+        phase_wis.len(),
+        actionable.len(),
+        terminal.len(),
     );
-    for (status, count) in &status_counts {
-        summary.push_str(&format!("  - {}: {}\n", status, count));
-    }
 
-    // Show retry counts for items with attempts
-    for wi in &phase_wis {
-        let attempts = coord_state.attempts(&wi.id);
-        if attempts > 0 {
-            summary.push_str(&format!("  [{}] {} — {} attempts\n", wi.id, wi.title, attempts));
-        }
-    }
-
-    // Fix #5: Show per-WI dependency info with satisfaction status
-    for wi in &phase_wis {
-        if !wi.dependencies.is_empty() {
-            let dep_status: Vec<String> = wi
-                .dependencies
-                .iter()
-                .map(|dep_id| {
-                    let status = works
-                        .get(dep_id)
-                        .map(|d| format!("{}", d.status))
-                        .unwrap_or_else(|| "unknown".to_string());
-                    format!("{}={}", dep_id, status)
-                })
-                .collect();
-            let all_met = wi
-                .dependencies
-                .iter()
-                .all(|dep_id| works.get(dep_id).map(|d| d.status == WorkStatus::Done).unwrap_or(false));
+    // Actionable works: these are the ONLY works eligible for assignment
+    if actionable.is_empty() {
+        summary.push_str("### Actionable Works (eligible for assignment)\nNone - all works are in a terminal state.\n\n");
+    } else {
+        summary.push_str("### Actionable Works (eligible for assignment)\n");
+        for wi in &actionable {
+            let attempts = coord_state.attempts(&wi.id);
+            let attempt_note = if attempts > 0 {
+                format!(" [{} attempts]", attempts)
+            } else {
+                String::new()
+            };
             summary.push_str(&format!(
-                "  [{}] {} — deps: [{}] ({})\n",
-                wi.id,
-                wi.title,
-                dep_status.join(", "),
-                if all_met { "READY" } else { "BLOCKED" }
+                "- [{}] {} (status: {}){}\n",
+                wi.id, wi.title, wi.status, attempt_note
             ));
+            // Show dependency info inline
+            if !wi.dependencies.is_empty() {
+                let dep_status: Vec<String> = wi
+                    .dependencies
+                    .iter()
+                    .map(|dep_id| {
+                        let status = works
+                            .get(dep_id)
+                            .map(|d| format!("{}", d.status))
+                            .unwrap_or_else(|| "unknown".to_string());
+                        format!("{}={}", dep_id, status)
+                    })
+                    .collect();
+                let all_met = wi
+                    .dependencies
+                    .iter()
+                    .all(|dep_id| {
+                        works
+                            .get(dep_id)
+                            .map(|d| d.status == WorkStatus::Done)
+                            .unwrap_or(false)
+                    });
+                summary.push_str(&format!(
+                    "    deps: [{}] ({})\n",
+                    dep_status.join(", "),
+                    if all_met { "READY" } else { "BLOCKED" }
+                ));
+            }
         }
+        summary.push('\n');
+    }
+
+    // Terminal works: DO NOT assign agents to these
+    if !terminal.is_empty() {
+        summary.push_str("### Terminal Works (COMPLETED - do NOT assign agents to these)\n");
+        for wi in &terminal {
+            summary.push_str(&format!("- [{}] {} ({})\n", wi.id, wi.title, wi.status));
+        }
+        summary.push('\n');
     }
 
     // Fix #9: Collect WI IDs (owned) before dropping works lock
@@ -1217,7 +1244,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
             .collect();
 
         if !phase_failures.is_empty() {
-            summary.push_str("\nRecent failure learnings:\n");
+            summary.push_str("Recent failure learnings:\n");
             for learning in phase_failures.iter().take(5) {
                 summary.push_str(&format!("  - {}\n", learning.content));
             }
@@ -1667,6 +1694,41 @@ impl CoordinatorAgent {
                         .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &summary));
                     last_summary = summary;
                     continue;
+                }
+            }
+
+            // Pre-validation: catch AssignAgent targeting terminal work before executing.
+            // This avoids wasting a bridge round-trip and gives a hard, directive error.
+            if let AgentAction::AssignAgent { target_id, .. } = action_ref {
+                if let Ok(works) = stores.read_works() {
+                    if let Some(wi) = works.get(target_id) {
+                        if matches!(wi.status, WorkStatus::Done | WorkStatus::Abandoned) {
+                            let err_msg = format!(
+                                "INVALID: Work '{}' ({}) is already '{}'. \
+                                 You MUST NOT assign agents to completed or abandoned work. \
+                                 Review the Actionable Works list and assign agents to Ready tasks instead.",
+                                target_id, wi.title, wi.status
+                            );
+                            self.ctx.warn(&err_msg);
+                            let (verdict, warning) = guard.record_error(&err_msg);
+                            if let Some(w) = warning {
+                                self.ctx.warn(&w);
+                            }
+                            if let Verdict::Escalate(reason) = verdict {
+                                self.ctx.warn(&format!("lifeguard: {}", reason));
+                                return Ok(IterationOutcome::NeedHelp(format!(
+                                    "lifeguard: repeated assignment to terminal work: {}",
+                                    reason
+                                )));
+                            }
+                            let _ = self
+                                .ctx
+                                .event_tx
+                                .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &err_msg));
+                            last_summary = err_msg;
+                            continue;
+                        }
+                    }
                 }
             }
 
@@ -3107,6 +3169,34 @@ mod tests {
         let status = build_phase_status(&stores, &coord_state);
         assert!(status.contains("Build Phase"));
         assert!(status.contains("2 total"));
+        // Verify grouping: actionable vs terminal sections
+        assert!(status.contains("Actionable Works (eligible for assignment)"));
+        assert!(status.contains("Terminal Works (COMPLETED - do NOT assign agents to these)"));
+        assert!(status.contains("1 actionable, 1 terminal"));
+    }
+
+    #[test]
+    fn test_build_phase_status_all_terminal() {
+        let dir = TestDir::new("loopr-coord-fsm-allterm");
+        let stores = test_stores(&dir);
+
+        let phase = Phase::new("spec-1".into(), "Done Phase".into(), "desc".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+        let mut wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+        wi1.status = WorkStatus::Done;
+        let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
+        wi2.status = WorkStatus::Abandoned;
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        coord_state.current_phase_id = Some(phase_id);
+
+        let status = build_phase_status(&stores, &coord_state);
+        assert!(status.contains("0 actionable, 2 terminal"));
+        assert!(status.contains("None - all works are in a terminal state"));
     }
 
     // =========================================================================
