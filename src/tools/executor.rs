@@ -85,10 +85,18 @@ impl ToolExecutor {
     pub async fn execute(&self, call: &ToolCall, ctx: &ToolContext) -> ToolResult {
         match self.tools.get(&call.name) {
             Some(tool) => tool.execute(call.input.clone(), ctx).await,
-            None => ToolResult {
-                content: format!("unknown tool: {}", call.name),
-                is_error: true,
-            },
+            None => {
+                let available: Vec<&str> = self.tools.keys().map(|s| s.as_str()).collect();
+                ToolResult {
+                    content: format!(
+                        "Tool '{}' not found. Available tools: [{}]. \
+                         Use register_tool to define it first.",
+                        call.name,
+                        available.join(", ")
+                    ),
+                    is_error: true,
+                }
+            }
         }
     }
 }
@@ -173,7 +181,11 @@ mod tests {
         };
         let result = exec.execute(&call, &ctx).await;
         assert!(result.is_error);
-        assert!(result.content.contains("unknown tool"));
+        assert!(
+            result.content.contains("not found"),
+            "Expected 'not found' in: {}",
+            result.content
+        );
     }
 
     #[test]

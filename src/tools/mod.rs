@@ -125,7 +125,16 @@ impl ToolRunner {
             tool,
             working_dir.display()
         );
-        let entry = self.tools.get(tool).ok_or_else(|| eyre!("unknown tool: {}", tool))?;
+        let entry = self.tools.get(tool).ok_or_else(|| {
+            let available: Vec<&str> = self.tools.keys().map(|s| s.as_str()).collect();
+            eyre!(
+                "Tool '{}' not found. Available tools: [{}]. \
+                 You MUST use the register_tool action to define this tool before retrying. \
+                 Analyze the project to determine the correct command, then register it.",
+                tool,
+                available.join(", ")
+            )
+        })?;
 
         let full_command = if args.is_empty() {
             entry.command.clone()
@@ -281,7 +290,9 @@ mod tests {
         let dir = std::env::temp_dir();
         let result = runner.run("nonexistent", &[], &dir).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown tool"));
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"), "Expected 'not found' in: {err}");
+        assert!(err.contains("register_tool"), "Expected 'register_tool' hint in: {err}");
     }
 
     #[tokio::test]

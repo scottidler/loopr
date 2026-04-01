@@ -299,38 +299,7 @@ impl Default for AgentConfig {
             reviewer: AgentRoleConfig::default_reviewer(),
             coordinator: CoordinatorConfig::default(),
             researcher: AgentRoleConfig::default_researcher(),
-            tools: vec![
-                ToolEntry {
-                    name: "test".to_string(),
-                    command: "cargo test".to_string(),
-                    timeout_secs: 300,
-                    worktree: true,
-                },
-                ToolEntry {
-                    name: "clippy".to_string(),
-                    command: "cargo clippy -- -D warnings".to_string(),
-                    timeout_secs: 120,
-                    worktree: true,
-                },
-                ToolEntry {
-                    name: "fmt-check".to_string(),
-                    command: "cargo fmt --check".to_string(),
-                    timeout_secs: 30,
-                    worktree: true,
-                },
-                ToolEntry {
-                    name: "fmt".to_string(),
-                    command: "cargo fmt".to_string(),
-                    timeout_secs: 30,
-                    worktree: true,
-                },
-                ToolEntry {
-                    name: "build".to_string(),
-                    command: "cargo build".to_string(),
-                    timeout_secs: 300,
-                    worktree: true,
-                },
-            ],
+            tools: Vec::new(),
         }
     }
 }
@@ -681,15 +650,12 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_config_default_tools() {
+    fn test_agent_config_default_tools_empty() {
         let ac = AgentConfig::default();
-        assert_eq!(ac.tools.len(), 5);
-        let names: Vec<&str> = ac.tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"test"));
-        assert!(names.contains(&"clippy"));
-        assert!(names.contains(&"fmt-check"));
-        assert!(names.contains(&"fmt"));
-        assert!(names.contains(&"build"));
+        assert!(
+            ac.tools.is_empty(),
+            "Default tools should be empty - configure in loopr.yml or use detection"
+        );
     }
 
     #[test]
@@ -730,7 +696,7 @@ mod tests {
     fn test_config_has_agents() {
         let config = Config::default();
         assert!(!config.agents.enabled);
-        assert!(!config.agents.tools.is_empty());
+        assert!(config.agents.tools.is_empty(), "Default tools should be empty");
     }
 
     #[test]
