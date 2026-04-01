@@ -1479,7 +1479,7 @@ impl CoordinatorAgent {
             .with_iteration(iteration)
             .with_footer(footer);
 
-        let assembled = builder.build(&crate::prompts::store().coordinator);
+        let assembled = builder.build(&crate::prompts::store().coordinator)?;
 
         self.ctx.info(&format!(
             "iteration {} (FSM: {}) context: ~{} tokens",

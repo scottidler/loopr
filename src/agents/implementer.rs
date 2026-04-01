@@ -247,7 +247,7 @@ impl ImplementerAgent {
             .with_staleness_note(staleness_note)
             .with_iteration(iteration)
             .with_footer("Implement the Work described above. Respond with a JSON array of actions.".into())
-            .build(&crate::prompts::store().implementer);
+            .build(&crate::prompts::store().implementer)?;
 
         self.ctx.info(&format!("context: ~{} tokens", assembled.token_estimate));
 
@@ -928,7 +928,8 @@ mod tests {
             .with_tools(&tool_runner)
             .with_iteration(1)
             .with_footer("Respond with JSON.".into())
-            .build(&crate::prompts::store().implementer);
+            .build(&crate::prompts::store().implementer)
+            .unwrap();
 
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
@@ -1166,7 +1167,8 @@ mod tests {
             .unwrap()
             .with_staleness_note(Some("A new Tick 'tick-99' has been published.".into()))
             .with_iteration(2)
-            .build(&crate::prompts::store().implementer);
+            .build(&crate::prompts::store().implementer)
+            .unwrap();
         assert!(assembled.user_message.contains("Staleness Warning"));
         assert!(assembled.user_message.contains("tick-99"));
     }

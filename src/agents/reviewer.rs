@@ -126,7 +126,7 @@ impl Agent for ReviewerAgent {
                     .into(),
             );
         let work_title = ctx_builder.work_title().unwrap_or("unknown").to_string();
-        let assembled = ctx_builder.build(&crate::prompts::store().reviewer);
+        let assembled = ctx_builder.build(&crate::prompts::store().reviewer)?;
 
         let response = self.llm.call(&assembled.system_prompt, &assembled.user_message).await?;
         self.ctx.log.write_iter_file(
@@ -538,7 +538,7 @@ mod tests {
             .with_footer("Review this Bundle.".into());
         assert_eq!(ctx.work_title(), Some("Test Work"));
 
-        let assembled = ctx.build(&crate::prompts::store().reviewer);
+        let assembled = ctx.build(&crate::prompts::store().reviewer).unwrap();
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
         assert!(assembled.user_message.contains("Test Phase"));

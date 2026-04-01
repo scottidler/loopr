@@ -131,11 +131,15 @@ fn truncate_list(items: &[String], max_tokens: usize) -> Vec<String> {
 // TokenBudget
 // =====================================================
 
-/// Per-section token budget allocation.
-/// Token estimation: ~1.3 tokens per word (~4 characters per token).
+/// Per-section token budget for variable data in the user message.
+///
+/// The system prompt (.pmt template) is NEVER truncated - it is our source code
+/// and must be delivered to the LLM verbatim. These budgets only apply to
+/// variable-length data (diffs, learnings, state summaries, etc.).
+///
+/// Token estimation: ~4 characters per token.
 #[derive(Debug, Clone)]
 pub struct TokenBudget {
-    pub system_prompt: usize,
     pub work_target: usize,
     pub hierarchy: usize,
     pub learnings: usize,
@@ -150,7 +154,6 @@ impl TokenBudget {
     pub fn for_role(role: Role) -> Self {
         match role {
             Role::Coordinator => Self {
-                system_prompt: 800,
                 work_target: 500,
                 hierarchy: 3000,
                 learnings: 1500,
@@ -160,7 +163,6 @@ impl TokenBudget {
                 guidance: 1500,
             },
             Role::Researcher => Self {
-                system_prompt: 500,
                 work_target: 1000,
                 hierarchy: 1000,
                 learnings: 1000,
@@ -170,7 +172,6 @@ impl TokenBudget {
                 guidance: 500,
             },
             Role::Implementer => Self {
-                system_prompt: 500,
                 work_target: 1000,
                 hierarchy: 2000,
                 learnings: 2000,
@@ -180,7 +181,6 @@ impl TokenBudget {
                 guidance: 800,
             },
             Role::Reviewer => Self {
-                system_prompt: 500,
                 work_target: 1000,
                 hierarchy: 2000,
                 learnings: 2000,
@@ -190,7 +190,6 @@ impl TokenBudget {
                 guidance: 500,
             },
             Role::Integrator => Self {
-                system_prompt: 600,
                 work_target: 500,
                 hierarchy: 500,
                 learnings: 1000,
@@ -461,7 +460,7 @@ impl<'a> ContextBuilder<'a> {
     }
 
     /// Build the assembled context with per-section token budgeting.
-    pub fn build(&self, system_prompt: &str) -> AssembledContext {
+    pub fn build(&self, system_prompt: &str) -> Result<AssembledContext> {
         debug!("ContextBuilder::build(system_prompt_len={})", system_prompt.len());
         let mut msg = String::with_capacity(4096);
 
@@ -639,21 +638,34 @@ impl<'a> ContextBuilder<'a> {
             msg.push('\n');
         }
 
-        // System prompt (truncated if needed)
-        let final_system = if estimate_tokens(system_prompt) > self.budget.system_prompt {
-            warn!("System prompt exceeds token budget, truncating");
-            truncate_prose(system_prompt, self.budget.system_prompt)
-        } else {
-            system_prompt.to_string()
-        };
+        // System prompt is NEVER truncated. It is our .pmt template - our
+        // source code for the agent's instructions and output schema. If it
+        // doesn't fit, that's a hard error, not a silent degradation.
+        let system_tokens = estimate_tokens(system_prompt);
+        let msg_tokens = estimate_tokens(&msg);
+        let token_estimate = system_tokens + msg_tokens;
 
-        let token_estimate = estimate_tokens(&final_system) + estimate_tokens(&msg);
+        // Claude models have 200k token context windows. Reserve output tokens
+        // (max_tokens from config, typically 4096-8192) plus a safety margin.
+        // Input limit = 200k - 10k (conservative output+margin reserve).
+        const MAX_INPUT_TOKENS: usize = 190_000;
+        if token_estimate > MAX_INPUT_TOKENS {
+            return Err(eyre!(
+                "assembled context ({} tokens) exceeds model input limit ({} tokens): \
+                 system_prompt={} tokens, user_message={} tokens. \
+                 Reduce variable data (learnings, diffs, state summary) or split the work.",
+                token_estimate,
+                MAX_INPUT_TOKENS,
+                system_tokens,
+                msg_tokens,
+            ));
+        }
 
-        AssembledContext {
-            system_prompt: final_system,
+        Ok(AssembledContext {
+            system_prompt: system_prompt.to_string(),
             user_message: msg,
             token_estimate,
-        }
+        })
     }
 }
 
@@ -1118,7 +1130,6 @@ mod tests {
     #[test]
     fn test_token_budget_for_implementer() {
         let budget = TokenBudget::for_role(Role::Implementer);
-        assert_eq!(budget.system_prompt, 500);
         assert_eq!(budget.hierarchy, 2000);
         assert_eq!(budget.learnings, 2000);
         assert_eq!(budget.tools_or_actions, 500);
@@ -1128,7 +1139,6 @@ mod tests {
     #[test]
     fn test_token_budget_for_reviewer() {
         let budget = TokenBudget::for_role(Role::Reviewer);
-        assert_eq!(budget.system_prompt, 500);
         assert_eq!(budget.hierarchy, 2000);
         assert_eq!(budget.learnings, 2000);
         assert_eq!(budget.tools_or_actions, 0);
@@ -1152,7 +1162,6 @@ mod tests {
     fn test_token_budget_for_integrator() {
         let budget = TokenBudget::for_role(Role::Integrator);
         assert!(budget.state_summary > 0);
-        assert!(budget.system_prompt > 0);
     }
 
     // =====================================================
@@ -1286,7 +1295,7 @@ mod tests {
             .with_iteration(1)
             .with_footer("Implement the Work described above.".to_string());
 
-        let assembled = builder.build("You are an Implementer.");
+        let assembled = builder.build("You are an Implementer.").unwrap();
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Spec"));
         assert!(assembled.user_message.contains("Test Phase"));
@@ -1309,7 +1318,7 @@ mod tests {
             .unwrap()
             .with_footer("Review this Bundle.".to_string());
 
-        let assembled = builder.build("You are a Reviewer.");
+        let assembled = builder.build("You are a Reviewer.").unwrap();
         assert!(assembled.user_message.contains("Test Plan"));
         assert!(assembled.user_message.contains("Test Work"));
         assert!(assembled.user_message.contains("Bundle Under Review"));
@@ -1329,7 +1338,7 @@ mod tests {
             .with_previous_summary(Some("Last iteration added error types".into()))
             .with_iteration(3);
 
-        let assembled = builder.build("system");
+        let assembled = builder.build("system").unwrap();
         assert!(assembled.user_message.contains("Previous Iteration Summary"));
         assert!(assembled.user_message.contains("Last iteration added error types"));
         assert!(assembled.user_message.contains("Current Iteration: 3"));
@@ -1346,7 +1355,7 @@ mod tests {
             .with_staleness_note(Some("A new Tick 'tick-99' has been published.".into()))
             .with_iteration(2);
 
-        let assembled = builder.build("system");
+        let assembled = builder.build("system").unwrap();
         assert!(assembled.user_message.contains("Staleness Warning"));
         assert!(assembled.user_message.contains("tick-99"));
     }
@@ -1363,7 +1372,7 @@ mod tests {
             .load_work_hierarchy(&wi_id)
             .unwrap();
 
-        let assembled = builder.build("system");
+        let assembled = builder.build("system").unwrap();
         assert!(!assembled.user_message.contains("Learnings"));
     }
 
@@ -1377,7 +1386,7 @@ mod tests {
             .unwrap();
         // No .with_tools() call
 
-        let assembled = builder.build("system");
+        let assembled = builder.build("system").unwrap();
         assert!(!assembled.user_message.contains("Available Tools"));
     }
 
@@ -1392,7 +1401,7 @@ mod tests {
             .unwrap()
             .with_previous_summary(Some("This should not appear".into()));
 
-        let assembled = builder.build("system");
+        let assembled = builder.build("system").unwrap();
         assert!(!assembled.user_message.contains("Previous Iteration Summary"));
     }
 
@@ -1404,7 +1413,8 @@ mod tests {
         let assembled = ContextBuilder::new(&stores, Role::Implementer)
             .load_work_hierarchy(&wi_id)
             .unwrap()
-            .build("system prompt");
+            .build("system prompt")
+            .unwrap();
 
         assert!(assembled.token_estimate > 0);
         assert!(!assembled.user_message.is_empty());
@@ -1425,7 +1435,8 @@ mod tests {
             .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_guidance(&guidance)
-            .build("system");
+            .build("system")
+            .unwrap();
 
         // Schema docs should appear in the assembled user_message
         assert!(
@@ -1458,7 +1469,8 @@ mod tests {
             .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_guidance(&guidance)
-            .build("system");
+            .build("system")
+            .unwrap();
         assert!(
             coord.user_message.contains("Draft → Ready"),
             "Coordinator context missing Draft → Ready"
@@ -1469,7 +1481,8 @@ mod tests {
             .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_guidance(&guidance)
-            .build("system");
+            .build("system")
+            .unwrap();
         assert!(
             !impl_ctx.user_message.contains("Draft → Ready"),
             "Implementer context should not contain Draft → Ready"
@@ -1494,7 +1507,8 @@ mod tests {
             .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_guidance(&guidance)
-            .build("system");
+            .build("system")
+            .unwrap();
 
         assert!(
             assembled.user_message.contains("Always use ES modules"),
@@ -1517,7 +1531,8 @@ mod tests {
             .load_work_hierarchy(&wi_id)
             .unwrap()
             .with_guidance(&guidance)
-            .build("system");
+            .build("system")
+            .unwrap();
 
         let guidance_pos = assembled
             .user_message
@@ -1545,7 +1560,8 @@ mod tests {
         let assembled = ContextBuilder::new(&stores, Role::Implementer)
             .load_work_hierarchy(&wi_id)
             .unwrap()
-            .build("system");
+            .build("system")
+            .unwrap();
 
         assert!(
             !assembled.user_message.contains("## Work Status Transitions"),

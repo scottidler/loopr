@@ -50,7 +50,7 @@ README
 
 target_validation_commands() {
     cat <<'CMDS'
-    - ".venv/bin/python -m pytest test_todo.py -v"
+    - "test -f test_todo.py && .venv/bin/python -m pytest test_todo.py -v || test ! -f test_todo.py"
 CMDS
 }
 

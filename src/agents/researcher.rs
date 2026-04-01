@@ -217,7 +217,7 @@ impl ResearcherAgent {
             .with_iteration(iteration)
             .with_footer(footer);
 
-        let assembled = builder.build(&system_prompt);
+        let assembled = builder.build(&system_prompt)?;
 
         self.ctx.info(&format!(
             "iteration {} context: ~{} tokens",
