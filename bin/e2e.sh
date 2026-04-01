@@ -149,8 +149,19 @@ if [[ -f "${PID_FILE}" ]]; then
     if [[ -n "${OLD_PID}" ]] && kill -0 "${OLD_PID}" 2>/dev/null; then
         log "Killing existing daemon (PID ${OLD_PID})..."
         kill "${OLD_PID}" 2>/dev/null || true
-        sleep 2
+        for _ in $(seq 1 30); do
+            kill -0 "${OLD_PID}" 2>/dev/null || break
+            sleep 0.5
+        done
+        if kill -0 "${OLD_PID}" 2>/dev/null; then
+            warn "Daemon still alive after 15s, sending SIGKILL..."
+            kill -9 "${OLD_PID}" 2>/dev/null || true
+            sleep 1
+        fi
     fi
+    # Clean up stale pid/socket files
+    rm -f "${PID_FILE}"
+    rm -f "${HOME}/.local/share/loopr/daemon.sock"
 fi
 
 ###############################################################################
