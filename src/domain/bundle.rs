@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
+use loopr_derive::FlexibleEnum;
+
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 pub enum BundleStatus {
     Proposed,
     Triaged,

@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
+use loopr_derive::FlexibleEnum;
+
 use crate::domain::role::Role;
 use crate::domain::transition::TransitionRule;
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 pub enum WorkStatus {
     Draft,
     Ready,
@@ -550,5 +552,71 @@ mod tests {
         // InReview → Ready is NOT in the normal table
         let rules = work_transitions();
         assert!(validate_transition(WorkStatus::InReview, WorkStatus::Ready, Role::Coordinator, &rules).is_err());
+    }
+
+    // --- FlexibleEnum tests ---
+
+    #[test]
+    fn test_flexible_enum_lowercase() {
+        assert_eq!("draft".parse::<WorkStatus>().unwrap(), WorkStatus::Draft);
+        assert_eq!("ready".parse::<WorkStatus>().unwrap(), WorkStatus::Ready);
+        assert_eq!("inprogress".parse::<WorkStatus>().unwrap(), WorkStatus::InProgress);
+        assert_eq!("blocked".parse::<WorkStatus>().unwrap(), WorkStatus::Blocked);
+        assert_eq!("inreview".parse::<WorkStatus>().unwrap(), WorkStatus::InReview);
+        assert_eq!("integrated".parse::<WorkStatus>().unwrap(), WorkStatus::Integrated);
+        assert_eq!("done".parse::<WorkStatus>().unwrap(), WorkStatus::Done);
+        assert_eq!("abandoned".parse::<WorkStatus>().unwrap(), WorkStatus::Abandoned);
+    }
+
+    #[test]
+    fn test_flexible_enum_pascal_case() {
+        assert_eq!("Draft".parse::<WorkStatus>().unwrap(), WorkStatus::Draft);
+        assert_eq!("Ready".parse::<WorkStatus>().unwrap(), WorkStatus::Ready);
+        assert_eq!("InProgress".parse::<WorkStatus>().unwrap(), WorkStatus::InProgress);
+    }
+
+    #[test]
+    fn test_flexible_enum_uppercase() {
+        assert_eq!("DRAFT".parse::<WorkStatus>().unwrap(), WorkStatus::Draft);
+        assert_eq!("READY".parse::<WorkStatus>().unwrap(), WorkStatus::Ready);
+        assert_eq!("INPROGRESS".parse::<WorkStatus>().unwrap(), WorkStatus::InProgress);
+    }
+
+    #[test]
+    fn test_flexible_enum_rejects_underscores() {
+        let err = "in_progress".parse::<WorkStatus>().unwrap_err();
+        assert!(err.contains("underscores and hyphens are not allowed"));
+        assert!(err.contains("valid:"));
+    }
+
+    #[test]
+    fn test_flexible_enum_rejects_hyphens() {
+        let err = "in-progress".parse::<WorkStatus>().unwrap_err();
+        assert!(err.contains("underscores and hyphens are not allowed"));
+    }
+
+    #[test]
+    fn test_flexible_enum_invalid_value() {
+        let err = "bogus".parse::<WorkStatus>().unwrap_err();
+        assert!(err.contains("invalid WorkStatus"));
+        assert!(err.contains("Draft"));
+        assert!(err.contains("Ready"));
+    }
+
+    #[test]
+    fn test_flexible_enum_variant_names() {
+        assert_eq!(
+            WorkStatus::VARIANT_NAMES,
+            &[
+                "Draft",
+                "Ready",
+                "InProgress",
+                "Blocked",
+                "InReview",
+                "Integrated",
+                "Done",
+                "Abandoned"
+            ]
+        );
     }
 }

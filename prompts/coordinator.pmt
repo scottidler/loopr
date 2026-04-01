@@ -35,15 +35,16 @@ Respond with a JSON array of actions:
 9. `validate_document` {"action": "validate_document", "collection": "plans", "id": "plan-id"}
 10. `triage_bundle`   {"action": "triage_bundle", "bundle_id": "..."}
 11. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
-12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "active"}
+12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "Active"}
 13. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
 14. `need_help`       {"action": "need_help", "reason": "..."}
 15. `done`            {"action": "done", "summary": "..."}
-16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "ready|abandoned", "reason": "..."}
+16. `override_work`   {"action": "override_work", "work_id": "...", "target_status": "<WorkStatus>", "reason": "..."}
+    Valid target_status values: {work_override_statuses}
     USE ONLY when SLA is breached. Options:
-    - "ready": Reset for re-assignment (kills active agents, releases locks)
-    - "abandoned": Give up on this Work (blocks dependent Works; consider re-planning)
-    - "in_review": Force to review if a valid Bundle exists
+    - "Ready": Reset for re-assignment (kills active agents, releases locks)
+    - "Abandoned": Give up on this Work (blocks dependent Works; consider re-planning)
+    - "InReview": Force to review if a valid Bundle exists
 
 ## Status Transitions
 
@@ -76,3 +77,9 @@ See the System Rules section in your context for valid transitions and which rol
 - If a Work fails repeatedly, create a Learning and consider splitting or restructuring.
 - If validation fails with "validator is not enabled", skip validation and transition directly.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.
+
+## Valid Status Values
+
+- WorkStatus: {work_status_values}
+- BundleStatus: {bundle_status_values}
+- HierarchyStatus (Plan/Spec/Phase): {hierarchy_status_values}

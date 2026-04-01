@@ -15,6 +15,7 @@ use taskstore::{Filter, FilterOp, IndexValue};
 use crate::daemon::context::Stores;
 
 use super::common::check_validation_gate;
+use super::{parse_optional_param, parse_required_param};
 
 pub(super) fn handle_phase_create(
     stores: &Arc<Stores>,
@@ -210,30 +211,14 @@ pub(super) fn handle_phase_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: PhaseStatus = match req.params.get("target_status") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(s) => s,
-                Err(_) => {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::invalid_params("invalid target_status"),
-                    ));
-                }
-            },
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("target_status is required"),
-                ));
-            }
+        let target_status: PhaseStatus = match parse_required_param(&req, "target_status") {
+            Ok(v) => v,
+            Err(resp) => return Ok(resp),
         };
 
-        let role: Role = match req.params.get("role") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(r) => r,
-                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
-            },
-            None => Role::Coordinator,
+        let role: Role = match parse_optional_param(&req, "role", Role::Coordinator) {
+            Ok(v) => v,
+            Err(resp) => return Ok(resp),
         };
 
         let skip_validation = req

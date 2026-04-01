@@ -1174,16 +1174,13 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
 
     // Actionable works: these are the ONLY works eligible for assignment
     if actionable.is_empty() {
-        summary.push_str("### Actionable Works (eligible for assignment)\nNone - all works are in a terminal state.\n\n");
+        summary
+            .push_str("### Actionable Works (eligible for assignment)\nNone - all works are in a terminal state.\n\n");
     } else {
         summary.push_str("### Actionable Works (eligible for assignment)\n");
         for wi in &actionable {
             let attempts = coord_state.attempts(&wi.id);
-            let attempt_note = if attempts > 0 {
-                format!(" [{} attempts]", attempts)
-            } else {
-                String::new()
-            };
+            let attempt_note = if attempts > 0 { format!(" [{} attempts]", attempts) } else { String::new() };
             summary.push_str(&format!(
                 "- [{}] {} (status: {}){}\n",
                 wi.id, wi.title, wi.status, attempt_note
@@ -1204,12 +1201,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
                 let all_met = wi
                     .dependencies
                     .iter()
-                    .all(|dep_id| {
-                        works
-                            .get(dep_id)
-                            .map(|d| d.status == WorkStatus::Done)
-                            .unwrap_or(false)
-                    });
+                    .all(|dep_id| works.get(dep_id).map(|d| d.status == WorkStatus::Done).unwrap_or(false));
                 summary.push_str(&format!(
                     "    deps: [{}] ({})\n",
                     dep_status.join(", "),
@@ -1699,37 +1691,35 @@ impl CoordinatorAgent {
 
             // Pre-validation: catch AssignAgent targeting terminal work before executing.
             // This avoids wasting a bridge round-trip and gives a hard, directive error.
-            if let AgentAction::AssignAgent { target_id, .. } = action_ref {
-                if let Ok(works) = stores.read_works() {
-                    if let Some(wi) = works.get(target_id) {
-                        if matches!(wi.status, WorkStatus::Done | WorkStatus::Abandoned) {
-                            let err_msg = format!(
-                                "INVALID: Work '{}' ({}) is already '{}'. \
-                                 You MUST NOT assign agents to completed or abandoned work. \
-                                 Review the Actionable Works list and assign agents to Ready tasks instead.",
-                                target_id, wi.title, wi.status
-                            );
-                            self.ctx.warn(&err_msg);
-                            let (verdict, warning) = guard.record_error(&err_msg);
-                            if let Some(w) = warning {
-                                self.ctx.warn(&w);
-                            }
-                            if let Verdict::Escalate(reason) = verdict {
-                                self.ctx.warn(&format!("lifeguard: {}", reason));
-                                return Ok(IterationOutcome::NeedHelp(format!(
-                                    "lifeguard: repeated assignment to terminal work: {}",
-                                    reason
-                                )));
-                            }
-                            let _ = self
-                                .ctx
-                                .event_tx
-                                .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &err_msg));
-                            last_summary = err_msg;
-                            continue;
-                        }
-                    }
+            if let AgentAction::AssignAgent { target_id, .. } = action_ref
+                && let Ok(works) = stores.read_works()
+                && let Some(wi) = works.get(target_id)
+                && matches!(wi.status, WorkStatus::Done | WorkStatus::Abandoned)
+            {
+                let err_msg = format!(
+                    "INVALID: Work '{}' ({}) is already '{}'. \
+                     You MUST NOT assign agents to completed or abandoned work. \
+                     Review the Actionable Works list and assign agents to Ready tasks instead.",
+                    target_id, wi.title, wi.status
+                );
+                self.ctx.warn(&err_msg);
+                let (verdict, warning) = guard.record_error(&err_msg);
+                if let Some(w) = warning {
+                    self.ctx.warn(&w);
                 }
+                if let Verdict::Escalate(reason) = verdict {
+                    self.ctx.warn(&format!("lifeguard: {}", reason));
+                    return Ok(IterationOutcome::NeedHelp(format!(
+                        "lifeguard: repeated assignment to terminal work: {}",
+                        reason
+                    )));
+                }
+                let _ = self
+                    .ctx
+                    .event_tx
+                    .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &err_msg));
+                last_summary = err_msg;
+                continue;
             }
 
             let result = match execute_action(action_ref, &self.ctx, repo_root, None).await {

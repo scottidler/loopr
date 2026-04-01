@@ -3,6 +3,10 @@ use std::sync::OnceLock;
 
 use log::info;
 
+use crate::domain::bundle::BundleStatus;
+use crate::domain::plan::HierarchyStatus;
+use crate::domain::work::WorkStatus;
+
 // Compile-time defaults — baked into the binary data segment, zero runtime cost
 const DEFAULT_COORDINATOR: &str = include_str!("../prompts/coordinator.pmt");
 const DEFAULT_IMPLEMENTER: &str = include_str!("../prompts/implementer.pmt");
@@ -54,6 +58,15 @@ pub struct PromptStore {
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
 
+/// Replace status value placeholders with canonical VARIANT_NAMES from enums.
+fn interpolate_status_values(content: String) -> String {
+    content
+        .replace("{work_status_values}", &WorkStatus::VARIANT_NAMES.join(", "))
+        .replace("{bundle_status_values}", &BundleStatus::VARIANT_NAMES.join(", "))
+        .replace("{hierarchy_status_values}", &HierarchyStatus::VARIANT_NAMES.join(", "))
+        .replace("{work_override_statuses}", "Ready, Abandoned, InReview")
+}
+
 /// Initialize the global prompt store. Call once at startup after config load.
 /// Checks ~/.config/loopr/prompts/ for overrides.
 pub fn init() {
@@ -80,7 +93,7 @@ pub fn init() {
 
     // OnceLock::set returns Err if already initialized — harmless no-op
     let _ = STORE.set(PromptStore {
-        coordinator: load("coordinator.pmt", DEFAULT_COORDINATOR),
+        coordinator: interpolate_status_values(load("coordinator.pmt", DEFAULT_COORDINATOR)),
         implementer: load("implementer.pmt", DEFAULT_IMPLEMENTER),
         reviewer: load("reviewer.pmt", DEFAULT_REVIEWER),
         researcher: load("researcher.pmt", DEFAULT_RESEARCHER),
@@ -108,7 +121,7 @@ pub fn init() {
 /// Initialize with compiled-in defaults only (no filesystem). For tests.
 pub fn init_defaults() {
     let _ = STORE.set(PromptStore {
-        coordinator: DEFAULT_COORDINATOR.to_string(),
+        coordinator: interpolate_status_values(DEFAULT_COORDINATOR.to_string()),
         implementer: DEFAULT_IMPLEMENTER.to_string(),
         reviewer: DEFAULT_REVIEWER.to_string(),
         researcher: DEFAULT_RESEARCHER.to_string(),
@@ -169,7 +182,11 @@ mod tests {
     fn test_defaults_match_include_str() {
         init_defaults();
         let s = store();
-        assert_eq!(s.coordinator, DEFAULT_COORDINATOR);
+        // Coordinator is interpolated (status placeholders replaced), so compare against interpolated version
+        assert_eq!(
+            s.coordinator,
+            interpolate_status_values(DEFAULT_COORDINATOR.to_string())
+        );
         assert_eq!(s.implementer, DEFAULT_IMPLEMENTER);
         assert_eq!(s.reviewer, DEFAULT_REVIEWER);
         assert_eq!(s.researcher, DEFAULT_RESEARCHER);
@@ -657,5 +674,38 @@ mod tests {
         assert!(p.contains("Zero-Result Handling"));
         assert!(p.contains("File Size Limits"));
         assert!(p.contains("Learning Scope Values"));
+    }
+
+    #[test]
+    fn test_coordinator_status_placeholders_interpolated() {
+        init_defaults();
+        let p = &store().coordinator;
+        // No raw placeholders should remain
+        assert!(
+            !p.contains("{work_status_values}"),
+            "un-interpolated {{work_status_values}}"
+        );
+        assert!(
+            !p.contains("{bundle_status_values}"),
+            "un-interpolated {{bundle_status_values}}"
+        );
+        assert!(
+            !p.contains("{hierarchy_status_values}"),
+            "un-interpolated {{hierarchy_status_values}}"
+        );
+        assert!(
+            !p.contains("{work_override_statuses}"),
+            "un-interpolated {{work_override_statuses}}"
+        );
+        // Canonical values should appear
+        assert!(p.contains("Draft"), "missing Draft in interpolated coordinator prompt");
+        assert!(
+            p.contains("InProgress"),
+            "missing InProgress in interpolated coordinator prompt"
+        );
+        assert!(
+            p.contains("Proposed"),
+            "missing Proposed (BundleStatus) in interpolated coordinator prompt"
+        );
     }
 }

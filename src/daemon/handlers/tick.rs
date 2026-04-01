@@ -13,6 +13,8 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+use super::{parse_optional_param, parse_required_param};
+
 pub(super) fn handle_tick_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -168,30 +170,14 @@ pub(super) fn handle_tick_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: TickStatus = match req.params.get("target_status") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(s) => s,
-                Err(_) => {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::invalid_params("invalid target_status"),
-                    ));
-                }
-            },
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("target_status is required"),
-                ));
-            }
+        let target_status: TickStatus = match parse_required_param(&req, "target_status") {
+            Ok(v) => v,
+            Err(resp) => return Ok(resp),
         };
 
-        let role: Role = match req.params.get("role") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(r) => r,
-                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
-            },
-            None => Role::Integrator,
+        let role: Role = match parse_optional_param(&req, "role", Role::Integrator) {
+            Ok(v) => v,
+            Err(resp) => return Ok(resp),
         };
 
         let mut ticks = stores.write_ticks()?;

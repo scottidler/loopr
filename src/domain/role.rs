@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+use loopr_derive::FlexibleEnum;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Coordinator,
@@ -20,23 +21,6 @@ impl fmt::Display for Role {
             Role::Implementer => write!(f, "implementer"),
             Role::Reviewer => write!(f, "reviewer"),
             Role::Researcher => write!(f, "researcher"),
-        }
-    }
-}
-
-impl FromStr for Role {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "coordinator" => Ok(Role::Coordinator),
-            "integrator" => Ok(Role::Integrator),
-            "implementer" => Ok(Role::Implementer),
-            "reviewer" => Ok(Role::Reviewer),
-            "researcher" => Ok(Role::Researcher),
-            _ => Err(format!(
-                "unknown role: '{s}' (expected: Coordinator, Integrator, Implementer, Reviewer, Researcher)"
-            )),
         }
     }
 }

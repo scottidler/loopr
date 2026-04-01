@@ -16,6 +16,8 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+use super::{parse_optional_param, parse_required_param};
+
 /// BFS cycle detection: returns true if adding `dependencies` to `new_id` would
 /// create a cycle in the dependency graph.
 pub(super) fn detect_dependency_cycle(works: &HashMap<String, Work>, new_id: &str, dependencies: &[String]) -> bool {
@@ -305,30 +307,14 @@ pub(super) fn handle_work_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
         };
 
-        let target_status: WorkStatus = match req.params.get("target_status") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(s) => s,
-                Err(_) => {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::invalid_params("invalid target_status"),
-                    ));
-                }
-            },
-            None => {
-                return Ok(DaemonResponse::err(
-                    req.id,
-                    RpcError::invalid_params("target_status is required"),
-                ));
-            }
+        let target_status: WorkStatus = match parse_required_param(&req, "target_status") {
+            Ok(v) => v,
+            Err(resp) => return Ok(resp),
         };
 
-        let role: Role = match req.params.get("role") {
-            Some(v) => match serde_json::from_value(v.clone()) {
-                Ok(r) => r,
-                Err(_) => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("invalid role"))),
-            },
-            None => Role::Coordinator,
+        let role: Role = match parse_optional_param(&req, "role", Role::Coordinator) {
+            Ok(v) => v,
+            Err(resp) => return Ok(resp),
         };
 
         let is_override = req.params.get("override").and_then(|v| v.as_bool()).unwrap_or(false);
