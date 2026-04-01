@@ -147,7 +147,10 @@ impl Agent for ReviewerAgent {
                     Err(parse_err) => {
                         requeries += 1;
                         if requeries > self.config.max_requeries {
-                            return Err(parse_err.wrap_err("reviewer exhausted parse retries"));
+                            return Err(crate::agents::error::AgentError::ParseExhausted {
+                                attempts: self.config.max_requeries,
+                            }
+                            .into());
                         }
                         self.ctx.warn(&format!(
                             "parse attempt {}/{} failed: {}",
@@ -305,6 +308,8 @@ impl Agent for ReviewerAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eyre::eyre;
+
     use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::{AgentContext, AgentSession, AgentType};

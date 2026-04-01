@@ -320,6 +320,7 @@ pub async fn run_agent_task(
             }
             if let Err(ref e) = result {
                 session.error_message = Some(e.to_string());
+                session.error_kind = Some(crate::agents::error::classify_error(e));
             }
             persist_session(&stores, session);
         }

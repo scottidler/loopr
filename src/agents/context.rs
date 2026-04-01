@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use eyre::{Result, eyre};
 use log::{debug, warn};
 
+use crate::agents::error::AgentError;
+
 use crate::daemon::context::Stores;
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::role::Role;
@@ -650,15 +652,11 @@ impl<'a> ContextBuilder<'a> {
         // Input limit = 200k - 10k (conservative output+margin reserve).
         const MAX_INPUT_TOKENS: usize = 190_000;
         if token_estimate > MAX_INPUT_TOKENS {
-            return Err(eyre!(
-                "assembled context ({} tokens) exceeds model input limit ({} tokens): \
-                 system_prompt={} tokens, user_message={} tokens. \
-                 Reduce variable data (learnings, diffs, state summary) or split the work.",
-                token_estimate,
-                MAX_INPUT_TOKENS,
-                system_tokens,
-                msg_tokens,
-            ));
+            return Err(AgentError::ContextOverflow {
+                tokens: token_estimate,
+                limit: MAX_INPUT_TOKENS,
+            }
+            .into());
         }
 
         Ok(AssembledContext {

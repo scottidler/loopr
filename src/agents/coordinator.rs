@@ -7,6 +7,7 @@ use eyre::{Result, eyre};
 use crate::agents::AgentAction;
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
+use crate::agents::error::AgentErrorKind;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::generation::{
     self, GenerationLevel, build_phase_prompt, build_plan_prompt, build_spec_prompt, build_work_prompt,
@@ -1575,6 +1576,60 @@ impl CoordinatorAgent {
             let resolved_action = resolve_batch_dependencies(action, &batch_created_ids, &self.ctx.log);
             let action_ref = resolved_action.as_ref().unwrap_or(action);
 
+            // Error classification: check if the most recent failed session for this
+            // work has a structural error_kind. ContextOverflow and ParseExhausted are
+            // not worth retrying - abandon immediately with an explanatory learning.
+            if let AgentAction::AssignAgent { agent_type, target_id } = action_ref
+                && agent_type == "implementer"
+                && let Some(error_kind) = last_error_kind_for_work(&self.ctx.stores, target_id)
+                && matches!(
+                    error_kind,
+                    AgentErrorKind::ContextOverflow | AgentErrorKind::ParseExhausted
+                )
+            {
+                let reason = match error_kind {
+                    AgentErrorKind::ContextOverflow => {
+                        format!(
+                            "Work '{}' failed due to context overflow - \
+                             reduce scope or split the work",
+                            target_id
+                        )
+                    }
+                    AgentErrorKind::ParseExhausted => {
+                        format!(
+                            "Work '{}' failed after exhausting parse retries - \
+                             the LLM cannot produce valid output for this prompt",
+                            target_id
+                        )
+                    }
+                    _ => unreachable!(),
+                };
+                self.ctx.warn(&reason);
+                let _ = bridge.request(
+                    "work.transition",
+                    serde_json::json!({
+                        "id": target_id,
+                        "target_status": "Abandoned",
+                        "role": "coordinator"
+                    }),
+                );
+                let _ = bridge.request(
+                    "learning.create",
+                    serde_json::json!({
+                        "content": reason,
+                        "scope": "phase",
+                        "source_id": target_id,
+                    }),
+                );
+                let summary = format!("Work {} abandoned (structural failure: {:?})", target_id, error_kind);
+                let _ = self
+                    .ctx
+                    .event_tx
+                    .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &summary));
+                last_summary = summary;
+                continue;
+            }
+
             // Fix #4: Enforce max_work_retries for implementer assignments
             if let AgentAction::AssignAgent { agent_type, target_id } = action_ref
                 && agent_type == "implementer"
@@ -1803,6 +1858,16 @@ impl Agent for CoordinatorAgent {
     fn agent_type(&self) -> AgentType {
         AgentType::Coordinator
     }
+}
+
+/// Find the error_kind from the most recent failed session for a given work ID.
+fn last_error_kind_for_work(stores: &Stores, work_id: &str) -> Option<AgentErrorKind> {
+    let sessions = stores.agent_sessions.read().ok()?;
+    sessions
+        .values()
+        .filter(|s| s.work_id.as_deref() == Some(work_id) && s.status == AgentStatus::Failed && s.error_kind.is_some())
+        .max_by_key(|s| s.updated_at)
+        .and_then(|s| s.error_kind)
 }
 
 fn format_action_summary(result: &ActionResult) -> String {
@@ -4638,5 +4703,67 @@ mod tests {
             "prompt should include Global-scoped learning: {}",
             text
         );
+    }
+
+    #[test]
+    fn test_last_error_kind_for_work_returns_none_when_no_sessions() {
+        let dir = TestDir::new("loopr-coord-errk-none");
+        let stores = test_stores(&dir);
+        assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
+    }
+
+    #[test]
+    fn test_last_error_kind_for_work_returns_structural_error() {
+        let dir = TestDir::new("loopr-coord-errk-struct");
+        let stores = test_stores(&dir);
+
+        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.status = AgentStatus::Failed;
+        session.error_kind = Some(AgentErrorKind::ContextOverflow);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let kind = last_error_kind_for_work(&stores, "wi-1");
+        assert_eq!(kind, Some(AgentErrorKind::ContextOverflow));
+    }
+
+    #[test]
+    fn test_last_error_kind_for_work_ignores_non_failed_sessions() {
+        let dir = TestDir::new("loopr-coord-errk-nonfail");
+        let stores = test_stores(&dir);
+
+        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        session.work_id = Some("wi-1".to_string());
+        session.status = AgentStatus::Completed;
+        session.error_kind = Some(AgentErrorKind::ContextOverflow);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
+    }
+
+    #[test]
+    fn test_last_error_kind_for_work_ignores_other_works() {
+        let dir = TestDir::new("loopr-coord-errk-other");
+        let stores = test_stores(&dir);
+
+        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        session.work_id = Some("wi-2".to_string());
+        session.status = AgentStatus::Failed;
+        session.error_kind = Some(AgentErrorKind::ContextOverflow);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
     }
 }

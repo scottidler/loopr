@@ -3,6 +3,7 @@ pub mod bridge;
 pub mod cache;
 pub mod context;
 pub mod coordinator;
+pub mod error;
 pub mod executor;
 pub mod generation;
 pub mod implementer;
@@ -337,6 +338,9 @@ pub struct AgentSession {
     /// Daemon session ID that spawned this agent (e.g. "20260305T143200").
     #[serde(default)]
     pub daemon_session_id: Option<String>,
+    /// Classified error kind for Coordinator dispatch (set on failure).
+    #[serde(default)]
+    pub error_kind: Option<crate::agents::error::AgentErrorKind>,
 }
 
 impl AgentSession {
@@ -357,6 +361,7 @@ impl AgentSession {
             target_id: None,
             query: None,
             daemon_session_id: None,
+            error_kind: None,
         }
     }
 
