@@ -49,9 +49,9 @@ README
 }
 
 target_validation_commands() {
-    cat <<'CMDS'
-    - "test -f test_todo.py && .venv/bin/python -m pytest test_todo.py -v || test ! -f test_todo.py"
-CMDS
+    # Phase-scoped validation-commands in python-todo.yml handle this now.
+    # Return empty so no global validation_commands are written to loopr.yml.
+    true
 }
 
 target_goal() {
@@ -60,7 +60,7 @@ target_goal() {
 
 target_plan() {
     # Return path to YAML manifest for deterministic decomposition
-    echo "${LOOPR_ROOT}/bin/e2e-targets/python-todo.yaml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/python-todo.yml"
 }
 
 collect_results() {

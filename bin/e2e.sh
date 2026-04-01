@@ -103,7 +103,9 @@ scaffold
 ###############################################################################
 
 CONFIG="${TARGET}/loopr.yml"
-cat > "${CONFIG}" <<YAML
+VALIDATION_CMDS="$(target_validation_commands)"
+{
+cat <<YAML
 log_level: debug
 
 project:
@@ -122,12 +124,17 @@ agents:
 integrator:
   enabled: true
   interval_secs: 15
-  validation_commands:
-$(target_validation_commands)
+YAML
+if [[ -n "${VALIDATION_CMDS}" ]]; then
+    echo "  validation_commands:"
+    echo "${VALIDATION_CMDS}"
+fi
+cat <<YAML
 
 validator:
   enabled: false
 YAML
+} > "${CONFIG}"
 ok "Config written to ${CONFIG}"
 
 ###############################################################################

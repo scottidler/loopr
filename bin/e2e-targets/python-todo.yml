@@ -6,8 +6,10 @@ plan:
     title: "Todo App Implementation"
     description: "Core todo module with CLI and tests"
     phases:
-      - title: "Python todo app with tests"
-        description: "Implement the complete todo application with tests in a single phase"
+      - title: "Core model"
+        description: "Data model with JSON persistence"
+        validation-commands:
+          - ".venv/bin/python -c 'import todo'"
         works:
           - key: "todo-model"
             title: "Create todo.py with TodoStore class"
@@ -27,6 +29,11 @@ plan:
               - "TodoStore.done() marks the correct todo as done"
               - "TodoStore.delete() removes the correct todo"
               - "JSON persistence survives reload"
+      - title: "CLI and test suite"
+        description: "Command-line interface and pytest coverage"
+        validation-commands:
+          - ".venv/bin/python -m pytest test_todo.py -v"
+        works:
           - key: "cli-entry"
             title: "Create cli.py with argparse CLI"
             description: |
