@@ -5,8 +5,6 @@ use taskstore::{IndexValue, Record};
 
 use loopr_derive::{FlexibleEnum, Fsm};
 
-use crate::domain::role::Role;
-use crate::domain::transition::TransitionRule;
 use crate::id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FlexibleEnum, Fsm)]
@@ -25,46 +23,6 @@ impl std::fmt::Display for TickStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
-}
-
-/// Returns the FSM transition rules for Tick status.
-/// All transitions are Integrator-only.
-pub fn tick_transitions() -> Vec<TransitionRule<TickStatus>> {
-    use TickStatus::*;
-    vec![
-        TransitionRule {
-            from: Open,
-            to: Sealing,
-            role: Some(Role::Integrator),
-        },
-        TransitionRule {
-            from: Sealing,
-            to: Validating,
-            role: Some(Role::Integrator),
-        },
-        TransitionRule {
-            from: Validating,
-            to: Published,
-            role: Some(Role::Integrator),
-        },
-        TransitionRule {
-            from: Validating,
-            to: Failed,
-            role: Some(Role::Integrator),
-        },
-        // B3: Merge failure during Sealing can transition to Failed
-        TransitionRule {
-            from: Sealing,
-            to: Failed,
-            role: Some(Role::Integrator),
-        },
-        // Crash recovery: Open Tick with no bundles can be failed directly
-        TransitionRule {
-            from: Open,
-            to: Failed,
-            role: Some(Role::Integrator),
-        },
-    ]
 }
 
 /// An immutable integration checkpoint identified by a Git SHA.
@@ -125,7 +83,8 @@ impl Record for Tick {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::transition::validate_transition;
+    use crate::domain::role::Role;
+    use crate::domain::transition::Transition;
 
     #[test]
     fn test_tick_status_is_terminal() {
@@ -224,74 +183,107 @@ mod tests {
 
     #[test]
     fn test_valid_open_to_sealing() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Open, TickStatus::Sealing, Role::Integrator, &rules).is_ok());
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Sealing, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_sealing_to_validating() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Sealing, TickStatus::Validating, Role::Integrator, &rules).is_ok());
+        assert!(
+            TickStatus::Sealing
+                .validate_transition(TickStatus::Validating, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_validating_to_published() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Validating, TickStatus::Published, Role::Integrator, &rules).is_ok());
+        assert!(
+            TickStatus::Validating
+                .validate_transition(TickStatus::Published, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_validating_to_failed() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Validating, TickStatus::Failed, Role::Integrator, &rules).is_ok());
+        assert!(
+            TickStatus::Validating
+                .validate_transition(TickStatus::Failed, Role::Integrator)
+                .is_ok()
+        );
     }
 
     // --- Invalid transitions: wrong role ---
 
     #[test]
     fn test_invalid_open_to_sealing_wrong_role() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Open, TickStatus::Sealing, Role::Coordinator, &rules).is_err());
-        assert!(validate_transition(TickStatus::Open, TickStatus::Sealing, Role::Implementer, &rules).is_err());
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Sealing, Role::Coordinator)
+                .is_err()
+        );
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Sealing, Role::Implementer)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_sealing_to_validating_wrong_role() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Sealing, TickStatus::Validating, Role::Coordinator, &rules).is_err());
+        assert!(
+            TickStatus::Sealing
+                .validate_transition(TickStatus::Validating, Role::Coordinator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_validating_to_published_wrong_role() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Validating, TickStatus::Published, Role::Implementer, &rules).is_err());
+        assert!(
+            TickStatus::Validating
+                .validate_transition(TickStatus::Published, Role::Implementer)
+                .is_err()
+        );
     }
 
     // --- Invalid transitions: skip states ---
 
     #[test]
     fn test_invalid_open_to_validating() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Open, TickStatus::Validating, Role::Integrator, &rules).is_err());
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Validating, Role::Integrator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_open_to_published() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Open, TickStatus::Published, Role::Integrator, &rules).is_err());
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Published, Role::Integrator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_sealing_to_published() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Sealing, TickStatus::Published, Role::Integrator, &rules).is_err());
+        assert!(
+            TickStatus::Sealing
+                .validate_transition(TickStatus::Published, Role::Integrator)
+                .is_err()
+        );
     }
 
     // --- Invalid transitions: terminal states ---
 
     #[test]
     fn test_invalid_published_to_anything() {
-        let rules = tick_transitions();
         for target in [
             TickStatus::Open,
             TickStatus::Sealing,
@@ -299,8 +291,10 @@ mod tests {
             TickStatus::Failed,
         ] {
             assert!(
-                validate_transition(TickStatus::Published, target, Role::Integrator, &rules).is_err(),
-                "Expected Published→{:?} to fail",
+                TickStatus::Published
+                    .validate_transition(target, Role::Integrator)
+                    .is_err(),
+                "Expected Published->{:?} to fail",
                 target
             );
         }
@@ -308,7 +302,6 @@ mod tests {
 
     #[test]
     fn test_invalid_failed_to_anything() {
-        let rules = tick_transitions();
         for target in [
             TickStatus::Open,
             TickStatus::Sealing,
@@ -316,8 +309,10 @@ mod tests {
             TickStatus::Published,
         ] {
             assert!(
-                validate_transition(TickStatus::Failed, target, Role::Integrator, &rules).is_err(),
-                "Expected Failed→{:?} to fail",
+                TickStatus::Failed
+                    .validate_transition(target, Role::Integrator)
+                    .is_err(),
+                "Expected Failed->{:?} to fail",
                 target
             );
         }
@@ -327,42 +322,68 @@ mod tests {
 
     #[test]
     fn test_invalid_sealing_to_open() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Sealing, TickStatus::Open, Role::Integrator, &rules).is_err());
+        assert!(
+            TickStatus::Sealing
+                .validate_transition(TickStatus::Open, Role::Integrator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_validating_to_sealing() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Validating, TickStatus::Sealing, Role::Integrator, &rules).is_err());
+        assert!(
+            TickStatus::Validating
+                .validate_transition(TickStatus::Sealing, Role::Integrator)
+                .is_err()
+        );
     }
 
-    // --- B3: Sealing → Failed transition (merge failure) ---
+    // --- B3: Sealing -> Failed transition (merge failure) ---
 
     #[test]
     fn test_valid_sealing_to_failed() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Sealing, TickStatus::Failed, Role::Integrator, &rules).is_ok());
+        assert!(
+            TickStatus::Sealing
+                .validate_transition(TickStatus::Failed, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_invalid_sealing_to_failed_wrong_role() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Sealing, TickStatus::Failed, Role::Coordinator, &rules).is_err());
+        assert!(
+            TickStatus::Sealing
+                .validate_transition(TickStatus::Failed, Role::Coordinator)
+                .is_err()
+        );
     }
 
-    // --- Crash recovery: Open → Failed ---
+    // --- Crash recovery: Open -> Failed ---
 
     #[test]
     fn test_valid_open_to_failed() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Open, TickStatus::Failed, Role::Integrator, &rules).is_ok());
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Failed, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_invalid_open_to_failed_wrong_role() {
-        let rules = tick_transitions();
-        assert!(validate_transition(TickStatus::Open, TickStatus::Failed, Role::Coordinator, &rules).is_err());
+        assert!(
+            TickStatus::Open
+                .validate_transition(TickStatus::Failed, Role::Coordinator)
+                .is_err()
+        );
+    }
+
+    // --- Idempotency ---
+
+    #[test]
+    fn test_idempotent_self_transition() {
+        let r = TickStatus::Open.validate_transition(TickStatus::Open, Role::Integrator);
+        assert_eq!(r.unwrap(), Transition::Unchanged);
     }
 
     // --- Record trait tests ---

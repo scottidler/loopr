@@ -5,8 +5,6 @@ use taskstore::{IndexValue, Record};
 
 use loopr_derive::{FlexibleEnum, Fsm};
 
-use crate::domain::role::Role;
-use crate::domain::transition::TransitionRule;
 use crate::id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
@@ -15,11 +13,7 @@ pub enum WorkStatus {
     Draft,
     #[transitions(InProgress(Coordinator), Blocked(Coordinator), Abandoned(Coordinator))]
     Ready,
-    #[transitions(
-        Blocked,
-        InReview(Implementer),
-        Abandoned(Coordinator),
-    )]
+    #[transitions(Blocked, InReview(Implementer), Abandoned(Coordinator))]
     #[overrides(Ready(Coordinator), InReview(Coordinator))]
     InProgress,
     #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
@@ -37,138 +31,6 @@ impl std::fmt::Display for WorkStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
-}
-
-/// Returns the FSM transition rules for Work status.
-pub fn work_transitions() -> Vec<TransitionRule<WorkStatus>> {
-    use WorkStatus::*;
-    vec![
-        TransitionRule {
-            from: Draft,
-            to: Ready,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: Ready,
-            to: InProgress,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: Ready,
-            to: Blocked,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: InProgress,
-            to: Blocked,
-            role: None,
-        },
-        TransitionRule {
-            from: Blocked,
-            to: Ready,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: InProgress,
-            to: InReview,
-            role: Some(Role::Implementer),
-        },
-        TransitionRule {
-            from: InReview,
-            to: InProgress,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: InReview,
-            to: Integrated,
-            role: Some(Role::Integrator),
-        },
-        TransitionRule {
-            from: Integrated,
-            to: Done,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: Integrated,
-            to: Done,
-            role: Some(Role::Integrator),
-        },
-        // Abandoned from any non-terminal state
-        TransitionRule {
-            from: Draft,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: Ready,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: InProgress,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: Blocked,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: InReview,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        TransitionRule {
-            from: Integrated,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-    ]
-}
-
-/// Override transitions available only to the Coordinator with the override flag.
-/// These bypass normal role constraints for recovery from stuck states.
-pub fn override_transitions() -> Vec<TransitionRule<WorkStatus>> {
-    use WorkStatus::*;
-    vec![
-        // Reset stuck InProgress back to Ready for re-assignment
-        TransitionRule {
-            from: InProgress,
-            to: Ready,
-            role: Some(Role::Coordinator),
-        },
-        // Force-advance InProgress to InReview when a valid Bundle exists
-        TransitionRule {
-            from: InProgress,
-            to: InReview,
-            role: Some(Role::Coordinator),
-        },
-        // Abandon stuck InProgress
-        TransitionRule {
-            from: InProgress,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        // Reset InReview back to Ready (no valid Bundle)
-        TransitionRule {
-            from: InReview,
-            to: Ready,
-            role: Some(Role::Coordinator),
-        },
-        // Abandon stuck InReview
-        TransitionRule {
-            from: InReview,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-        // Abandon stuck Blocked
-        TransitionRule {
-            from: Blocked,
-            to: Abandoned,
-            role: Some(Role::Coordinator),
-        },
-    ]
 }
 
 /// A single item in a Work's completion checklist.
@@ -243,7 +105,8 @@ impl Record for Work {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::transition::validate_transition;
+    use crate::domain::role::Role;
+    use crate::domain::transition::Transition;
 
     #[test]
     fn test_work_status_display() {
@@ -262,7 +125,6 @@ mod tests {
 
     #[test]
     fn test_work_status_display_matches_serde() {
-        // Regression: Display must produce values that serde can deserialize.
         for status in [
             WorkStatus::Draft,
             WorkStatus::Ready,
@@ -328,28 +190,34 @@ mod tests {
         assert_ne!(w1.id, w2.id);
     }
 
-    // --- Valid transitions ---
+    // --- Valid transitions (derived via #[derive(Fsm)]) ---
 
     #[test]
     fn test_valid_draft_to_ready() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Draft, WorkStatus::Ready, Role::Coordinator, &rules,).is_ok());
+        assert!(
+            WorkStatus::Draft
+                .validate_transition(WorkStatus::Ready, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_ready_to_in_progress() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Ready, WorkStatus::InProgress, Role::Coordinator, &rules,).is_ok());
+        assert!(
+            WorkStatus::Ready
+                .validate_transition(WorkStatus::InProgress, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_in_progress_to_blocked_any_role() {
-        let rules = work_transitions();
-        // InProgress → Blocked has role: None (any role)
         for role in [Role::Coordinator, Role::Integrator, Role::Implementer] {
             assert!(
-                validate_transition(WorkStatus::InProgress, WorkStatus::Blocked, role, &rules,).is_ok(),
-                "Expected InProgress→Blocked to succeed for {:?}",
+                WorkStatus::InProgress
+                    .validate_transition(WorkStatus::Blocked, role)
+                    .is_ok(),
+                "Expected InProgress->Blocked to succeed for {:?}",
                 role
             );
         }
@@ -357,43 +225,60 @@ mod tests {
 
     #[test]
     fn test_valid_blocked_to_ready() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Blocked, WorkStatus::Ready, Role::Coordinator, &rules,).is_ok());
+        assert!(
+            WorkStatus::Blocked
+                .validate_transition(WorkStatus::Ready, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_in_progress_to_in_review() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::InReview, Role::Implementer, &rules,).is_ok());
+        assert!(
+            WorkStatus::InProgress
+                .validate_transition(WorkStatus::InReview, Role::Implementer)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_in_review_to_in_progress_rejection() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::InReview, WorkStatus::InProgress, Role::Coordinator, &rules,).is_ok());
+        assert!(
+            WorkStatus::InReview
+                .validate_transition(WorkStatus::InProgress, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_in_review_to_integrated() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Integrated, Role::Integrator, &rules,).is_ok());
+        assert!(
+            WorkStatus::InReview
+                .validate_transition(WorkStatus::Integrated, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_integrated_to_done() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Integrated, WorkStatus::Done, Role::Coordinator, &rules,).is_ok());
+        assert!(
+            WorkStatus::Integrated
+                .validate_transition(WorkStatus::Done, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_integrated_to_done_integrator() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Integrated, WorkStatus::Done, Role::Integrator, &rules,).is_ok());
+        assert!(
+            WorkStatus::Integrated
+                .validate_transition(WorkStatus::Done, Role::Integrator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_valid_abandoned_from_all_non_terminal() {
-        let rules = work_transitions();
         let non_terminal = [
             WorkStatus::Draft,
             WorkStatus::Ready,
@@ -404,8 +289,9 @@ mod tests {
         ];
         for from in non_terminal {
             assert!(
-                validate_transition(from, WorkStatus::Abandoned, Role::Coordinator, &rules,).is_ok(),
-                "Expected {:?}→Abandoned to succeed",
+                from.validate_transition(WorkStatus::Abandoned, Role::Coordinator)
+                    .is_ok(),
+                "Expected {:?}->Abandoned to succeed",
                 from
             );
         }
@@ -415,24 +301,28 @@ mod tests {
 
     #[test]
     fn test_invalid_draft_to_ready_wrong_role() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Draft, WorkStatus::Ready, Role::Implementer, &rules,).is_err());
+        assert!(
+            WorkStatus::Draft
+                .validate_transition(WorkStatus::Ready, Role::Implementer)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_skip_draft_to_in_progress() {
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::Draft, WorkStatus::InProgress, Role::Coordinator, &rules,).is_err());
+        assert!(
+            WorkStatus::Draft
+                .validate_transition(WorkStatus::InProgress, Role::Coordinator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_done_to_anything() {
-        let rules = work_transitions();
-        // Done is terminal — no transitions out
         for target in [WorkStatus::Draft, WorkStatus::Ready, WorkStatus::InProgress] {
             assert!(
-                validate_transition(WorkStatus::Done, target, Role::Coordinator, &rules,).is_err(),
-                "Expected Done→{:?} to fail",
+                WorkStatus::Done.validate_transition(target, Role::Coordinator).is_err(),
+                "Expected Done->{:?} to fail",
                 target
             );
         }
@@ -440,30 +330,38 @@ mod tests {
 
     #[test]
     fn test_invalid_abandoned_to_anything() {
-        let rules = work_transitions();
-        // Abandoned is terminal — no transitions out
-        assert!(validate_transition(WorkStatus::Abandoned, WorkStatus::Draft, Role::Coordinator, &rules,).is_err());
+        assert!(
+            WorkStatus::Abandoned
+                .validate_transition(WorkStatus::Draft, Role::Coordinator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_in_review_to_integrated_wrong_role() {
-        let rules = work_transitions();
-        // Only Integrator can move InReview → Integrated
-        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Integrated, Role::Coordinator, &rules,).is_err());
+        assert!(
+            WorkStatus::InReview
+                .validate_transition(WorkStatus::Integrated, Role::Coordinator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_in_progress_to_in_review_wrong_role() {
-        let rules = work_transitions();
-        // Only Implementer can move InProgress → InReview
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::InReview, Role::Coordinator, &rules,).is_err());
+        assert!(
+            WorkStatus::InProgress
+                .validate_transition(WorkStatus::InReview, Role::Coordinator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_invalid_abandoned_not_by_implementer() {
-        let rules = work_transitions();
-        // Abandoned requires Coordinator
-        assert!(validate_transition(WorkStatus::Ready, WorkStatus::Abandoned, Role::Implementer, &rules,).is_err());
+        assert!(
+            WorkStatus::Ready
+                .validate_transition(WorkStatus::Abandoned, Role::Implementer)
+                .is_err()
+        );
     }
 
     // --- Record trait tests ---
@@ -502,68 +400,110 @@ mod tests {
         );
     }
 
-    // --- Override transition tests ---
+    // --- Override transition tests (validate_override includes normal + override edges) ---
 
     #[test]
     fn test_override_in_progress_to_ready_coordinator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Coordinator, &rules).is_ok());
+        assert!(
+            WorkStatus::InProgress
+                .validate_override(WorkStatus::Ready, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_override_in_progress_to_in_review_coordinator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::InReview, Role::Coordinator, &rules).is_ok());
+        assert!(
+            WorkStatus::InProgress
+                .validate_override(WorkStatus::InReview, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_override_in_progress_to_abandoned_coordinator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Abandoned, Role::Coordinator, &rules).is_ok());
+        assert!(
+            WorkStatus::InProgress
+                .validate_override(WorkStatus::Abandoned, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_override_in_review_to_ready_coordinator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Ready, Role::Coordinator, &rules).is_ok());
+        assert!(
+            WorkStatus::InReview
+                .validate_override(WorkStatus::Ready, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_override_in_review_to_abandoned_coordinator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Abandoned, Role::Coordinator, &rules).is_ok());
+        assert!(
+            WorkStatus::InReview
+                .validate_override(WorkStatus::Abandoned, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_override_blocked_to_abandoned_coordinator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::Blocked, WorkStatus::Abandoned, Role::Coordinator, &rules).is_ok());
+        assert!(
+            WorkStatus::Blocked
+                .validate_override(WorkStatus::Abandoned, Role::Coordinator)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_override_rejected_for_implementer() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Implementer, &rules).is_err());
+        assert!(
+            WorkStatus::InProgress
+                .validate_override(WorkStatus::Ready, Role::Implementer)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_override_rejected_for_integrator() {
-        let rules = override_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Integrator, &rules).is_err());
+        assert!(
+            WorkStatus::InProgress
+                .validate_override(WorkStatus::Ready, Role::Integrator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_override_not_in_normal_transitions() {
-        // InProgress → Ready is NOT in the normal table (only override)
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::InProgress, WorkStatus::Ready, Role::Coordinator, &rules).is_err());
+        assert!(
+            WorkStatus::InProgress
+                .validate_transition(WorkStatus::Ready, Role::Coordinator)
+                .is_err()
+        );
     }
 
     #[test]
     fn test_override_in_review_to_ready_not_in_normal() {
-        // InReview → Ready is NOT in the normal table
-        let rules = work_transitions();
-        assert!(validate_transition(WorkStatus::InReview, WorkStatus::Ready, Role::Coordinator, &rules).is_err());
+        assert!(
+            WorkStatus::InReview
+                .validate_transition(WorkStatus::Ready, Role::Coordinator)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_is_terminal() {
+        assert!(!WorkStatus::Draft.is_terminal());
+        assert!(!WorkStatus::InProgress.is_terminal());
+        assert!(WorkStatus::Done.is_terminal());
+        assert!(WorkStatus::Abandoned.is_terminal());
+    }
+
+    #[test]
+    fn test_idempotent_self_transition() {
+        let r = WorkStatus::Draft.validate_transition(WorkStatus::Draft, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Unchanged);
     }
 
     // --- FlexibleEnum tests ---

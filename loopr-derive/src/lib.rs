@@ -123,10 +123,7 @@ impl Parse for TransitionList {
     }
 }
 
-fn target_to_match_arm(
-    from: &Ident,
-    target: &TransitionTarget,
-) -> proc_macro2::TokenStream {
+fn target_to_match_arm(from: &Ident, target: &TransitionTarget) -> proc_macro2::TokenStream {
     let to = &target.target;
     if target.roles.is_empty() {
         quote! { (Self::#from, Self::#to) => true }
@@ -161,10 +158,7 @@ pub fn fsm(input: TokenStream) -> TokenStream {
 
     for variant in variants {
         if !matches!(variant.fields, Fields::Unit) {
-            panic!(
-                "Fsm only supports unit variants, but `{}` has fields",
-                variant.ident
-            );
+            panic!("Fsm only supports unit variants, but `{}` has fields", variant.ident);
         }
     }
 

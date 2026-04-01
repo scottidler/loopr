@@ -6,18 +6,15 @@
 //! 3. Project conventions ($TARGET_PROJECT/LOOPR.md)
 //! 4. Auto-generated schema docs (transition graphs, valid actions, status enums)
 
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::hash::Hash;
+use std::collections::HashMap;
 use std::path::Path;
 
 use log::{info, warn};
 
-use crate::domain::bundle::bundle_transitions;
-use crate::domain::plan::hierarchy_transitions;
+use crate::domain::bundle::BundleStatus;
+use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
-use crate::domain::transition::TransitionRule;
-use crate::domain::work::work_transitions;
+use crate::domain::work::WorkStatus;
 
 /// Assembled guidance from all layers, ready for context injection.
 #[derive(Debug, Clone)]
@@ -93,46 +90,90 @@ pub fn load_guidance(repo_path: &Path) -> AgentGuidance {
     }
 }
 
-/// Generate role-specific schema documentation from transition rules.
+/// All WorkStatus variants for enumeration.
+const ALL_WORK_STATUSES: [WorkStatus; 8] = [
+    WorkStatus::Draft,
+    WorkStatus::Ready,
+    WorkStatus::InProgress,
+    WorkStatus::Blocked,
+    WorkStatus::InReview,
+    WorkStatus::Integrated,
+    WorkStatus::Done,
+    WorkStatus::Abandoned,
+];
+
+/// All HierarchyStatus variants for enumeration.
+const ALL_HIERARCHY_STATUSES: [HierarchyStatus; 4] = [
+    HierarchyStatus::Draft,
+    HierarchyStatus::Active,
+    HierarchyStatus::Complete,
+    HierarchyStatus::Abandoned,
+];
+
+/// All BundleStatus variants for enumeration.
+const ALL_BUNDLE_STATUSES: [BundleStatus; 8] = [
+    BundleStatus::Proposed,
+    BundleStatus::Triaged,
+    BundleStatus::Reviewed,
+    BundleStatus::Accepted,
+    BundleStatus::Integrating,
+    BundleStatus::Merged,
+    BundleStatus::Rejected,
+    BundleStatus::Superseded,
+];
+
+/// Generate role-specific schema documentation by probing the derived FSM methods.
 ///
-/// Reads from the same `work_transitions()`, `bundle_transitions()`,
-/// `hierarchy_transitions()` functions that the runtime validates against —
-/// guaranteed in sync by construction.
+/// Enumerates all (from, to) state pairs and calls `validate_transition` to discover
+/// which transitions are available for the given role - guaranteed in sync with the
+/// `#[derive(Fsm)]` attributes by construction.
 pub fn generate_schema_doc(role: Role) -> String {
     let mut doc = String::with_capacity(2048);
 
     doc.push_str(&format!("### System Rules (your role: {})\n\n", role));
 
     // Work transitions
-    let work_rules = work_transitions();
     doc.push_str("## Work Status Transitions\n");
-    append_transitions(&mut doc, &work_rules, role);
-    append_terminal_states(&mut doc, &work_rules);
+    append_work_transitions(&mut doc, role);
+    append_work_terminal_states(&mut doc);
 
     // Hierarchy transitions (Plan/Spec/Phase share the same FSM)
-    let hierarchy_rules = hierarchy_transitions();
     doc.push_str("## Plan/Spec/Phase Status Transitions\n");
-    append_transitions(&mut doc, &hierarchy_rules, role);
-    append_terminal_states(&mut doc, &hierarchy_rules);
+    append_hierarchy_transitions(&mut doc, role);
+    append_hierarchy_terminal_states(&mut doc);
 
     // Bundle transitions
-    let bundle_rules = bundle_transitions();
     doc.push_str("## Bundle Status Transitions\n");
-    append_transitions(&mut doc, &bundle_rules, role);
-    append_terminal_states(&mut doc, &bundle_rules);
+    append_bundle_transitions(&mut doc, role);
+    append_bundle_terminal_states(&mut doc);
 
     doc
 }
 
-/// Derive terminal states from transition rules.
-///
-/// A terminal state is one that appears as a `to` destination but never as a `from` source.
-/// This is derived purely from the rules — no hardcoded state names.
-fn append_terminal_states<S: Debug + Copy + Eq + Hash>(doc: &mut String, rules: &[TransitionRule<S>]) {
-    let from_states: HashSet<_> = rules.iter().map(|r| r.from).collect();
-    let to_states: HashSet<_> = rules.iter().map(|r| r.to).collect();
-    let mut terminals: Vec<_> = to_states.difference(&from_states).collect();
-    // Sort for deterministic output
+fn append_work_transitions(doc: &mut String, role: Role) {
+    let mut found = false;
+    for &from in &ALL_WORK_STATUSES {
+        for &to in &ALL_WORK_STATUSES {
+            if from == to {
+                continue;
+            }
+            if from.validate_transition(to, role).is_ok() {
+                doc.push_str(&format!("{:?} \u{2192} {:?}", from, to));
+                if ALL_ROLES.iter().all(|&r| from.validate_transition(to, r).is_ok()) {
+                    doc.push_str("  (any role)");
+                }
+                doc.push('\n');
+                found = true;
+            }
+        }
+    }
+    if !found {
+        doc.push_str("(no transitions available for your role)\n");
+    }
+}
+
+fn append_work_terminal_states(doc: &mut String) {
+    let mut terminals: Vec<_> = ALL_WORK_STATUSES.iter().filter(|s| s.is_terminal()).collect();
     terminals.sort_by_key(|s| format!("{:?}", s));
     if !terminals.is_empty() {
         let names: Vec<String> = terminals.iter().map(|s| format!("{:?}", s)).collect();
@@ -143,23 +184,71 @@ fn append_terminal_states<S: Debug + Copy + Eq + Hash>(doc: &mut String, rules: 
     }
 }
 
-/// Append filtered transition rules to the doc string.
-/// Shows rules that the given role can execute (role matches or role is None = any).
-fn append_transitions<S: Debug>(doc: &mut String, rules: &[TransitionRule<S>], role: Role) {
+fn append_hierarchy_transitions(doc: &mut String, role: Role) {
     let mut found = false;
-    for rule in rules {
-        let allowed = rule.role.is_none() || rule.role == Some(role);
-        if allowed {
-            doc.push_str(&format!("{:?} → {:?}", rule.from, rule.to));
-            if rule.role.is_none() {
-                doc.push_str("  (any role)");
+    for &from in &ALL_HIERARCHY_STATUSES {
+        for &to in &ALL_HIERARCHY_STATUSES {
+            if from == to {
+                continue;
             }
-            doc.push('\n');
-            found = true;
+            if from.validate_transition(to, role).is_ok() {
+                doc.push_str(&format!("{:?} \u{2192} {:?}", from, to));
+                if ALL_ROLES.iter().all(|&r| from.validate_transition(to, r).is_ok()) {
+                    doc.push_str("  (any role)");
+                }
+                doc.push('\n');
+                found = true;
+            }
         }
     }
     if !found {
         doc.push_str("(no transitions available for your role)\n");
+    }
+}
+
+fn append_hierarchy_terminal_states(doc: &mut String) {
+    let mut terminals: Vec<_> = ALL_HIERARCHY_STATUSES.iter().filter(|s| s.is_terminal()).collect();
+    terminals.sort_by_key(|s| format!("{:?}", s));
+    if !terminals.is_empty() {
+        let names: Vec<String> = terminals.iter().map(|s| format!("{:?}", s)).collect();
+        doc.push_str(&format!(
+            "\nTerminal states: {} (no outgoing transitions)\n\n",
+            names.join(", ")
+        ));
+    }
+}
+
+fn append_bundle_transitions(doc: &mut String, role: Role) {
+    let mut found = false;
+    for &from in &ALL_BUNDLE_STATUSES {
+        for &to in &ALL_BUNDLE_STATUSES {
+            if from == to {
+                continue;
+            }
+            if from.validate_transition(to, role).is_ok() {
+                doc.push_str(&format!("{:?} \u{2192} {:?}", from, to));
+                if ALL_ROLES.iter().all(|&r| from.validate_transition(to, r).is_ok()) {
+                    doc.push_str("  (any role)");
+                }
+                doc.push('\n');
+                found = true;
+            }
+        }
+    }
+    if !found {
+        doc.push_str("(no transitions available for your role)\n");
+    }
+}
+
+fn append_bundle_terminal_states(doc: &mut String) {
+    let mut terminals: Vec<_> = ALL_BUNDLE_STATUSES.iter().filter(|s| s.is_terminal()).collect();
+    terminals.sort_by_key(|s| format!("{:?}", s));
+    if !terminals.is_empty() {
+        let names: Vec<String> = terminals.iter().map(|s| format!("{:?}", s)).collect();
+        doc.push_str(&format!(
+            "\nTerminal states: {} (no outgoing transitions)\n\n",
+            names.join(", ")
+        ));
     }
 }
 
@@ -460,48 +549,61 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_doc_completeness_work_transitions() {
-        // Every work transition rule should appear in at least one role's schema doc
-        let rules = work_transitions();
-        for rule in &rules {
-            let role = rule.role.unwrap_or(Role::Coordinator);
+    fn test_schema_doc_completeness_all_valid_transitions_present() {
+        // For every role, every valid transition discovered by probing must appear in the doc
+        for role in ALL_ROLES {
             let doc = generate_schema_doc(role);
-            let from = format!("{:?}", rule.from);
-            let to = format!("{:?}", rule.to);
-            assert!(
-                doc.contains(&format!("{from} → {to}")),
-                "Work transition {from} → {to} missing from {role}'s schema doc"
-            );
-        }
-    }
 
-    #[test]
-    fn test_schema_doc_completeness_bundle_transitions() {
-        let rules = bundle_transitions();
-        for rule in &rules {
-            let role = rule.role.unwrap_or(Role::Coordinator);
-            let doc = generate_schema_doc(role);
-            let from = format!("{:?}", rule.from);
-            let to = format!("{:?}", rule.to);
-            assert!(
-                doc.contains(&format!("{from} → {to}")),
-                "Bundle transition {from} → {to} missing from {role}'s schema doc"
-            );
-        }
-    }
+            // Work transitions
+            for &from in &ALL_WORK_STATUSES {
+                for &to in &ALL_WORK_STATUSES {
+                    if from == to {
+                        continue;
+                    }
+                    if from.validate_transition(to, role).is_ok() {
+                        assert!(
+                            doc.contains(&format!("{:?} \u{2192} {:?}", from, to)),
+                            "Work {:?} \u{2192} {:?} missing for {role}",
+                            from,
+                            to
+                        );
+                    }
+                }
+            }
 
-    #[test]
-    fn test_schema_doc_completeness_hierarchy_transitions() {
-        let rules = hierarchy_transitions();
-        for rule in &rules {
-            let role = rule.role.unwrap_or(Role::Coordinator);
-            let doc = generate_schema_doc(role);
-            let from = format!("{:?}", rule.from);
-            let to = format!("{:?}", rule.to);
-            assert!(
-                doc.contains(&format!("{from} → {to}")),
-                "Hierarchy transition {from} → {to} missing from {role}'s schema doc"
-            );
+            // Hierarchy transitions
+            for &from in &ALL_HIERARCHY_STATUSES {
+                for &to in &ALL_HIERARCHY_STATUSES {
+                    if from == to {
+                        continue;
+                    }
+                    if from.validate_transition(to, role).is_ok() {
+                        assert!(
+                            doc.contains(&format!("{:?} \u{2192} {:?}", from, to)),
+                            "Hierarchy {:?} \u{2192} {:?} missing for {role}",
+                            from,
+                            to
+                        );
+                    }
+                }
+            }
+
+            // Bundle transitions
+            for &from in &ALL_BUNDLE_STATUSES {
+                for &to in &ALL_BUNDLE_STATUSES {
+                    if from == to {
+                        continue;
+                    }
+                    if from.validate_transition(to, role).is_ok() {
+                        assert!(
+                            doc.contains(&format!("{:?} \u{2192} {:?}", from, to)),
+                            "Bundle {:?} \u{2192} {:?} missing for {role}",
+                            from,
+                            to
+                        );
+                    }
+                }
+            }
         }
     }
 

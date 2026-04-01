@@ -4,7 +4,7 @@
 //! 1. Every valid transition succeeds with the correct role
 //! 2. Every invalid transition is rejected (wrong role, skip state, terminal, reverse, self)
 //! 3. Terminal states cannot transition to ANY other state
-//! 4. Self-transitions are always rejected
+//! 4. Self-transitions are idempotent (return Transition::Unchanged)
 //! 5. Records serialize/deserialize correctly through the full lifecycle
 //!
 //! Organized by FSM, with N×N matrix coverage for each.
@@ -13,13 +13,13 @@
 #[cfg(test)]
 mod tests {
     use crate::agents::AgentStatus;
-    use crate::domain::bundle::{Bundle, BundleStatus, bundle_transitions};
+    use crate::domain::bundle::{Bundle, BundleStatus};
     use crate::domain::lock::{Lock, LockStatus};
-    use crate::domain::plan::{HierarchyStatus, Plan, hierarchy_transitions};
+    use crate::domain::plan::{HierarchyStatus, Plan};
     use crate::domain::role::Role;
-    use crate::domain::tick::{Tick, TickStatus, tick_transitions};
-    use crate::domain::transition::validate_transition;
-    use crate::domain::work::{Work, WorkStatus, work_transitions};
+    use crate::domain::tick::{Tick, TickStatus};
+    use crate::domain::transition::Transition;
+    use crate::domain::work::{Work, WorkStatus};
 
     // ========================================================================
     // Helper: all roles for exhaustive wrong-role testing
@@ -33,13 +33,13 @@ mod tests {
         Role::Researcher,
     ];
 
-    fn assert_valid(from: impl Into<String>, to: impl Into<String>, result: &crate::error::Result<()>) {
+    fn assert_valid(from: impl Into<String>, to: impl Into<String>, result: &crate::error::Result<Transition>) {
         let f = from.into();
         let t = to.into();
         assert!(result.is_ok(), "{} -> {} should be valid but got: {:?}", f, t, result);
     }
 
-    fn assert_invalid(from: impl Into<String>, to: impl Into<String>, result: &crate::error::Result<()>) {
+    fn assert_invalid(from: impl Into<String>, to: impl Into<String>, result: &crate::error::Result<Transition>) {
         let f = from.into();
         let t = to.into();
         assert!(result.is_err(), "{} -> {} should be INVALID but succeeded", f, t);
@@ -67,45 +67,25 @@ mod tests {
 
         #[test]
         fn valid_draft_to_active() {
-            let r = validate_transition(
-                HierarchyStatus::Draft,
-                HierarchyStatus::Active,
-                Role::Coordinator,
-                &hierarchy_transitions(),
-            );
+            let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Active, Role::Coordinator);
             assert_valid("Draft", "Active", &r);
         }
 
         #[test]
         fn valid_active_to_complete() {
-            let r = validate_transition(
-                HierarchyStatus::Active,
-                HierarchyStatus::Complete,
-                Role::Coordinator,
-                &hierarchy_transitions(),
-            );
+            let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Complete, Role::Coordinator);
             assert_valid("Active", "Complete", &r);
         }
 
         #[test]
         fn valid_draft_to_abandoned() {
-            let r = validate_transition(
-                HierarchyStatus::Draft,
-                HierarchyStatus::Abandoned,
-                Role::Coordinator,
-                &hierarchy_transitions(),
-            );
+            let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
             assert_valid("Draft", "Abandoned", &r);
         }
 
         #[test]
         fn valid_active_to_abandoned() {
-            let r = validate_transition(
-                HierarchyStatus::Active,
-                HierarchyStatus::Abandoned,
-                Role::Coordinator,
-                &hierarchy_transitions(),
-            );
+            let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
             assert_valid("Active", "Abandoned", &r);
         }
 
@@ -113,7 +93,6 @@ mod tests {
 
         #[test]
         fn wrong_role_on_every_valid_transition() {
-            let rules = hierarchy_transitions();
             let valid_pairs = [
                 (HierarchyStatus::Draft, HierarchyStatus::Active),
                 (HierarchyStatus::Active, HierarchyStatus::Complete),
@@ -124,7 +103,7 @@ mod tests {
 
             for (from, to) in &valid_pairs {
                 for role in &wrong_roles {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?}", to), &r);
                 }
             }
@@ -134,26 +113,28 @@ mod tests {
 
         #[test]
         fn terminal_states_reject_all_outbound() {
-            let rules = hierarchy_transitions();
             for terminal in &TERMINAL {
                 for target in &ALL_STATES {
+                    if terminal == target {
+                        continue;
+                    }
                     for role in &ALL_ROLES {
-                        let r = validate_transition(*terminal, *target, *role, &rules);
+                        let r = terminal.validate_transition(*target, *role);
                         assert_invalid(format!("{:?}", terminal), format!("{:?}", target), &r);
                     }
                 }
             }
         }
 
-        // --- Self-transitions: always rejected ---
+        // --- Self-transitions: idempotent ---
 
         #[test]
-        fn self_transitions_rejected() {
-            let rules = hierarchy_transitions();
+        fn self_transitions_idempotent() {
             for state in &ALL_STATES {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*state, *state, *role, &rules);
-                    assert_invalid(format!("{:?}", state), format!("{:?}", state), &r);
+                    let r = state.validate_transition(*state, *role);
+                    assert_valid(format!("{:?}", state), format!("{:?}", state), &r);
+                    assert_eq!(r.unwrap(), Transition::Unchanged);
                 }
             }
         }
@@ -162,12 +143,7 @@ mod tests {
 
         #[test]
         fn skip_draft_to_complete_rejected() {
-            let r = validate_transition(
-                HierarchyStatus::Draft,
-                HierarchyStatus::Complete,
-                Role::Coordinator,
-                &hierarchy_transitions(),
-            );
+            let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Complete, Role::Coordinator);
             assert_invalid("Draft", "Complete", &r);
         }
 
@@ -175,12 +151,7 @@ mod tests {
 
         #[test]
         fn reverse_active_to_draft_rejected() {
-            let r = validate_transition(
-                HierarchyStatus::Active,
-                HierarchyStatus::Draft,
-                Role::Coordinator,
-                &hierarchy_transitions(),
-            );
+            let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Draft, Role::Coordinator);
             assert_invalid("Active", "Draft", &r);
         }
 
@@ -225,104 +196,62 @@ mod tests {
 
         #[test]
         fn valid_draft_to_ready() {
-            let r = validate_transition(
-                WorkStatus::Draft,
-                WorkStatus::Ready,
-                Role::Coordinator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::Draft.validate_transition(WorkStatus::Ready, Role::Coordinator);
             assert_valid("Draft", "Ready", &r);
         }
 
         #[test]
         fn valid_ready_to_in_progress() {
-            let r = validate_transition(
-                WorkStatus::Ready,
-                WorkStatus::InProgress,
-                Role::Coordinator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::Ready.validate_transition(WorkStatus::InProgress, Role::Coordinator);
             assert_valid("Ready", "InProgress", &r);
         }
 
         #[test]
         fn valid_in_progress_to_blocked_any_role() {
-            let rules = work_transitions();
             for role in &ALL_ROLES {
-                let r = validate_transition(WorkStatus::InProgress, WorkStatus::Blocked, *role, &rules);
+                let r = WorkStatus::InProgress.validate_transition(WorkStatus::Blocked, *role);
                 assert_valid("InProgress", format!("Blocked ({:?})", role), &r);
             }
         }
 
         #[test]
         fn valid_blocked_to_ready() {
-            let r = validate_transition(
-                WorkStatus::Blocked,
-                WorkStatus::Ready,
-                Role::Coordinator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::Blocked.validate_transition(WorkStatus::Ready, Role::Coordinator);
             assert_valid("Blocked", "Ready", &r);
         }
 
         #[test]
         fn valid_in_progress_to_in_review() {
-            let r = validate_transition(
-                WorkStatus::InProgress,
-                WorkStatus::InReview,
-                Role::Implementer,
-                &work_transitions(),
-            );
+            let r = WorkStatus::InProgress.validate_transition(WorkStatus::InReview, Role::Implementer);
             assert_valid("InProgress", "InReview", &r);
         }
 
         #[test]
         fn valid_in_review_to_in_progress() {
-            let r = validate_transition(
-                WorkStatus::InReview,
-                WorkStatus::InProgress,
-                Role::Coordinator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::InReview.validate_transition(WorkStatus::InProgress, Role::Coordinator);
             assert_valid("InReview", "InProgress", &r);
         }
 
         #[test]
         fn valid_in_review_to_integrated() {
-            let r = validate_transition(
-                WorkStatus::InReview,
-                WorkStatus::Integrated,
-                Role::Integrator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::InReview.validate_transition(WorkStatus::Integrated, Role::Integrator);
             assert_valid("InReview", "Integrated", &r);
         }
 
         #[test]
         fn valid_integrated_to_done_coordinator() {
-            let r = validate_transition(
-                WorkStatus::Integrated,
-                WorkStatus::Done,
-                Role::Coordinator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::Integrated.validate_transition(WorkStatus::Done, Role::Coordinator);
             assert_valid("Integrated", "Done (Coordinator)", &r);
         }
 
         #[test]
         fn valid_integrated_to_done_integrator() {
-            let r = validate_transition(
-                WorkStatus::Integrated,
-                WorkStatus::Done,
-                Role::Integrator,
-                &work_transitions(),
-            );
+            let r = WorkStatus::Integrated.validate_transition(WorkStatus::Done, Role::Integrator);
             assert_valid("Integrated", "Done (Integrator)", &r);
         }
 
         #[test]
         fn valid_abandoned_from_all_non_terminal() {
-            let rules = work_transitions();
             let non_terminal = [
                 WorkStatus::Draft,
                 WorkStatus::Ready,
@@ -332,7 +261,7 @@ mod tests {
                 WorkStatus::Integrated,
             ];
             for from in &non_terminal {
-                let r = validate_transition(*from, WorkStatus::Abandoned, Role::Coordinator, &rules);
+                let r = from.validate_transition(WorkStatus::Abandoned, Role::Coordinator);
                 assert_valid(format!("{:?}", from), "Abandoned", &r);
             }
         }
@@ -341,26 +270,28 @@ mod tests {
 
         #[test]
         fn terminal_states_reject_all_outbound() {
-            let rules = work_transitions();
             for terminal in &TERMINAL {
                 for target in &ALL_STATES {
+                    if terminal == target {
+                        continue;
+                    }
                     for role in &ALL_ROLES {
-                        let r = validate_transition(*terminal, *target, *role, &rules);
+                        let r = terminal.validate_transition(*target, *role);
                         assert_invalid(format!("{:?}", terminal), format!("{:?}", target), &r);
                     }
                 }
             }
         }
 
-        // --- Self-transitions: always rejected ---
+        // --- Self-transitions: idempotent ---
 
         #[test]
-        fn self_transitions_rejected() {
-            let rules = work_transitions();
+        fn self_transitions_idempotent() {
             for state in &ALL_STATES {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*state, *state, *role, &rules);
-                    assert_invalid(format!("{:?}", state), format!("{:?}", state), &r);
+                    let r = state.validate_transition(*state, *role);
+                    assert_valid(format!("{:?}", state), format!("{:?}", state), &r);
+                    assert_eq!(r.unwrap(), Transition::Unchanged);
                 }
             }
         }
@@ -369,61 +300,54 @@ mod tests {
 
         #[test]
         fn wrong_role_draft_to_ready() {
-            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkStatus::Draft, WorkStatus::Ready, role, &rules);
+                let r = WorkStatus::Draft.validate_transition(WorkStatus::Ready, role);
                 assert_invalid("Draft", format!("Ready ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_ready_to_in_progress() {
-            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkStatus::Ready, WorkStatus::InProgress, role, &rules);
+                let r = WorkStatus::Ready.validate_transition(WorkStatus::InProgress, role);
                 assert_invalid("Ready", format!("InProgress ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_in_progress_to_in_review() {
-            let rules = work_transitions();
             for role in [Role::Coordinator, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkStatus::InProgress, WorkStatus::InReview, role, &rules);
+                let r = WorkStatus::InProgress.validate_transition(WorkStatus::InReview, role);
                 assert_invalid("InProgress", format!("InReview ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_in_review_to_in_progress() {
-            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(WorkStatus::InReview, WorkStatus::InProgress, role, &rules);
+                let r = WorkStatus::InReview.validate_transition(WorkStatus::InProgress, role);
                 assert_invalid("InReview", format!("InProgress ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_in_review_to_integrated() {
-            let rules = work_transitions();
             for role in [Role::Coordinator, Role::Implementer, Role::Reviewer, Role::Researcher] {
-                let r = validate_transition(WorkStatus::InReview, WorkStatus::Integrated, role, &rules);
+                let r = WorkStatus::InReview.validate_transition(WorkStatus::Integrated, role);
                 assert_invalid("InReview", format!("Integrated ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_integrated_to_done() {
-            let rules = work_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher] {
-                let r = validate_transition(WorkStatus::Integrated, WorkStatus::Done, role, &rules);
+                let r = WorkStatus::Integrated.validate_transition(WorkStatus::Done, role);
                 assert_invalid("Integrated", format!("Done ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_abandoned() {
-            let rules = work_transitions();
             let non_terminal = [
                 WorkStatus::Draft,
                 WorkStatus::Ready,
@@ -434,7 +358,7 @@ mod tests {
             ];
             for from in &non_terminal {
                 for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                    let r = validate_transition(*from, WorkStatus::Abandoned, role, &rules);
+                    let r = from.validate_transition(WorkStatus::Abandoned, role);
                     assert_invalid(format!("{:?}", from), format!("Abandoned ({:?})", role), &r);
                 }
             }
@@ -444,7 +368,6 @@ mod tests {
 
         #[test]
         fn skip_states_rejected() {
-            let rules = work_transitions();
             let skip_pairs = [
                 (WorkStatus::Draft, WorkStatus::InProgress),
                 (WorkStatus::Draft, WorkStatus::InReview),
@@ -463,7 +386,7 @@ mod tests {
             ];
             for (from, to) in &skip_pairs {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
@@ -473,7 +396,6 @@ mod tests {
 
         #[test]
         fn reverse_directions_rejected() {
-            let rules = work_transitions();
             let reverse_pairs = [
                 (WorkStatus::Ready, WorkStatus::Draft),
                 (WorkStatus::InProgress, WorkStatus::Draft),
@@ -486,7 +408,7 @@ mod tests {
             ];
             for (from, to) in &reverse_pairs {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
@@ -496,7 +418,6 @@ mod tests {
 
         #[test]
         fn full_lifecycle_happy_path() {
-            let rules = work_transitions();
             let chain: Vec<(WorkStatus, WorkStatus, Role)> = vec![
                 (WorkStatus::Draft, WorkStatus::Ready, Role::Coordinator),
                 (WorkStatus::Ready, WorkStatus::InProgress, Role::Coordinator),
@@ -505,7 +426,7 @@ mod tests {
                 (WorkStatus::Integrated, WorkStatus::Done, Role::Coordinator),
             ];
             for (from, to, role) in &chain {
-                let r = validate_transition(*from, *to, *role, &rules);
+                let r = from.validate_transition(*to, *role);
                 assert_valid(format!("{:?}", from), format!("{:?}", to), &r);
             }
         }
@@ -550,7 +471,6 @@ mod tests {
 
         #[test]
         fn valid_happy_path() {
-            let rules = bundle_transitions();
             let chain = [
                 (BundleStatus::Proposed, BundleStatus::Triaged, Role::Coordinator),
                 (BundleStatus::Triaged, BundleStatus::Reviewed, Role::Coordinator),
@@ -559,65 +479,47 @@ mod tests {
                 (BundleStatus::Integrating, BundleStatus::Merged, Role::Integrator),
             ];
             for (from, to, role) in &chain {
-                let r = validate_transition(*from, *to, *role, &rules);
+                let r = from.validate_transition(*to, *role);
                 assert_valid(format!("{:?}", from), format!("{:?}", to), &r);
             }
         }
 
         #[test]
         fn valid_triaged_to_reviewed_by_reviewer() {
-            let r = validate_transition(
-                BundleStatus::Triaged,
-                BundleStatus::Reviewed,
-                Role::Reviewer,
-                &bundle_transitions(),
-            );
+            let r = BundleStatus::Triaged.validate_transition(BundleStatus::Reviewed, Role::Reviewer);
             assert_valid("Triaged", "Reviewed (Reviewer)", &r);
         }
 
         #[test]
         fn valid_integrating_to_rejected() {
-            let r = validate_transition(
-                BundleStatus::Integrating,
-                BundleStatus::Rejected,
-                Role::Integrator,
-                &bundle_transitions(),
-            );
+            let r = BundleStatus::Integrating.validate_transition(BundleStatus::Rejected, Role::Integrator);
             assert_valid("Integrating", "Rejected", &r);
         }
 
         #[test]
         fn valid_accepted_to_rejected() {
-            let r = validate_transition(
-                BundleStatus::Accepted,
-                BundleStatus::Rejected,
-                Role::Integrator,
-                &bundle_transitions(),
-            );
+            let r = BundleStatus::Accepted.validate_transition(BundleStatus::Rejected, Role::Integrator);
             assert_valid("Accepted", "Rejected (Integrator)", &r);
         }
 
         #[test]
         fn valid_early_rejection_coordinator() {
-            let rules = bundle_transitions();
             for from in [BundleStatus::Proposed, BundleStatus::Triaged, BundleStatus::Reviewed] {
-                let r = validate_transition(from, BundleStatus::Rejected, Role::Coordinator, &rules);
+                let r = from.validate_transition(BundleStatus::Rejected, Role::Coordinator);
                 assert_valid(format!("{:?}", from), "Rejected (Coordinator)", &r);
             }
         }
 
         #[test]
         fn valid_early_rejection_reviewer() {
-            let rules = bundle_transitions();
             for from in [BundleStatus::Proposed, BundleStatus::Triaged, BundleStatus::Reviewed] {
-                let r = validate_transition(from, BundleStatus::Rejected, Role::Reviewer, &rules);
+                let r = from.validate_transition(BundleStatus::Rejected, Role::Reviewer);
                 assert_valid(format!("{:?}", from), "Rejected (Reviewer)", &r);
             }
         }
 
         #[test]
         fn valid_superseded_from_all_non_terminal() {
-            let rules = bundle_transitions();
             let non_terminal = [
                 BundleStatus::Proposed,
                 BundleStatus::Triaged,
@@ -626,7 +528,7 @@ mod tests {
                 BundleStatus::Integrating,
             ];
             for from in &non_terminal {
-                let r = validate_transition(*from, BundleStatus::Superseded, Role::Coordinator, &rules);
+                let r = from.validate_transition(BundleStatus::Superseded, Role::Coordinator);
                 assert_valid(format!("{:?}", from), "Superseded", &r);
             }
         }
@@ -635,26 +537,28 @@ mod tests {
 
         #[test]
         fn terminal_states_reject_all_outbound() {
-            let rules = bundle_transitions();
             for terminal in &TERMINAL {
                 for target in &ALL_STATES {
+                    if terminal == target {
+                        continue;
+                    }
                     for role in &ALL_ROLES {
-                        let r = validate_transition(*terminal, *target, *role, &rules);
+                        let r = terminal.validate_transition(*target, *role);
                         assert_invalid(format!("{:?}", terminal), format!("{:?}", target), &r);
                     }
                 }
             }
         }
 
-        // --- Self-transitions: always rejected ---
+        // --- Self-transitions: idempotent ---
 
         #[test]
-        fn self_transitions_rejected() {
-            let rules = bundle_transitions();
+        fn self_transitions_idempotent() {
             for state in &ALL_STATES {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*state, *state, *role, &rules);
-                    assert_invalid(format!("{:?}", state), format!("{:?}", state), &r);
+                    let r = state.validate_transition(*state, *role);
+                    assert_valid(format!("{:?}", state), format!("{:?}", state), &r);
+                    assert_eq!(r.unwrap(), Transition::Unchanged);
                 }
             }
         }
@@ -663,53 +567,47 @@ mod tests {
 
         #[test]
         fn wrong_role_proposed_to_triaged() {
-            let rules = bundle_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(BundleStatus::Proposed, BundleStatus::Triaged, role, &rules);
+                let r = BundleStatus::Proposed.validate_transition(BundleStatus::Triaged, role);
                 assert_invalid("Proposed", format!("Triaged ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_triaged_to_reviewed() {
-            let rules = bundle_transitions();
             // Only Coordinator and Reviewer are valid
             for role in [Role::Implementer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(BundleStatus::Triaged, BundleStatus::Reviewed, role, &rules);
+                let r = BundleStatus::Triaged.validate_transition(BundleStatus::Reviewed, role);
                 assert_invalid("Triaged", format!("Reviewed ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_reviewed_to_accepted() {
-            let rules = bundle_transitions();
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(BundleStatus::Reviewed, BundleStatus::Accepted, role, &rules);
+                let r = BundleStatus::Reviewed.validate_transition(BundleStatus::Accepted, role);
                 assert_invalid("Reviewed", format!("Accepted ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_accepted_to_integrating() {
-            let rules = bundle_transitions();
             for role in [Role::Coordinator, Role::Implementer, Role::Reviewer, Role::Researcher] {
-                let r = validate_transition(BundleStatus::Accepted, BundleStatus::Integrating, role, &rules);
+                let r = BundleStatus::Accepted.validate_transition(BundleStatus::Integrating, role);
                 assert_invalid("Accepted", format!("Integrating ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_integrating_to_merged() {
-            let rules = bundle_transitions();
             for role in [Role::Coordinator, Role::Implementer, Role::Reviewer, Role::Researcher] {
-                let r = validate_transition(BundleStatus::Integrating, BundleStatus::Merged, role, &rules);
+                let r = BundleStatus::Integrating.validate_transition(BundleStatus::Merged, role);
                 assert_invalid("Integrating", format!("Merged ({:?})", role), &r);
             }
         }
 
         #[test]
         fn wrong_role_superseded() {
-            let rules = bundle_transitions();
             let non_terminal = [
                 BundleStatus::Proposed,
                 BundleStatus::Triaged,
@@ -719,7 +617,7 @@ mod tests {
             ];
             for from in &non_terminal {
                 for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                    let r = validate_transition(*from, BundleStatus::Superseded, role, &rules);
+                    let r = from.validate_transition(BundleStatus::Superseded, role);
                     assert_invalid(format!("{:?}", from), format!("Superseded ({:?})", role), &r);
                 }
             }
@@ -729,13 +627,12 @@ mod tests {
 
         #[test]
         fn skip_states_rejected() {
-            let rules = bundle_transitions();
             let skip_pairs = [
                 (BundleStatus::Proposed, BundleStatus::Reviewed),
                 (BundleStatus::Proposed, BundleStatus::Accepted),
                 (BundleStatus::Proposed, BundleStatus::Integrating),
                 (BundleStatus::Proposed, BundleStatus::Merged),
-                // Triaged→Accepted is now valid for Coordinator (advisory review bypass)
+                // Triaged->Accepted is now valid for Coordinator (advisory review bypass)
                 (BundleStatus::Triaged, BundleStatus::Integrating),
                 (BundleStatus::Triaged, BundleStatus::Merged),
                 (BundleStatus::Reviewed, BundleStatus::Integrating),
@@ -744,15 +641,15 @@ mod tests {
             ];
             for (from, to) in &skip_pairs {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
-            // Triaged→Accepted: valid for Coordinator only
-            let r = validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, Role::Coordinator, &rules);
+            // Triaged->Accepted: valid for Coordinator only
+            let r = BundleStatus::Triaged.validate_transition(BundleStatus::Accepted, Role::Coordinator);
             assert_valid("Triaged", "Accepted (Coordinator)", &r);
             for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
-                let r = validate_transition(BundleStatus::Triaged, BundleStatus::Accepted, role, &rules);
+                let r = BundleStatus::Triaged.validate_transition(BundleStatus::Accepted, role);
                 assert_invalid("Triaged", format!("Accepted ({:?})", role), &r);
             }
         }
@@ -761,7 +658,6 @@ mod tests {
 
         #[test]
         fn reverse_directions_rejected() {
-            let rules = bundle_transitions();
             let reverse_pairs = [
                 (BundleStatus::Triaged, BundleStatus::Proposed),
                 (BundleStatus::Reviewed, BundleStatus::Triaged),
@@ -776,7 +672,7 @@ mod tests {
             ];
             for (from, to) in &reverse_pairs {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
@@ -819,56 +715,31 @@ mod tests {
 
         #[test]
         fn valid_open_to_sealing() {
-            let r = validate_transition(
-                TickStatus::Open,
-                TickStatus::Sealing,
-                Role::Integrator,
-                &tick_transitions(),
-            );
+            let r = TickStatus::Open.validate_transition(TickStatus::Sealing, Role::Integrator);
             assert_valid("Open", "Sealing", &r);
         }
 
         #[test]
         fn valid_sealing_to_validating() {
-            let r = validate_transition(
-                TickStatus::Sealing,
-                TickStatus::Validating,
-                Role::Integrator,
-                &tick_transitions(),
-            );
+            let r = TickStatus::Sealing.validate_transition(TickStatus::Validating, Role::Integrator);
             assert_valid("Sealing", "Validating", &r);
         }
 
         #[test]
         fn valid_validating_to_published() {
-            let r = validate_transition(
-                TickStatus::Validating,
-                TickStatus::Published,
-                Role::Integrator,
-                &tick_transitions(),
-            );
+            let r = TickStatus::Validating.validate_transition(TickStatus::Published, Role::Integrator);
             assert_valid("Validating", "Published", &r);
         }
 
         #[test]
         fn valid_open_to_failed() {
-            let r = validate_transition(
-                TickStatus::Open,
-                TickStatus::Failed,
-                Role::Integrator,
-                &tick_transitions(),
-            );
+            let r = TickStatus::Open.validate_transition(TickStatus::Failed, Role::Integrator);
             assert_valid("Open", "Failed", &r);
         }
 
         #[test]
         fn valid_validating_to_failed() {
-            let r = validate_transition(
-                TickStatus::Validating,
-                TickStatus::Failed,
-                Role::Integrator,
-                &tick_transitions(),
-            );
+            let r = TickStatus::Validating.validate_transition(TickStatus::Failed, Role::Integrator);
             assert_valid("Validating", "Failed", &r);
         }
 
@@ -876,7 +747,6 @@ mod tests {
 
         #[test]
         fn wrong_role_on_every_valid_transition() {
-            let rules = tick_transitions();
             let valid_pairs = [
                 (TickStatus::Open, TickStatus::Sealing),
                 (TickStatus::Open, TickStatus::Failed),
@@ -889,7 +759,7 @@ mod tests {
 
             for (from, to) in &valid_pairs {
                 for role in &wrong_roles {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
@@ -899,26 +769,28 @@ mod tests {
 
         #[test]
         fn terminal_states_reject_all_outbound() {
-            let rules = tick_transitions();
             for terminal in &TERMINAL {
                 for target in &ALL_STATES {
+                    if terminal == target {
+                        continue;
+                    }
                     for role in &ALL_ROLES {
-                        let r = validate_transition(*terminal, *target, *role, &rules);
+                        let r = terminal.validate_transition(*target, *role);
                         assert_invalid(format!("{:?}", terminal), format!("{:?}", target), &r);
                     }
                 }
             }
         }
 
-        // --- Self-transitions: always rejected ---
+        // --- Self-transitions: idempotent ---
 
         #[test]
-        fn self_transitions_rejected() {
-            let rules = tick_transitions();
+        fn self_transitions_idempotent() {
             for state in &ALL_STATES {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*state, *state, *role, &rules);
-                    assert_invalid(format!("{:?}", state), format!("{:?}", state), &r);
+                    let r = state.validate_transition(*state, *role);
+                    assert_valid(format!("{:?}", state), format!("{:?}", state), &r);
+                    assert_eq!(r.unwrap(), Transition::Unchanged);
                 }
             }
         }
@@ -927,17 +799,16 @@ mod tests {
 
         #[test]
         fn skip_states_rejected() {
-            let rules = tick_transitions();
             let skip_pairs = [
                 (TickStatus::Open, TickStatus::Validating),
                 (TickStatus::Open, TickStatus::Published),
-                // Open→Failed is now valid (crash recovery path), removed from skip list
+                // Open->Failed is now valid (crash recovery path), removed from skip list
                 (TickStatus::Sealing, TickStatus::Published),
-                // B3: Sealing→Failed is now valid (merge failure path), removed from skip list
+                // B3: Sealing->Failed is now valid (merge failure path), removed from skip list
             ];
             for (from, to) in &skip_pairs {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
@@ -947,7 +818,6 @@ mod tests {
 
         #[test]
         fn reverse_directions_rejected() {
-            let rules = tick_transitions();
             let reverse_pairs = [
                 (TickStatus::Sealing, TickStatus::Open),
                 (TickStatus::Validating, TickStatus::Sealing),
@@ -955,7 +825,7 @@ mod tests {
             ];
             for (from, to) in &reverse_pairs {
                 for role in &ALL_ROLES {
-                    let r = validate_transition(*from, *to, *role, &rules);
+                    let r = from.validate_transition(*to, *role);
                     assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
                 }
             }
@@ -989,28 +859,26 @@ mod tests {
 
         #[test]
         fn full_lifecycle_happy_path() {
-            let rules = tick_transitions();
             let chain = [
                 (TickStatus::Open, TickStatus::Sealing),
                 (TickStatus::Sealing, TickStatus::Validating),
                 (TickStatus::Validating, TickStatus::Published),
             ];
             for (from, to) in &chain {
-                let r = validate_transition(*from, *to, Role::Integrator, &rules);
+                let r = from.validate_transition(*to, Role::Integrator);
                 assert_valid(format!("{:?}", from), format!("{:?}", to), &r);
             }
         }
 
         #[test]
         fn full_lifecycle_failure_path() {
-            let rules = tick_transitions();
             let chain = [
                 (TickStatus::Open, TickStatus::Sealing),
                 (TickStatus::Sealing, TickStatus::Validating),
                 (TickStatus::Validating, TickStatus::Failed),
             ];
             for (from, to) in &chain {
-                let r = validate_transition(*from, *to, Role::Integrator, &rules);
+                let r = from.validate_transition(*to, Role::Integrator);
                 assert_valid(format!("{:?}", from), format!("{:?}", to), &r);
             }
         }

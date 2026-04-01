@@ -61,9 +61,8 @@ impl Record for Spec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::plan::hierarchy_transitions;
     use crate::domain::role::Role;
-    use crate::domain::transition::validate_transition;
+    use crate::domain::transition::Transition;
     use taskstore::record::{IndexValue, Record};
 
     #[test]
@@ -114,91 +113,65 @@ mod tests {
         assert_eq!(spec.plan_id, plan_id);
     }
 
-    // Spec uses the same HierarchyStatus FSM as Plan — verify transitions work for Spec context
+    // Spec uses the same HierarchyStatus FSM as Plan - verify transitions work for Spec context
 
     #[test]
     fn test_spec_valid_transition_draft_to_active() {
-        let rules = hierarchy_transitions();
-        let result = validate_transition(
-            HierarchyStatus::Draft,
-            HierarchyStatus::Active,
-            Role::Coordinator,
-            &rules,
-        );
-        assert!(result.is_ok());
+        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Active, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Changed);
     }
 
     #[test]
     fn test_spec_valid_transition_active_to_complete() {
-        let rules = hierarchy_transitions();
-        let result = validate_transition(
-            HierarchyStatus::Active,
-            HierarchyStatus::Complete,
-            Role::Coordinator,
-            &rules,
-        );
-        assert!(result.is_ok());
+        let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Complete, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Changed);
     }
 
     #[test]
     fn test_spec_valid_transition_to_abandoned() {
-        let rules = hierarchy_transitions();
-        // From Draft
         assert!(
-            validate_transition(
-                HierarchyStatus::Draft,
-                HierarchyStatus::Abandoned,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_ok()
+            HierarchyStatus::Draft
+                .validate_transition(HierarchyStatus::Abandoned, Role::Coordinator)
+                .is_ok()
         );
-        // From Active
         assert!(
-            validate_transition(
-                HierarchyStatus::Active,
-                HierarchyStatus::Abandoned,
-                Role::Coordinator,
-                &rules,
-            )
-            .is_ok()
+            HierarchyStatus::Active
+                .validate_transition(HierarchyStatus::Abandoned, Role::Coordinator)
+                .is_ok()
         );
     }
 
     #[test]
     fn test_spec_invalid_transition_wrong_role() {
-        let rules = hierarchy_transitions();
-        let result = validate_transition(
-            HierarchyStatus::Draft,
-            HierarchyStatus::Active,
-            Role::Implementer,
-            &rules,
+        assert!(
+            HierarchyStatus::Draft
+                .validate_transition(HierarchyStatus::Active, Role::Implementer)
+                .is_err()
         );
-        assert!(result.is_err());
     }
 
     #[test]
     fn test_spec_invalid_transition_reverse() {
-        let rules = hierarchy_transitions();
-        let result = validate_transition(
-            HierarchyStatus::Complete,
-            HierarchyStatus::Active,
-            Role::Coordinator,
-            &rules,
+        assert!(
+            HierarchyStatus::Complete
+                .validate_transition(HierarchyStatus::Active, Role::Coordinator)
+                .is_err()
         );
-        assert!(result.is_err());
     }
 
     #[test]
     fn test_spec_invalid_transition_skip_state() {
-        let rules = hierarchy_transitions();
-        let result = validate_transition(
-            HierarchyStatus::Draft,
-            HierarchyStatus::Complete,
-            Role::Coordinator,
-            &rules,
+        assert!(
+            HierarchyStatus::Draft
+                .validate_transition(HierarchyStatus::Complete, Role::Coordinator)
+                .is_err()
         );
-        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_spec_idempotent_self_transition() {
+        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Draft, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Unchanged);
     }
 
     // Record trait tests
