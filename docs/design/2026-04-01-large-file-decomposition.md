@@ -2,8 +2,8 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-01
-**Status:** Draft
-**Review Passes Completed:** 1/5
+**Status:** Approved
+**Review Passes Completed:** 5/5
 
 ## Summary
 
@@ -134,7 +134,7 @@ agents/coordinator/
   generation/
     mod.rs            # re-exports
     footer.rs         # build_generation_footer()
-    fsm_footer.rs     # build_fsm_footer()
+    fsm.rs            # build_fsm_footer() (FSM-state-specific context footers)
     validation.rs     # find_pending_draft_for_validation(), validation cap logic
   phase/
     mod.rs            # re-exports
@@ -149,43 +149,49 @@ agents/coordinator/
     prune.rs          # prune_independent_deps()
 ```
 
-#### `src/tests/` (from `integration_tests.rs`, 3,705 lines)
+#### `src/tests/` (consolidating `integration_tests.rs` and `fsm_correctness_tests.rs`)
+
+Both source files are `#[cfg(test)]` modules with no production callers. There is no backwards-compatibility reason to preserve their names. Grouping them under a single `tests/` parent separates test code from production code at the directory level and reduces `lib.rs` to a single declaration:
+
+```rust
+// lib.rs: two lines become one
+mod tests;
+```
+
+`tests/fsm_correctness_tests.rs` defines its own `dispatch_ok/dispatch_err` locally - it does NOT import from `tests/integration_tests.rs`. The two subdirectories are fully independent and can be populated in either order.
 
 ```
 tests/
-  mod.rs              # submodule declarations
-  fixtures.rs         # test_stores(), test_agent_logger(), dispatch_ok/err, create_test_hierarchy()
-  hierarchy.rs        # hierarchy creation & lifecycle (tests 1-2)
-  learning.rs         # learning auto-promotion, contradiction (tests 3-4)
-  pool.rs             # pool exhaustion, terminal cleanup (tests 5-6)
-  coordinator.rs      # coordinator state, goals, generation progression (tests 7, 16, 18, 27-30)
-  tick.rs             # tick crash recovery, lifecycle (tests 8, 20)
-  locks.rs            # lock lifecycle (test 10)
-  context.rs          # role filtering, path sandboxing, role inference (tests 9, 11-12)
-  fsm.rs              # FSM enforcement (test 13)
-  sessions.rs         # multi-agent coexistence, pause/resume (tests 14-15, 17)
-  config.rs           # strategy knobs, defaults, dispatch routes (tests 19-20)
-  pipeline.rs         # full pipeline end-to-end (tests 21-23)
-  executor.rs         # coordinator-via-executor integration (tests 24-26)
-  cycling.rs          # FSM cycling, dependency chains, duplicate rejection (tests 31-34)
-  errors.rs           # error handling, lifeguard, max requeries (tests 35-37, 41-43)
-  advisory.rs         # advisory review flows (tests 38-40)
-  preformed.rs        # preformed plan injection tests (tests 44-46)
-```
-
-#### `src/fsm_tests/` (from `fsm_correctness_tests.rs`, 2,122 lines)
-
-```
-fsm_tests/
-  mod.rs              # submodule declarations
-  common.rs           # ALL_ROLES, assert_valid/assert_invalid macros, shared setup
-  hierarchy.rs        # HierarchyStatus FSM (10 tests)
-  work.rs             # WorkStatus FSM (26+ tests)
-  bundle.rs           # BundleStatus FSM (21+ tests)
-  tick.rs             # TickStatus FSM (17+ tests)
-  lock.rs             # LockStatus FSM (15 tests)
-  agent_status.rs     # AgentStatus FSM (14+ tests)
-  dispatch.rs         # IPC dispatch lifecycle tests (9 tests)
+  mod.rs              # mod integration; mod fsm;
+  integration/
+    mod.rs            # submodule declarations
+    fixtures.rs       # test_stores(), test_agent_logger(), dispatch_ok/err, create_test_hierarchy()
+    hierarchy.rs      # hierarchy creation & lifecycle (tests 1-2)
+    learning.rs       # learning auto-promotion, contradiction (tests 3-4)
+    pool.rs           # pool exhaustion, terminal cleanup (tests 5-6)
+    coordinator.rs    # coordinator state, goals, generation progression (tests 7, 16, 18, 27-30)
+    tick.rs           # tick crash recovery, lifecycle (tests 8, 20)
+    locks.rs          # lock lifecycle (test 10)
+    context.rs        # role filtering, path sandboxing, role inference (tests 9, 11-12)
+    fsm.rs            # FSM enforcement (test 13)
+    sessions.rs       # multi-agent coexistence, pause/resume (tests 14-15, 17)
+    config.rs         # strategy knobs, defaults, dispatch routes (tests 19-20)
+    pipeline.rs       # full pipeline end-to-end (tests 21-23)
+    executor.rs       # coordinator-via-executor integration (tests 24-26)
+    cycling.rs        # FSM cycling, dependency chains, duplicate rejection (tests 31-34)
+    errors.rs         # error handling, lifeguard, max requeries (tests 35-37, 41-43)
+    advisory.rs       # advisory review flows (tests 38-40)
+    preformed.rs      # preformed plan injection tests (tests 44-46)
+  fsm/
+    mod.rs            # submodule declarations
+    common.rs         # ALL_ROLES, assert_valid/assert_invalid macros, shared setup
+    hierarchy.rs      # HierarchyStatus FSM (10 tests)
+    work.rs           # WorkStatus FSM (26+ tests)
+    bundle.rs         # BundleStatus FSM (21+ tests)
+    tick.rs           # TickStatus FSM (17+ tests)
+    lock.rs           # LockStatus FSM (15 tests)
+    status.rs         # AgentStatus FSM (14+ tests)
+    dispatch.rs       # IPC dispatch lifecycle tests (9 tests)
 ```
 
 #### `src/tui/run/` (from `src/tui/run.rs`, 2,552 lines)
@@ -216,12 +222,12 @@ agents/generation/
 agents/integrator/
   mod.rs              # IntegratorAgent, Agent impl re-exports
   core.rs             # IntegratorAgent struct, new(), run() main loop
-  tick_state.rs       # latest_published_tick_id(), next_tick_number(), has_tick_in_progress()
+  state.rs            # latest_published_tick_id(), next_tick_number(), has_tick_in_progress()
   recovery.rs         # recover_stuck_ticks(), reset_work_after_bundle_rejection()
   cycle.rs            # IntegratorCycleResult, run_cycle() (~700 lines)
   integration.rs      # merge_bundle_branches(), tick/bundle state transitions, work updates
   validation.rs       # effective_validation_commands(), run_validation_commands()
-  git_ops.rs          # get_git_head_sha()
+  git.rs              # get_git_head_sha()
 ```
 
 #### `src/agents/implementer/` (from 2,048 lines)
@@ -242,18 +248,17 @@ agents/implementer/
 #### `src/agents/types/` (from `agents/mod.rs`, 1,805 lines)
 
 ```
-agents/mod.rs         # pub trait Agent, re-exports from submodules
+agents/mod.rs         # pub trait Agent, AgentContext struct+impl, re-exports from submodules
 agents/types/
   mod.rs              # re-exports
-  agent_type.rs       # AgentType enum, default_role(), is_thinking_plane()
+  kind.rs             # AgentType enum, default_role(), is_thinking_plane()
   status.rs           # AgentStatus enum, can_transition_to(), is_terminal()
   session.rs          # AgentSession struct, Record impl
   action.rs           # AgentAction enum (40+ variants)
 agents/event.rs       # AgentEvent enum
-agents/context_state.rs  # AgentContext struct, impl (extracted from agents/mod.rs)
 ```
 
-Note: The existing `agents/context.rs` (1,691 lines) is a different file - the `ContextBuilder` and token budget system.
+`AgentContext` stays in `agents/mod.rs` - it is the central shared-state struct referenced across the entire agents subsystem and belongs at the root. Note: the existing `agents/context.rs` (1,691 lines) is a different concept - the `ContextBuilder` and token budget system.
 
 #### `src/agents/context/` (from `agents/context.rs`, 1,691 lines)
 
@@ -304,6 +309,34 @@ daemon/handlers/bundle/
     fsm.rs            # FSM role-based transition validation
 ```
 
+### Re-export Requirement for Moved Public Types
+
+When types move from `agents/mod.rs` to submodules (`types/kind.rs`, `types/status.rs`, `types/session.rs`, `types/action.rs`, `event.rs`), every existing caller continues to use `crate::agents::AgentType` etc. This requires explicit re-exports in `agents/mod.rs`:
+
+```rust
+// agents/mod.rs
+mod event;
+mod types;
+
+pub use event::AgentEvent;
+pub use types::{AgentAction, AgentSession, AgentStatus, AgentType};
+```
+
+Failing to add these re-exports will break every file that imports these types. Add the `pub use` lines before extracting each type to confirm the compiler accepts the indirection.
+
+### Validators Subdirectory - Flat vs Nested
+
+The `daemon/handlers/bundle/validators/` subdirectory contains 4 files that may each be only 30-60 lines (`staleness.rs`, `precondition.rs`, `policy.rs`, `fsm.rs`). A single `bundle/validate.rs` (~200 lines) is a valid alternative that avoids an extra nesting level.
+
+**Use a subdirectory** if any individual validator file exceeds 200 lines.
+**Use a flat `validate.rs`** if the combined validation logic is under 300 lines.
+
+Measure the actual line count during Phase 3 and decide then. The architecture described here is the nested form; if flat turns out cleaner, use that instead.
+
+### Phase Ordering Constraint
+
+`agents/context.rs` must be converted to `agents/context/` (the ContextBuilder split) **before** `agents/mod.rs` is split into `agents/types/`. Both phases produce files in the `agents/` directory, and doing `mod.rs` first risks naming confusion between `AgentContext` (which stays in `mod.rs`) and `ContextBuilder` (moving to `context/mod.rs`). No circular dependency exists - the ordering is for human clarity, not compiler correctness.
+
 ### Visibility Strategy
 
 Consistent with the handlers decomposition:
@@ -316,49 +349,73 @@ Consistent with the handlers decomposition:
 ### Implementation Plan
 
 **Phase 0: Test files (zero production risk)**
-1. Move `integration_tests.rs` content into `src/tests/` submodule - split by topic, extract `fixtures.rs`
-2. Move `fsm_correctness_tests.rs` content into `src/fsm_tests/` submodule - split by FSM
-3. Verify `otto ci` passes
+1. Create `src/tests/mod.rs` with `mod integration;` and `mod fsm;`
+2. Update `lib.rs`: replace `mod integration_tests; mod fsm_correctness_tests;` with `mod tests;`
+3. Move `integration_tests.rs` content into `src/tests/integration/` - create `mod.rs`, extract `fixtures.rs`, split remaining tests by topic
+4. Move `fsm_correctness_tests.rs` content into `src/tests/fsm/` - create `mod.rs`, extract `common.rs`, split by FSM
+5. Verify `otto ci` passes
 
 **Phase 1: executor.rs**
+0. Pre-check: `grep -n "\.spawn\|tokio::spawn" src/agents/executor.rs` - if spawn calls hold references, plan to use `Arc<ExecutionContext>` instead of `ExecutionContext<'a>`
 1. Create `agents/executor/` directory, rename `executor.rs` to `executor/mod.rs`
 2. Extract `ActionResult` to `result.rs`
-3. Extract `ExecutionContext<'a>` to `context.rs`
-4. Extract lifecycle functions to `lifecycle.rs`
+3. Extract `ExecutionContext<'a>` (or `Arc<ExecutionContext>`) to `context.rs`
+4. Extract lifecycle functions to `lifecycle.rs` (`run_agent_task`, `run_agent_loop`)
 5. Extract utilities to `util.rs` and `llm.rs`
-6. Create `action/mod.rs` with the `execute_action()` dispatcher
-7. Extract each action domain to its `action/*.rs` file (tool, file, work, bundle, record, lock, learning, validation)
-8. Verify `otto ci` at each step
+6. Create `action/mod.rs` with the `execute_action()` dispatcher shell
+7. Extract each action domain to its `action/*.rs` file (tool, file, work, bundle, record, lock, learning, validation) - one per commit
+8. Verify `otto ci` after each action file extraction
 
 **Phase 2: coordinator.rs**
 1. Scaffold `agents/coordinator/` directory
-2. Extract `util.rs` (pure helpers, no deps)
-3. Extract `state/` submodule (persistence, cleanup, then fsm)
-4. Extract `context/` submodule (learning first, then summary)
-5. Extract `generation/` submodule
-6. Extract `phase/` submodule (gate extracted from fsm.rs)
-7. Extract `dependencies/` submodule
-8. Extract `loop.rs`
-9. Verify `otto ci` at each step
+2. Extract `util.rs` (pure helpers, no cross-module deps)
+3. Extract `state/persistence.rs` and `state/cleanup.rs`
+4. Extract `phase/` submodule files (completion, activation, status, tools)
+5. Extract `phase/gate.rs` from `state/fsm.rs` - wire call direction `fsm.rs -> phase/gate.rs`
+6. Extract `state/fsm.rs` (now calls into phase/gate)
+7. Extract `context/learning.rs` then `context/summary.rs`
+8. Extract `generation/footer.rs`, `generation/fsm.rs`, `generation/validation.rs`
+9. Extract `dependencies/resolve.rs` and `dependencies/prune.rs`
+10. Extract `loop.rs`
+11. Verify `otto ci` at each step
 
-**Phase 3: Remaining files (largest-to-smallest)**
-- `tui/run.rs` - terminal, events, ipc, ui
-- `agents/generation.rs` - prompts, hierarchy, validation, coverage
-- `agents/integrator.rs` - core, tick_state, recovery, cycle, integration, validation, git_ops
-- `agents/implementer.rs` - llm, parsing, errors, summary, lifecycle, iteration, events, output
-- `agents/mod.rs` - types/ subdir + event.rs + context_state.rs
-- `agents/context.rs` - learning, token, budget, assembled, builder, section
-- `cli/dispatch.rs` - runner + mappers/ subdir
-- `daemon/handlers/bundle.rs` - CRUD files + validators/ subdir
+**Phase 3: Remaining files**
 
-Each file is an independent extraction: scaffold directory, copy `mod.rs`, extract one file at a time, verify CI.
+Process each independently: scaffold directory, create `mod.rs`, extract one file at a time, verify CI.
+
+Order (largest-to-smallest, with ordering constraint applied):
+
+1. `tui/run.rs` (2,552) - terminal, events, ipc, ui
+2. `agents/generation.rs` (2,293) - prompts, hierarchy, validation, coverage
+3. `agents/integrator.rs` (2,163) - core, state, recovery, cycle, integration, validation, git
+4. `agents/implementer.rs` (2,048) - llm, parsing, errors, summary, lifecycle, iteration, events, output
+5. `agents/context.rs` (1,691) - learning, token, budget, assembled, builder, section (**before mod.rs**)
+6. `agents/mod.rs` (1,805) - types/ subdir + event.rs; add `pub use` re-exports before each type moves
+7. `cli/dispatch.rs` (1,591) - runner + mappers/ subdir
+8. `daemon/handlers/bundle.rs` (1,559) - CRUD files + validate.rs or validators/ subdir (decide based on line count)
+
+### Call Direction: coordinator state/fsm.rs and phase/gate.rs
+
+`check_fsm_transition()` (689 lines) in `coordinator/state/fsm.rs` contains embedded phase gate logic. The split is:
+
+1. `state/fsm.rs` calls `phase::gate::check_phase_gate(ctx, state)` as a sub-call
+2. `phase/gate.rs` contains the extracted gate logic as a standalone function
+3. The direction is always `fsm.rs` -> `phase/gate.rs` - never the reverse
+
+This avoids circular dependencies. `state/` and `phase/` are siblings under `coordinator/`, so the import is:
+```rust
+// state/fsm.rs
+use super::super::phase::gate::check_phase_gate;
+// or: use crate::agents::coordinator::phase::gate::check_phase_gate;
+```
 
 ### Migration Safety
 
 - Every extraction produces a standalone passing commit
 - No file is touched until its predecessor passes `otto ci`
-- The `run_cycle()` 700-line function in `integrator.rs` is left intact in `cycle.rs` - it's dense orchestration that needs a follow-up design doc if further decomposition is warranted
+- The `run_cycle()` 700-line function in `integrator.rs` is left intact in `cycle.rs` - it remains dense orchestration; further decomposition is a separate work item
 - `check_fsm_transition()` in coordinator: extract the phase gate logic into `phase/gate.rs` but leave the core FSM logic in `state/fsm.rs` intact - do not refactor the logic itself
+- `lib.rs` requires a one-line change in Phase 0: two `mod` declarations become one (`mod tests;`)
 
 ## Alternatives Considered
 
@@ -416,14 +473,16 @@ Single branch (`refactor/large-file-decomposition`). Phases 0-3 merge sequential
 | Test helper visibility across sibling submodules | Medium | Low | Place shared helpers in #[cfg(test)] pub(crate) mod tests in mod.rs |
 | check_fsm_transition split breaks coordinator correctness | Medium | High | Move code only; extract phase gate as a called helper, do not rewrite logic |
 | Merge conflicts with concurrent agent work during refactor | Low | Medium | Run Phase 0-1 on a quiet window; coordinate with active work items |
+| ExecutionContext<'a> rejected by borrow checker due to async task spawning | Low | High | Check executor.rs for any spawn() calls holding references before committing to <'a>; if present, use Arc<ExecutionContext> instead |
+| Re-exports missing from agents/mod.rs after type extraction | Medium | High | Immediately after each type moves to a submodule, add pub use in mod.rs and run cargo check before proceeding |
 | git blame history loss | Low | Low | Accepted cost; use git log --all -- <original path> to recover |
 
 ## Open Questions
 
 - [ ] Should `run_cycle()` in `integrator/cycle.rs` (~700 lines) be further decomposed in this pass, or deferred to a follow-up?
 - [ ] Should `check_fsm_transition()` in `coordinator/state/fsm.rs` (~689 lines) have the phase gate sub-logic extracted in this pass, or is moving the file sufficient?
-- [ ] For the `agents/mod.rs` split, should `AgentContext` move to `agents/context_state.rs` (alongside the file) or to `agents/types/context.rs` (alongside the other types)?
-- [ ] `integration_tests.rs` declares test helpers used by `fsm_correctness_tests.rs` - need to verify the dependency direction before splitting.
+- [x] ~~`integration_tests.rs` may share helpers with `fsm_correctness_tests.rs` - verify before splitting.~~ Confirmed independent: `fsm_correctness_tests.rs` defines its own `dispatch_ok/dispatch_err` locally. No cross-dependency. Both move to `tests/integration/` and `tests/fsm/` under a common parent.
+- [ ] Does `execute_action()` in `executor.rs` spawn async tasks that hold references? If yes, `ExecutionContext<'a>` requires `Arc<ExecutionContext>` rather than a borrow.
 
 ## References
 

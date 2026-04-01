@@ -9,7 +9,6 @@ set -euo pipefail
 #   bin/e2e.sh --target rust-version  # explicit Rust target
 
 LOOPR_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET="/tmp/loopr-e2e-target"
 DAEMON_PID=""
 
 # Parse args
@@ -20,6 +19,12 @@ while [[ $# -gt 0 ]]; do
         *) err "Unknown argument: $1"; exit 1 ;;
     esac
 done
+
+# Each run gets a timestamped subdirectory under the target name
+RUN_TS="$(date +%Y%m%d-%H%M%S)"
+TARGET_BASE="/tmp/loopr-e2e/${E2E_TARGET}"
+TARGET="${TARGET_BASE}/${RUN_TS}"
+LATEST_LINK="${TARGET_BASE}/latest"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -89,12 +94,11 @@ ok "Binary: ${LOOPR}"
 # Step 2: Scaffold target (delegated to target definition)
 ###############################################################################
 
-if [[ -d "${TARGET}" ]]; then
-    log "Cleaning previous target..."
-    (cd "${TARGET}" && git worktree prune 2>/dev/null || true)
-    rkvr rmrf "${TARGET}"
-fi
+mkdir -p "${TARGET}"
+ln -sfn "${TARGET}" "${LATEST_LINK}"
 
+log "Run directory: ${TARGET}"
+log "Latest link:   ${LATEST_LINK}"
 log "Scaffolding target at ${TARGET}..."
 scaffold
 
