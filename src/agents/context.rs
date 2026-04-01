@@ -241,6 +241,9 @@ pub struct ContextBuilder<'a> {
     // Optional sections
     bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, touched_paths)
     bundle_diff: Option<String>,
+    bundle_noop_reason: Option<String>,
+    /// For noop bundles: file contents read from repo for Reviewer verification.
+    noop_file_contents: Option<Vec<(String, String)>>,
     tools: Vec<String>,
     previous_summary: Option<String>,
     staleness_note: Option<String>,
@@ -277,6 +280,8 @@ impl<'a> ContextBuilder<'a> {
             phase_id: None,
             bundle_info: None,
             bundle_diff: None,
+            bundle_noop_reason: None,
+            noop_file_contents: None,
             tools: Vec::new(),
             previous_summary: None,
             staleness_note: None,
@@ -350,7 +355,7 @@ impl<'a> ContextBuilder<'a> {
     /// Load hierarchy from a bundle ID: Bundle -> Work -> Phase -> Spec -> Plan.
     pub fn load_bundle_hierarchy(mut self, bundle_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_bundle_hierarchy(bundle_id={})", bundle_id);
-        let (bid, claims, touched_paths, work_id) = {
+        let (bid, claims, touched_paths, work_id, noop_reason) = {
             let guard = self.stores.read_bundles()?;
             let bundle = guard
                 .get(bundle_id)
@@ -360,28 +365,51 @@ impl<'a> ContextBuilder<'a> {
                 bundle.claims.clone(),
                 bundle.touched_paths.clone(),
                 bundle.work_id.clone(),
+                bundle.noop_reason.clone(),
             )
         };
 
-        self.bundle_info = Some((bid, claims, touched_paths));
+        self.bundle_info = Some((bid, claims, touched_paths.clone()));
+        self.bundle_noop_reason = noop_reason.clone();
 
-        // Load the git diff from the worktree branch so the reviewer can see actual code
-        let diff = {
-            let branch = format!("agent/{}", work_id);
+        if noop_reason.is_some() {
+            // Noop bundle: skip git diff (no branch exists). Instead, read
+            // relevant files from the repo so the Reviewer can verify the
+            // codebase state against acceptance criteria.
             let repo_path = &self.stores.config.project.repo_path;
-            let output = std::process::Command::new("git")
-                .args(["diff", "HEAD", &branch, "--stat", "-p"])
-                .current_dir(repo_path)
-                .output();
-            match output {
-                Ok(o) if o.status.success() => {
-                    let d = String::from_utf8_lossy(&o.stdout).to_string();
-                    if d.trim().is_empty() { None } else { Some(d) }
+            let resource_tags = {
+                let works = self.stores.read_works()?;
+                works.get(&work_id).map(|w| w.resource_tags.clone()).unwrap_or_default()
+            };
+            // Prefer touched_paths (files the Implementer verified) over resource_tags
+            let paths_to_read: Vec<String> = if touched_paths.is_empty() { resource_tags } else { touched_paths };
+            let mut file_contents = Vec::new();
+            for path in &paths_to_read {
+                let full_path = repo_path.join(path);
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    file_contents.push((path.clone(), content));
                 }
-                _ => None,
             }
-        };
-        self.bundle_diff = diff;
+            self.noop_file_contents = if file_contents.is_empty() { None } else { Some(file_contents) };
+        } else {
+            // Normal bundle: load the git diff from the worktree branch
+            let diff = {
+                let branch = format!("agent/{}", work_id);
+                let repo_path = &self.stores.config.project.repo_path;
+                let output = std::process::Command::new("git")
+                    .args(["diff", "HEAD", &branch, "--stat", "-p"])
+                    .current_dir(repo_path)
+                    .output();
+                match output {
+                    Ok(o) if o.status.success() => {
+                        let d = String::from_utf8_lossy(&o.stdout).to_string();
+                        if d.trim().is_empty() { None } else { Some(d) }
+                    }
+                    _ => None,
+                }
+            };
+            self.bundle_diff = diff;
+        }
 
         self.load_work_hierarchy(&work_id)
     }
@@ -537,8 +565,30 @@ impl<'a> ContextBuilder<'a> {
             }
             bundle_sec.push('\n');
 
-            // Include the actual code diff so the reviewer can see the changes
-            if let Some(ref diff) = self.bundle_diff {
+            // Include either code diff (normal) or noop directive + file contents
+            if let Some(ref reason) = self.bundle_noop_reason {
+                bundle_sec.push_str("**NO-OP BUNDLE** - The Implementer made no code changes.\n\n");
+                bundle_sec.push_str(&format!("**Implementer's claim:** {}\n\n", reason));
+                bundle_sec.push_str(
+                    "**Your task:** Do NOT look for a diff. Instead, use the file contents \
+                     provided below and verify the codebase's CURRENT STATE against every \
+                     acceptance criterion. If the criteria are already satisfied, approve. \
+                     If not, reject with specifics about what is missing.\n\n",
+                );
+                if let Some(ref files) = self.noop_file_contents {
+                    bundle_sec.push_str("**Current File Contents:**\n\n");
+                    for (path, content) in files {
+                        bundle_sec.push_str(&format!("### `{}`\n```\n", path));
+                        if content.len() > 4000 {
+                            bundle_sec.push_str(&content[..4000]);
+                            bundle_sec.push_str("\n... [truncated]\n");
+                        } else {
+                            bundle_sec.push_str(content);
+                        }
+                        bundle_sec.push_str("```\n\n");
+                    }
+                }
+            } else if let Some(ref diff) = self.bundle_diff {
                 bundle_sec.push_str("**Code Changes:**\n```diff\n");
                 // Truncate if too large
                 if diff.len() > 8000 {
@@ -1564,6 +1614,78 @@ mod tests {
         assert!(
             !assembled.user_message.contains("## Work Status Transitions"),
             "Guidance should not appear when with_guidance() is not called"
+        );
+    }
+
+    #[test]
+    fn test_context_builder_noop_bundle_injects_directive() {
+        let dir = TestDir::new("loopr-ctx-noop");
+        let (stores, wi_id) = setup_stores(&dir);
+
+        // Create a noop bundle with noop_reason set
+        let mut bundle = Bundle::new(
+            wi_id.clone(),
+            None,
+            String::new(), // empty branch for noop
+            vec!["criteria already met".into()],
+        );
+        bundle.status = BundleStatus::Triaged;
+        bundle.noop_reason = Some("Phase 1 already added Tailwind styling".to_string());
+        bundle.touched_paths = vec!["src/main.rs".into()];
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        // Create the file so the context builder can read it
+        let repo_path = &stores.config.project.repo_path;
+        std::fs::create_dir_all(repo_path.join("src")).unwrap();
+        std::fs::write(repo_path.join("src/main.rs"), "fn main() {}").unwrap();
+
+        let builder = ContextBuilder::new(&stores, Role::Reviewer)
+            .load_bundle_hierarchy(&bundle_id)
+            .unwrap();
+
+        assert!(builder.bundle_noop_reason.is_some());
+        assert!(builder.bundle_diff.is_none(), "noop bundle should not have a diff");
+        assert!(
+            builder.noop_file_contents.is_some(),
+            "noop bundle should have file contents"
+        );
+
+        let assembled = builder.build("You are a Reviewer.").unwrap();
+        assert!(
+            assembled.user_message.contains("NO-OP BUNDLE"),
+            "should contain noop directive"
+        );
+        assert!(
+            assembled.user_message.contains("Phase 1 already added Tailwind"),
+            "should contain noop reason"
+        );
+        assert!(
+            assembled.user_message.contains("fn main()"),
+            "should contain file contents from repo"
+        );
+        assert!(
+            !assembled.user_message.contains("Code Changes"),
+            "should NOT contain diff section"
+        );
+    }
+
+    #[test]
+    fn test_context_builder_normal_bundle_no_noop_directive() {
+        let dir = TestDir::new("loopr-ctx-nonnoop");
+        let (stores, _, bundle_id) = setup_stores_with_bundle(&dir);
+
+        let builder = ContextBuilder::new(&stores, Role::Reviewer)
+            .load_bundle_hierarchy(&bundle_id)
+            .unwrap();
+
+        assert!(builder.bundle_noop_reason.is_none());
+        assert!(builder.noop_file_contents.is_none());
+
+        let assembled = builder.build("You are a Reviewer.").unwrap();
+        assert!(
+            !assembled.user_message.contains("NO-OP BUNDLE"),
+            "normal bundle should NOT contain noop directive"
         );
     }
 }

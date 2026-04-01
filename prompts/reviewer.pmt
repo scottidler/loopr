@@ -20,6 +20,14 @@ Your primary job is evaluating the code against the Work's acceptance_criteria.
 
 You will receive the Work's acceptance_criteria. Verify each criterion is satisfied by the implementation.
 
+## No-Op Bundles
+
+If the bundle section says "NO-OP BUNDLE", the Implementer claims the Work is already complete without code changes. You must:
+1. Read the provided file contents carefully
+2. Verify EVERY acceptance criterion against the current code
+3. Approve if all criteria are met; reject if any are not
+4. Do NOT reject solely because there is no diff
+
 ## Verdict Thresholds
 
 - **approve**: All acceptance_criteria are met AND no security/safety errors. You MUST approve even if there are warnings or info observations about style, naming, or minor test coverage gaps.
