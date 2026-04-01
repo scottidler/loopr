@@ -4,6 +4,15 @@ use crate::error::LooprError;
 
 use super::role::Role;
 
+/// Result of a validated state transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transition {
+    /// The transition is valid and moves to a new state.
+    Changed,
+    /// The target state equals the current state (idempotent no-op).
+    Unchanged,
+}
+
 #[derive(Debug, Clone)]
 pub struct TransitionRule<S> {
     pub from: S,
@@ -17,6 +26,10 @@ pub fn validate_transition<S: PartialEq + Copy + Debug>(
     role: Role,
     rules: &[TransitionRule<S>],
 ) -> crate::error::Result<()> {
+    // Idempotent: requesting the current state is always a no-op success.
+    if current == target {
+        return Ok(());
+    }
     let allowed = rules
         .iter()
         .any(|r| r.from == current && r.to == target && r.role.is_none_or(|required| required == role));
@@ -93,6 +106,18 @@ mod tests {
         let rules = test_rules();
         let result = validate_transition(TestState::C, TestState::A, Role::Coordinator, &rules);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_idempotent_transition_always_ok() {
+        let rules = test_rules();
+        // Same state -> same state is always OK regardless of role
+        for role in [Role::Coordinator, Role::Integrator, Role::Implementer, Role::Reviewer] {
+            for state in [TestState::A, TestState::B, TestState::C] {
+                let result = validate_transition(state, state, role, &rules);
+                assert!(result.is_ok(), "Expected {:?}->{:?} to succeed for {:?}", state, state, role);
+            }
+        }
     }
 
     #[test]
