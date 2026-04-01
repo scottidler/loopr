@@ -1,0 +1,61 @@
+goal: "Build a Python command-line todo application. The app should support: add, list, done, and delete commands. Persist todos to a JSON file. Include proper error handling and tests using pytest."
+plan:
+  title: "Python Todo App"
+  description: "Build a Python CLI todo app with CRUD operations, JSON persistence, and pytest tests."
+  spec:
+    title: "Todo App Implementation"
+    description: "Core todo module with CLI and tests"
+    phases:
+      - title: "Python todo app with tests"
+        description: "Implement the complete todo application with tests in a single phase"
+        works:
+          - key: "todo-model"
+            title: "Create todo.py with TodoStore class"
+            description: |
+              TodoStore manages a list of todo dicts with id, title, done fields.
+              - load() reads from todos.json, save() writes to todos.json
+              - add(title) creates a new todo with a unique integer id, returns it
+              - list_todos(status_filter=None) returns all todos, optionally filtered ("all", "active", "done")
+              - done(todo_id) marks a todo as done, returns True if found
+              - delete(todo_id) removes a todo, returns True if found
+              - Use json module for persistence, no external dependencies
+              - IMPORTANT: use .venv/bin/python for all python commands
+            resource_tags: ["todo.py"]
+            acceptance_criteria:
+              - "TodoStore.add() creates a todo with id, title, done=False"
+              - "TodoStore.list_todos() returns all todos, filtered by status"
+              - "TodoStore.done() marks the correct todo as done"
+              - "TodoStore.delete() removes the correct todo"
+              - "JSON persistence survives reload"
+          - key: "cli-entry"
+            title: "Create cli.py with argparse CLI"
+            description: |
+              CLI with subcommands: add, list, done, delete.
+              - add takes a positional title argument
+              - list takes optional --filter flag (all/active/done, default: all)
+              - done and delete take a positional id argument (integer)
+              - Pretty-print output with status indicators ([x] for done, [ ] for active)
+              - from todo import TodoStore
+              - IMPORTANT: use .venv/bin/python for all python commands
+            resource_tags: ["cli.py"]
+            dependencies: ["todo-model"]
+            acceptance_criteria:
+              - "cli.py add creates a todo and prints confirmation"
+              - "cli.py list shows todos with status indicators"
+              - "cli.py done marks a todo as done"
+              - "cli.py delete removes a todo"
+          - key: "test-suite"
+            title: "Create test_todo.py with pytest tests"
+            description: |
+              Test TodoStore CRUD operations using tmp_path fixture for isolation.
+              - Test add creates a todo with correct fields (id, title, done=False)
+              - Test done marks the correct todo as done
+              - Test delete removes the correct todo
+              - Test list_todos filtering works for all/active/done
+              - Test persistence: add items, create new TodoStore on same path, verify data survived
+              - IMPORTANT: use .venv/bin/pytest for running tests
+            resource_tags: ["test_todo.py"]
+            dependencies: ["todo-model"]
+            acceptance_criteria:
+              - "All pytest tests pass"
+              - "Tests cover add, done, delete, list_todos, and persistence"

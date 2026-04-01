@@ -412,6 +412,128 @@ pub(super) fn handle_coordinator_accept_plan(
     })
 }
 
+pub(super) fn handle_coordinator_seed_manifest(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    worktree_mgr: &WorktreeManager,
+    integrator_config: &IntegratorConfig,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    try_handler!(req.id, {
+        debug!("handle_coordinator_seed_manifest()");
+
+        let yaml = match req.params.get("manifest").and_then(|v| v.as_str()) {
+            Some(y) => y.to_string(),
+            None => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params("manifest (YAML string) is required"),
+                ));
+            }
+        };
+
+        let resolved = match crate::manifest::parse_manifest(&yaml) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params(&format!("manifest parse error: {}", e)),
+                ));
+            }
+        };
+
+        // Create goal
+        let goal = CoordinatorGoal::new(resolved.goal.clone());
+        let goal_id = goal.id.clone();
+        if let Some(store) = &stores.store {
+            let _ = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(goal.clone());
+        }
+        stores.write_coordinator_goals()?.insert(goal_id.clone(), goal);
+
+        // Activate Plan
+        let mut plan = resolved.plan;
+        plan.status = HierarchyStatus::Active;
+        plan.updated_at = crate::id::now_millis();
+        let plan_id = plan.id.clone();
+        if let Some(store) = &stores.store {
+            let _ = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(plan.clone());
+        }
+        stores.write_plans()?.insert(plan_id.clone(), plan);
+        let _ = event_tx.send(DaemonEvent::record_created("plans", &plan_id));
+
+        // Activate Spec
+        let mut spec = resolved.spec;
+        spec.status = HierarchyStatus::Active;
+        spec.updated_at = crate::id::now_millis();
+        let spec_id = spec.id.clone();
+        if let Some(store) = &stores.store {
+            let _ = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(spec.clone());
+        }
+        stores.write_specs()?.insert(spec_id.clone(), spec);
+        let _ = event_tx.send(DaemonEvent::record_created("specs", &spec_id));
+
+        // Activate Phases
+        for mut phase in resolved.phases {
+            phase.status = HierarchyStatus::Active;
+            phase.updated_at = crate::id::now_millis();
+            let phase_id = phase.id.clone();
+            if let Some(store) = &stores.store {
+                let _ = store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create(phase.clone());
+            }
+            stores.write_phases()?.insert(phase_id.clone(), phase);
+            let _ = event_tx.send(DaemonEvent::record_created("phases", &phase_id));
+        }
+
+        // Insert Works (already in Ready status from manifest parser)
+        for work in resolved.works {
+            let work_id = work.id.clone();
+            if let Some(store) = &stores.store {
+                let _ = store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create(work.clone());
+            }
+            stores.write_works()?.insert(work_id.clone(), work);
+            let _ = event_tx.send(DaemonEvent::record_created("works", &work_id));
+        }
+
+        // Create CoordinatorState with plan_approved=true, skipping interview and generation
+        let coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Skip);
+        let cs_id = coord_state.id.clone();
+        if let Some(store) = &stores.store {
+            let _ = store
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(coord_state.clone());
+        }
+        stores.write_coordinator_states()?.insert(cs_id, coord_state);
+
+        // Start the Coordinator agent
+        let start_req = DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
+        let _ = super::dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({
+                "id": goal_id,
+                "plan_id": plan_id,
+            }),
+        ))
+    })
+}
+
 pub(super) fn handle_coordinator_interview_question(
     _stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,

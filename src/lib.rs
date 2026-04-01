@@ -11,6 +11,7 @@ pub mod evaluator;
 pub mod guidance;
 pub mod id;
 pub mod ipc;
+pub mod manifest;
 pub mod prompts;
 pub mod session_summary;
 pub mod tools;

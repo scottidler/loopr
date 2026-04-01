@@ -147,6 +147,9 @@ pub fn dispatch(
         "coordinator.accept_plan" => {
             handle_coordinator_accept_plan(stores, event_tx, worktree_mgr, integrator_config, req)
         }
+        "coordinator.seed_manifest" => {
+            handle_coordinator_seed_manifest(stores, event_tx, worktree_mgr, integrator_config, req)
+        }
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "chat.submit" => handle_chat_submit(stores, event_tx, req),
         "chat.attach" => handle_chat_attach(stores, req),

@@ -59,37 +59,8 @@ target_goal() {
 }
 
 target_plan() {
-    cat <<'PLAN'
-Phase 1: Python todo app with tests
-
-Work 1: Create todo.py with TodoStore class
-- TodoStore manages a list of todo dicts with id, title, done fields
-- load() reads from todos.json, save() writes to todos.json
-- add(title) creates a new todo with a unique integer id, returns it
-- list_todos(status_filter=None) returns all todos, optionally filtered by done status ("all", "active", "done")
-- done(todo_id) marks a todo as done, returns True if found
-- delete(todo_id) removes a todo, returns True if found
-- Use json module for persistence, no external dependencies
-- IMPORTANT: use .venv/bin/python for all python commands
-
-Work 2: Create cli.py with argparse CLI (depends on Work 1)
-- Subcommands: add, list, done, delete
-- add takes a positional title argument
-- list takes optional --filter flag (all/active/done, default: all)
-- done and delete take a positional id argument (integer)
-- Pretty-print output with status indicators ([x] for done, [ ] for active)
-- from todo import TodoStore
-- IMPORTANT: use .venv/bin/python for all python commands
-
-Work 3: Create test_todo.py with pytest tests (depends on Work 1)
-- Test TodoStore CRUD operations using tmp_path fixture for isolation
-- Test add creates a todo with correct fields (id, title, done=False)
-- Test done marks the correct todo as done
-- Test delete removes the correct todo
-- Test list_todos filtering works for all/active/done
-- Test persistence: add items, create new TodoStore on same path, verify data survived
-- IMPORTANT: use .venv/bin/pytest for running tests
-PLAN
+    # Return path to YAML manifest for deterministic decomposition
+    echo "${LOOPR_ROOT}/bin/e2e-targets/python-todo.yaml"
 }
 
 collect_results() {

@@ -161,34 +161,63 @@ async fn run_headless(
         .context("failed to connect to daemon - is it running?")?;
     client.handshake(crate::version()).await.context("handshake failed")?;
 
-    // Step 1: Set the goal
-    let (resp, _) = client
-        .request("coordinator.set_goal", json!({ "goal": goal }))
-        .await
-        .context("failed to set goal")?;
-    if let Some(err) = resp.error {
-        bail!("set_goal error: {}", err.message);
-    }
-    let goal_id = resp
-        .result
-        .as_ref()
-        .and_then(|r| r.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    eprintln!("Goal set: {} ({})", goal, goal_id);
+    // Step 1+2: Set goal and optionally inject plan
+    let is_manifest = plan_text
+        .map(|p| p.ends_with(".yaml") || p.ends_with(".yml"))
+        .unwrap_or(false);
 
-    // Step 2: If plan text provided, accept it directly
-    if let Some(plan) = plan_text {
+    let goal_id = if is_manifest {
+        // YAML manifest: read file and seed full Plan/Spec/Phase/Work hierarchy
+        let manifest_path = plan_text.expect("manifest path checked above");
+        let yaml = std::fs::read_to_string(manifest_path)
+            .context(format!("failed to read manifest file: {}", manifest_path))?;
         let (resp, _) = client
-            .request("coordinator.accept_plan", json!({ "plan": plan }))
+            .request("coordinator.seed_manifest", json!({ "manifest": yaml }))
             .await
-            .context("failed to accept plan")?;
+            .context("failed to seed manifest")?;
         if let Some(err) = resp.error {
-            bail!("accept_plan error: {}", err.message);
+            bail!("seed_manifest error: {}", err.message);
         }
-        eprintln!("Plan accepted, orchestration starting.");
-    }
+        let gid = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        eprintln!("Goal set: {} ({})", goal, gid);
+        eprintln!("Manifest seeded, orchestration starting.");
+        gid
+    } else {
+        // Text plan or no plan: use existing set_goal + accept_plan flow
+        let (resp, _) = client
+            .request("coordinator.set_goal", json!({ "goal": goal }))
+            .await
+            .context("failed to set goal")?;
+        if let Some(err) = resp.error {
+            bail!("set_goal error: {}", err.message);
+        }
+        let gid = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        eprintln!("Goal set: {} ({})", goal, gid);
+
+        if let Some(plan) = plan_text {
+            let (resp, _) = client
+                .request("coordinator.accept_plan", json!({ "plan": plan }))
+                .await
+                .context("failed to accept plan")?;
+            if let Some(err) = resp.error {
+                bail!("accept_plan error: {}", err.message);
+            }
+            eprintln!("Plan accepted, orchestration starting.");
+        }
+        gid
+    };
 
     // Step 3: If no-monitor, exit now
     if no_monitor {
