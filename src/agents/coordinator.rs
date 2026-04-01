@@ -1022,10 +1022,25 @@ fn phase_missing_test_tool(stores: &Stores, coord_state: &CoordinatorState) -> S
     if has_test_tool {
         return String::new();
     }
-    "**WARNING: This phase has validation-commands but no 'test' tool is registered.** \
-     Do NOT dispatch implementers until a valid test tool is registered. \
-     If all researchers have failed to register a test tool, escalate this phase to NeedHelp.\n\n"
-        .to_string()
+    // Surface the declared validation commands as a hint
+    let cmds_list = phase
+        .validation_commands
+        .iter()
+        .map(|c| format!("  - `{}`", c))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "**WARNING: This phase has validation-commands but no 'test' tool \
+         is registered.** The declared validation commands for this phase are:\n\
+         {}\n\
+         You MUST use `register_tool` to register a test command based on \
+         these commands BEFORE dispatching implementers. Extract the \
+         executable from the commands above and register it. \
+         Do NOT spawn researchers for tool discovery when validation \
+         commands are already declared.\n\n",
+        cmds_list
+    )
 }
 
 /// Determine the FSM state footer — state-specific instructions for the LLM.
@@ -1759,6 +1774,23 @@ impl CoordinatorAgent {
                 continue;
             }
 
+            // Pre-execution guard: researcher spawn limit per scope
+            if let AgentAction::SpawnResearcher { scope_id, .. } = action_ref {
+                let count = coord_state.researcher_spawn_count(scope_id);
+                if count >= config.max_researcher_spawns {
+                    self.ctx.warn(&format!(
+                        "researcher spawn limit reached ({}/{}) for scope '{}'",
+                        count, config.max_researcher_spawns, scope_id
+                    ));
+                    last_summary = format!(
+                        "Researcher spawn limit reached for scope '{}'. \
+                         You MUST escalate via need_help.",
+                        scope_id
+                    );
+                    continue;
+                }
+            }
+
             let result = match execute_action(action_ref, &self.ctx, repo_root, None).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -1820,6 +1852,13 @@ impl CoordinatorAgent {
                         }
                     }
                 }
+            }
+
+            // Post-execution: track successful researcher spawns
+            if let AgentAction::SpawnResearcher { scope_id, .. } = action_ref
+                && matches!(result, ActionResult::AgentSpawned { .. })
+            {
+                coord_state.increment_researcher_spawns(scope_id);
             }
 
             // Track created Work IDs for batch dependency resolution
@@ -4922,7 +4961,8 @@ mod tests {
             "should warn when validation_commands exist but no test tool"
         );
         assert!(warning.contains("WARNING"));
-        assert!(warning.contains("NeedHelp"));
+        assert!(warning.contains("register_tool"));
+        assert!(warning.contains("cargo test"));
     }
 
     #[test]

@@ -201,6 +201,14 @@ pub struct CoordinatorConfig {
     pub goal_timeout_secs: u64,
     #[serde(default)]
     pub interview_mode: InterviewMode,
+    /// Maximum researchers the coordinator can spawn per scope before
+    /// being forced to escalate. Default: 3.
+    #[serde(default = "default_max_researcher_spawns")]
+    pub max_researcher_spawns: u32,
+}
+
+fn default_max_researcher_spawns() -> u32 {
+    3
 }
 
 impl Default for CoordinatorConfig {
@@ -223,6 +231,7 @@ impl Default for CoordinatorConfig {
             phase_timeout_secs: 3600,
             goal_timeout_secs: 14400,
             interview_mode: InterviewMode::default(),
+            max_researcher_spawns: default_max_researcher_spawns(),
         }
     }
 }

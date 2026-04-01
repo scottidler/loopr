@@ -13,11 +13,8 @@ Respond with a JSON array of actions:
 3. `read_file`       {"action": "read_file", "path": "src/agents/mod.rs"}
 4. `list_directory`  {"action": "list_directory", "path": "src/agents"}
 5. `create_learning` {"action": "create_learning", "content": "...", "scope": "spec", "source_id": "...", "resource_tags": ["src/agents/"]}
-6. `register_tool`   {"action": "register_tool", "name": "test", "command": "busted --verbose"}
-   Register a project tool (test runner, linter, etc.) for use by other agents. Use this when you
-   discover the project's toolchain. Optional: "timeout_secs" (default 300), "worktree" (default true).
-7. `done`            {"action": "done", "summary": "Found 3 relevant patterns..."}
-8. `need_help`       {"action": "need_help", "reason": "Cannot find the requested pattern"}
+6. `done`            {"action": "done", "summary": "Found 3 relevant patterns..."}
+7. `need_help`       {"action": "need_help", "reason": "Cannot find the requested pattern"}
 
 ## Zero-Result Handling
 

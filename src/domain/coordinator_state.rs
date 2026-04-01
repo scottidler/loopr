@@ -66,6 +66,11 @@ pub struct CoordinatorState {
     /// Interview context accumulated during the Interviewing state.
     #[serde(default)]
     pub interview_context: Vec<InterviewExchange>,
+    /// Number of researchers spawned per scope_id in the current phase.
+    /// Used to enforce the spawn limit (default: 3 per scope).
+    /// Reset when the phase changes.
+    #[serde(default)]
+    pub researcher_spawns: HashMap<String, u32>,
     /// Whether the user has approved the Plan.
     #[serde(default)]
     pub plan_approved: bool,
@@ -95,6 +100,7 @@ impl CoordinatorState {
             phase_activated_at: None,
             decomposition_attempts: HashMap::new(),
             bubble_up_count: 0,
+            researcher_spawns: HashMap::new(),
             goal_started_at: now,
             phases_completed: Vec::new(),
             interview_context: Vec::new(),
@@ -115,6 +121,7 @@ impl CoordinatorState {
     pub fn activate_phase(&mut self, phase_id: String) {
         self.current_phase_id = Some(phase_id);
         self.phase_activated_at = Some(id::now_millis());
+        self.researcher_spawns.clear();
         self.fsm_state = CoordinatorFsmState::Executing;
         self.updated_at = id::now_millis();
     }
@@ -181,6 +188,19 @@ impl CoordinatorState {
     pub fn reset_bubble_up(&mut self) {
         self.bubble_up_count = 0;
         self.updated_at = id::now_millis();
+    }
+
+    /// Increment the researcher spawn counter for a scope. Returns the new count.
+    pub fn increment_researcher_spawns(&mut self, scope_id: &str) -> u32 {
+        let count = self.researcher_spawns.entry(scope_id.to_string()).or_insert(0);
+        *count += 1;
+        self.updated_at = id::now_millis();
+        *count
+    }
+
+    /// Get the researcher spawn count for a scope.
+    pub fn researcher_spawn_count(&self, scope_id: &str) -> u32 {
+        self.researcher_spawns.get(scope_id).copied().unwrap_or(0)
     }
 
     /// Get the wall-clock age in minutes since first assignment, or None if never assigned.
@@ -485,5 +505,73 @@ mod tests {
         let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Auto);
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
         assert!(!state.plan_approved);
+    }
+
+    // --- Researcher spawn tracking tests ---
+
+    #[test]
+    fn test_researcher_spawns_empty_on_new() {
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        assert!(state.researcher_spawns.is_empty());
+    }
+
+    #[test]
+    fn test_increment_researcher_spawns() {
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        assert_eq!(state.increment_researcher_spawns("scope-1"), 1);
+        assert_eq!(state.increment_researcher_spawns("scope-1"), 2);
+        assert_eq!(state.increment_researcher_spawns("scope-1"), 3);
+        assert_eq!(state.researcher_spawn_count("scope-1"), 3);
+    }
+
+    #[test]
+    fn test_researcher_spawn_count_unknown_scope() {
+        let state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        assert_eq!(state.researcher_spawn_count("nonexistent"), 0);
+    }
+
+    #[test]
+    fn test_activate_phase_clears_researcher_spawns() {
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        state.increment_researcher_spawns("scope-1");
+        state.increment_researcher_spawns("scope-2");
+        assert_eq!(state.researcher_spawn_count("scope-1"), 1);
+        assert_eq!(state.researcher_spawn_count("scope-2"), 1);
+
+        state.activate_phase("phase-2".to_string());
+        assert_eq!(state.researcher_spawn_count("scope-1"), 0);
+        assert_eq!(state.researcher_spawn_count("scope-2"), 0);
+        assert!(state.researcher_spawns.is_empty());
+    }
+
+    #[test]
+    fn test_serde_roundtrip_with_researcher_spawns() {
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+        state.increment_researcher_spawns("scope-1");
+        state.increment_researcher_spawns("scope-1");
+        state.increment_researcher_spawns("scope-2");
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: CoordinatorState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state.researcher_spawns, deserialized.researcher_spawns);
+    }
+
+    #[test]
+    fn test_serde_backward_compat_without_researcher_spawns() {
+        // Old JSON without researcher_spawns should deserialize with empty HashMap
+        let json = serde_json::json!({
+            "id": "test-id",
+            "goal_id": "goal-1",
+            "fsm_state": "Planning",
+            "current_phase_id": null,
+            "work_attempts": {},
+            "phase_activated_at": null,
+            "goal_started_at": 1000,
+            "phases_completed": [],
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let state: CoordinatorState = serde_json::from_value(json).unwrap();
+        assert!(state.researcher_spawns.is_empty());
     }
 }
