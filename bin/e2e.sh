@@ -128,6 +128,8 @@ YAML
 if [[ -n "${VALIDATION_CMDS}" ]]; then
     echo "  validation_commands:"
     echo "${VALIDATION_CMDS}"
+else
+    echo "  validation_commands: []"
 fi
 cat <<YAML
 
