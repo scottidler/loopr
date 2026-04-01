@@ -788,6 +788,35 @@ pub async fn execute_action(
             let is_noop = noop_reason.is_some();
             let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
 
+            // Guard: reject noop bundles with uncommitted changes.
+            // The LLM may have written files via write_file but then
+            // incorrectly taken the noop path. Return an error so a
+            // fresh session can self-correct with a normal bundle.
+            if is_noop {
+                let status_output = tokio::process::Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .current_dir(worktree_path)
+                    .output()
+                    .await;
+                if let Ok(output) = status_output {
+                    let status = String::from_utf8_lossy(&output.stdout);
+                    if !status.trim().is_empty() {
+                        agent_log.warn(&format!(
+                            "Rejected noop bundle: worktree has uncommitted changes:\n{}",
+                            status.trim()
+                        ));
+                        return Ok(ActionResult::ActionError(format!(
+                            "Cannot propose a noop bundle while the worktree has uncommitted \
+                             changes:\n{}\n\
+                             You wrote files in this session that are not committed. \
+                             Use `commit` first, then propose a normal bundle (without \
+                             noop_reason). Do NOT use noop_reason if you made any changes.",
+                            status.trim()
+                        )));
+                    }
+                }
+            }
+
             // For normal bundles: auto-commit any pending changes before creating
             // the bundle. Skip for noop bundles (no changes to commit).
             if !is_noop {
@@ -5134,6 +5163,146 @@ mod tests {
             err_msg.contains("branch_name"),
             "error should mention branch_name: {}",
             err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_noop_guard_rejects_dirty_worktree() {
+        let dir = TestDir::new("loopr-exec-noop-dirty");
+
+        // Initialize git repo
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        // Initial commit so git status works
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        // Write a file but don't commit - worktree is dirty
+        std::fs::write(dir.join("todo.lua"), "print('hello')").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Work already complete".to_string(),
+            claims: vec!["criteria satisfied".to_string()],
+            noop_reason: Some("already done".to_string()),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("uncommitted changes")),
+            "expected ActionError for dirty worktree noop, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_noop_guard_allows_clean_worktree() {
+        let dir = TestDir::new("loopr-exec-noop-clean");
+
+        // Initialize git repo with clean state
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        // Gitignore test artifacts so the worktree appears clean
+        std::fs::write(dir.join(".gitignore"), ".taskstore/\n*.log\n").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        // Worktree is clean - no uncommitted files
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Work already complete".to_string(),
+            claims: vec!["criteria satisfied".to_string()],
+            noop_reason: Some("Phase 1 already implemented this".to_string()),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref d) if d == "Work already complete"),
+            "expected BundleProposed for clean noop, got: {:?}",
+            result
         );
     }
 

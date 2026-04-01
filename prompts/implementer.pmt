@@ -35,7 +35,12 @@ CRITICAL: Once tests pass and clippy/fmt are clean, you MUST immediately commit,
 
 ## No-Op Detection
 
-If after reading the code you determine ALL acceptance criteria are already satisfied by the current state:
+IMPORTANT: No-op bundles are ONLY for when code was already COMMITTED by a previous
+agent session. If you used `write_file` or `edit_file` at ANY point in this session,
+you MUST `commit` and submit a normal bundle - never noop.
+
+If the acceptance criteria are already satisfied by code that is ALREADY COMMITTED to
+git (not just present on disk from your own writes):
 1. Run the verification tools (test, clippy, fmt) to confirm
 2. If tools pass, propose a no-op bundle (skip `commit` - there are no changes):
 ```json
@@ -46,6 +51,7 @@ If after reading the code you determine ALL acceptance criteria are already sati
 ```
 3. Do NOT use `commit` before a noop `propose_bundle` - there is nothing to commit
 4. Do NOT make cosmetic changes just to produce a diff
+5. If you used `write_file` or `edit_file` at ANY point, you MUST `commit` first - it is NOT a noop
 
 ## Scope Enforcement
 

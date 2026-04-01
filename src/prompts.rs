@@ -324,6 +324,15 @@ mod tests {
         }
         assert!(p.contains("iteration budget"));
         assert!(p.contains("clippy"));
+        // Noop guard prompt hardening
+        assert!(
+            p.contains("ALREADY COMMITTED to"),
+            "implementer.pmt missing noop guard: 'ALREADY COMMITTED to'"
+        );
+        assert!(
+            p.contains("write_file` or `edit_file` at ANY point"),
+            "implementer.pmt missing noop guard: write_file/edit_file rule"
+        );
     }
 
     #[test]
