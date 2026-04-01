@@ -77,8 +77,8 @@ mod tests {
             stores: stores.clone(),
             bridge,
             event_tx: tx,
-            tool_runner: stores.tool_runner.clone(),
-            tool_executor: stores.tool_executor.clone(),
+            tool_runner: stores.read_tool_runner().unwrap(),
+            tool_executor: stores.read_tool_executor().unwrap(),
             log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         }
@@ -2400,8 +2400,8 @@ mod tests {
             stores: stores.clone(),
             bridge: impl_bridge,
             event_tx: tx.clone(),
-            tool_runner: stores.tool_runner.clone(),
-            tool_executor: stores.tool_executor.clone(),
+            tool_runner: stores.read_tool_runner().unwrap(),
+            tool_executor: stores.read_tool_executor().unwrap(),
             log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };

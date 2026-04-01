@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 
 use crate::agents::{AgentEvent, AgentSession, AgentStatus};
 use crate::config::Config;
+use crate::config::ToolEntry;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::chat::ChatHistory;
 use crate::domain::coordinator_goal::CoordinatorGoal;
@@ -57,10 +58,12 @@ pub struct Stores {
     pub validator: Option<Arc<DocValidator>>,
     /// Coverage Evaluator (LLM-based). None when coverage is disabled or in legacy contexts.
     pub evaluator: Option<Arc<crate::evaluator::CoverageEvaluator>>,
-    /// Tool runner for agent subprocess execution. Shared across agent tasks.
-    pub tool_runner: Arc<ToolRunner>,
-    /// Unified tool executor (built-in + configured tools). Shared across agent tasks.
-    pub tool_executor: Arc<ToolExecutor>,
+    /// Runtime tools discovered by agents via tools.register IPC. Session-scoped, not persisted.
+    pub runtime_tools: StdRwLock<HashMap<String, ToolEntry>>,
+    /// Tool runner for agent subprocess execution. Wrapped in RwLock for atomic swap on tools.register.
+    pub tool_runner: StdRwLock<Arc<ToolRunner>>,
+    /// Unified tool executor (built-in + configured tools). Wrapped in RwLock for atomic swap on tools.register.
+    pub tool_executor: StdRwLock<Arc<ToolExecutor>>,
     /// Full config, available to handlers for agent spawning.
     pub config: Config,
     /// Assembled guidance (schema docs + LOOPR.md files), loaded once at startup.
@@ -115,6 +118,25 @@ impl Stores {
         agent_sessions: AgentSession,
         coverage_reports: CoverageReport,
         agent_events: VecDeque<AgentEvent>,
+        runtime_tools: ToolEntry,
+    }
+
+    /// Clone the current Arc<ToolRunner> from behind the RwLock.
+    pub fn read_tool_runner(&self) -> Result<Arc<ToolRunner>> {
+        Ok(self
+            .tool_runner
+            .read()
+            .map_err(|_| eyre!("tool_runner lock poisoned"))?
+            .clone())
+    }
+
+    /// Clone the current Arc<ToolExecutor> from behind the RwLock.
+    pub fn read_tool_executor(&self) -> Result<Arc<ToolExecutor>> {
+        Ok(self
+            .tool_executor
+            .read()
+            .map_err(|_| eyre!("tool_executor lock poisoned"))?
+            .clone())
     }
 
     pub fn lock_store(&self) -> Result<Option<MutexGuard<'_, Store>>> {
@@ -157,11 +179,12 @@ impl Stores {
             decisions: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
             coverage_reports: StdRwLock::new(HashMap::new()),
+            runtime_tools: StdRwLock::new(HashMap::new()),
             store: None,
             validator: None,
             evaluator: None,
-            tool_runner: Arc::new(ToolRunner::new(&[])),
-            tool_executor: Arc::new(ToolExecutor::standard(&[])),
+            tool_runner: StdRwLock::new(Arc::new(ToolRunner::new(&[]))),
+            tool_executor: StdRwLock::new(Arc::new(ToolExecutor::standard(&[]))),
             config: Config::default(),
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
@@ -319,11 +342,11 @@ impl DaemonContext {
         stores.session_dir = Some(session_dir.clone());
 
         // Create ToolRunner from agent config
-        stores.tool_runner = Arc::new(ToolRunner::new(&config.agents.tools));
-        stores.tool_executor = Arc::new(ToolExecutor::standard(&config.agents.tools));
+        stores.tool_runner = StdRwLock::new(Arc::new(ToolRunner::new(&config.agents.tools)));
+        stores.tool_executor = StdRwLock::new(Arc::new(ToolExecutor::standard(&config.agents.tools)));
         info!(
             "Tool runner initialized with {} tools",
-            stores.tool_runner.available_tools().len()
+            stores.read_tool_runner()?.available_tools().len()
         );
 
         // Create DocValidator if enabled in config

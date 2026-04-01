@@ -768,8 +768,8 @@ mod tests {
         let wi_id = get_work_id(&stores);
         let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), dir);
         let agent_log = test_agent_logger(dir);
-        let tool_runner = stores.tool_runner.clone();
-        let tool_executor = stores.tool_executor.clone();
+        let tool_runner = stores.read_tool_runner().unwrap();
+        let tool_executor = stores.read_tool_executor().unwrap();
 
         let mut session = AgentSession::new(AgentType::Implementer, "test".into());
         session.work_id = Some(wi_id.clone());
@@ -1238,8 +1238,8 @@ mod tests {
             stores: stores.clone(),
             bridge,
             event_tx,
-            tool_runner: stores.tool_runner.clone(),
-            tool_executor: stores.tool_executor.clone(),
+            tool_runner: stores.read_tool_runner().unwrap(),
+            tool_executor: stores.read_tool_executor().unwrap(),
             log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };

@@ -132,8 +132,8 @@ impl AgentContext {
             stores: stores.clone(),
             bridge,
             event_tx,
-            tool_runner: stores.tool_runner.clone(),
-            tool_executor: stores.tool_executor.clone(),
+            tool_runner: stores.read_tool_runner()?,
+            tool_executor: stores.read_tool_executor()?,
             log,
             read_cache: Mutex::new(ReadCache::default()),
         })
@@ -674,8 +674,8 @@ mod tests {
             stores: stores.clone(),
             bridge,
             event_tx,
-            tool_runner: stores.tool_runner.clone(),
-            tool_executor: stores.tool_executor.clone(),
+            tool_runner: stores.read_tool_runner().unwrap(),
+            tool_executor: stores.read_tool_executor().unwrap(),
             log: agent_log,
             read_cache: Mutex::new(ReadCache::default()),
         };

@@ -606,7 +606,7 @@ pub(super) fn handle_validator_reports(stores: &Arc<Stores>, req: DaemonRequest)
 pub(super) fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_tool_list()");
-        let tool_runner = &stores.tool_runner;
+        let tool_runner = stores.read_tool_runner()?;
         let names = tool_runner.available_tools();
         let tools: Vec<serde_json::Value> = names
             .iter()
@@ -617,6 +617,7 @@ pub(super) fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
                         "command": entry.command,
                         "timeout_secs": entry.timeout_secs,
                         "worktree": entry.worktree,
+                        "source": "config",
                     })
                 })
             })

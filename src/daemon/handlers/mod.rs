@@ -83,6 +83,7 @@ mod plan;
 mod spec;
 mod system;
 mod tick;
+mod tools;
 mod work;
 mod worktree;
 
@@ -98,6 +99,7 @@ use plan::*;
 use spec::*;
 use system::*;
 use tick::*;
+use tools::*;
 use work::*;
 use worktree::*;
 
@@ -172,6 +174,7 @@ pub fn dispatch(
         "validator.reports" => handle_validator_reports(stores, req),
         "coverage.evaluate" => handle_coverage_evaluate(stores, req),
         "tool.list" => handle_tool_list(stores, req),
+        "tools.register" => handle_tools_register(stores, event_tx, req),
         "coordinator.set_goal" => handle_coordinator_set_goal(stores, event_tx, req),
         "coordinator.clear_goal" => handle_coordinator_clear_goal(stores, event_tx, req),
         "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
