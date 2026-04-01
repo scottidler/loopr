@@ -347,6 +347,10 @@ impl ResearcherAgent {
                 .send(DaemonEvent::agent_action_completed(&self.ctx.session.id, &summary));
 
             match &result {
+                ActionResult::ActionError(_) => {
+                    last_summary = summary;
+                    break;
+                }
                 ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
                 ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
                 _ => {}

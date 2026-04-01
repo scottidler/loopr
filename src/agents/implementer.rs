@@ -398,6 +398,10 @@ impl ImplementerAgent {
                 .send(DaemonEvent::agent_action_completed(session_id, &summary));
 
             match &result {
+                ActionResult::ActionError(_) => {
+                    summaries.push(summary);
+                    break;
+                }
                 ActionResult::Done(s) => return Ok(IterationOutcome::Done(s.clone())),
                 ActionResult::NeedHelp(reason) => return Ok(IterationOutcome::NeedHelp(reason.clone())),
                 ActionResult::BundleProposed(desc) => {
@@ -1348,6 +1352,32 @@ mod tests {
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "Early exit"));
         // The file after Done should NOT have been written
         assert!(!dir.join("should_not_exist.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_action_error_breaks_batch_before_done() {
+        // When an action fails with ActionError, the subsequent done must NOT fire.
+        // The error should feed back via IterationOutcome::Continue.
+        let dir = TestDir::new("loopr-impl-errbatch");
+        let stores = setup_stores(&dir);
+        let config = AgentRoleConfig::default_implementer();
+
+        // edit_file on a nonexistent file produces ActionError
+        let llm = Box::new(MockLlm::new(
+            r#"[
+            {"action": "edit_file", "path": "nonexistent.lua", "old_string": "x", "new_string": "y"},
+            {"action": "done", "summary": "work complete"}
+        ]"#,
+        ));
+        let agent = test_implementer(llm, stores, &dir, config);
+
+        let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
+        // Must be Continue (error fed back), NOT Done
+        assert!(
+            matches!(outcome, IterationOutcome::Continue(ref s) if s.contains("ERROR")),
+            "expected Continue with error, got: {:?}",
+            outcome
+        );
     }
 
     #[test]
