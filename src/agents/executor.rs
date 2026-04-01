@@ -86,17 +86,12 @@ fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String> {
 /// Returns `Some(target_status)` to transition, or `None` to skip (sibling still active).
 ///
 /// Decision table:
-/// | Agent result | Sibling active? | Bundle state         | Work transition |
-/// |---|---|---|---|
-/// | Ok           | —               | —                    | "InReview"      |
-/// | Err          | Yes             | —                    | (skip)          |
-/// | Err          | No              | active Bundle exists | "InReview"      |
-/// | Err          | No              | all Rejected/none    | "Blocked"       |
-fn determine_work_handback(stores: &Stores, work_id: &str, session_id: &str, succeeded: bool) -> Option<&'static str> {
-    if succeeded {
-        return Some("InReview");
-    }
-
+/// | Sibling active? | Bundle state         | Work transition |
+/// |---|---|---|
+/// | Yes             | —                    | (skip)          |
+/// | No              | active Bundle exists | "InReview"      |
+/// | No              | all Rejected/none    | "Blocked"       |
+fn determine_work_handback(stores: &Stores, work_id: &str, session_id: &str, _succeeded: bool) -> Option<&'static str> {
     // If a sibling implementer is still active, don't touch the Work.
     let sessions = stores.read_agent_sessions().ok()?;
     let sibling_active = sessions.values().any(|s| {
@@ -4270,11 +4265,12 @@ mod tests {
     // --- determine_work_handback tests ---
 
     #[test]
-    fn test_handback_succeeded_returns_in_review() {
+    fn test_handback_succeeded_no_bundles_returns_blocked() {
         let dir = TestDir::new("loopr-handback-ok");
         let stores = test_stores(&dir);
+        // succeeded=true but no bundles -> Blocked (not InReview)
         let result = determine_work_handback(&stores, "wi-1", "sess-1", true);
-        assert_eq!(result, Some("InReview"));
+        assert_eq!(result, Some("Blocked"));
     }
 
     #[test]
