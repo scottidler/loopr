@@ -158,8 +158,6 @@ impl IntegratorAgent {
                 continue;
             };
 
-            let mut ok = true;
-
             if status == TickStatus::Open {
                 let resp = self.ctx.bridge.request(
                     "tick.transition",
@@ -170,11 +168,12 @@ impl IntegratorAgent {
                     }),
                 );
                 if resp.is_error() {
-                    self.ctx.warn(&format!(
-                        "failed to recover stuck tick {} (Open→Failed): {:?}",
-                        tick_id, resp.error
+                    let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                    self.ctx.error(&format!(
+                        "failed to recover stuck tick {} (Open->Failed): {}",
+                        tick_id, msg
                     ));
-                    ok = false;
+                    continue;
                 }
             } else {
                 if status == TickStatus::Sealing {
@@ -187,45 +186,46 @@ impl IntegratorAgent {
                         }),
                     );
                     if resp.is_error() {
-                        self.ctx.warn(&format!(
-                            "failed to recover stuck tick {} (Sealing→Validating): {:?}",
-                            tick_id, resp.error
+                        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                        self.ctx.error(&format!(
+                            "failed to recover stuck tick {} (Sealing->Validating): {}",
+                            tick_id, msg
                         ));
-                        ok = false;
+                        continue;
                     }
                 }
 
-                if ok {
-                    let resp = self.ctx.bridge.request(
-                        "tick.transition",
-                        serde_json::json!({
-                            "id": tick_id,
-                            "target_status": "Failed",
-                            "role": "integrator",
-                        }),
-                    );
-                    if resp.is_error() {
-                        self.ctx.warn(&format!(
-                            "failed to recover stuck tick {} (→Failed): {:?}",
-                            tick_id, resp.error
-                        ));
-                        ok = false;
-                    }
+                let resp = self.ctx.bridge.request(
+                    "tick.transition",
+                    serde_json::json!({
+                        "id": tick_id,
+                        "target_status": "Failed",
+                        "role": "integrator",
+                    }),
+                );
+                if resp.is_error() {
+                    let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                    self.ctx
+                        .error(&format!("failed to recover stuck tick {} (->Failed): {}", tick_id, msg));
+                    continue;
                 }
             }
 
-            if ok {
-                self.ctx.info(&format!("recovered stuck tick {} → Failed", tick_id));
-                recovered += 1;
+            // If we reach here, all transitions succeeded (failures use continue above)
+            self.ctx.info(&format!("recovered stuck tick {} -> Failed", tick_id));
+            recovered += 1;
 
-                let _ = self.ctx.bridge.request(
-                    "learning.create",
-                    serde_json::json!({
-                        "content": format!("Tick {} was stuck after crash, recovered to Failed", tick_id),
-                        "scope": "global",
-                        "source_id": tick_id,
-                    }),
-                );
+            let learn_resp = self.ctx.bridge.request(
+                "learning.create",
+                serde_json::json!({
+                    "content": format!("Tick {} was stuck after crash, recovered to Failed", tick_id),
+                    "scope": "global",
+                    "source_id": tick_id,
+                }),
+            );
+            if learn_resp.is_error() {
+                self.ctx
+                    .warn(&format!("failed to create recovery learning for tick {}", tick_id));
             }
         }
         Ok(recovered)
@@ -310,8 +310,8 @@ impl IntegratorAgent {
                         }),
                     );
                     if resp.is_error() {
-                        self.ctx
-                            .warn(&format!("failed to reject stale bundle {}: {:?}", stale_id, resp.error));
+                        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                        return Err(eyre!("failed to reject stale bundle {}: {}", stale_id, msg));
                     } else {
                         self.ctx.info(&format!("rejected stale bundle {}", stale_id));
                         let wi_id = self
@@ -333,7 +333,10 @@ impl IntegratorAgent {
                             "role": "integrator",
                         }),
                     );
-                    if !resp.is_error() {
+                    if resp.is_error() {
+                        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                        return Err(eyre!("failed to reject stale bundle {} (replan): {}", stale_id, msg));
+                    } else {
                         let wi_id = self
                             .ctx
                             .stores
@@ -376,18 +379,34 @@ impl IntegratorAgent {
                         }),
                     );
                     if refresh_resp.is_error() {
-                        let _ = self.ctx.bridge.request(
+                        let rej_resp = self.ctx.bridge.request(
                             "bundle.transition",
                             serde_json::json!({"id": stale_id, "target_status": "Rejected", "role": "integrator"}),
                         );
+                        if rej_resp.is_error() {
+                            let msg = rej_resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Err(eyre!(
+                                "failed to reject bundle {} after auto-replay failure: {}",
+                                stale_id,
+                                msg
+                            ));
+                        }
                         self.reset_work_after_bundle_rejection(&wi_id, "auto-replay failed");
                         self.ctx
                             .warn(&format!("auto-replay failed for bundle {}, rejected", stale_id));
                     } else {
-                        let _ = self.ctx.bridge.request(
+                        let upd_resp = self.ctx.bridge.request(
                             "bundle.update",
                             serde_json::json!({"id": stale_id, "base_tick_id": latest_tick_id}),
                         );
+                        if upd_resp.is_error() {
+                            let msg = upd_resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Err(eyre!(
+                                "failed to update stale bundle {} base_tick_id: {}",
+                                stale_id,
+                                msg
+                            ));
+                        }
                         valid_bundle_ids.push(stale_id.clone());
                         self.ctx.info(&format!("auto-replayed stale bundle {}", stale_id));
                     }
@@ -546,8 +565,12 @@ impl IntegratorAgent {
                         }),
                     );
                     if fail_resp.is_error() {
-                        self.ctx
-                            .error(&format!("failed to fail tick {}: {:?}", tick_id, fail_resp.error));
+                        let msg = fail_resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                        return Err(eyre!(
+                            "failed to transition tick {} to Failed after merge failure: {}",
+                            tick_id,
+                            msg
+                        ));
                     }
 
                     for bundle_id in &valid_bundle_ids {
@@ -560,9 +583,11 @@ impl IntegratorAgent {
                             }),
                         );
                         if resp.is_error() {
-                            self.ctx.warn(&format!(
-                                "failed to reject bundle {} after merge failure: {:?}",
-                                bundle_id, resp.error
+                            let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Err(eyre!(
+                                "failed to reject bundle {} after merge failure: {}",
+                                bundle_id,
+                                msg
                             ));
                         } else {
                             let wi_id = self
@@ -680,10 +705,19 @@ impl IntegratorAgent {
                     }),
                 );
                 if resp.is_error() {
-                    self.ctx.warn(&format!(
-                        "failed to transition bundle {} to Merged: {:?}",
-                        bundle_id, resp.error
+                    let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                    self.ctx.error(&format!(
+                        "CRITICAL: bundle {} merged in git but failed to transition to Merged: {}",
+                        bundle_id, msg
                     ));
+                    let _ = self.ctx.bridge.request(
+                        "learning.create",
+                        serde_json::json!({
+                            "content": format!("Bundle {} merged in git but FSM transition to Merged failed: {}. Coordinator must reconcile.", bundle_id, msg),
+                            "scope": format!("bundle/{}", bundle_id),
+                            "source_id": bundle_id,
+                        }),
+                    );
                 }
             }
 
@@ -716,10 +750,19 @@ impl IntegratorAgent {
                         }),
                     );
                     if resp.is_error() {
-                        self.ctx.warn(&format!(
-                            "failed to transition WI {} to Integrated: {:?}",
-                            wi_id, resp.error
+                        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                        self.ctx.error(&format!(
+                            "CRITICAL: work {} has merged bundle but failed to transition to Integrated: {}",
+                            wi_id, msg
                         ));
+                        let _ = self.ctx.bridge.request(
+                            "learning.create",
+                            serde_json::json!({
+                                "content": format!("Work {} has merged bundle but failed to transition to Integrated: {}. Coordinator must reconcile.", wi_id, msg),
+                                "scope": format!("work/{}", wi_id),
+                                "source_id": wi_id,
+                            }),
+                        );
                     } else {
                         self.ctx.info(&format!("Work {} transitioned to Integrated", wi_id));
                     }
@@ -740,8 +783,8 @@ impl IntegratorAgent {
                 }),
             );
             if fail_resp.is_error() {
-                self.ctx
-                    .error(&format!("failed to fail tick {}: {:?}", tick_id, fail_resp.error));
+                let msg = fail_resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                return Err(eyre!("failed to transition tick {} to Failed: {}", tick_id, msg));
             }
 
             for bundle_id in &valid_bundle_ids {
@@ -754,9 +797,11 @@ impl IntegratorAgent {
                     }),
                 );
                 if resp.is_error() {
-                    self.ctx.warn(&format!(
-                        "failed to reject bundle {} after validation failure: {:?}",
-                        bundle_id, resp.error
+                    let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                    return Err(eyre!(
+                        "failed to reject bundle {} after validation failure: {}",
+                        bundle_id,
+                        msg
                     ));
                 } else {
                     let wi_id = self
