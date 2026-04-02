@@ -4,7 +4,7 @@ use eyre::eyre;
 use log::debug;
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentSession, AgentStatus, AgentType};
+use crate::agents::{AgentSession, AgentStatus, AgentKind};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
@@ -25,7 +25,7 @@ pub(super) fn handle_agent_start(
             req.params.get("work_id"),
             req.params.get("bundle_id"),
         );
-        let agent_type: AgentType = match req.params.get("agent_type") {
+        let agent_type: AgentKind = match req.params.get("agent_type") {
             Some(v) => match serde_json::from_value(v.clone()) {
                 Ok(t) => t,
                 Err(_) => {
@@ -59,7 +59,7 @@ pub(super) fn handle_agent_start(
         // Validate: Implementer needs work_id, Reviewer needs bundle_id
         // Thinking plane agents (Coordinator, Researcher, Integrator) don't require either.
         match agent_type {
-            AgentType::Implementer => {
+            AgentKind::Implementer => {
                 if work_id.is_none() {
                     return Ok(DaemonResponse::err(
                         req.id,
@@ -67,7 +67,7 @@ pub(super) fn handle_agent_start(
                     ));
                 }
             }
-            AgentType::Reviewer => {
+            AgentKind::Reviewer => {
                 if bundle_id.is_none() {
                     return Ok(DaemonResponse::err(
                         req.id,
@@ -75,7 +75,7 @@ pub(super) fn handle_agent_start(
                     ));
                 }
             }
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Chat => {
+            AgentKind::Coordinator | AgentKind::Researcher | AgentKind::Integrator | AgentKind::Chat => {
                 // These agents operate without worktrees; no target ID required at start time
             }
         }
@@ -89,12 +89,12 @@ pub(super) fn handle_agent_start(
 
         // Create agent session with model from config (before lock, no shared state)
         let model = match agent_type {
-            AgentType::Coordinator => stores.config.agents.coordinator.role.model.clone(),
-            AgentType::Implementer => stores.config.agents.implementer.model.clone(),
-            AgentType::Reviewer => stores.config.agents.reviewer.model.clone(),
-            AgentType::Researcher => stores.config.agents.researcher.model.clone(),
-            AgentType::Integrator => "deterministic".to_string(),
-            AgentType::Chat => stores.config.agents.implementer.model.clone(),
+            AgentKind::Coordinator => stores.config.agents.coordinator.role.model.clone(),
+            AgentKind::Implementer => stores.config.agents.implementer.model.clone(),
+            AgentKind::Reviewer => stores.config.agents.reviewer.model.clone(),
+            AgentKind::Researcher => stores.config.agents.researcher.model.clone(),
+            AgentKind::Integrator => "deterministic".to_string(),
+            AgentKind::Chat => stores.config.agents.implementer.model.clone(),
         };
         let mut session = AgentSession::new(agent_type, model);
         session.work_id = work_id;
@@ -143,11 +143,11 @@ pub(super) fn handle_agent_start(
             }
 
             // Gap #26: Researcher dedup by target_id
-            if agent_type == AgentType::Researcher
+            if agent_type == AgentKind::Researcher
                 && let Some(tid) = req.params.get("target_id").and_then(|v| v.as_str())
             {
                 let has_existing = sessions.values().any(|s| {
-                    s.agent_type == AgentType::Researcher
+                    s.agent_type == AgentKind::Researcher
                         && !s.status.is_terminal()
                         && s.target_id.as_deref() == Some(tid)
                 });
@@ -163,11 +163,11 @@ pub(super) fn handle_agent_start(
             }
 
             // Implementer dedup by work_id (mirrors Gap #26 Researcher dedup by target_id)
-            if agent_type == AgentType::Implementer
+            if agent_type == AgentKind::Implementer
                 && let Some(wi_id) = session.work_id.as_deref()
             {
                 let has_existing = sessions.values().any(|s| {
-                    s.agent_type == AgentType::Implementer
+                    s.agent_type == AgentKind::Implementer
                         && !s.status.is_terminal()
                         && s.work_id.as_deref() == Some(wi_id)
                 });
@@ -473,7 +473,7 @@ pub(super) fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
             .params
             .get("status")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
-        let type_filter: Option<AgentType> = req
+        let type_filter: Option<AgentKind> = req
             .params
             .get("agent_type")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
@@ -553,7 +553,7 @@ pub(super) fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> D
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use crate::agents::{AgentSession, AgentStatus, AgentType};
+    use crate::agents::{AgentSession, AgentStatus, AgentKind};
     use crate::daemon::handlers::dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,
@@ -567,7 +567,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let session = crate::agents::AgentSession::new(AgentType::Coordinator, "model".to_string());
+        let session = crate::agents::AgentSession::new(AgentKind::Coordinator, "model".to_string());
         stores
             .agent_sessions
             .write()
@@ -588,7 +588,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let mut session = crate::agents::AgentSession::new(AgentType::Coordinator, "model".to_string());
+        let mut session = crate::agents::AgentSession::new(AgentKind::Coordinator, "model".to_string());
         session.status = crate::agents::AgentStatus::Completed;
         stores
             .agent_sessions
@@ -607,7 +607,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let mut session = crate::agents::AgentSession::new(AgentKind::Implementer, "model".to_string());
         let _ = session.transition_to(crate::agents::AgentStatus::Running);
         let sid = session.id.clone();
         stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
@@ -645,7 +645,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let mut session = crate::agents::AgentSession::new(AgentKind::Implementer, "model".to_string());
         let _ = session.transition_to(crate::agents::AgentStatus::Running);
         let _ = session.transition_to(crate::agents::AgentStatus::Completed);
         let sid = session.id.clone();
@@ -667,7 +667,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "model".to_string());
+        let mut session = crate::agents::AgentSession::new(AgentKind::Implementer, "model".to_string());
         let _ = session.transition_to(crate::agents::AgentStatus::Running);
         let _ = session.transition_to(crate::agents::AgentStatus::Paused);
         let sid = session.id.clone();
@@ -757,21 +757,21 @@ mod tests {
     fn test_agent_session_model_from_config() {
         use crate::config::Config;
         let config = Config::default();
-        let cases: Vec<(AgentType, String)> = vec![
-            (AgentType::Coordinator, config.agents.coordinator.role.model.clone()),
-            (AgentType::Implementer, config.agents.implementer.model.clone()),
-            (AgentType::Reviewer, config.agents.reviewer.model.clone()),
-            (AgentType::Researcher, config.agents.researcher.model.clone()),
-            (AgentType::Integrator, "deterministic".to_string()),
+        let cases: Vec<(AgentKind, String)> = vec![
+            (AgentKind::Coordinator, config.agents.coordinator.role.model.clone()),
+            (AgentKind::Implementer, config.agents.implementer.model.clone()),
+            (AgentKind::Reviewer, config.agents.reviewer.model.clone()),
+            (AgentKind::Researcher, config.agents.researcher.model.clone()),
+            (AgentKind::Integrator, "deterministic".to_string()),
         ];
         for (agent_type, expected_model) in cases {
             let model = match agent_type {
-                AgentType::Coordinator => config.agents.coordinator.role.model.clone(),
-                AgentType::Implementer => config.agents.implementer.model.clone(),
-                AgentType::Reviewer => config.agents.reviewer.model.clone(),
-                AgentType::Researcher => config.agents.researcher.model.clone(),
-                AgentType::Integrator => "deterministic".to_string(),
-                AgentType::Chat => config.agents.implementer.model.clone(),
+                AgentKind::Coordinator => config.agents.coordinator.role.model.clone(),
+                AgentKind::Implementer => config.agents.implementer.model.clone(),
+                AgentKind::Reviewer => config.agents.reviewer.model.clone(),
+                AgentKind::Researcher => config.agents.researcher.model.clone(),
+                AgentKind::Integrator => "deterministic".to_string(),
+                AgentKind::Chat => config.agents.implementer.model.clone(),
             };
             assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
         }
@@ -785,7 +785,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         session.work_id = Some("wi-1".to_string());
         session.transition_to(AgentStatus::Running).unwrap();
         stores
@@ -817,7 +817,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         session.work_id = Some("wi-1".to_string());
         session.transition_to(AgentStatus::Running).unwrap();
         session.transition_to(AgentStatus::Completed).unwrap();
@@ -851,7 +851,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         session.work_id = Some("wi-1".to_string());
         session.transition_to(AgentStatus::Running).unwrap();
         stores
@@ -891,7 +891,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         let session_id = session.id.clone();
         stores.store.as_ref().unwrap().lock().unwrap().create(session).unwrap();
 
@@ -912,7 +912,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         let session_id = session.id.clone();
         stores
             .agent_sessions

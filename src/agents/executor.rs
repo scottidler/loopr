@@ -17,7 +17,7 @@ use eyre::{Result, eyre};
 use log::{debug, info, warn};
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentSession, AgentStatus, AgentType};
+use crate::agents::{AgentSession, AgentStatus, AgentKind};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
@@ -74,7 +74,7 @@ pub async fn run_single_work(
         let sessions = stores.read_agent_sessions()?;
         let active_count = sessions
             .values()
-            .filter(|s| s.agent_type == AgentType::Implementer && !s.status.is_terminal())
+            .filter(|s| s.agent_type == AgentKind::Implementer && !s.status.is_terminal())
             .count();
         let max_pool = stores.config.agents.implementer.max_pool as usize;
         if active_count >= max_pool {
@@ -87,7 +87,7 @@ pub async fn run_single_work(
 
         // Dedup: if an implementer is already running on this work, skip
         let has_existing = sessions.values().any(|s| {
-            s.agent_type == AgentType::Implementer && !s.status.is_terminal() && s.work_id.as_deref() == Some(work_id)
+            s.agent_type == AgentKind::Implementer && !s.status.is_terminal() && s.work_id.as_deref() == Some(work_id)
         });
         if has_existing {
             info!(
@@ -99,7 +99,7 @@ pub async fn run_single_work(
     }
 
     // Step 3: Create AgentSession
-    let mut session = AgentSession::new(AgentType::Implementer, implementer_config.model.clone());
+    let mut session = AgentSession::new(AgentKind::Implementer, implementer_config.model.clone());
     session.work_id = Some(work_id.to_string());
     let session_id = session.id.clone();
 
@@ -124,7 +124,7 @@ pub async fn run_single_work(
     // Step 4: Run the full agent lifecycle (worktree, LLM, loop, handback, cleanup)
     run_agent_task(
         session_id,
-        AgentType::Implementer,
+        AgentKind::Implementer,
         stores.clone(),
         event_tx.clone(),
         worktree_mgr.clone(),

@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::agents::AgentType;
+use crate::agents::AgentKind;
 use crate::config::InterviewMode;
 
 use super::fixtures::*;
@@ -111,9 +111,9 @@ fn test_full_fsm_cycle() {
 fn test_role_inference_from_agent_type() {
     use crate::domain::role::Role;
 
-    assert_eq!(AgentType::Implementer.default_role(), Role::Implementer);
-    assert_eq!(AgentType::Reviewer.default_role(), Role::Reviewer);
-    assert_eq!(AgentType::Coordinator.default_role(), Role::Coordinator);
-    assert_eq!(AgentType::Researcher.default_role(), Role::Researcher);
-    assert_eq!(AgentType::Integrator.default_role(), Role::Integrator);
+    assert_eq!(AgentKind::Implementer.default_role(), Role::Implementer);
+    assert_eq!(AgentKind::Reviewer.default_role(), Role::Reviewer);
+    assert_eq!(AgentKind::Coordinator.default_role(), Role::Coordinator);
+    assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
+    assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
 }

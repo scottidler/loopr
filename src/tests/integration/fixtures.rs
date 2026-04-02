@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentSession, AgentType};
+use crate::agents::{AgentSession, AgentKind};
 use crate::config::{Config, IntegratorConfig};
 use crate::daemon::context::Stores;
 use crate::daemon::handlers::dispatch;
@@ -38,7 +38,7 @@ pub(super) fn test_agent_logger(dir: &std::path::Path) -> crate::agents::agent_l
         .append(true)
         .open(&file_path)
         .unwrap();
-    crate::agents::agent_logger::AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+    crate::agents::agent_logger::AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
 }
 
 pub(super) fn test_event_tx() -> broadcast::Sender<DaemonEvent> {
@@ -60,7 +60,7 @@ pub(super) fn test_agent_context(
     tx: broadcast::Sender<DaemonEvent>,
     agent_log: crate::agents::agent_logger::AgentLogger,
 ) -> crate::agents::AgentContext {
-    let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+    let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
     crate::agents::AgentContext {
         session,
         stores: stores.clone(),

@@ -92,7 +92,7 @@ pub enum AgentAction {
         collection: String,
         id: String,
         target_status: String,
-        /// If None, role is inferred from agent_type via AgentType::default_role().
+        /// If None, role is inferred from agent_type via AgentKind::default_role().
         #[serde(default)]
         role: Option<String>,
     },

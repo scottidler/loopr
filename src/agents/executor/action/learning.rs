@@ -53,7 +53,7 @@ mod tests {
     use crate::agents::executor::tests::{
         test_stores, test_agent_context,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     
     
     
@@ -78,7 +78,7 @@ mod tests {
             applicable_roles: Some(vec!["implementer".to_string()]),
             resource_tags: Some(vec!["src/".to_string()]),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::LearningCreated(ref c) if c == "Always add tests"),
@@ -99,7 +99,7 @@ mod tests {
             applicable_roles: None,
             resource_tags: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::LearningCreated(_)));
     }

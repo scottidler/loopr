@@ -1,7 +1,7 @@
     use super::*;
     use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::{AgentSession, AgentType};
+    use crate::agents::{AgentSession, AgentKind};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig, ToolEntry};
     use crate::daemon::context::Stores;
     use crate::domain::learning::{Learning, LearningScope};
@@ -93,14 +93,14 @@
     }
 
     fn test_agent_logger(dir: &Path) -> AgentLogger {
-        use crate::agents::AgentType;
+        use crate::agents::AgentKind;
         let file_path = dir.join("test-agent.log");
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&file_path)
             .unwrap();
-        AgentLogger::_new_for_test(AgentType::Implementer, "test-session", file, file_path)
+        AgentLogger::_new_for_test(AgentKind::Implementer, "test-session", file, file_path)
     }
 
     fn test_bridge_with_tx(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
@@ -124,7 +124,7 @@
         let tool_runner = stores.read_tool_runner().unwrap();
         let tool_executor = stores.read_tool_executor().unwrap();
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test".into());
         session.work_id = Some(wi_id.clone());
         session.worktree_path = Some(dir.to_string_lossy().into());
 
@@ -582,7 +582,7 @@
             event_tx: event_tx.clone(),
         });
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test".into());
         session.work_id = Some(wi_id.clone());
         session.worktree_path = Some(dir.to_string_lossy().into());
 
@@ -957,7 +957,7 @@
 
         // Add a sibling agent session (different work_id, not terminal)
         let mut session =
-            crate::agents::AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
+            crate::agents::AgentSession::new(crate::agents::AgentKind::Implementer, "test-model".to_string());
         session.work_id = Some("wi-sibling".to_string());
         stores
             .agent_sessions

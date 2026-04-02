@@ -83,7 +83,7 @@ mod tests {
     use crate::agents::executor::tests::{
         test_stores, test_agent_context, test_agent_context_with_config,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     use crate::config::Config;
     
     
@@ -101,7 +101,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-acqlock");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let action = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
@@ -121,7 +121,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-lockconf");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let action = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
@@ -151,7 +151,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-rellock");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let acquire_action = AgentAction::AcquireLock {
             resource: "src/lib.rs".to_string(),
@@ -180,7 +180,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-reacq");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let action1 = AgentAction::AcquireLock {
             resource: "src/config.rs".to_string(),
@@ -210,7 +210,7 @@ mod tests {
     async fn test_lock_conflict_policy_ignore() {
         let dir = TestDir::new("loopr-exec-lockign");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         ctx.bridge.request(
             "lock.create",
@@ -242,7 +242,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Coordinator, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentKind::Coordinator, config);
 
         ctx.bridge.request(
             "lock.create",

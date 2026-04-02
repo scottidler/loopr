@@ -168,7 +168,7 @@ mod tests {
     use crate::agents::executor::tests::{
         test_stores, test_agent_context,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     
     
     
@@ -186,7 +186,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-done");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::Done {
             summary: "All done".to_string(),
@@ -204,7 +204,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-help");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::NeedHelp {
             reason: "Ambiguous spec".to_string(),
@@ -222,7 +222,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-unk");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::RunTool {
             tool: "nonexistent".to_string(),

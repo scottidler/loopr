@@ -80,14 +80,14 @@
     }
 
     pub(crate) fn test_agent_logger(dir: &std::path::Path) -> AgentLogger {
-        use crate::agents::AgentType;
+        use crate::agents::AgentKind;
         let file_path = dir.join("test-coordinator.log");
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&file_path)
             .unwrap();
-        AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+        AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
     }
 
     /// Build a CoordinatorAgent for testing with the given stores and LLM responses.
@@ -98,7 +98,7 @@
         config: CoordinatorConfig,
     ) -> CoordinatorAgent {
         let (event_tx, _rx) = broadcast::channel(16);
-        let session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(dir);
@@ -217,7 +217,7 @@
         let dir = TestDir::new("loopr-coord-sess");
         let stores = test_stores(&dir);
 
-        let session = AgentSession::new(AgentType::Implementer, "model".into());
+        let session = AgentSession::new(AgentKind::Implementer, "model".into());
         stores
             .agent_sessions
             .write()
@@ -249,7 +249,7 @@
         let dir = TestDir::new("loopr-coord-termsess");
         let stores = test_stores(&dir);
 
-        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
         session.status = AgentStatus::Completed;
         stores
             .agent_sessions
@@ -2481,7 +2481,7 @@
         let dir = TestDir::new("loopr-coord-errk-struct");
         let stores = test_stores(&dir);
 
-        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
         session.work_id = Some("wi-1".to_string());
         session.status = AgentStatus::Failed;
         session.error_kind = Some(AgentErrorKind::ContextOverflow);
@@ -2500,7 +2500,7 @@
         let dir = TestDir::new("loopr-coord-errk-nonfail");
         let stores = test_stores(&dir);
 
-        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
         session.work_id = Some("wi-1".to_string());
         session.status = AgentStatus::Completed;
         session.error_kind = Some(AgentErrorKind::ContextOverflow);
@@ -2518,7 +2518,7 @@
         let dir = TestDir::new("loopr-coord-errk-other");
         let stores = test_stores(&dir);
 
-        let mut session = AgentSession::new(AgentType::Implementer, "model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
         session.work_id = Some("wi-2".to_string());
         session.status = AgentStatus::Failed;
         session.error_kind = Some(AgentErrorKind::ContextOverflow);

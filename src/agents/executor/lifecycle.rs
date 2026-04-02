@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::{Agent, AgentContext, AgentStatus, AgentType};
+use crate::agents::{Agent, AgentContext, AgentStatus, AgentKind};
 use crate::agents::{coordinator, implementer, integrator, researcher, reviewer};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
@@ -22,7 +22,7 @@ use super::util::{determine_work_handback, persist_session, release_agent_locks,
 /// Phase 2 will add the full Implementer/Reviewer loops with LLM calls.
 pub async fn run_agent_task(
     session_id: String,
-    agent_type: AgentType,
+    agent_type: AgentKind,
     stores: Arc<Stores>,
     event_tx: broadcast::Sender<DaemonEvent>,
     worktree_mgr: WorktreeManager,
@@ -48,10 +48,10 @@ pub async fn run_agent_task(
             }
         };
         match agent_type {
-            AgentType::Implementer => session.work_id.clone(),
-            AgentType::Reviewer => session.bundle_id.clone(),
+            AgentKind::Implementer => session.work_id.clone(),
+            AgentKind::Reviewer => session.bundle_id.clone(),
             // Already handled by is_thinking_plane() above
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Chat => None,
+            AgentKind::Coordinator | AgentKind::Researcher | AgentKind::Integrator | AgentKind::Chat => None,
         }
     };
 
@@ -131,12 +131,12 @@ pub async fn run_agent_task(
 
     // Resolve session timeout from the agent's role config
     let timeout_secs = match agent_type {
-        AgentType::Implementer => stores.config.agents.implementer.session_timeout_secs,
-        AgentType::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
-        AgentType::Researcher => stores.config.agents.researcher.session_timeout_secs,
-        AgentType::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
-        AgentType::Integrator => stores.config.integrator.session_timeout_secs,
-        AgentType::Chat => None,
+        AgentKind::Implementer => stores.config.agents.implementer.session_timeout_secs,
+        AgentKind::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
+        AgentKind::Researcher => stores.config.agents.researcher.session_timeout_secs,
+        AgentKind::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
+        AgentKind::Integrator => stores.config.integrator.session_timeout_secs,
+        AgentKind::Chat => None,
     };
 
     let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log);
@@ -154,7 +154,7 @@ pub async fn run_agent_task(
     };
 
     // Bundle-aware work handback (implementer only)
-    if agent_type == AgentType::Implementer
+    if agent_type == AgentKind::Implementer
         && let Some(ref wi_id) = worktree_key
     {
         if let Some(target_status) = determine_work_handback(&stores, wi_id, &session_id, result.is_ok()) {
@@ -222,7 +222,7 @@ pub async fn run_agent_task(
         }
     }
     // Create a Learning from implementer failures so the Coordinator can adapt
-    if terminal_status == AgentStatus::Failed && agent_type == AgentType::Implementer {
+    if terminal_status == AgentStatus::Failed && agent_type == AgentKind::Implementer {
         let (wi_title, wi_id, iteration_count) = {
             let Ok(sessions) = stores.read_agent_sessions() else {
                 error!("agent_sessions lock poisoned");
@@ -280,7 +280,7 @@ pub async fn run_agent_task(
 /// Agent loop - dispatches to the appropriate agent implementation based on type.
 pub(super) async fn run_agent_loop(
     session_id: &str,
-    agent_type: AgentType,
+    agent_type: AgentKind,
     stores: &Arc<Stores>,
     bridge: &AgentIpcBridge,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -318,7 +318,7 @@ pub(super) async fn run_agent_loop(
     }
 
     let (result, iteration) = match agent_type {
-        AgentType::Implementer => {
+        AgentKind::Implementer => {
             let config = stores.config.agents.implementer.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
             let work_id = ctx
@@ -336,34 +336,34 @@ pub(super) async fn run_agent_loop(
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentType::Reviewer => {
+        AgentKind::Reviewer => {
             let config = stores.config.agents.reviewer.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
             let mut agent = reviewer::ReviewerAgent::new(ctx, llm, config)?;
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentType::Coordinator => {
+        AgentKind::Coordinator => {
             let config = stores.config.agents.coordinator.clone();
             let llm = create_llm_client(&config.role, session_id, event_tx)?;
             let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentType::Researcher => {
+        AgentKind::Researcher => {
             let config = stores.config.agents.researcher.clone();
             let llm = create_llm_client(&config, session_id, event_tx)?;
             let mut agent = researcher::ResearcherAgent::new(ctx, llm, config);
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentType::Integrator => {
+        AgentKind::Integrator => {
             let config = stores.config.integrator.clone();
             let mut agent = integrator::IntegratorAgent::new(ctx, config);
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
-        AgentType::Chat => {
+        AgentKind::Chat => {
             // Chat sessions are not started via run_agent_task - they use chat.submit IPC.
             // This arm should never be reached.
             return Ok(());
@@ -388,7 +388,7 @@ mod tests {
     
     
     use crate::agents::executor::tests::test_stores;
-    use crate::agents::AgentType;
+    use crate::agents::AgentKind;
     use crate::config::{Config, ProjectConfig};
     
     
@@ -408,14 +408,14 @@ mod tests {
     
     use eyre::eyre;
 
-    fn resolve_timeout(config: &Config, agent_type: AgentType) -> Option<u64> {
+    fn resolve_timeout(config: &Config, agent_type: AgentKind) -> Option<u64> {
         match agent_type {
-            AgentType::Implementer => config.agents.implementer.session_timeout_secs,
-            AgentType::Reviewer => config.agents.reviewer.session_timeout_secs,
-            AgentType::Researcher => config.agents.researcher.session_timeout_secs,
-            AgentType::Coordinator => config.agents.coordinator.role.session_timeout_secs,
-            AgentType::Integrator => config.integrator.session_timeout_secs,
-            AgentType::Chat => None,
+            AgentKind::Implementer => config.agents.implementer.session_timeout_secs,
+            AgentKind::Reviewer => config.agents.reviewer.session_timeout_secs,
+            AgentKind::Researcher => config.agents.researcher.session_timeout_secs,
+            AgentKind::Coordinator => config.agents.coordinator.role.session_timeout_secs,
+            AgentKind::Integrator => config.integrator.session_timeout_secs,
+            AgentKind::Chat => None,
         }
     }
 
@@ -427,7 +427,7 @@ mod tests {
         let (event_tx, mut event_rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        let session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
+        let session = AgentSession::new(AgentKind::Implementer, "test-model".to_string());
         let session_id = session.id.clone();
         stores
             .agent_sessions
@@ -437,7 +437,7 @@ mod tests {
 
         run_agent_task(
             session_id.clone(),
-            AgentType::Implementer,
+            AgentKind::Implementer,
             stores.clone(),
             event_tx,
             worktree_mgr,
@@ -489,7 +489,7 @@ mod tests {
         let (event_tx, _rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        let session = AgentSession::new(AgentType::Coordinator, "test-model".to_string());
+        let session = AgentSession::new(AgentKind::Coordinator, "test-model".to_string());
         let session_id = session.id.clone();
         stores
             .agent_sessions
@@ -510,7 +510,7 @@ mod tests {
 
         run_agent_task(
             session_id.clone(),
-            AgentType::Coordinator,
+            AgentKind::Coordinator,
             stores.clone(),
             event_tx,
             worktree_mgr,
@@ -531,7 +531,7 @@ mod tests {
         let (event_tx, _rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        let mut session = AgentSession::new(AgentType::Researcher, "test-model".to_string());
+        let mut session = AgentSession::new(AgentKind::Researcher, "test-model".to_string());
         session.target_id = Some("plan-1".to_string());
         let session_id = session.id.clone();
         stores
@@ -553,7 +553,7 @@ mod tests {
 
         run_agent_task(
             session_id.clone(),
-            AgentType::Researcher,
+            AgentKind::Researcher,
             stores.clone(),
             event_tx,
             worktree_mgr,
@@ -591,7 +591,7 @@ mod tests {
         let (event_tx, _rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        let session = AgentSession::new(AgentType::Integrator, "test-model".to_string());
+        let session = AgentSession::new(AgentKind::Integrator, "test-model".to_string());
         let session_id = session.id.clone();
         stores
             .agent_sessions
@@ -612,7 +612,7 @@ mod tests {
 
         run_agent_task(
             session_id.clone(),
-            AgentType::Integrator,
+            AgentKind::Integrator,
             stores.clone(),
             event_tx,
             worktree_mgr,
@@ -670,7 +670,7 @@ mod tests {
         let (event_tx, _rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".to_string());
         session.work_id = Some("wi-test-123".to_string());
         let session_id = session.id.clone();
         stores
@@ -681,7 +681,7 @@ mod tests {
 
         run_agent_task(
             session_id.clone(),
-            AgentType::Implementer,
+            AgentKind::Implementer,
             stores.clone(),
             event_tx,
             worktree_mgr,
@@ -697,12 +697,12 @@ mod tests {
     fn test_session_timeout_defaults_per_agent_type() {
         let config = Config::default();
 
-        assert_eq!(resolve_timeout(&config, AgentType::Implementer), Some(1800));
-        assert_eq!(resolve_timeout(&config, AgentType::Reviewer), Some(600));
-        assert_eq!(resolve_timeout(&config, AgentType::Researcher), Some(600));
-        assert_eq!(resolve_timeout(&config, AgentType::Integrator), Some(1200));
-        assert_eq!(resolve_timeout(&config, AgentType::Coordinator), None);
-        assert_eq!(resolve_timeout(&config, AgentType::Chat), None);
+        assert_eq!(resolve_timeout(&config, AgentKind::Implementer), Some(1800));
+        assert_eq!(resolve_timeout(&config, AgentKind::Reviewer), Some(600));
+        assert_eq!(resolve_timeout(&config, AgentKind::Researcher), Some(600));
+        assert_eq!(resolve_timeout(&config, AgentKind::Integrator), Some(1200));
+        assert_eq!(resolve_timeout(&config, AgentKind::Coordinator), None);
+        assert_eq!(resolve_timeout(&config, AgentKind::Chat), None);
     }
 
     #[tokio::test]

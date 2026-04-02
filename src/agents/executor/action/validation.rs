@@ -131,7 +131,7 @@ mod tests {
         test_stores, test_agent_context,
         create_test_hierarchy,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     
     
     
@@ -148,7 +148,7 @@ mod tests {
     async fn test_execute_validate_document() {
         let dir = TestDir::new("loopr-exec-valdoc");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 

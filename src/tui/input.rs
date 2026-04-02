@@ -815,7 +815,7 @@ mod tests {
     fn test_apply_pause_with_running_coordinator() {
         let mut app = App::new();
         let mut session =
-            crate::agents::AgentSession::new(crate::agents::AgentType::Coordinator, "test-model".to_string());
+            crate::agents::AgentSession::new(crate::agents::AgentKind::Coordinator, "test-model".to_string());
         session.status = crate::agents::AgentStatus::Running;
         let session_id = session.id.clone();
         app.state.agent_sessions.push(session);
@@ -827,7 +827,7 @@ mod tests {
     fn test_apply_resume_with_paused_coordinator() {
         let mut app = App::new();
         let mut session =
-            crate::agents::AgentSession::new(crate::agents::AgentType::Coordinator, "test-model".to_string());
+            crate::agents::AgentSession::new(crate::agents::AgentKind::Coordinator, "test-model".to_string());
         session.status = crate::agents::AgentStatus::Paused;
         let session_id = session.id.clone();
         app.state.agent_sessions.push(session);
@@ -839,7 +839,7 @@ mod tests {
     fn test_apply_stop_coordinator() {
         let mut app = App::new();
         let mut session =
-            crate::agents::AgentSession::new(crate::agents::AgentType::Coordinator, "test-model".to_string());
+            crate::agents::AgentSession::new(crate::agents::AgentKind::Coordinator, "test-model".to_string());
         session.status = crate::agents::AgentStatus::Running;
         let session_id = session.id.clone();
         app.state.agent_sessions.push(session);

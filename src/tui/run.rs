@@ -1395,12 +1395,12 @@ mod tests {
 
     #[test]
     fn test_draw_with_agent_sessions() {
-        use crate::agents::{AgentSession, AgentType};
+        use crate::agents::{AgentSession, AgentKind};
         let mut app = App::new();
         app.current_view = View::Agents;
         app.state
             .agent_sessions
-            .push(AgentSession::new(AgentType::Implementer, "test-model".to_string()));
+            .push(AgentSession::new(AgentKind::Implementer, "test-model".to_string()));
         let mut terminal = test_terminal();
         terminal.draw(|frame| draw(&app, frame)).unwrap();
     }
@@ -1833,7 +1833,7 @@ mod tests {
             "coord".into(),
         ));
         app.state.agent_sessions.push(crate::agents::AgentSession::new(
-            crate::agents::AgentType::Coordinator,
+            crate::agents::AgentKind::Coordinator,
             "model".to_string(),
         ));
 
@@ -2066,7 +2066,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-agent-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_session = AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
+        let mock_session = AgentSession::new(crate::agents::AgentKind::Implementer, "test-model".to_string());
         let sessions_json = serde_json::to_value(vec![mock_session]).unwrap();
 
         let server = IpcServer::new(&path);

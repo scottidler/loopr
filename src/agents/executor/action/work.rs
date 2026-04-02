@@ -399,7 +399,7 @@ mod tests {
         test_stores, test_agent_context,
         create_test_hierarchy,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     
     use crate::daemon::context::Stores;
     use crate::domain::bundle::BundleStatus;
@@ -412,7 +412,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-transparam");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -436,7 +436,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-autotrans");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -471,7 +471,7 @@ mod tests {
     async fn test_execute_create_work() {
         let dir = TestDir::new("loopr-exec-createwi");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
         ctx.bridge.request(
@@ -509,7 +509,7 @@ mod tests {
             query: "How does auth work?".to_string(),
             scope_id: "plan-1".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
@@ -523,7 +523,7 @@ mod tests {
     async fn test_transition_role_inference() {
         let dir = TestDir::new("loopr-exec-roleinfer");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -545,7 +545,7 @@ mod tests {
     async fn test_transition_role_inference_all_collections() {
         let dir = TestDir::new("loopr-exec-transall");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (plan_id, spec_id, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -585,7 +585,7 @@ mod tests {
     async fn test_transition_assignee_validation_for_inprogress() {
         let dir = TestDir::new("loopr-exec-assignee");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -612,7 +612,7 @@ mod tests {
             acceptance_criteria: vec![],
             dependencies: vec![],
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_work failed")),
@@ -630,7 +630,7 @@ mod tests {
             query: "What patterns are used in the codebase?".to_string(),
             scope_id: "spec-1".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
@@ -644,7 +644,7 @@ mod tests {
     async fn test_assign_agent_dependency_not_met() {
         let dir = TestDir::new("loopr-exec-depnotmet");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -690,7 +690,7 @@ mod tests {
     async fn test_assign_agent_dependency_met() {
         let dir = TestDir::new("loopr-exec-depmet");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -747,7 +747,7 @@ mod tests {
     async fn test_create_work_with_dependencies() {
         let dir = TestDir::new("loopr-exec-wideps");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -773,7 +773,7 @@ mod tests {
     async fn test_create_work_duplicate_rejected() {
         let dir = TestDir::new("loopr-exec-widup");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -808,7 +808,7 @@ mod tests {
     async fn test_create_work_duplicate_case_insensitive() {
         let dir = TestDir::new("loopr-exec-widupcase");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -844,7 +844,7 @@ mod tests {
     async fn test_assign_agent_to_done_work_returns_directive_error() {
         let dir = TestDir::new("loopr-exec-assigndone");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -977,7 +977,7 @@ mod tests {
     async fn test_override_guard_merged_blocks_ready() {
         let dir = TestDir::new("loopr-exec-guard-merged");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (wi_id, bundle_id) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
 
@@ -1010,7 +1010,7 @@ mod tests {
     async fn test_override_guard_integrating_blocks_ready() {
         let dir = TestDir::new("loopr-exec-guard-integrating");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (wi_id, bundle_id) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Integrating");
 
@@ -1042,7 +1042,7 @@ mod tests {
     async fn test_override_guard_rejected_allows_ready() {
         let dir = TestDir::new("loopr-exec-guard-rejected");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Rejected");
 
@@ -1064,7 +1064,7 @@ mod tests {
     async fn test_override_guard_merged_allows_abandoned() {
         let dir = TestDir::new("loopr-exec-guard-abandoned");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
 
@@ -1086,7 +1086,7 @@ mod tests {
     async fn test_override_guard_mixed_bundles_merged_blocks() {
         let dir = TestDir::new("loopr-exec-guard-mixed");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
 

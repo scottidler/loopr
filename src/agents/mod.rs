@@ -22,7 +22,7 @@ pub mod worker;
 
 pub use self::action::AgentAction;
 pub use self::event::AgentEvent;
-pub use self::kind::AgentType;
+pub use self::kind::AgentKind;
 pub use self::session::AgentSession;
 pub use self::status::AgentStatus;
 
@@ -51,7 +51,7 @@ pub trait Agent: Send {
     async fn run(&mut self) -> Result<()>;
 
     /// Agent type for dispatch and logging.
-    fn agent_type(&self) -> AgentType;
+    fn agent_type(&self) -> AgentKind;
 }
 
 /// Shared cross-cutting fields for all agents.
@@ -70,7 +70,7 @@ impl AgentContext {
     /// Create an AgentContext by cloning the session from stores.
     pub fn from_session_id(
         session_id: &str,
-        agent_type: AgentType,
+        agent_type: AgentKind,
         stores: Arc<Stores>,
         event_tx: broadcast::Sender<DaemonEvent>,
     ) -> eyre::Result<Self> {
@@ -190,7 +190,7 @@ mod tests {
             .append(true)
             .open(&file_path)
             .unwrap();
-        AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+        AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
     }
 
     fn test_stores_with_dir(dir: &Path) -> Arc<crate::daemon::context::Stores> {
@@ -212,7 +212,7 @@ mod tests {
     fn test_agent_context(
         dir: &Path,
         stores: &Arc<crate::daemon::context::Stores>,
-        agent_type: AgentType,
+        agent_type: AgentKind,
     ) -> (AgentContext, broadcast::Receiver<DaemonEvent>) {
         let (event_tx, event_rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
@@ -240,7 +240,7 @@ mod tests {
         let stores = test_stores_with_dir(&dir);
 
         // Insert a session into stores
-        let session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         let session_id = session.id.clone();
         stores
             .agent_sessions
@@ -249,11 +249,11 @@ mod tests {
             .insert(session_id.clone(), session);
 
         let (event_tx, _event_rx) = broadcast::channel(16);
-        let ctx = AgentContext::from_session_id(&session_id, AgentType::Implementer, stores.clone(), event_tx);
+        let ctx = AgentContext::from_session_id(&session_id, AgentKind::Implementer, stores.clone(), event_tx);
         assert!(ctx.is_ok());
         let ctx = ctx.unwrap();
         assert_eq!(ctx.session.id, session_id);
-        assert_eq!(ctx.session.agent_type, AgentType::Implementer);
+        assert_eq!(ctx.session.agent_type, AgentKind::Implementer);
     }
 
     #[test]
@@ -262,7 +262,7 @@ mod tests {
         let stores = test_stores_with_dir(&dir);
 
         let (event_tx, _event_rx) = broadcast::channel(16);
-        let result = AgentContext::from_session_id("nonexistent", AgentType::Coordinator, stores, event_tx);
+        let result = AgentContext::from_session_id("nonexistent", AgentKind::Coordinator, stores, event_tx);
         let err_msg = result.err().expect("expected Err").to_string();
         assert!(
             err_msg.contains("session not found"),
@@ -274,7 +274,7 @@ mod tests {
     fn test_agent_context_log_delegates() {
         let dir = make_test_dir("log-delegates");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         // These should not panic -- they delegate to AgentLogger
         ctx.info("info message");
@@ -294,7 +294,7 @@ mod tests {
     fn test_agent_context_is_cancelled_false_when_running() {
         let dir = make_test_dir("cancel-false");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Insert session into stores with Starting status
         stores
@@ -310,7 +310,7 @@ mod tests {
     fn test_agent_context_is_cancelled_true_when_cancelled() {
         let dir = make_test_dir("cancel-true");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Insert session with Cancelled status
         let mut session = ctx.session.clone();
@@ -328,7 +328,7 @@ mod tests {
     fn test_agent_context_is_cancelled_true_when_session_missing() {
         let dir = make_test_dir("cancel-missing");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Don't insert session -- simulates a removed/expired session
         assert!(ctx.is_cancelled());
@@ -338,7 +338,7 @@ mod tests {
     fn test_agent_context_persist_iteration() {
         let dir = make_test_dir("persist-iter");
         let stores = test_stores_with_dir(&dir);
-        let (mut ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (mut ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Insert session with iteration 0
         stores
@@ -361,7 +361,7 @@ mod tests {
     fn test_agent_context_persist_iteration_noop_when_missing() {
         let dir = make_test_dir("persist-iter-noop");
         let stores = test_stores_with_dir(&dir);
-        let (mut ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (mut ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Don't insert session -- persist_iteration should silently no-op
         ctx.session.iteration = 10;
@@ -372,7 +372,7 @@ mod tests {
     fn test_agent_context_emit_iteration_completed() {
         let dir = make_test_dir("emit-iter");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, mut rx) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, mut rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         ctx.emit_iteration_completed(3, "Planned 5 specs");
 
@@ -391,7 +391,7 @@ mod tests {
     fn test_agent_context_emit_iteration_completed_no_receivers() {
         let dir = make_test_dir("emit-no-rx");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, rx) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         // Drop receiver -- emit should not panic (uses `let _ =`)
         drop(rx);
@@ -402,7 +402,7 @@ mod tests {
     fn test_cache_helper_returns_guard() {
         let dir = make_test_dir("cache-helper");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Basic usage: acquire lock, record, check hit
         let path = dir.join("test.txt");
@@ -416,7 +416,7 @@ mod tests {
     fn test_cache_helper_recovers_from_poison() {
         let dir = make_test_dir("cache-poison");
         let stores = test_stores_with_dir(&dir);
-        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         // Poison the mutex by panicking in another thread while holding it
         let cache_ref = &ctx.read_cache;

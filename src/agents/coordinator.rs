@@ -14,7 +14,7 @@ use crate::agents::generation::{
 };
 use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
-use crate::agents::{Agent, AgentContext, AgentStatus, AgentType};
+use crate::agents::{Agent, AgentContext, AgentStatus, AgentKind};
 use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
@@ -1468,8 +1468,8 @@ impl Agent for CoordinatorAgent {
         }
     }
 
-    fn agent_type(&self) -> AgentType {
-        AgentType::Coordinator
+    fn agent_type(&self) -> AgentKind {
+        AgentKind::Coordinator
     }
 }
 

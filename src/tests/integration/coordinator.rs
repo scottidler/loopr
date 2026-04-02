@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::agents::{AgentSession, AgentType};
+use crate::agents::{AgentSession, AgentKind};
 use crate::config::InterviewMode;
 use crate::daemon::context::Stores;
 use crate::test_util::TestDir;
@@ -33,7 +33,7 @@ fn test_coordinator_state_summary_multi_record() {
     );
 
     // Add agent session
-    let session = AgentSession::new(AgentType::Implementer, "model".into());
+    let session = AgentSession::new(AgentKind::Implementer, "model".into());
     stores
         .agent_sessions
         .write()
@@ -238,13 +238,13 @@ async fn test_coordinator_assigns_implementer_completes() {
         .open(&log_file_path)
         .unwrap();
     let agent_log = crate::agents::agent_logger::AgentLogger::_new_for_test(
-        AgentType::Implementer,
+        AgentKind::Implementer,
         "test-pipeline",
         log_file,
         log_file_path,
     );
     let config = crate::config::AgentRoleConfig::default_implementer();
-    let mut session = crate::agents::AgentSession::new(AgentType::Implementer, "test".into());
+    let mut session = crate::agents::AgentSession::new(AgentKind::Implementer, "test".into());
     session.work_id = Some(wi_id.clone());
     session.worktree_path = Some(dir.to_string_lossy().into());
     let impl_bridge = crate::agents::bridge::AgentIpcBridge::new(

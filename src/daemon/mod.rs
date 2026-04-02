@@ -772,7 +772,7 @@ mod tests {
         {
             let mut sessions = stores.agent_sessions.write().unwrap();
             let mut session =
-                crate::agents::AgentSession::new(crate::agents::AgentType::Implementer, "test-model".to_string());
+                crate::agents::AgentSession::new(crate::agents::AgentKind::Implementer, "test-model".to_string());
             session.status = AgentStatus::Running;
             sessions.insert(session.id.clone(), session);
         }

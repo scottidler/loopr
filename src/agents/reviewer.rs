@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::context::ContextBuilder;
 use crate::agents::implementer::{ChatMessage, LlmClient};
-use crate::agents::{Agent, AgentContext, AgentType};
+use crate::agents::{Agent, AgentContext, AgentKind};
 use crate::config::AgentRoleConfig;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
@@ -306,8 +306,8 @@ impl Agent for ReviewerAgent {
         Ok(())
     }
 
-    fn agent_type(&self) -> AgentType {
-        AgentType::Reviewer
+    fn agent_type(&self) -> AgentKind {
+        AgentKind::Reviewer
     }
 }
 
@@ -319,7 +319,7 @@ mod tests {
 
     use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::{AgentContext, AgentSession, AgentType};
+    use crate::agents::{AgentContext, AgentSession, AgentKind};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig};
     use crate::daemon::context::Stores;
     use crate::domain::bundle::{Bundle, BundleStatus};
@@ -454,7 +454,7 @@ mod tests {
             .append(true)
             .open(&file_path)
             .unwrap();
-        AgentLogger::_new_for_test(AgentType::Reviewer, "test-session", file, file_path)
+        AgentLogger::_new_for_test(AgentKind::Reviewer, "test-session", file, file_path)
     }
 
     fn test_reviewer(dir: &Path, stores: Arc<Stores>, bundle_id: &str, llm: Box<dyn LlmClient>) -> ReviewerAgent {
@@ -462,7 +462,7 @@ mod tests {
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(dir);
-        let mut session = AgentSession::new(AgentType::Reviewer, "test".into());
+        let mut session = AgentSession::new(AgentKind::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id.to_string());
         stores
             .agent_sessions
@@ -704,7 +704,7 @@ mod tests {
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
-        let session = AgentSession::new(AgentType::Reviewer, "test".into());
+        let session = AgentSession::new(AgentKind::Reviewer, "test".into());
         // No bundle_id set
         let ctx = AgentContext {
             session,

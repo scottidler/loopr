@@ -4,7 +4,7 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 use taskstore::record::{IndexValue, Record};
 
-use crate::agents::kind::AgentType;
+use crate::agents::kind::AgentKind;
 use crate::agents::status::AgentStatus;
 use crate::id;
 
@@ -12,7 +12,7 @@ use crate::id;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSession {
     pub id: String,
-    pub agent_type: AgentType,
+    pub agent_type: AgentKind,
     pub work_id: Option<String>,
     pub bundle_id: Option<String>,
     pub status: AgentStatus,
@@ -40,7 +40,7 @@ pub struct AgentSession {
 }
 
 impl AgentSession {
-    pub fn new(agent_type: AgentType, model: String) -> Self {
+    pub fn new(agent_type: AgentKind, model: String) -> Self {
         let now = id::now_millis();
         Self {
             id: id::generate_id("ag"),
@@ -114,9 +114,9 @@ mod tests {
 
     #[test]
     fn test_agent_session_new() {
-        let session = AgentSession::new(AgentType::Implementer, "claude-sonnet-4-6".to_string());
+        let session = AgentSession::new(AgentKind::Implementer, "claude-sonnet-4-6".to_string());
         assert!(!session.id.is_empty());
-        assert_eq!(session.agent_type, AgentType::Implementer);
+        assert_eq!(session.agent_type, AgentKind::Implementer);
         assert_eq!(session.status, AgentStatus::Starting);
         assert_eq!(session.iteration, 0);
         assert_eq!(session.model, "claude-sonnet-4-6");
@@ -132,32 +132,32 @@ mod tests {
 
     #[test]
     fn test_agent_session_new_researcher_with_target() {
-        let mut session = AgentSession::new(AgentType::Researcher, "model".to_string());
+        let mut session = AgentSession::new(AgentKind::Researcher, "model".to_string());
         session.target_id = Some("wi-123".to_string());
         session.query = Some("Investigate auth module".to_string());
-        assert_eq!(session.agent_type, AgentType::Researcher);
+        assert_eq!(session.agent_type, AgentKind::Researcher);
         assert_eq!(session.target_id.as_deref(), Some("wi-123"));
         assert_eq!(session.query.as_deref(), Some("Investigate auth module"));
     }
 
     #[test]
     fn test_agent_session_new_coordinator() {
-        let session = AgentSession::new(AgentType::Coordinator, "model".to_string());
-        assert_eq!(session.agent_type, AgentType::Coordinator);
+        let session = AgentSession::new(AgentKind::Coordinator, "model".to_string());
+        assert_eq!(session.agent_type, AgentKind::Coordinator);
         assert!(session.target_id.is_none());
         assert!(session.query.is_none());
     }
 
     #[test]
     fn test_agent_session_unique_ids() {
-        let s1 = AgentSession::new(AgentType::Implementer, "m".to_string());
-        let s2 = AgentSession::new(AgentType::Implementer, "m".to_string());
+        let s1 = AgentSession::new(AgentKind::Implementer, "m".to_string());
+        let s2 = AgentSession::new(AgentKind::Implementer, "m".to_string());
         assert_ne!(s1.id, s2.id);
     }
 
     #[test]
     fn test_agent_session_transition_valid() {
-        let mut session = AgentSession::new(AgentType::Implementer, "m".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         assert!(session.transition_to(AgentStatus::Running).is_ok());
         assert_eq!(session.status, AgentStatus::Running);
         assert!(session.updated_at >= session.created_at);
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_agent_session_transition_invalid() {
-        let mut session = AgentSession::new(AgentType::Implementer, "m".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         let result = session.transition_to(AgentStatus::Completed);
         assert!(result.is_err());
         assert_eq!(session.status, AgentStatus::Starting); // unchanged
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_agent_session_transition_chain() {
-        let mut session = AgentSession::new(AgentType::Reviewer, "m".to_string());
+        let mut session = AgentSession::new(AgentKind::Reviewer, "m".to_string());
         assert!(session.transition_to(AgentStatus::Running).is_ok());
         assert!(session.transition_to(AgentStatus::WaitingForLlm).is_ok());
         assert!(session.transition_to(AgentStatus::Running).is_ok());
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_agent_session_serde_roundtrip() {
-        let mut session = AgentSession::new(AgentType::Implementer, "claude-sonnet-4-6".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "claude-sonnet-4-6".to_string());
         session.work_id = Some("wi-123".to_string());
         session.worktree_path = Some("/tmp/worktree".to_string());
         let json = serde_json::to_string(&session).unwrap();
@@ -213,13 +213,13 @@ mod tests {
 
     #[test]
     fn test_agent_session_record_id() {
-        let session = AgentSession::new(AgentType::Implementer, "m".to_string());
+        let session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         assert_eq!(Record::id(&session), session.id.as_str());
     }
 
     #[test]
     fn test_agent_session_record_updated_at() {
-        let session = AgentSession::new(AgentType::Implementer, "m".to_string());
+        let session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         assert_eq!(Record::updated_at(&session), session.updated_at);
     }
 
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_agent_session_record_indexed_fields() {
-        let mut session = AgentSession::new(AgentType::Implementer, "m".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         session.work_id = Some("wi-1".to_string());
 
         let fields = session.indexed_fields();
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_agent_session_record_indexed_fields_reviewer() {
-        let mut session = AgentSession::new(AgentType::Reviewer, "m".to_string());
+        let mut session = AgentSession::new(AgentKind::Reviewer, "m".to_string());
         session.bundle_id = Some("b-1".to_string());
 
         let fields = session.indexed_fields();
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_agent_session_record_indexed_fields_with_target_id() {
-        let mut session = AgentSession::new(AgentType::Researcher, "m".to_string());
+        let mut session = AgentSession::new(AgentKind::Researcher, "m".to_string());
         session.target_id = Some("wi-42".to_string());
 
         let fields = session.indexed_fields();

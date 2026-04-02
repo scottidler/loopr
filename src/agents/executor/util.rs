@@ -2,7 +2,7 @@ use log::{debug, error, warn};
 
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::{AgentSession, AgentType};
+use crate::agents::{AgentSession, AgentKind};
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::tick::TickStatus;
@@ -71,7 +71,7 @@ pub(super) fn determine_work_handback(
     let sessions = stores.read_agent_sessions().ok()?;
     let sibling_active = sessions.values().any(|s| {
         s.id != session_id
-            && s.agent_type == AgentType::Implementer
+            && s.agent_type == AgentKind::Implementer
             && s.work_id.as_deref() == Some(work_id)
             && !s.status.is_terminal()
     });
@@ -176,7 +176,7 @@ pub(super) fn persist_session(stores: &Stores, session: &AgentSession) {
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use crate::agents::{AgentSession, AgentStatus, AgentType};
+    use crate::agents::{AgentSession, AgentStatus, AgentKind};
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::executor::tests::{test_agent_logger, test_stores};
     use crate::domain::bundle::BundleStatus;
@@ -337,7 +337,7 @@ mod tests {
         let dir = TestDir::new("loopr-handback-sib");
         let stores = test_stores(&dir);
 
-        let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut sibling = AgentSession::new(AgentKind::Implementer, "test-model".into());
         sibling.work_id = Some("wi-1".to_string());
         sibling.transition_to(AgentStatus::Running).unwrap();
         stores
@@ -355,7 +355,7 @@ mod tests {
         let dir = TestDir::new("loopr-handback-sibterm");
         let stores = test_stores(&dir);
 
-        let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut sibling = AgentSession::new(AgentKind::Implementer, "test-model".into());
         sibling.work_id = Some("wi-1".to_string());
         sibling.transition_to(AgentStatus::Running).unwrap();
         sibling.transition_to(AgentStatus::Completed).unwrap();

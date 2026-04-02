@@ -1,7 +1,7 @@
     use super::*;
     use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::{AgentContext, AgentSession, AgentStatus, AgentType};
+    use crate::agents::{AgentContext, AgentSession, AgentStatus, AgentKind};
     use crate::config::{Config, ProjectConfig};
     use crate::daemon::context::Stores;
     use crate::domain::bundle::Bundle;
@@ -37,7 +37,7 @@
             .append(true)
             .open(&file_path)
             .unwrap();
-        AgentLogger::_new_for_test(AgentType::Integrator, "test-session", file, file_path)
+        AgentLogger::_new_for_test(AgentKind::Integrator, "test-session", file, file_path)
     }
 
     fn test_config() -> IntegratorConfig {
@@ -64,7 +64,7 @@
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(dir);
-        let session = AgentSession::new(AgentType::Integrator, "model".into());
+        let session = AgentSession::new(AgentKind::Integrator, "model".into());
         stores
             .agent_sessions
             .write()
@@ -93,7 +93,7 @@
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(dir);
-        let session = AgentSession::new(AgentType::Integrator, "model".into());
+        let session = AgentSession::new(AgentKind::Integrator, "model".into());
         stores
             .agent_sessions
             .write()
@@ -119,7 +119,7 @@
         let dir = TestDir::new("loopr-intg-canc1");
         let stores = test_stores(&dir);
 
-        let mut session = AgentSession::new(AgentType::Integrator, "model".into());
+        let mut session = AgentSession::new(AgentKind::Integrator, "model".into());
         let _ = session.transition_to(AgentStatus::Running);
         let sid = session.id.clone();
         stores.agent_sessions.write().unwrap().insert(sid.clone(), session);
@@ -133,7 +133,7 @@
         let dir = TestDir::new("loopr-intg-canc2");
         let stores = test_stores(&dir);
 
-        let mut session = AgentSession::new(AgentType::Integrator, "model".into());
+        let mut session = AgentSession::new(AgentKind::Integrator, "model".into());
         let _ = session.transition_to(AgentStatus::Running);
         let _ = session.transition_to(AgentStatus::Cancelled);
         let sid = session.id.clone();

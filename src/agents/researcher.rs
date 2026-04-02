@@ -9,7 +9,7 @@ use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::sandbox;
-use crate::agents::{Agent, AgentAction, AgentContext, AgentStatus, AgentType};
+use crate::agents::{Agent, AgentAction, AgentContext, AgentStatus, AgentKind};
 use crate::config::AgentRoleConfig;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
@@ -417,8 +417,8 @@ impl Agent for ResearcherAgent {
         ))
     }
 
-    fn agent_type(&self) -> AgentType {
-        AgentType::Researcher
+    fn agent_type(&self) -> AgentKind {
+        AgentKind::Researcher
     }
 }
 
@@ -453,7 +453,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
 mod tests {
     use super::*;
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::{AgentContext, AgentSession, AgentType};
+    use crate::agents::{AgentContext, AgentSession, AgentKind};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig};
     use crate::daemon::context::Stores;
     use crate::test_util::TestDir;
@@ -511,7 +511,7 @@ mod tests {
             .append(true)
             .open(&file_path)
             .unwrap();
-        AgentLogger::_new_for_test(AgentType::Researcher, "test-session", file, file_path)
+        AgentLogger::_new_for_test(AgentKind::Researcher, "test-session", file, file_path)
     }
 
     fn test_researcher_agent(dir: &Path, stores: Arc<Stores>, llm: Box<dyn LlmClient>) -> ResearcherAgent {
@@ -520,7 +520,7 @@ mod tests {
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(dir);
         let config = AgentRoleConfig::default_researcher();
-        let mut session = AgentSession::new(AgentType::Researcher, "test".into());
+        let mut session = AgentSession::new(AgentKind::Researcher, "test".into());
         session.query = Some("test query".into());
         stores
             .agent_sessions
@@ -826,7 +826,7 @@ mod tests {
         let agent_log = test_agent_logger(&dir);
         let mut config = AgentRoleConfig::default_researcher();
         config.max_iterations = 3;
-        let mut session = AgentSession::new(AgentType::Researcher, "test".into());
+        let mut session = AgentSession::new(AgentKind::Researcher, "test".into());
         session.query = Some("Search forever".into());
         stores
             .agent_sessions

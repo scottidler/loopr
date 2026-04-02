@@ -4,7 +4,7 @@ use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
 
-use crate::agents::AgentType;
+use crate::agents::AgentKind;
 use crate::config::IntegratorConfig;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
@@ -59,14 +59,14 @@ macro_rules! try_handler {
 }
 
 /// Returns the configured max_pool for a given agent type.
-fn max_pool_for(agent_type: AgentType, config: &crate::config::Config) -> u32 {
+fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
     match agent_type {
-        AgentType::Implementer => config.agents.implementer.max_pool,
-        AgentType::Reviewer => config.agents.reviewer.max_pool,
-        AgentType::Coordinator => config.agents.coordinator.role.max_pool,
-        AgentType::Researcher => config.agents.researcher.max_pool,
-        AgentType::Integrator => 1,
-        AgentType::Chat => 1, // Single chat session for now
+        AgentKind::Implementer => config.agents.implementer.max_pool,
+        AgentKind::Reviewer => config.agents.reviewer.max_pool,
+        AgentKind::Coordinator => config.agents.coordinator.role.max_pool,
+        AgentKind::Researcher => config.agents.researcher.max_pool,
+        AgentKind::Integrator => 1,
+        AgentKind::Chat => 1, // Single chat session for now
     }
 }
 
@@ -264,7 +264,7 @@ pub(crate) mod tests {
 
     use super::*;
 
-    use crate::agents::AgentType;
+    use crate::agents::AgentKind;
     use crate::config::IntegratorConfig;
     use crate::domain::bundle::Bundle;
     use crate::domain::learning::Learning;
@@ -552,10 +552,10 @@ pub(crate) mod tests {
     #[test]
     fn test_max_pool_for_helper() {
         let config = crate::config::Config::default();
-        assert_eq!(max_pool_for(AgentType::Implementer, &config), 6);
-        assert_eq!(max_pool_for(AgentType::Reviewer, &config), 2);
-        assert_eq!(max_pool_for(AgentType::Coordinator, &config), 1);
-        assert_eq!(max_pool_for(AgentType::Researcher, &config), 4);
-        assert_eq!(max_pool_for(AgentType::Integrator, &config), 1);
+        assert_eq!(max_pool_for(AgentKind::Implementer, &config), 6);
+        assert_eq!(max_pool_for(AgentKind::Reviewer, &config), 2);
+        assert_eq!(max_pool_for(AgentKind::Coordinator, &config), 1);
+        assert_eq!(max_pool_for(AgentKind::Researcher, &config), 4);
+        assert_eq!(max_pool_for(AgentKind::Integrator, &config), 1);
     }
 }

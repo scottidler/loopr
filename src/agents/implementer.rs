@@ -9,7 +9,7 @@ use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
-use crate::agents::{Agent, AgentAction, AgentContext, AgentType};
+use crate::agents::{Agent, AgentAction, AgentContext, AgentKind};
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
 use crate::domain::role::Role;
@@ -574,8 +574,8 @@ impl Agent for ImplementerAgent {
         Err(eyre!("implementer reached max iterations ({})", max_iterations))
     }
 
-    fn agent_type(&self) -> AgentType {
-        AgentType::Implementer
+    fn agent_type(&self) -> AgentKind {
+        AgentKind::Implementer
     }
 }
 

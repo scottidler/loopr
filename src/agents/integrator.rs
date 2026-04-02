@@ -10,7 +10,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use eyre::{Result, eyre};
 
-use crate::agents::{Agent, AgentContext, AgentType};
+use crate::agents::{Agent, AgentContext, AgentKind};
 use crate::config::IntegratorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
@@ -94,8 +94,8 @@ impl Agent for IntegratorAgent {
         }
     }
 
-    fn agent_type(&self) -> AgentType {
-        AgentType::Integrator
+    fn agent_type(&self) -> AgentKind {
+        AgentKind::Integrator
     }
 }
 

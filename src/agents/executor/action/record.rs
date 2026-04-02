@@ -356,7 +356,7 @@ mod tests {
         test_stores, test_agent_context,
         create_test_hierarchy,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     
     
     
@@ -379,7 +379,7 @@ mod tests {
             description: "Plan desc".to_string(),
             acceptance_criteria: "Tests pass".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "plans");
@@ -394,7 +394,7 @@ mod tests {
     async fn test_execute_create_spec() {
         let dir = TestDir::new("loopr-exec-createspec");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -416,7 +416,7 @@ mod tests {
     async fn test_execute_create_phase() {
         let dir = TestDir::new("loopr-exec-createphase");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, spec_id, _, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -445,7 +445,7 @@ mod tests {
             description: "desc".to_string(),
             acceptance_criteria: "pass".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
@@ -466,7 +466,7 @@ mod tests {
     async fn test_execute_create_spec_error_path() {
         let dir = TestDir::new("loopr-exec-specerr");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
@@ -502,7 +502,7 @@ mod tests {
             description: "desc".to_string(),
             order: 1,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_phase failed")),

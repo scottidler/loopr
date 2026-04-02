@@ -60,7 +60,7 @@ mod tests {
         test_stores, test_agent_context,
         test_agent_context_with_tools,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     use crate::config::ToolEntry;
     
     
@@ -84,7 +84,7 @@ mod tests {
             worktree: true,
         }];
         let stores = test_stores(&dir);
-        let ctx = test_agent_context_with_tools(&dir, &stores, AgentType::Implementer, &entries);
+        let ctx = test_agent_context_with_tools(&dir, &stores, AgentKind::Implementer, &entries);
 
         let action = AgentAction::RunTool {
             tool: "echo-test".to_string(),
@@ -104,7 +104,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-regtool");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Researcher);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Researcher);
 
         let action = AgentAction::RegisterTool {
             name: "my-echo".to_string(),

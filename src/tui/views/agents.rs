@@ -74,7 +74,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentSession, AgentType};
+    use crate::agents::{AgentSession, AgentKind};
     use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
@@ -90,25 +90,25 @@ mod tests {
     #[test]
     fn test_render_with_sessions_shows_details() {
         let mut app = App::new();
-        let mut s1 = AgentSession::new(AgentType::Implementer, "claude-sonnet-4-6".to_string());
+        let mut s1 = AgentSession::new(AgentKind::Implementer, "claude-sonnet-4-6".to_string());
         s1.work_id = Some("wi-abc123".to_string());
         s1.iteration = 3;
         let _ = s1.transition_to(AgentStatus::Running);
         app.state.agent_sessions.push(s1);
 
-        let mut s2 = AgentSession::new(AgentType::Reviewer, "claude-sonnet-4-6".to_string());
+        let mut s2 = AgentSession::new(AgentKind::Reviewer, "claude-sonnet-4-6".to_string());
         s2.bundle_id = Some("b-def456".to_string());
         let _ = s2.transition_to(AgentStatus::Running);
         let _ = s2.transition_to(AgentStatus::Completed);
         app.state.agent_sessions.push(s2);
 
-        let mut s3 = AgentSession::new(AgentType::Researcher, "claude-sonnet-4-6".to_string());
+        let mut s3 = AgentSession::new(AgentKind::Researcher, "claude-sonnet-4-6".to_string());
         s3.target_id = Some("wi-xyz789".to_string());
         s3.query = Some("Investigate auth module".to_string());
         let _ = s3.transition_to(AgentStatus::Running);
         app.state.agent_sessions.push(s3);
 
-        let s4 = AgentSession::new(AgentType::Coordinator, "claude-sonnet-4-6".to_string());
+        let s4 = AgentSession::new(AgentKind::Coordinator, "claude-sonnet-4-6".to_string());
         app.state.agent_sessions.push(s4);
 
         let mut terminal = test_terminal(80, 24);
@@ -145,7 +145,7 @@ mod tests {
             AgentStatus::Cancelled,
         ];
         for (i, &terminal_status) in statuses.iter().enumerate() {
-            let mut session = AgentSession::new(AgentType::Implementer, "m".to_string());
+            let mut session = AgentSession::new(AgentKind::Implementer, "m".to_string());
             match terminal_status {
                 AgentStatus::Starting => {}
                 AgentStatus::Running => {

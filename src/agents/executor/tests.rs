@@ -1,6 +1,6 @@
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::{AgentContext, AgentSession, AgentType};
+use crate::agents::{AgentContext, AgentSession, AgentKind};
 use crate::config::{Config, ProjectConfig, ToolEntry};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
@@ -13,14 +13,14 @@ use taskstore::Store;
 use tokio::sync::broadcast;
 
 pub(crate) fn test_agent_logger(dir: &Path) -> AgentLogger {
-    use crate::agents::AgentType;
+    use crate::agents::AgentKind;
     let file_path = dir.join("test-executor.log");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&file_path)
         .unwrap();
-    AgentLogger::_new_for_test(AgentType::Coordinator, "test-session", file, file_path)
+    AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
 }
 
 pub(crate) fn test_stores(dir: &Path) -> Arc<Stores> {
@@ -42,7 +42,7 @@ pub(crate) fn test_stores(dir: &Path) -> Arc<Stores> {
 pub(crate) fn test_agent_context(
     dir: &Path,
     stores: &Arc<Stores>,
-    agent_type: AgentType,
+    agent_type: AgentKind,
 ) -> (AgentContext, broadcast::Receiver<DaemonEvent>) {
     let (event_tx, event_rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
@@ -66,7 +66,7 @@ pub(crate) fn test_agent_context(
 pub(crate) fn test_agent_context_with_tools(
     dir: &Path,
     stores: &Arc<Stores>,
-    agent_type: AgentType,
+    agent_type: AgentKind,
     tool_entries: &[ToolEntry],
 ) -> AgentContext {
     let (event_tx, _) = broadcast::channel(16);
@@ -90,7 +90,7 @@ pub(crate) fn test_agent_context_with_tools(
 pub(crate) fn test_agent_context_with_config(
     dir: &Path,
     stores: &Arc<Stores>,
-    agent_type: AgentType,
+    agent_type: AgentKind,
     config: Config,
 ) -> AgentContext {
     let (event_tx, _) = broadcast::channel(16);

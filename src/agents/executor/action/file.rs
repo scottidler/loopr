@@ -261,7 +261,7 @@ mod tests {
     use crate::agents::executor::tests::{
         test_stores, test_agent_context, test_agent_context_with_config,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     use crate::config::Config;
     
     
@@ -279,7 +279,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-write");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::WriteFile {
             path: "test.txt".to_string(),
@@ -306,7 +306,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentKind::Implementer, config);
 
         let lock_resp = ctx.bridge.request(
             "lock.create",
@@ -340,7 +340,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentKind::Implementer, config);
 
         let lock_resp = ctx.bridge.request(
             "lock.create",
@@ -365,7 +365,7 @@ mod tests {
         let dir = TestDir::new("loopr-exec-lockadvisory");
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let lock_resp = ctx.bridge.request(
             "lock.create",
@@ -387,7 +387,7 @@ mod tests {
         std::fs::write(dir.join("read-me.txt"), "file content").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::ReadFile {
             path: "read-me.txt".to_string(),
@@ -438,7 +438,7 @@ mod tests {
             message: "test commit".to_string(),
             paths: vec![],
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::Committed(ref msg) if msg == "test commit"),
@@ -484,7 +484,7 @@ mod tests {
             message: "add a.txt only".to_string(),
             paths: vec!["a.txt".to_string()],
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::Committed(_)));
     }
@@ -498,7 +498,7 @@ mod tests {
             path: "../../../etc/passwd".to_string(),
             content: "pwned".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("path traversal"));
@@ -514,7 +514,7 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
     }
@@ -528,7 +528,7 @@ mod tests {
             path: "deep/nested/dir/file.txt".to_string(),
             content: "nested content".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::FileWritten(_)));
         let content = std::fs::read_to_string(dir.join("deep/nested/dir/file.txt")).unwrap();
@@ -546,7 +546,7 @@ mod tests {
             glob: None,
             path: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileRead(ref content) if content.contains("fn main"))
@@ -564,7 +564,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         let action = AgentAction::ListDirectory { path: ".".to_string() };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::FileRead(ref content) if content.contains("file1.txt")),
@@ -581,7 +581,7 @@ mod tests {
         std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::ReadFile {
             path: "target.rs".to_string(),
@@ -615,7 +615,7 @@ mod tests {
         std::fs::write(dir.join("target.rs"), "original\n").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let read_action = AgentAction::ReadFile {
             path: "target.rs".to_string(),
@@ -650,7 +650,7 @@ mod tests {
         std::fs::write(dir.join("target.rs"), "hello world\n").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let read_action = AgentAction::ReadFile {
             path: "target.rs".to_string(),
@@ -686,7 +686,7 @@ mod tests {
         std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action1 = AgentAction::ReadFile {
             path: "target.rs".to_string(),
@@ -720,7 +720,7 @@ mod tests {
     async fn test_write_file_auto_acquires_lock() {
         let dir = TestDir::new("loopr-exec-autolock-write");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::WriteFile {
             path: "src/lib.rs".to_string(),
@@ -744,7 +744,7 @@ mod tests {
         std::fs::write(dir.join("src/lib.rs"), "old content").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::EditFile {
             path: "src/lib.rs".to_string(),
@@ -765,7 +765,7 @@ mod tests {
     async fn test_write_file_reuses_existing_lock() {
         let dir = TestDir::new("loopr-exec-autolock-reuse");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let action = AgentAction::WriteFile {
             path: "src/lib.rs".to_string(),
@@ -790,7 +790,7 @@ mod tests {
     async fn test_no_auto_lock_without_work_id() {
         let dir = TestDir::new("loopr-exec-autolock-none");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let action = AgentAction::WriteFile {
             path: "src/lib.rs".to_string(),
@@ -822,7 +822,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentKind::Implementer, config);
 
         ctx.bridge.request(
             "lock.create",
@@ -858,7 +858,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentKind::Implementer, config);
 
         ctx.bridge.request(
             "lock.create",

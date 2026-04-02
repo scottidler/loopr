@@ -253,7 +253,7 @@ mod tests {
         test_stores, test_agent_context,
         create_test_hierarchy,
     };
-    use crate::agents::{AgentAction, AgentType};
+    use crate::agents::{AgentAction, AgentKind};
     
     
     use crate::domain::tick::TickStatus;
@@ -308,7 +308,7 @@ mod tests {
             .await
             .unwrap();
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -373,7 +373,7 @@ mod tests {
             claims: vec![],
             noop_reason: None,
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("work_id"));
@@ -385,7 +385,7 @@ mod tests {
     async fn test_execute_triage_bundle() {
         let dir = TestDir::new("loopr-exec-triage");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -414,7 +414,7 @@ mod tests {
     async fn test_execute_accept_bundle() {
         let dir = TestDir::new("loopr-exec-accept");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -457,7 +457,7 @@ mod tests {
         let action = AgentAction::TriageBundle {
             bundle_id: "bd-nonexistent".to_string(),
         };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
             matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not found")),
@@ -470,7 +470,7 @@ mod tests {
     async fn test_execute_triage_bundle_rejects_work_id() {
         let dir = TestDir::new("loopr-exec-triage-wkid");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let action = AgentAction::TriageBundle {
             bundle_id: "wk-12345".to_string(),
@@ -487,7 +487,7 @@ mod tests {
     async fn test_execute_accept_bundle_rejects_work_id() {
         let dir = TestDir::new("loopr-exec-accept-wkid");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let action = AgentAction::AcceptBundle {
             bundle_id: "wk-12345".to_string(),
@@ -504,7 +504,7 @@ mod tests {
     async fn test_execute_accept_bundle_full() {
         let dir = TestDir::new("loopr-exec-acceptfull");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -533,7 +533,7 @@ mod tests {
     async fn test_triage_bundle_rejects_reviewed_bundle() {
         let dir = TestDir::new("loopr-exec-triage-rev");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -570,7 +570,7 @@ mod tests {
     async fn test_accept_bundle_rejects_proposed_bundle() {
         let dir = TestDir::new("loopr-exec-accept-prop");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -637,7 +637,7 @@ mod tests {
             .await
             .unwrap();
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let tick = crate::domain::tick::Tick {
             id: "tick-pub-1".to_string(),
@@ -671,7 +671,7 @@ mod tests {
     async fn test_propose_bundle_uses_deterministic_branch_name() {
         let dir = TestDir::new("loopr-exec-f2branch");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
         ctx.bridge.request(
@@ -737,7 +737,7 @@ mod tests {
     async fn test_noop_propose_bundle_creates_empty_branch() {
         let dir = TestDir::new("loopr-exec-noop-branch");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -769,7 +769,7 @@ mod tests {
     async fn test_noop_bundle_handler_rejects_empty_branch_without_noop() {
         let dir = TestDir::new("loopr-exec-noop-reject");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
@@ -835,7 +835,7 @@ mod tests {
         std::fs::write(dir.join("todo.lua"), "print('hello')").unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::ProposeBundle {
@@ -908,7 +908,7 @@ mod tests {
             .unwrap();
 
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::ProposeBundle {
@@ -928,7 +928,7 @@ mod tests {
     async fn test_noop_bundle_handler_allows_empty_branch_with_noop() {
         let dir = TestDir::new("loopr-exec-noop-allow");
         let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 

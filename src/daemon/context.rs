@@ -545,7 +545,7 @@ impl DaemonContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentType;
+    use crate::agents::AgentKind;
     use crate::config::{InterviewMode, ProjectConfig};
     use crate::test_util::TestDir;
 
@@ -645,7 +645,7 @@ mod tests {
                 .create(Decision::new("title".into(), "rationale".into(), "decider".into()))
                 .unwrap();
             store
-                .create(AgentSession::new(AgentType::Implementer, "model".into()))
+                .create(AgentSession::new(AgentKind::Implementer, "model".into()))
                 .unwrap();
         }
 
@@ -1158,7 +1158,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         session.status = AgentStatus::Running;
         let session_id = session.id.clone();
         ctx.stores
@@ -1187,7 +1187,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut session = AgentSession::new(AgentType::Coordinator, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
         session.status = AgentStatus::Running;
         session.transition_to(AgentStatus::WaitingForLlm).unwrap();
         let session_id = session.id.clone();
@@ -1216,7 +1216,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut session = AgentSession::new(AgentType::Implementer, "test-model".into());
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         session.status = AgentStatus::Completed;
         let session_id = session.id.clone();
         ctx.stores

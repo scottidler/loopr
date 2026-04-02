@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::agents::AgentType;
+use crate::agents::AgentKind;
 use crate::daemon::context::Stores;
 use crate::domain::lock::LockStatus;
 use crate::domain::work::WorkStatus;
@@ -45,7 +45,7 @@ pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>
         // Exclude Works that already have a non-terminal Implementer
         .filter(|w| {
             !sessions.values().any(|s| {
-                s.agent_type == AgentType::Implementer && s.work_id.as_deref() == Some(&w.id) && !s.status.is_terminal()
+                s.agent_type == AgentKind::Implementer && s.work_id.as_deref() == Some(&w.id) && !s.status.is_terminal()
             })
         })
         .map(|w| {
@@ -178,7 +178,7 @@ mod tests {
         let id = ready_work(&stores, "phase-1", "Work A");
 
         // Create an active implementer session for this work
-        let mut session = AgentSession::new(AgentType::Implementer, "model".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "model".to_string());
         session.work_id = Some(id.clone());
         session.status = AgentStatus::Running;
         stores
@@ -196,7 +196,7 @@ mod tests {
         let id = ready_work(&stores, "phase-1", "Work A");
 
         // Create a completed implementer session for this work
-        let mut session = AgentSession::new(AgentType::Implementer, "model".to_string());
+        let mut session = AgentSession::new(AgentKind::Implementer, "model".to_string());
         session.work_id = Some(id.clone());
         session.status = AgentStatus::Completed;
         stores

@@ -4,7 +4,7 @@ use std::time::Instant;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentSession, AgentType};
+use crate::agents::{AgentSession, AgentKind};
 use crate::domain::bundle::Bundle;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
@@ -267,7 +267,7 @@ impl App {
         self.state
             .agent_sessions
             .iter()
-            .find(|s| s.agent_type == AgentType::Coordinator && s.status == target)
+            .find(|s| s.agent_type == AgentKind::Coordinator && s.status == target)
             .map(|s| s.id.clone())
     }
 

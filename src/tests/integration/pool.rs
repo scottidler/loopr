@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::agents::{AgentSession, AgentStatus, AgentType};
+use crate::agents::{AgentSession, AgentStatus, AgentKind};
 
 use super::fixtures::*;
 
@@ -14,7 +14,7 @@ async fn test_pool_exhaustion_multi_type() {
     let ic = test_integrator_config();
 
     // Fill Coordinator pool (pool_size = 1)
-    let session = AgentSession::new(AgentType::Coordinator, "model".into());
+    let session = AgentSession::new(AgentKind::Coordinator, "model".into());
     stores
         .agent_sessions
         .write()
@@ -52,7 +52,7 @@ async fn test_pool_allows_after_terminal_session() {
     let ic = test_integrator_config();
 
     // Add a Completed Coordinator session
-    let mut session = AgentSession::new(AgentType::Coordinator, "model".into());
+    let mut session = AgentSession::new(AgentKind::Coordinator, "model".into());
     let _ = session.transition_to(AgentStatus::Running);
     let _ = session.transition_to(AgentStatus::Completed);
     stores

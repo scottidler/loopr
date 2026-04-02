@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::agents::AgentType;
+use crate::agents::AgentKind;
 
 /// Per-agent logger that writes to both a dedicated log file and the main daemon log.
 ///
@@ -14,7 +14,7 @@ use crate::agents::AgentType;
 /// the corresponding `log::*!` macro with a `[session_id]` prefix.
 pub struct AgentLogger {
     session_id: String,
-    agent_type: AgentType,
+    agent_type: AgentKind,
     writer: Mutex<BufWriter<File>>,
     file_path: PathBuf,
 }
@@ -23,7 +23,7 @@ impl AgentLogger {
     /// Create a new AgentLogger, opening the per-agent log file.
     /// When `session_dir` is provided, writes to `{session_dir}/agents/`.
     /// Otherwise falls back to the legacy path.
-    pub fn new(agent_type: AgentType, session_id: &str, session_dir: Option<&Path>) -> eyre::Result<Self> {
+    pub fn new(agent_type: AgentKind, session_id: &str, session_dir: Option<&Path>) -> eyre::Result<Self> {
         let log_dir = if let Some(dir) = session_dir {
             dir.join("agents")
         } else {
@@ -51,7 +51,7 @@ impl AgentLogger {
 
     /// Create an AgentLogger from a pre-opened file (for tests).
     #[doc(hidden)]
-    pub fn _new_for_test(agent_type: AgentType, session_id: &str, file: File, file_path: PathBuf) -> Self {
+    pub fn _new_for_test(agent_type: AgentKind, session_id: &str, file: File, file_path: PathBuf) -> Self {
         Self {
             session_id: session_id.to_string(),
             agent_type,
@@ -156,7 +156,7 @@ mod tests {
     use crate::test_util::TestDir;
     use std::io::Read;
 
-    fn test_logger(agent_type: AgentType, suffix: &str) -> (AgentLogger, TestDir) {
+    fn test_logger(agent_type: AgentKind, suffix: &str) -> (AgentLogger, TestDir) {
         let tmp_dir = TestDir::new(&format!("loopr_agent_logger_test_{suffix}"));
         let file_path = tmp_dir.join(format!("{}-test123.log", agent_type));
         // Remove stale file from previous test run
@@ -175,14 +175,14 @@ mod tests {
 
     #[test]
     fn test_agent_logger_creates_file() {
-        let (logger, _tmp) = test_logger(AgentType::Implementer, "creates");
+        let (logger, _tmp) = test_logger(AgentKind::Implementer, "creates");
         logger.info("hello");
         assert!(logger.file_path().exists());
     }
 
     #[test]
     fn test_agent_logger_file_naming() {
-        let (logger, _tmp) = test_logger(AgentType::Implementer, "naming");
+        let (logger, _tmp) = test_logger(AgentKind::Implementer, "naming");
         let name = logger.file_path().file_name().unwrap().to_string_lossy();
         assert_eq!(name, "implementer-test123.log");
     }
@@ -193,7 +193,7 @@ mod tests {
         let session_dir = tmp_dir.join("session1");
         fs::create_dir_all(session_dir.join("agents")).unwrap();
 
-        let logger = AgentLogger::new(AgentType::Implementer, "ag01", Some(&session_dir)).unwrap();
+        let logger = AgentLogger::new(AgentKind::Implementer, "ag01", Some(&session_dir)).unwrap();
         logger.info("session scoped");
 
         assert!(logger.file_path().exists());
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_agent_logger_legacy_fallback() {
-        let logger = AgentLogger::new(AgentType::Reviewer, "ag02", None).unwrap();
+        let logger = AgentLogger::new(AgentKind::Reviewer, "ag02", None).unwrap();
         assert!(logger.file_path().exists());
         let name = logger.file_path().file_name().unwrap().to_string_lossy();
         assert_eq!(name, "reviewer-ag02.log");
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_agent_logger_writes_formatted_line() {
-        let (logger, _tmp) = test_logger(AgentType::Reviewer, "formatted");
+        let (logger, _tmp) = test_logger(AgentKind::Reviewer, "formatted");
         logger.info("test message");
 
         let mut contents = String::new();
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_agent_logger_all_levels() {
-        let (logger, _tmp) = test_logger(AgentType::Coordinator, "levels");
+        let (logger, _tmp) = test_logger(AgentKind::Coordinator, "levels");
         logger.debug("d");
         logger.info("i");
         logger.warn("w");
