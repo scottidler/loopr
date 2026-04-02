@@ -771,7 +771,9 @@ pub async fn execute_action(
             let commit_out = commit_cmd.output().await?;
             if !commit_out.status.success() {
                 let stderr = String::from_utf8_lossy(&commit_out.stderr);
-                return Err(eyre!("git commit failed: {}", stderr));
+                let stdout = String::from_utf8_lossy(&commit_out.stdout);
+                let detail = if stderr.trim().is_empty() { &stdout } else { &stderr };
+                return Err(eyre!("git commit failed: {}", detail.trim()));
             }
             Ok(ActionResult::Committed(message.clone()))
         }
