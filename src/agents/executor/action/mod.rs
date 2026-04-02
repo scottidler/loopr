@@ -3,6 +3,7 @@ mod file;
 mod learning;
 mod lock;
 mod record;
+pub(super) mod scope;
 mod tool;
 mod validation;
 mod work;
@@ -51,7 +52,18 @@ pub async fn execute_action(
         AgentAction::ReadFile { path, offset, limit } => {
             file::handle_read_file(ctx, worktree_path, path, offset, limit).await
         }
-        AgentAction::Commit { message, paths } => file::handle_commit(worktree_path, message, paths).await,
+        AgentAction::Commit { message, paths } => {
+            let resource_tags = work_id
+                .and_then(|wid| {
+                    ctx.bridge
+                        .stores()
+                        .read_works()
+                        .ok()
+                        .and_then(|works| works.get(wid).map(|w| w.resource_tags.clone()))
+                })
+                .unwrap_or_default();
+            file::handle_commit(worktree_path, message, paths, &resource_tags).await
+        }
         AgentAction::ProposeBundle {
             description,
             claims,

@@ -3,6 +3,7 @@ use std::path::Path;
 use eyre::{Result, eyre};
 
 use crate::agents::AgentContext;
+use crate::agents::executor::action::scope;
 use crate::agents::executor::result::ActionResult;
 use crate::agents::executor::util::resolve_latest_published_tick_id;
 use crate::domain::bundle::BundleStatus;
@@ -51,27 +52,58 @@ pub(super) async fn handle_propose_bundle(
     }
 
     // For normal bundles: auto-commit any pending changes before creating
-    // the bundle. Skip for noop bundles (no changes to commit).
+    // the bundle, scoped to resource_tags. Skip for noop bundles.
+    let mut loose_files: Vec<String> = Vec::new();
     if !is_noop {
-        let auto_commit = tokio::process::Command::new("git")
-            .args(["add", "-A"])
+        // Fetch the Work's resource_tags for scoped staging
+        let resource_tags: Vec<String> = bridge
+            .stores()
+            .read_works()
+            .ok()
+            .and_then(|works| works.get(wi_id).map(|w| w.resource_tags.clone()))
+            .unwrap_or_default();
+
+        let status_output = tokio::process::Command::new("git")
+            .args(["status", "--porcelain"])
             .current_dir(worktree_path)
             .output()
             .await;
-        if let Ok(add_out) = auto_commit
-            && add_out.status.success()
-        {
-            let commit_out = tokio::process::Command::new("git")
-                .args(["commit", "-m", &format!("impl: {}", description)])
-                .current_dir(worktree_path)
-                .output()
-                .await;
-            match commit_out {
-                Ok(out) if out.status.success() => {
-                    agent_log.info("Auto-committed pending changes before propose_bundle");
-                }
-                _ => {
-                    agent_log.info("No pending changes to auto-commit before propose_bundle");
+        if let Ok(output) = status_output {
+            let dirty_files = scope::parse_porcelain_status(&String::from_utf8_lossy(&output.stdout));
+            let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty_files, &resource_tags);
+
+            if resource_tags.is_empty() && !in_scope.is_empty() {
+                agent_log.warn("Work has no resource_tags, staging all non-artifact dirty files");
+            }
+
+            if !out_of_scope.is_empty() {
+                agent_log.info(&format!("Loose files (not in scope): {:?}", out_of_scope));
+                loose_files = out_of_scope;
+            }
+
+            if !in_scope.is_empty() {
+                let add_out = tokio::process::Command::new("git")
+                    .arg("add")
+                    .args(&in_scope)
+                    .current_dir(worktree_path)
+                    .output()
+                    .await;
+                if let Ok(out) = add_out
+                    && out.status.success()
+                {
+                    let commit_out = tokio::process::Command::new("git")
+                        .args(["commit", "-m", &format!("impl: {}", description)])
+                        .current_dir(worktree_path)
+                        .output()
+                        .await;
+                    match commit_out {
+                        Ok(out) if out.status.success() => {
+                            agent_log.info("Auto-committed in-scope changes before propose_bundle");
+                        }
+                        _ => {
+                            agent_log.info("No pending changes to auto-commit before propose_bundle");
+                        }
+                    }
                 }
             }
         }
@@ -118,6 +150,9 @@ pub(super) async fn handle_propose_bundle(
     }
     if let Some(tick_id) = &base_tick_id {
         params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
+    }
+    if !loose_files.is_empty() {
+        params["loose_files"] = serde_json::json!(loose_files);
     }
 
     let resp = bridge.request("bundle.create", params.clone());

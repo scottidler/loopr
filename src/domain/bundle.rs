@@ -87,6 +87,11 @@ pub struct Bundle {
     /// and pre-merge verification that the branch still has the expected commits.
     #[serde(default)]
     pub head_commit: Option<String>,
+    /// Files modified in the worktree but excluded from the bundle because
+    /// they fall outside the Work's resource_tags scope. Observable signal
+    /// for downstream agents to detect scope gaps.
+    #[serde(default)]
+    pub loose_files: Vec<String>,
     pub status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -109,6 +114,7 @@ impl Bundle {
             locks_used: Vec::new(),
             noop_reason: None,
             head_commit: None,
+            loose_files: Vec::new(),
             status: BundleStatus::Proposed,
             created_at: now,
             updated_at: now,

@@ -283,6 +283,41 @@ fn parse_worktree_list(output: &str, worktree_dir: &Path) -> Vec<WorktreeInfo> {
     result
 }
 
+const LOOPR_EXCLUDE_MARKER: &str = "# loopr-managed";
+const LOOPR_EXCLUDES: &[&str] = &[".taskstore/", ".worktrees/", "loopr.yml"];
+
+/// Ensure Loopr orchestration artifacts are in .git/info/exclude for the
+/// given repository root. Idempotent: checks for marker before appending.
+///
+/// Because worktrees inherit the common git directory's exclude rules,
+/// calling this once on the root repo covers all worktrees.
+pub fn ensure_loopr_excludes(repo_path: &Path) -> Result<(), std::io::Error> {
+    let exclude_path = repo_path.join(".git").join("info").join("exclude");
+
+    // Read existing content (file may not exist yet)
+    let existing = std::fs::read_to_string(&exclude_path).unwrap_or_default();
+    if existing.contains(LOOPR_EXCLUDE_MARKER) {
+        return Ok(()); // Already injected
+    }
+
+    // Ensure .git/info/ directory exists
+    if let Some(parent) = exclude_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Append our patterns
+    let mut content = existing;
+    if !content.ends_with('\n') && !content.is_empty() {
+        content.push('\n');
+    }
+    content.push_str(&format!("{}\n", LOOPR_EXCLUDE_MARKER));
+    for pattern in LOOPR_EXCLUDES {
+        content.push_str(&format!("{}\n", pattern));
+    }
+    std::fs::write(&exclude_path, content)?;
+    Ok(())
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -620,6 +655,73 @@ branch refs/heads/agent/wi-001
         assert!(!check.status.success(), "branch should be gone after delete");
 
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // --- ensure_loopr_excludes tests ---
+
+    #[test]
+    fn test_ensure_excludes_creates_file_when_missing() {
+        let temp = std::env::temp_dir().join("loopr-test-excludes-create");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join(".git")).unwrap();
+
+        ensure_loopr_excludes(&temp).unwrap();
+
+        let content = std::fs::read_to_string(temp.join(".git/info/exclude")).unwrap();
+        assert!(content.contains(LOOPR_EXCLUDE_MARKER));
+        assert!(content.contains(".taskstore/"));
+        assert!(content.contains(".worktrees/"));
+        assert!(content.contains("loopr.yml"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_ensure_excludes_idempotent() {
+        let temp = std::env::temp_dir().join("loopr-test-excludes-idempotent");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join(".git")).unwrap();
+
+        ensure_loopr_excludes(&temp).unwrap();
+        let content1 = std::fs::read_to_string(temp.join(".git/info/exclude")).unwrap();
+
+        ensure_loopr_excludes(&temp).unwrap();
+        let content2 = std::fs::read_to_string(temp.join(".git/info/exclude")).unwrap();
+
+        assert_eq!(content1, content2, "second call should not append again");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_ensure_excludes_appends_to_existing() {
+        let temp = std::env::temp_dir().join("loopr-test-excludes-append");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join(".git/info")).unwrap();
+        std::fs::write(temp.join(".git/info/exclude"), "# existing pattern\n*.log\n").unwrap();
+
+        ensure_loopr_excludes(&temp).unwrap();
+
+        let content = std::fs::read_to_string(temp.join(".git/info/exclude")).unwrap();
+        assert!(content.starts_with("# existing pattern\n*.log\n"));
+        assert!(content.contains(LOOPR_EXCLUDE_MARKER));
+        assert!(content.contains(".taskstore/"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_ensure_excludes_creates_info_dir() {
+        let temp = std::env::temp_dir().join("loopr-test-excludes-mkdir");
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(temp.join(".git")).unwrap();
+        // .git/info/ does not exist yet
+
+        ensure_loopr_excludes(&temp).unwrap();
+
+        assert!(temp.join(".git/info/exclude").exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]

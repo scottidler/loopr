@@ -135,7 +135,7 @@ pub(super) fn handle_bundle_create(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let mut bundle = Bundle::new(work_id, base_tick_id, branch_name, claims);
+        let mut bundle = Bundle::new(work_id.clone(), base_tick_id, branch_name, claims);
         bundle.description = description;
         bundle.noop_reason = noop_reason;
         bundle.head_commit = head_commit;
@@ -176,6 +176,48 @@ pub(super) fn handle_bundle_create(
                     loc, policy.max_loc_changed
                 )),
             ));
+        }
+
+        // Layer 3: Scope validation - touched_paths must be subset of Work's resource_tags.
+        // Phase 1: warn only (log but don't reject).
+        {
+            let works = stores.read_works()?;
+            if let Some(work) = works.get(&work_id)
+                && !work.resource_tags.is_empty()
+                && !bundle.touched_paths.is_empty()
+            {
+                let violations: Vec<&str> = bundle
+                    .touched_paths
+                    .iter()
+                    .filter(|p| {
+                        let norm_p = p.strip_prefix("./").unwrap_or(p);
+                        !work
+                            .resource_tags
+                            .iter()
+                            .any(|tag| tag.strip_prefix("./").unwrap_or(tag) == norm_p)
+                    })
+                    .map(|p| p.as_str())
+                    .collect();
+                if !violations.is_empty() {
+                    log::warn!(
+                        "Bundle {} touches files outside Work {}'s resource_tags: {:?}. Allowed: {:?}",
+                        bundle.id,
+                        work_id,
+                        violations,
+                        work.resource_tags
+                    );
+                }
+            }
+        }
+
+        // Parse and persist loose_files from RPC params
+        if let Some(files) = req.params.get("loose_files").and_then(|v| v.as_array()) {
+            bundle.loose_files = files
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                // Belt-and-suspenders: filter known Loopr artifacts even if Layer 0 missed them
+                .filter(|f| !f.starts_with(".taskstore/") && !f.starts_with(".worktrees/") && f != "loopr.yml")
+                .collect();
         }
 
         let bundle_json = match serde_json::to_value(&bundle) {

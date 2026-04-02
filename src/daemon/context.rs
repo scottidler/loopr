@@ -269,6 +269,12 @@ impl DaemonContext {
 
         info!("TaskStore opened at {}", repo_path.display());
 
+        // Layer 0: Inject Loopr artifacts into .git/info/exclude so they are
+        // invisible to all git operations (worktrees inherit automatically).
+        if let Err(e) = crate::worktree::manager::ensure_loopr_excludes(&repo_path) {
+            warn!("Failed to inject .git/info/exclude: {}", e);
+        }
+
         let mut stores = Stores::new();
 
         // Hydrate in-memory HashMaps from TaskStore so all code paths
