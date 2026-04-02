@@ -319,7 +319,7 @@ mod tests {
 
     use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::{AgentContext, AgentSession, AgentKind};
+    use crate::agents::{AgentContext, AgentKind, AgentSession};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig};
     use crate::daemon::context::Stores;
     use crate::domain::bundle::{Bundle, BundleStatus};

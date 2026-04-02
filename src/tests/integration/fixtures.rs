@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentSession, AgentKind};
+use crate::agents::{AgentKind, AgentSession};
 use crate::config::{Config, IntegratorConfig};
 use crate::daemon::context::Stores;
 use crate::daemon::handlers::dispatch;

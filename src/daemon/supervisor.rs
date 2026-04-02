@@ -5,7 +5,7 @@ use log::{info, warn};
 use serde_json::json;
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentEvent, AgentStatus, AgentKind};
+use crate::agents::{AgentEvent, AgentKind, AgentStatus};
 use crate::config::IntegratorConfig;
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;

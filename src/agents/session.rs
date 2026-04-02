@@ -65,7 +65,10 @@ impl AgentSession {
     /// Returns Err if the transition is not allowed.
     pub fn transition_to(&mut self, target: AgentStatus) -> Result<(), String> {
         if !self.status.can_transition_to(target) {
-            return Err(format!("invalid agent status transition: {} \u{2192} {}", self.status, target));
+            return Err(format!(
+                "invalid agent status transition: {} \u{2192} {}",
+                self.status, target
+            ));
         }
         self.status = target;
         self.updated_at = id::now_millis();

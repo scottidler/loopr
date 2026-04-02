@@ -562,7 +562,10 @@ mod tests {
 
     #[test]
     fn test_orch_event_record_created_work() {
-        let event = DaemonEvent::new("record.created", serde_json::json!({"collection": "work", "id": "wk-abc"}));
+        let event = DaemonEvent::new(
+            "record.created",
+            serde_json::json!({"collection": "work", "id": "wk-abc"}),
+        );
         assert_eq!(
             format_orchestration_event(&event),
             Some("Created Work: wk-abc".to_string())
@@ -571,7 +574,10 @@ mod tests {
 
     #[test]
     fn test_orch_event_record_created_spec() {
-        let event = DaemonEvent::new("record.created", serde_json::json!({"collection": "spec", "id": "sp-xyz"}));
+        let event = DaemonEvent::new(
+            "record.created",
+            serde_json::json!({"collection": "spec", "id": "sp-xyz"}),
+        );
         assert_eq!(
             format_orchestration_event(&event),
             Some("Created Spec: sp-xyz".to_string())
@@ -580,7 +586,10 @@ mod tests {
 
     #[test]
     fn test_orch_event_record_created_phase() {
-        let event = DaemonEvent::new("record.created", serde_json::json!({"collection": "phase", "id": "ph-123"}));
+        let event = DaemonEvent::new(
+            "record.created",
+            serde_json::json!({"collection": "phase", "id": "ph-123"}),
+        );
         assert_eq!(
             format_orchestration_event(&event),
             Some("Created Phase: ph-123".to_string())
@@ -589,7 +598,10 @@ mod tests {
 
     #[test]
     fn test_orch_event_record_created_bundle() {
-        let event = DaemonEvent::new("record.created", serde_json::json!({"collection": "bundle", "id": "bu-999"}));
+        let event = DaemonEvent::new(
+            "record.created",
+            serde_json::json!({"collection": "bundle", "id": "bu-999"}),
+        );
         assert_eq!(
             format_orchestration_event(&event),
             Some("Bundle proposed: bu-999".to_string())
@@ -598,7 +610,10 @@ mod tests {
 
     #[test]
     fn test_orch_event_record_created_irrelevant() {
-        let event = DaemonEvent::new("record.created", serde_json::json!({"collection": "learning", "id": "lr-1"}));
+        let event = DaemonEvent::new(
+            "record.created",
+            serde_json::json!({"collection": "learning", "id": "lr-1"}),
+        );
         assert_eq!(format_orchestration_event(&event), None);
     }
 

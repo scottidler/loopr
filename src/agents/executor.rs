@@ -17,7 +17,7 @@ use eyre::{Result, eyre};
 use log::{debug, info, warn};
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentSession, AgentStatus, AgentKind};
+use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;

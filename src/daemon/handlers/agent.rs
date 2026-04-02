@@ -4,7 +4,7 @@ use eyre::eyre;
 use log::debug;
 use tokio::sync::broadcast;
 
-use crate::agents::{AgentSession, AgentStatus, AgentKind};
+use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
@@ -553,7 +553,7 @@ pub(super) fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> D
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use crate::agents::{AgentSession, AgentStatus, AgentKind};
+    use crate::agents::{AgentKind, AgentSession, AgentStatus};
     use crate::daemon::handlers::dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,

@@ -1,6 +1,6 @@
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::{AgentContext, AgentSession, AgentKind};
+use crate::agents::{AgentContext, AgentKind, AgentSession};
 use crate::config::{Config, ProjectConfig, ToolEntry};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;

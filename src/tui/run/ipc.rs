@@ -987,7 +987,9 @@ mod tests {
 
         let mut state = AppState::default();
         // Should not panic -- deserialization failure is silently ignored
-        for collection in ["plan", "spec", "phase", "work", "bundle", "tick", "learning", "lock", "agent"] {
+        for collection in [
+            "plan", "spec", "phase", "work", "bundle", "tick", "learning", "lock", "agent",
+        ] {
             refresh_collection(&mut state, &mut client, collection).await;
         }
         assert!(state.plans.is_empty());

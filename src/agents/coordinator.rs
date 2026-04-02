@@ -14,7 +14,7 @@ use crate::agents::generation::{
 };
 use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
-use crate::agents::{Agent, AgentContext, AgentStatus, AgentKind};
+use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
 use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;

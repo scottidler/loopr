@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::{Agent, AgentContext, AgentStatus, AgentKind};
+use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
 use crate::agents::{coordinator, implementer, integrator, researcher, reviewer};
 use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
@@ -384,28 +384,24 @@ pub(super) async fn run_agent_loop(
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    
-    
-    
-    use crate::agents::executor::tests::test_stores;
+
     use crate::agents::AgentKind;
+    use crate::agents::executor::tests::test_stores;
     use crate::config::{Config, ProjectConfig};
-    
-    
+
     use crate::test_util::TestDir;
-    
-    
+
+    use crate::agents::executor::run_agent_task;
+    use crate::agents::{AgentSession, AgentStatus};
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use taskstore::Store;
     use tokio::sync::broadcast;
-    use crate::agents::{AgentSession, AgentStatus};
-    use crate::agents::executor::run_agent_task;
-    
+
     use crate::daemon::context::Stores;
     use crate::worktree::manager::WorktreeManager;
-    
+
     use eyre::eyre;
 
     fn resolve_timeout(config: &Config, agent_type: AgentKind) -> Option<u64> {

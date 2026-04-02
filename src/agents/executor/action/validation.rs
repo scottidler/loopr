@@ -124,25 +124,12 @@ pub(super) fn handle_evaluate_coverage(
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    
-    
-    use crate::agents::executor::{execute_action, ActionResult};
-    use crate::agents::executor::tests::{
-        test_stores, test_agent_context,
-        create_test_hierarchy,
-    };
+
+    use crate::agents::executor::tests::{create_test_hierarchy, test_agent_context, test_stores};
+    use crate::agents::executor::{ActionResult, execute_action};
     use crate::agents::{AgentAction, AgentKind};
-    
-    
-    
+
     use crate::test_util::TestDir;
-    
-    
-    
-    
-    
-    
-    
 
     #[tokio::test]
     async fn test_execute_validate_document() {

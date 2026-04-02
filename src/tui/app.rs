@@ -4,7 +4,7 @@ use std::time::Instant;
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentSession, AgentKind};
+use crate::agents::{AgentKind, AgentSession};
 use crate::domain::bundle::Bundle;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;

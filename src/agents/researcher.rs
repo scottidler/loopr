@@ -9,7 +9,7 @@ use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::sandbox;
-use crate::agents::{Agent, AgentAction, AgentContext, AgentStatus, AgentKind};
+use crate::agents::{Agent, AgentAction, AgentContext, AgentKind, AgentStatus};
 use crate::config::AgentRoleConfig;
 use crate::domain::role::Role;
 use crate::ipc::protocol::DaemonEvent;
@@ -453,7 +453,7 @@ fn format_action_summary(action: &AgentAction, result: &ActionResult) -> String 
 mod tests {
     use super::*;
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::{AgentContext, AgentSession, AgentKind};
+    use crate::agents::{AgentContext, AgentKind, AgentSession};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig};
     use crate::daemon::context::Stores;
     use crate::test_util::TestDir;

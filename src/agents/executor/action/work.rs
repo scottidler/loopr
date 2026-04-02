@@ -392,20 +392,16 @@ pub(super) fn handle_override_work(
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    
+
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::executor::{execute_action, ActionResult};
-    use crate::agents::executor::tests::{
-        test_stores, test_agent_context,
-        create_test_hierarchy,
-    };
+    use crate::agents::executor::tests::{create_test_hierarchy, test_agent_context, test_stores};
+    use crate::agents::executor::{ActionResult, execute_action};
     use crate::agents::{AgentAction, AgentKind};
-    
+
     use crate::daemon::context::Stores;
     use crate::domain::bundle::BundleStatus;
     use crate::test_util::TestDir;
     use std::sync::Arc;
-    
 
     #[tokio::test]
     async fn test_transition_action_uses_correct_param() {

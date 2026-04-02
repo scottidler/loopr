@@ -2,7 +2,7 @@ use log::{debug, error, warn};
 
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::{AgentSession, AgentKind};
+use crate::agents::{AgentKind, AgentSession};
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::tick::TickStatus;
@@ -176,16 +176,18 @@ pub(super) fn persist_session(stores: &Stores, session: &AgentSession) {
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use crate::agents::{AgentSession, AgentStatus, AgentKind};
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::executor::tests::{test_agent_logger, test_stores};
+    use crate::agents::{AgentKind, AgentSession, AgentStatus};
     use crate::domain::bundle::BundleStatus;
     use crate::domain::tick::TickStatus;
     use crate::test_util::TestDir;
     use crate::worktree::manager::WorktreeManager;
-    
+
+    use super::{
+        determine_work_handback, release_agent_locks, resolve_latest_published_tick_id, resolve_worktree_base,
+    };
     use tokio::sync::broadcast;
-    use super::{determine_work_handback, release_agent_locks, resolve_latest_published_tick_id, resolve_worktree_base};
 
     #[test]
     fn test_resolve_worktree_base_no_ticks() {

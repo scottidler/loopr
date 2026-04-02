@@ -557,10 +557,10 @@ impl CoordinatorAgent {
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use crate::agents::coordinator::tests::{test_stores, test_coordinator, insert_test_goal};
-    use crate::agents::{Agent, AgentStatus};
+    use crate::agents::coordinator::tests::{insert_test_goal, test_coordinator, test_stores};
     use crate::agents::implementer::IterationOutcome;
     use crate::agents::lifeguard::Lifeguard;
+    use crate::agents::{Agent, AgentStatus};
     use crate::config::{CoordinatorConfig, InterviewMode};
     use crate::domain::coordinator_state::CoordinatorState;
     use crate::test_util::TestDir;

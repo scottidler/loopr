@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::agents::{AgentSession, AgentKind};
+use crate::agents::{AgentKind, AgentSession};
 use crate::config::InterviewMode;
 use crate::daemon::context::Stores;
 use crate::test_util::TestDir;

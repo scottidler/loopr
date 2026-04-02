@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::agents::{AgentSession, AgentStatus, AgentKind};
+use crate::agents::{AgentKind, AgentSession, AgentStatus};
 
 use super::fixtures::*;
 

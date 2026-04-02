@@ -74,7 +74,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentSession, AgentKind};
+    use crate::agents::{AgentKind, AgentSession};
     use crate::tui::test_utils::{buffer_contains_text, test_terminal};
 
     #[test]
