@@ -1,0 +1,244 @@
+use std::path::Path;
+
+use eyre::{Result, eyre};
+
+use crate::agents::AgentContext;
+use crate::agents::executor::result::ActionResult;
+use crate::agents::executor::util::resolve_latest_published_tick_id;
+use crate::domain::bundle::BundleStatus;
+
+/// Handle ProposeBundle action.
+pub(super) async fn handle_propose_bundle(
+    ctx: &AgentContext,
+    worktree_path: &Path,
+    work_id: Option<&str>,
+    description: &str,
+    claims: &[String],
+    noop_reason: Option<&str>,
+) -> Result<ActionResult> {
+    let bridge = &ctx.bridge;
+    let agent_log = &ctx.log;
+    let is_noop = noop_reason.is_some();
+    let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
+
+    // Guard: reject noop bundles with uncommitted changes.
+    // The LLM may have written files via write_file but then
+    // incorrectly taken the noop path. Return an error so a
+    // fresh session can self-correct with a normal bundle.
+    if is_noop {
+        let status_output = tokio::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(worktree_path)
+            .output()
+            .await;
+        if let Ok(output) = status_output {
+            let status = String::from_utf8_lossy(&output.stdout);
+            if !status.trim().is_empty() {
+                agent_log.warn(&format!(
+                    "Rejected noop bundle: worktree has uncommitted changes:\n{}",
+                    status.trim()
+                ));
+                return Ok(ActionResult::ActionError(format!(
+                    "Cannot propose a noop bundle while the worktree has uncommitted \
+                     changes:\n{}\n\
+                     You wrote files in this session that are not committed. \
+                     Use `commit` first, then propose a normal bundle (without \
+                     noop_reason). Do NOT use noop_reason if you made any changes.",
+                    status.trim()
+                )));
+            }
+        }
+    }
+
+    // For normal bundles: auto-commit any pending changes before creating
+    // the bundle. Skip for noop bundles (no changes to commit).
+    if !is_noop {
+        let auto_commit = tokio::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(worktree_path)
+            .output()
+            .await;
+        if let Ok(add_out) = auto_commit
+            && add_out.status.success()
+        {
+            let commit_out = tokio::process::Command::new("git")
+                .args(["commit", "-m", &format!("impl: {}", description)])
+                .current_dir(worktree_path)
+                .output()
+                .await;
+            match commit_out {
+                Ok(out) if out.status.success() => {
+                    agent_log.info("Auto-committed pending changes before propose_bundle");
+                }
+                _ => {
+                    agent_log.info("No pending changes to auto-commit before propose_bundle");
+                }
+            }
+        }
+    }
+
+    // F2: Derive branch name deterministically from work_id - matches
+    // WorktreeManager::create() which uses format!("agent/{}", work_id).
+    // For noop bundles, use empty branch_name (Integrator skips merge).
+    let branch_name = if is_noop {
+        agent_log.info(&format!("Noop bundle: {}", noop_reason.unwrap_or("(no reason)")));
+        String::new()
+    } else {
+        format!("agent/{}", wi_id)
+    };
+
+    // Capture the current HEAD SHA for audit and pre-merge verification
+    let head_commit = if !is_noop {
+        tokio::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(worktree_path)
+            .output()
+            .await
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    } else {
+        None
+    };
+
+    // Fix #1: Resolve base_tick_id from latest Published Tick
+    let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
+
+    let mut params = serde_json::json!({
+        "work_id": wi_id,
+        "branch_name": branch_name,
+        "claims": claims,
+        "description": description,
+    });
+    if let Some(ref sha) = head_commit {
+        params["head_commit"] = serde_json::Value::String(sha.clone());
+    }
+    if let Some(reason) = noop_reason {
+        params["noop_reason"] = serde_json::Value::String(reason.to_string());
+    }
+    if let Some(tick_id) = &base_tick_id {
+        params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
+    }
+
+    let resp = bridge.request("bundle.create", params.clone());
+    if resp.is_error() {
+        // Fix #7: On stale bundle rejection (-32002), retry once
+        if let Some(ref err) = resp.error
+            && err.code == -32002
+        {
+            agent_log.warn(&format!(
+                "Bundle stale ({}), retrying with fresh base_tick_id",
+                err.message
+            ));
+            let new_base_tick_id = resolve_latest_published_tick_id(bridge.stores());
+            if let Some(tick_id) = &new_base_tick_id {
+                params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
+            }
+            let retry_resp = bridge.request("bundle.create", params);
+            if retry_resp.is_error() {
+                return Err(eyre!("propose bundle failed after retry: {:?}", retry_resp.error));
+            }
+            return Ok(ActionResult::BundleProposed(description.to_string()));
+        }
+        return Err(eyre!("propose bundle failed: {:?}", resp.error));
+    }
+    Ok(ActionResult::BundleProposed(description.to_string()))
+}
+
+/// Handle TriageBundle action.
+pub(super) fn handle_triage_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
+    let bridge = &ctx.bridge;
+    let agent_log = &ctx.log;
+
+    if !bundle_id.starts_with("bd-") {
+        return Ok(ActionResult::ActionError(format!(
+            "triage_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
+            bundle_id
+        )));
+    }
+    // Pre-flight status guard: only Proposed bundles can be triaged
+    let bundles = bridge.stores().read_bundles()?;
+    match bundles.get(bundle_id) {
+        None => {
+            return Ok(ActionResult::ActionError(format!(
+                "triage_bundle: bundle {} not found",
+                bundle_id
+            )));
+        }
+        Some(bundle) if bundle.status != BundleStatus::Proposed => {
+            let hint = match bundle.status {
+                BundleStatus::Reviewed => "Use accept_bundle instead.",
+                _ => "No triage action needed.",
+            };
+            return Ok(ActionResult::ActionError(format!(
+                "triage_bundle: bundle {} is {} not Proposed. {}",
+                bundle_id, bundle.status, hint
+            )));
+        }
+        _ => {}
+    }
+    drop(bundles);
+    let resp = bridge.request(
+        "bundle.transition",
+        serde_json::json!({
+            "id": bundle_id,
+            "target_status": "Triaged",
+            "role": "coordinator",
+        }),
+    );
+    if resp.is_error() {
+        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+        return Ok(ActionResult::ActionError(format!("triage_bundle failed: {}", msg)));
+    }
+    agent_log.info(&format!("TriageBundle: {} -> Triaged", bundle_id));
+    Ok(ActionResult::Transitioned(format!("bundle/{} -> Triaged", bundle_id)))
+}
+
+/// Handle AcceptBundle action.
+pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
+    let bridge = &ctx.bridge;
+    let agent_log = &ctx.log;
+
+    if !bundle_id.starts_with("bd-") {
+        return Ok(ActionResult::ActionError(format!(
+            "accept_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
+            bundle_id
+        )));
+    }
+    // Pre-flight status guard: only Triaged or Reviewed bundles can be accepted
+    let bundles = bridge.stores().read_bundles()?;
+    match bundles.get(bundle_id) {
+        None => {
+            return Ok(ActionResult::ActionError(format!(
+                "accept_bundle: bundle {} not found",
+                bundle_id
+            )));
+        }
+        Some(bundle) if !matches!(bundle.status, BundleStatus::Triaged | BundleStatus::Reviewed) => {
+            let hint = match bundle.status {
+                BundleStatus::Proposed => "Use triage_bundle first.",
+                _ => "No accept action needed.",
+            };
+            return Ok(ActionResult::ActionError(format!(
+                "accept_bundle: bundle {} is {} not Triaged/Reviewed. {}",
+                bundle_id, bundle.status, hint
+            )));
+        }
+        _ => {}
+    }
+    drop(bundles);
+    let resp = bridge.request(
+        "bundle.transition",
+        serde_json::json!({
+            "id": bundle_id,
+            "target_status": "Accepted",
+            "role": "coordinator",
+        }),
+    );
+    if resp.is_error() {
+        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+        return Ok(ActionResult::ActionError(format!("accept_bundle failed: {}", msg)));
+    }
+    agent_log.info(&format!("AcceptBundle: {} -> Accepted", bundle_id));
+    Ok(ActionResult::Transitioned(format!("bundle/{} -> Accepted", bundle_id)))
+}

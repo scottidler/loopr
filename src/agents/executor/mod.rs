@@ -1,1969 +1,36 @@
-use std::path::Path;
+mod action;
+pub(crate) mod context;
+mod lifecycle;
+mod llm;
+pub mod result;
+mod util;
+
+// Re-exports: preserve the public API from the old single-file executor.rs
+pub use action::execute_action;
+pub use lifecycle::run_agent_task;
+pub use result::ActionResult;
+pub use util::resolve_worktree_base;
+
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
 
 use eyre::{Result, eyre};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use tokio::sync::broadcast;
 
-// Note: log:: macros are still used in run_agent_task (pre-logger section) and utility functions.
-// Post-logger code uses agent_log. execute_action uses agent_log passed as parameter.
-
-use crate::agents::agent_logger::AgentLogger;
-use crate::agents::bridge::AgentIpcBridge;
-use crate::agents::coordinator;
-use crate::agents::implementer::{self, LlmClient};
-use crate::agents::integrator;
-use crate::agents::llm_client::AgentLlmClient;
-use crate::agents::researcher;
-use crate::agents::reviewer;
-use crate::agents::{Agent, AgentAction, AgentContext, AgentSession, AgentStatus, AgentType};
+use crate::agents::{AgentSession, AgentStatus, AgentType};
 use crate::daemon::context::Stores;
-use crate::domain::bundle::BundleStatus;
-use crate::domain::tick::TickStatus;
 use crate::ipc::protocol::DaemonEvent;
-use crate::tools::ToolResult;
 use crate::worktree::manager::WorktreeManager;
-
-/// Normalize a collection name from plural to singular for IPC method dispatch.
-/// The LLM may emit "plans", "specs", "phases", "works", "bundles", "ticks"
-/// but IPC methods use singular: "plan", "spec", "phase", "work", "bundle", "tick".
-fn normalize_collection(collection: &str) -> &str {
-    debug!("normalize_collection(collection={})", collection);
-    match collection {
-        "plans" => "plan",
-        "specs" => "spec",
-        "phases" => "phase",
-        "works" => "work",
-        "bundles" => "bundle",
-        "ticks" => "tick",
-        other => other,
-    }
-}
-
-/// Create the LLM client. Fails if the API key env var is not set.
-fn create_llm_client(
-    config: &crate::config::AgentRoleConfig,
-    session_id: &str,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-) -> Result<Box<dyn LlmClient>> {
-    debug!("create_llm_client(session_id={}, model={})", session_id, config.model);
-    let client = AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone())?;
-    info!("Agent {} using LLM client (model: {})", session_id, config.model);
-    Ok(Box::new(client))
-}
-
-/// Returns the integration SHA of the latest Published Tick,
-/// or "HEAD" if no Ticks have been published yet.
-pub fn resolve_worktree_base(stores: &Stores) -> String {
-    debug!("resolve_worktree_base()");
-    let Ok(ticks) = stores.read_ticks() else {
-        error!("ticks lock poisoned");
-        return "HEAD".to_string();
-    };
-    ticks
-        .values()
-        .filter(|t| t.status == TickStatus::Published)
-        .max_by_key(|t| t.number)
-        .and_then(|t| t.integration_sha.clone())
-        .unwrap_or_else(|| "HEAD".to_string())
-}
-
-/// Resolve the ID of the latest Published Tick from stores.
-/// Returns None if no Published Tick exists (bootstrap case).
-fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String> {
-    debug!("resolve_latest_published_tick_id()");
-    let ticks = stores.read_ticks().ok()?;
-    ticks
-        .values()
-        .filter(|t| t.status == TickStatus::Published)
-        .max_by_key(|t| t.number)
-        .map(|t| t.id.clone())
-}
-
-/// Determine the Work transition after an Implementer's agent loop exits.
-///
-/// Returns `Some(target_status)` to transition, or `None` to skip (sibling still active).
-///
-/// Decision table:
-/// | Sibling active? | Bundle state         | Work transition |
-/// |---|---|---|
-/// | Yes             | —                    | (skip)          |
-/// | No              | active Bundle exists | "InReview"      |
-/// | No              | all Rejected/none    | "Blocked"       |
-fn determine_work_handback(stores: &Stores, work_id: &str, session_id: &str, _succeeded: bool) -> Option<&'static str> {
-    // If a sibling implementer is still active, don't touch the Work.
-    let sessions = stores.read_agent_sessions().ok()?;
-    let sibling_active = sessions.values().any(|s| {
-        s.id != session_id
-            && s.agent_type == AgentType::Implementer
-            && s.work_id.as_deref() == Some(work_id)
-            && !s.status.is_terminal()
-    });
-    drop(sessions);
-
-    if sibling_active {
-        return None; // let the sibling finish
-    }
-
-    // Did the agent produce a usable Bundle?
-    let bundles = stores.read_bundles().ok()?;
-    let has_active_bundle = bundles
-        .values()
-        .any(|b| b.work_id == work_id && !matches!(b.status, BundleStatus::Rejected | BundleStatus::Superseded));
-
-    Some(if has_active_bundle { "InReview" } else { "Blocked" })
-}
-
-/// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
-///
-/// Currently implements a minimal lifecycle: Starting → Running → Completed/Failed.
-/// Phase 2 will add the full Implementer/Reviewer loops with LLM calls.
-pub async fn run_agent_task(
-    session_id: String,
-    agent_type: AgentType,
-    stores: Arc<Stores>,
-    event_tx: broadcast::Sender<DaemonEvent>,
-    worktree_mgr: WorktreeManager,
-) {
-    debug!("run_agent_task(session_id={}, agent_type={})", session_id, agent_type);
-    info!("Agent task started: {} ({})", session_id, agent_type);
-
-    // Create a worktree for the agent before starting the loop.
-    // Thinking plane agents (Coordinator, Researcher, Integrator) don't use worktrees.
-    // Implementers key on work_id, Reviewers on bundle_id.
-    let worktree_key = if agent_type.is_thinking_plane() {
-        None
-    } else {
-        let Ok(sessions) = stores.read_agent_sessions() else {
-            error!("agent_sessions lock poisoned");
-            return;
-        };
-        let session = match sessions.get(&session_id) {
-            Some(s) => s,
-            None => {
-                error!("Agent {} session not found in stores", session_id);
-                return;
-            }
-        };
-        match agent_type {
-            AgentType::Implementer => session.work_id.clone(),
-            AgentType::Reviewer => session.bundle_id.clone(),
-            // Already handled by is_thinking_plane() above
-            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Chat => None,
-        }
-    };
-
-    if let Some(ref key) = worktree_key {
-        let base_ref = resolve_worktree_base(&stores);
-        info!("Agent {} using worktree base: {}", session_id, base_ref);
-        let worktree_path = match worktree_mgr.get_or_create_branch(key, &base_ref) {
-            Ok(path) => path,
-            Err(e) => {
-                error!("Agent {} worktree creation failed: {}", session_id, e);
-                // Fail the session immediately — don't proceed without a worktree
-                let Ok(mut sessions) = stores.write_agent_sessions() else {
-                    error!("agent_sessions lock poisoned");
-                    return;
-                };
-                if let Some(session) = sessions.get_mut(&session_id) {
-                    let _ = session.transition_to(AgentStatus::Failed);
-                    session.error_message = Some(format!("worktree creation failed: {}", e));
-                    persist_session(&stores, session);
-                }
-                debug!("[agent_status] {}: -> Failed (worktree creation)", session_id);
-                let _ = event_tx.send(DaemonEvent::agent_status_failed(
-                    &session_id,
-                    Some(format!("worktree creation failed: {}", e)),
-                ));
-                return;
-            }
-        };
-
-        {
-            let Ok(mut sessions) = stores.write_agent_sessions() else {
-                error!("agent_sessions lock poisoned");
-                return;
-            };
-            if let Some(session) = sessions.get_mut(&session_id) {
-                session.worktree_path = Some(worktree_path.to_string_lossy().to_string());
-                persist_session(&stores, session);
-            }
-            info!("Agent {} worktree created at {}", session_id, worktree_path.display());
-        }
-    }
-
-    // Retain a copy of the worktree manager for cleanup after the agent loop exits.
-    // The original is moved into the bridge.
-    let cleanup_mgr = worktree_mgr.clone();
-    let cleanup_key = worktree_key.clone();
-
-    // Create per-agent logger
-    let agent_log = match AgentLogger::new(agent_type, &session_id, stores.session_dir.as_deref()) {
-        Ok(al) => al,
-        Err(e) => {
-            error!("Agent {} failed to create logger: {}", session_id, e);
-            return;
-        }
-    };
-    agent_log.info(&format!("Agent task started: {} ({})", session_id, agent_type));
-
-    // Create the in-process IPC bridge for this agent
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-
-    // Transition to Running
-    {
-        let Ok(mut sessions) = stores.write_agent_sessions() else {
-            error!("agent_sessions lock poisoned");
-            return;
-        };
-        if let Some(session) = sessions.get_mut(&session_id) {
-            if let Err(e) = session.transition_to(AgentStatus::Running) {
-                agent_log.error(&format!("failed to start: {}", e));
-                return;
-            }
-            persist_session(&stores, session);
-        }
-    }
-    debug!("[agent_status] {}: -> Running", session_id);
-    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
-
-    // Resolve session timeout from the agent's role config
-    let timeout_secs = match agent_type {
-        AgentType::Implementer => stores.config.agents.implementer.session_timeout_secs,
-        AgentType::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
-        AgentType::Researcher => stores.config.agents.researcher.session_timeout_secs,
-        AgentType::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
-        AgentType::Integrator => stores.config.integrator.session_timeout_secs,
-        AgentType::Chat => None,
-    };
-
-    let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log);
-
-    let result = if let Some(secs) = timeout_secs {
-        match tokio::time::timeout(Duration::from_secs(secs), loop_future).await {
-            Ok(inner) => inner,
-            Err(_) => {
-                agent_log.warn(&format!("session timeout after {}s", secs));
-                Err(eyre!("session timed out after {}s", secs))
-            }
-        }
-    } else {
-        loop_future.await
-    };
-
-    // Bundle-aware work handback (implementer only)
-    if agent_type == AgentType::Implementer
-        && let Some(ref wi_id) = worktree_key
-    {
-        if let Some(target_status) = determine_work_handback(&stores, wi_id, &session_id, result.is_ok()) {
-            let resp = bridge.request(
-                "work.transition",
-                serde_json::json!({ "id": wi_id, "target_status": target_status, "role": "implementer" }),
-            );
-            if resp.is_error() {
-                agent_log.warn(&format!(
-                    "failed to transition work {} → {}: {:?}",
-                    wi_id, target_status, resp.error
-                ));
-            } else {
-                agent_log.info(&format!("transitioned work {} → {}", wi_id, target_status));
-            }
-        } else {
-            agent_log.info(&format!(
-                "skipping work handback for {} — sibling implementer still active",
-                wi_id
-            ));
-        }
-    }
-
-    // Release all advisory locks held by this agent's work ID
-    if let Ok(sessions) = stores.read_agent_sessions()
-        && let Some(session) = sessions.get(&session_id)
-        && let Some(ref wi_id) = session.work_id
-    {
-        release_agent_locks(&bridge, wi_id, &agent_log);
-    }
-
-    // Clean up worktree after agent loop exits (only for non-thinking-plane agents)
-    if let Some(ref key) = cleanup_key {
-        if let Err(e) = cleanup_mgr.cleanup(key) {
-            agent_log.warn(&format!("worktree cleanup failed (key={}): {}", key, e));
-        } else {
-            agent_log.info(&format!("worktree cleaned up (key={})", key));
-        }
-    }
-
-    // Transition to terminal state based on result
-    let terminal_status = match result {
-        Ok(_) => AgentStatus::Completed,
-        Err(ref e) => {
-            agent_log.warn(&format!("failed: {}", e));
-            AgentStatus::Failed
-        }
-    };
-
-    {
-        let Ok(mut sessions) = stores.write_agent_sessions() else {
-            error!("agent_sessions lock poisoned");
-            return;
-        };
-        if let Some(session) = sessions.get_mut(&session_id) {
-            if let Err(e) = session.transition_to(terminal_status) {
-                agent_log.error(&format!("failed to transition to {:?}: {}", terminal_status, e));
-                return;
-            }
-            if let Err(ref e) = result {
-                session.error_message = Some(e.to_string());
-                session.error_kind = Some(crate::agents::error::classify_error(e));
-            }
-            persist_session(&stores, session);
-        }
-    }
-    // Create a Learning from implementer failures so the Coordinator can adapt
-    if terminal_status == AgentStatus::Failed && agent_type == AgentType::Implementer {
-        let (wi_title, wi_id, iteration_count) = {
-            let Ok(sessions) = stores.read_agent_sessions() else {
-                error!("agent_sessions lock poisoned");
-                return;
-            };
-            let session = sessions.get(&session_id);
-            let wi_id = session.and_then(|s| s.work_id.clone()).unwrap_or_default();
-            let iteration = session.map(|s| s.iteration).unwrap_or(0);
-            let title = if !wi_id.is_empty() {
-                stores
-                    .read_works()
-                    .ok()
-                    .and_then(|works| works.get(&wi_id).map(|w| w.title.clone()))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            (title, wi_id, iteration)
-        };
-
-        let error_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
-        let learning = crate::domain::learning::Learning::new(
-            wi_id.clone(),
-            crate::domain::learning::LearningScope::Phase,
-            format!(
-                "Implementer failed on '{}' after {} iterations. Error: {}. \
-                 Consider: splitting into smaller tasks, providing more context, \
-                 or checking dependency ordering.",
-                wi_title, iteration_count, error_msg
-            ),
-        );
-        let learning_id = learning.id.clone();
-        if let Ok(mut learnings) = stores.write_learnings() {
-            learnings.insert(learning_id.clone(), learning.clone());
-        } else {
-            error!("learnings lock poisoned");
-        }
-        if let Ok(Some(mut store_guard)) = stores.lock_store() {
-            let _ = store_guard.create(learning);
-        }
-        agent_log.info(&format!("created failure learning {} on '{}'", learning_id, wi_title));
-    }
-
-    debug!("[agent_status] {}: -> {:?} (terminal)", session_id, terminal_status);
-    if terminal_status == AgentStatus::Failed {
-        let error = result.as_ref().err().map(|e| e.to_string());
-        let _ = event_tx.send(DaemonEvent::agent_status_failed(&session_id, error));
-    } else {
-        let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
-    }
-
-    agent_log.info(&format!("task finished → {:?}", terminal_status));
-}
-
-/// Agent loop — dispatches to the appropriate agent implementation based on type.
-async fn run_agent_loop(
-    session_id: &str,
-    agent_type: AgentType,
-    stores: &Arc<Stores>,
-    bridge: &AgentIpcBridge,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    agent_log: &AgentLogger,
-) -> Result<()> {
-    agent_log.debug(&format!(
-        "run_agent_loop(session_id={}, agent_type={})",
-        session_id, agent_type
-    ));
-    // Verify the bridge works by checking system status
-    let status_resp = bridge.request("system.status", serde_json::json!(null));
-    if status_resp.is_error() {
-        return Err(eyre!("bridge health check failed: {:?}", status_resp.error));
-    }
-    agent_log.info("Bridge health check passed");
-
-    let mut ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
-
-    // Per-session tool resolution: 3-layer priority stack
-    //   Layer 1: config tools (from loopr.yml)
-    //   Layer 2: runtime tools (from tools.register IPC)
-    //   Layer 3: detected tools (from marker files)
-    if let Some(ref wt_path) = ctx.session.worktree_path {
-        let worktree = std::path::Path::new(wt_path);
-        let runtime_tools = stores.read_runtime_tools()?;
-        let resolved = crate::tools::resolve_tools(&stores.config.agents.tools, &runtime_tools, Some(worktree));
-        drop(runtime_tools);
-        ctx.tool_runner = Arc::new(crate::tools::ToolRunner::new(&resolved));
-        ctx.tool_executor = Arc::new(crate::tools::ToolExecutor::standard(&resolved));
-        agent_log.info(&format!(
-            "Session tool executor: {} tools (resolved from {})",
-            ctx.tool_executor.available_tools().len(),
-            wt_path
-        ));
-    }
-
-    let (result, iteration) = match agent_type {
-        AgentType::Implementer => {
-            let config = stores.config.agents.implementer.clone();
-            let llm = create_llm_client(&config, session_id, event_tx)?;
-            let work_id = ctx
-                .session
-                .work_id
-                .clone()
-                .ok_or_else(|| eyre!("implementer session missing work_id"))?;
-            let worktree_path = ctx
-                .session
-                .worktree_path
-                .as_ref()
-                .map(std::path::PathBuf::from)
-                .ok_or_else(|| eyre!("implementer session missing worktree_path"))?;
-            let mut agent = implementer::ImplementerAgent::new(ctx, llm, config, work_id, worktree_path);
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
-        AgentType::Reviewer => {
-            let config = stores.config.agents.reviewer.clone();
-            let llm = create_llm_client(&config, session_id, event_tx)?;
-            let mut agent = reviewer::ReviewerAgent::new(ctx, llm, config)?;
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
-        AgentType::Coordinator => {
-            let config = stores.config.agents.coordinator.clone();
-            let llm = create_llm_client(&config.role, session_id, event_tx)?;
-            let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
-        AgentType::Researcher => {
-            let config = stores.config.agents.researcher.clone();
-            let llm = create_llm_client(&config, session_id, event_tx)?;
-            let mut agent = researcher::ResearcherAgent::new(ctx, llm, config);
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
-        AgentType::Integrator => {
-            let config = stores.config.integrator.clone();
-            let mut agent = integrator::IntegratorAgent::new(ctx, config);
-            let result = agent.run().await;
-            (result, agent.ctx.session.iteration)
-        }
-        AgentType::Chat => {
-            // Chat sessions are not started via run_agent_task — they use chat.submit IPC.
-            // This arm should never be reached.
-            return Ok(());
-        }
-    };
-
-    // Unified iteration writeback
-    {
-        let mut sessions = stores.write_agent_sessions()?;
-        if let Some(s) = sessions.get_mut(session_id) {
-            s.iteration = iteration;
-        }
-    }
-
-    result
-}
-
-/// Auto-acquire an advisory lock before a file write/edit. Returns the lock ID if a new
-/// lock was created, or None if the holder already holds a lock on this resource.
-fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, holder_id: &str) -> Option<String> {
-    // Check if we already hold a lock on this resource
-    let check = bridge.request(
-        "lock.list",
-        serde_json::json!({ "resource": resource, "holder_id": holder_id, "active_only": true }),
-    );
-    let already_held = check
-        .result
-        .as_ref()
-        .and_then(|v| v.as_array())
-        .is_some_and(|locks| !locks.is_empty());
-
-    if already_held {
-        return None; // Already locked by us
-    }
-
-    // Check if another agent already holds a lock (advisory warning)
-    let existing = bridge.request(
-        "lock.list",
-        serde_json::json!({ "resource": resource, "active_only": true }),
-    );
-    if let Some(locks) = existing.result.as_ref().and_then(|v| v.as_array()) {
-        for lock in locks {
-            if let Some(other) = lock.get("holder_id").and_then(|v| v.as_str())
-                && other != holder_id
-            {
-                log::warn!(
-                    "advisory lock contention: {} already holds lock on {}, acquiring concurrent lock for {}",
-                    other,
-                    resource,
-                    holder_id
-                );
-            }
-        }
-    }
-
-    // Acquire new lock
-    let resp = bridge.request(
-        "lock.create",
-        serde_json::json!({
-            "resource": resource,
-            "holder_id": holder_id,
-            "granted_by": holder_id,
-        }),
-    );
-    resp.result
-        .as_ref()
-        .and_then(|v| v.get("id"))
-        .and_then(|id| id.as_str())
-        .map(String::from)
-}
-
-/// Release all advisory locks held by a given holder (work ID). Called at agent exit.
-fn release_agent_locks(bridge: &AgentIpcBridge, holder_id: &str, agent_log: &AgentLogger) {
-    let resp = bridge.request(
-        "lock.list",
-        serde_json::json!({ "holder_id": holder_id, "active_only": true }),
-    );
-    if let Some(locks) = resp.result.as_ref().and_then(|v| v.as_array()) {
-        for lock in locks {
-            if let Some(lock_id) = lock.get("id").and_then(|v| v.as_str()) {
-                let _ = bridge.request("lock.release", serde_json::json!({ "id": lock_id }));
-            }
-        }
-        if !locks.is_empty() {
-            agent_log.info(&format!("released {} advisory lock(s)", locks.len()));
-        }
-    }
-}
-
-/// Execute a single agent action. Used by the agent loop to process parsed LLM responses.
-///
-/// `ctx.session.agent_type` is used for role inference on Transition actions (when role is None).
-pub async fn execute_action(
-    action: &AgentAction,
-    ctx: &AgentContext,
-    worktree_path: &Path,
-    work_id: Option<&str>,
-) -> Result<ActionResult> {
-    let tool_runner = &*ctx.tool_runner;
-    let bridge = &ctx.bridge;
-    let agent_type = ctx.session.agent_type;
-    let agent_log = &ctx.log;
-    agent_log.debug(&format!("execute_action(action={:?})", action));
-    match action {
-        AgentAction::RunTool { tool, args } => {
-            let tool_result = tool_runner
-                .run(tool, args, worktree_path)
-                .await
-                .map_err(|e| eyre!("run_tool '{}': {}", tool, e))?;
-            Ok(ActionResult::ToolRun(tool_result))
-        }
-        AgentAction::RegisterTool {
-            name,
-            command,
-            timeout_secs,
-            worktree,
-        } => {
-            let params = serde_json::json!({
-                "name": name,
-                "command": command,
-                "timeout_secs": timeout_secs,
-                "worktree": worktree,
-                "context_dir": worktree_path.to_string_lossy(),
-            });
-            let resp = bridge.request("tools.register", params);
-            if resp.is_error() {
-                let msg = resp
-                    .error
-                    .map(|e| e.message)
-                    .unwrap_or_else(|| "unknown error".to_string());
-                return Ok(ActionResult::ActionError(format!("register_tool '{}': {}", name, msg)));
-            }
-            // The tools.register IPC rebuilds the stores' tool_runner/tool_executor.
-            // Newly spawned agents will pick up the registered tool automatically.
-            Ok(ActionResult::ToolRegistered(name.clone()))
-        }
-        AgentAction::WriteFile { path, content } => {
-            // Validate path stays within worktree (sandbox)
-            let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
-
-            // Auto-acquire advisory lock for write operations
-            if let Some(wi_id) = work_id {
-                auto_acquire_write_lock(bridge, path, wi_id);
-            }
-
-            // Advisory lock check: under LockStrict, reject writes if another agent holds the lock
-            if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
-                let lock_resp = bridge.request(
-                    "lock.list",
-                    serde_json::json!({ "resource": path, "active_only": true }),
-                );
-                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array()) {
-                    let held_by_other = locks
-                        .iter()
-                        .any(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id);
-                    if held_by_other {
-                        let holder = locks
-                            .iter()
-                            .find(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id)
-                            .and_then(|l| l.get("holder_id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        return Ok(ActionResult::ActionError(format!(
-                            "file '{}' locked by {} (policy: LockStrict)",
-                            path, holder
-                        )));
-                    }
-                }
-            }
-
-            if let Some(parent) = full_path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| eyre!("write_file mkdir '{}': {}", path, e))?;
-            }
-            tokio::fs::write(&full_path, content)
-                .await
-                .map_err(|e| eyre!("write_file '{}': {}", path, e))?;
-            ctx.cache().invalidate(&full_path);
-            Ok(ActionResult::FileWritten(path.clone()))
-        }
-        AgentAction::EditFile {
-            path,
-            old_string,
-            new_string,
-        } => {
-            let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
-
-            // Auto-acquire advisory lock for edit operations
-            if let Some(wi_id) = work_id {
-                auto_acquire_write_lock(bridge, path, wi_id);
-            }
-
-            // Advisory lock check: under LockStrict, reject edits if another agent holds the lock
-            if bridge.config().strategy.conflict_policy == crate::config::ConflictPolicy::LockStrict {
-                let lock_resp = bridge.request(
-                    "lock.list",
-                    serde_json::json!({ "resource": path, "active_only": true }),
-                );
-                if let Some(locks) = lock_resp.result.as_ref().and_then(|v| v.as_array()) {
-                    let held_by_other = locks
-                        .iter()
-                        .any(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id);
-                    if held_by_other {
-                        let holder = locks
-                            .iter()
-                            .find(|l| l.get("holder_id").and_then(|v| v.as_str()) != work_id)
-                            .and_then(|l| l.get("holder_id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        return Ok(ActionResult::ActionError(format!(
-                            "file '{}' locked by {} (policy: LockStrict)",
-                            path, holder
-                        )));
-                    }
-                }
-            }
-
-            let content = tokio::fs::read_to_string(&full_path)
-                .await
-                .map_err(|e| eyre!("edit_file read '{}': {}", path, e))?;
-
-            let count = content.matches(old_string.as_str()).count();
-            if count == 0 {
-                return Ok(ActionResult::ActionError(format!(
-                    "edit_file '{}': old_string not found in file",
-                    path
-                )));
-            }
-            if count > 1 {
-                return Ok(ActionResult::ActionError(format!(
-                    "edit_file '{}': old_string found {} times (must be unique - provide more context)",
-                    path, count
-                )));
-            }
-
-            let updated = content.replacen(old_string.as_str(), new_string, 1);
-            tokio::fs::write(&full_path, &updated)
-                .await
-                .map_err(|e| eyre!("edit_file write '{}': {}", path, e))?;
-            ctx.cache().invalidate(&full_path);
-            Ok(ActionResult::FileEdited(path.clone()))
-        }
-        AgentAction::ReadFile { path, offset, limit } => {
-            let full_path = crate::agents::sandbox::validate_sandboxed_path(worktree_path, path, false)?;
-
-            // Stat for mtime (single syscall, kernel-cached)
-            let mtime = tokio::fs::metadata(&full_path)
-                .await
-                .map_err(|e| eyre!("read_file '{}': {}", path, e))?
-                .modified()
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-
-            // Dedup check BEFORE reading the file
-            if let Some(cached_lines) = ctx.cache().check_hit(&full_path, *offset, *limit, mtime) {
-                let start = offset.unwrap_or(1).max(1);
-                let effective_limit = limit.unwrap_or(500);
-                let end = (start + effective_limit - 1).min(cached_lines as u64);
-                return Ok(ActionResult::FileRead(format!(
-                    "File unchanged since last read \
-                     (lines {}-{} of {}, use offset/limit for other sections, \
-                     or proceed with editing).",
-                    start, end, cached_lines
-                )));
-            }
-
-            // Cache miss - read the file
-            let content = tokio::fs::read_to_string(&full_path)
-                .await
-                .map_err(|e| eyre!("read_file '{}': {}", path, e))?;
-            let lines: Vec<&str> = content.lines().collect();
-
-            // Record in cache for future dedup
-            ctx.cache().record(&full_path, *offset, *limit, mtime, lines.len());
-
-            let start = offset.unwrap_or(1).max(1) as usize - 1;
-            let effective_limit = limit.unwrap_or(500) as usize;
-            let end = (start + effective_limit).min(lines.len());
-            let mut numbered: Vec<String> = lines[start..end]
-                .iter()
-                .enumerate()
-                .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
-                .collect();
-            if end < lines.len() && limit.is_none() {
-                numbered.push(format!(
-                    "\n... [{} more lines, use offset/limit to read specific sections]",
-                    lines.len() - end
-                ));
-            }
-            Ok(ActionResult::FileRead(numbered.join("\n")))
-        }
-        AgentAction::Commit { message, paths } => {
-            // Stage specified paths (or all changes if empty)
-            let add_args = if paths.is_empty() { vec!["-A".to_string()] } else { paths.clone() };
-            let mut add_cmd = tokio::process::Command::new("git");
-            add_cmd.arg("add").args(&add_args).current_dir(worktree_path);
-            let add_out = add_cmd.output().await?;
-            if !add_out.status.success() {
-                let stderr = String::from_utf8_lossy(&add_out.stderr);
-                return Err(eyre!("git add failed: {}", stderr));
-            }
-
-            // Commit
-            let mut commit_cmd = tokio::process::Command::new("git");
-            commit_cmd.args(["commit", "-m", message]).current_dir(worktree_path);
-            let commit_out = commit_cmd.output().await?;
-            if !commit_out.status.success() {
-                let stderr = String::from_utf8_lossy(&commit_out.stderr);
-                let stdout = String::from_utf8_lossy(&commit_out.stdout);
-                let detail = if stderr.trim().is_empty() { &stdout } else { &stderr };
-                return Err(eyre!("git commit failed: {}", detail.trim()));
-            }
-            Ok(ActionResult::Committed(message.clone()))
-        }
-        AgentAction::ProposeBundle {
-            description,
-            claims,
-            noop_reason,
-        } => {
-            let is_noop = noop_reason.is_some();
-            let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
-
-            // Guard: reject noop bundles with uncommitted changes.
-            // The LLM may have written files via write_file but then
-            // incorrectly taken the noop path. Return an error so a
-            // fresh session can self-correct with a normal bundle.
-            if is_noop {
-                let status_output = tokio::process::Command::new("git")
-                    .args(["status", "--porcelain"])
-                    .current_dir(worktree_path)
-                    .output()
-                    .await;
-                if let Ok(output) = status_output {
-                    let status = String::from_utf8_lossy(&output.stdout);
-                    if !status.trim().is_empty() {
-                        agent_log.warn(&format!(
-                            "Rejected noop bundle: worktree has uncommitted changes:\n{}",
-                            status.trim()
-                        ));
-                        return Ok(ActionResult::ActionError(format!(
-                            "Cannot propose a noop bundle while the worktree has uncommitted \
-                             changes:\n{}\n\
-                             You wrote files in this session that are not committed. \
-                             Use `commit` first, then propose a normal bundle (without \
-                             noop_reason). Do NOT use noop_reason if you made any changes.",
-                            status.trim()
-                        )));
-                    }
-                }
-            }
-
-            // For normal bundles: auto-commit any pending changes before creating
-            // the bundle. Skip for noop bundles (no changes to commit).
-            if !is_noop {
-                let auto_commit = tokio::process::Command::new("git")
-                    .args(["add", "-A"])
-                    .current_dir(worktree_path)
-                    .output()
-                    .await;
-                if let Ok(add_out) = auto_commit
-                    && add_out.status.success()
-                {
-                    let commit_out = tokio::process::Command::new("git")
-                        .args(["commit", "-m", &format!("impl: {}", description)])
-                        .current_dir(worktree_path)
-                        .output()
-                        .await;
-                    match commit_out {
-                        Ok(out) if out.status.success() => {
-                            agent_log.info("Auto-committed pending changes before propose_bundle");
-                        }
-                        _ => {
-                            agent_log.info("No pending changes to auto-commit before propose_bundle");
-                        }
-                    }
-                }
-            }
-
-            // F2: Derive branch name deterministically from work_id - matches
-            // WorktreeManager::create() which uses format!("agent/{}", work_id).
-            // For noop bundles, use empty branch_name (Integrator skips merge).
-            let branch_name = if is_noop {
-                agent_log.info(&format!(
-                    "Noop bundle: {}",
-                    noop_reason.as_deref().unwrap_or("(no reason)")
-                ));
-                String::new()
-            } else {
-                format!("agent/{}", wi_id)
-            };
-
-            // Capture the current HEAD SHA for audit and pre-merge verification
-            let head_commit = if !is_noop {
-                tokio::process::Command::new("git")
-                    .args(["rev-parse", "HEAD"])
-                    .current_dir(worktree_path)
-                    .output()
-                    .await
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            };
-
-            // Fix #1: Resolve base_tick_id from latest Published Tick
-            let base_tick_id = resolve_latest_published_tick_id(bridge.stores());
-
-            let mut params = serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": branch_name,
-                "claims": claims,
-                "description": description,
-            });
-            if let Some(ref sha) = head_commit {
-                params["head_commit"] = serde_json::Value::String(sha.clone());
-            }
-            if let Some(reason) = noop_reason {
-                params["noop_reason"] = serde_json::Value::String(reason.clone());
-            }
-            if let Some(tick_id) = &base_tick_id {
-                params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
-            }
-
-            let resp = bridge.request("bundle.create", params.clone());
-            if resp.is_error() {
-                // Fix #7: On stale bundle rejection (-32002), retry once
-                if let Some(ref err) = resp.error
-                    && err.code == -32002
-                {
-                    agent_log.warn(&format!(
-                        "Bundle stale ({}), retrying with fresh base_tick_id",
-                        err.message
-                    ));
-                    let new_base_tick_id = resolve_latest_published_tick_id(bridge.stores());
-                    if let Some(tick_id) = &new_base_tick_id {
-                        params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
-                    }
-                    let retry_resp = bridge.request("bundle.create", params);
-                    if retry_resp.is_error() {
-                        return Err(eyre!("propose bundle failed after retry: {:?}", retry_resp.error));
-                    }
-                    return Ok(ActionResult::BundleProposed(description.clone()));
-                }
-                return Err(eyre!("propose bundle failed: {:?}", resp.error));
-            }
-            Ok(ActionResult::BundleProposed(description.clone()))
-        }
-        AgentAction::Transition {
-            collection,
-            id,
-            target_status,
-            role,
-        } => {
-            // If role is not specified, infer from agent_type
-            let effective_role = role
-                .as_ref()
-                .map(|r| r.to_string())
-                .unwrap_or_else(|| agent_type.default_role().to_string());
-            let params = serde_json::json!({ "id": id, "target_status": target_status, "role": effective_role });
-            let method = format!("{}.transition", normalize_collection(collection));
-            let resp = bridge.request(&method, params);
-            if resp.is_error() {
-                return Err(eyre!("transition failed: {:?}", resp.error));
-            }
-            Ok(ActionResult::Transitioned(format!(
-                "{}/{} → {}",
-                collection, id, target_status
-            )))
-        }
-        AgentAction::CreateLearning {
-            content,
-            scope,
-            source_id,
-            applicable_roles,
-            resource_tags,
-        } => {
-            // M9: Defense-in-depth — if source_id doesn't look like a record ID,
-            // use work_id if available (fixes Reviewer sending title as source_id)
-            let effective_source_id = if !source_id.starts_with("wi-")
-                && !source_id.starts_with("phase-")
-                && !source_id.starts_with("plan-")
-                && !source_id.starts_with("spec-")
-            {
-                work_id.unwrap_or(source_id).to_string()
-            } else {
-                source_id.clone()
-            };
-            let mut params = serde_json::json!({
-                "content": content,
-                "scope": scope,
-                "source_id": effective_source_id,
-            });
-            if let Some(roles) = applicable_roles {
-                params["applicable_roles"] = serde_json::json!(roles);
-            }
-            if let Some(tags) = resource_tags {
-                params["resource_tags"] = serde_json::json!(tags);
-            }
-            let resp = bridge.request("learning.create", params);
-            if resp.is_error() {
-                return Err(eyre!("create learning failed: {:?}", resp.error));
-            }
-            Ok(ActionResult::LearningCreated(content.clone()))
-        }
-        AgentAction::Done { summary } => Ok(ActionResult::Done(summary.clone())),
-        AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
-
-        // --- Coordinator document-creation actions ---
-        AgentAction::CreatePlan {
-            title,
-            description,
-            acceptance_criteria,
-        } => {
-            // Gap #27: Draft-awareness guard
-            let list_resp = bridge.request("plan.list", serde_json::json!({}));
-            if let Some(plans) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
-                let has_draft = plans.iter().any(|p| {
-                    p.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase()) == Some("draft".to_string())
-                });
-                if has_draft {
-                    return Ok(ActionResult::ActionError(
-                        "A Draft Plan already exists. Iterate on the existing Draft instead of creating a new one."
-                            .into(),
-                    ));
-                }
-            }
-            let resp = bridge.request(
-                "plan.create",
-                serde_json::json!({
-                    "title": title,
-                    "description": description,
-                    "acceptance_criteria": acceptance_criteria,
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("create_plan failed: {}", msg)));
-            }
-            let id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!("CreatePlan: {} (id: {})", title, id));
-            // Auto-approve Plan in non-Interactive modes
-            if bridge.config().agents.coordinator.interview_mode != crate::config::InterviewMode::Interactive {
-                let approve_resp = bridge.request("coordinator.accept_plan", serde_json::json!({ "plan_id": id }));
-                if approve_resp.is_error() {
-                    agent_log.warn(&format!(
-                        "auto-approve failed for plan {}: {:?}",
-                        id, approve_resp.error
-                    ));
-                } else {
-                    agent_log.info(&format!("auto-approved plan {} (interview_mode != interactive)", id));
-                }
-            }
-            Ok(ActionResult::RecordCreated {
-                collection: "plans".to_string(),
-                id,
-            })
-        }
-        AgentAction::CreateSpec {
-            plan_id,
-            title,
-            description,
-        } => {
-            // Gap #27: Draft-awareness guard for specs under same plan
-            let list_resp = bridge.request("spec.list", serde_json::json!({}));
-            if let Some(specs) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
-                let has_draft = specs.iter().any(|s| {
-                    s.get("plan_id").and_then(|v| v.as_str()) == Some(plan_id)
-                        && s.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase())
-                            == Some("draft".to_string())
-                });
-                if has_draft {
-                    return Ok(ActionResult::ActionError(
-                        "A Draft Spec already exists under this Plan. Iterate on the existing Draft.".into(),
-                    ));
-                }
-            }
-            let resp = bridge.request(
-                "spec.create",
-                serde_json::json!({
-                    "plan_id": plan_id,
-                    "title": title,
-                    "description": description,
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("create_spec failed: {}", msg)));
-            }
-            let id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!("CreateSpec: {} (id: {})", title, id));
-            Ok(ActionResult::RecordCreated {
-                collection: "specs".to_string(),
-                id,
-            })
-        }
-        AgentAction::CreatePhase {
-            spec_id,
-            title,
-            description,
-            order,
-        } => {
-            let resp = bridge.request(
-                "phase.create",
-                serde_json::json!({
-                    "spec_id": spec_id,
-                    "title": title,
-                    "description": description,
-                    "order": order,
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("create_phase failed: {}", msg)));
-            }
-            let id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!("CreatePhase: {} (id: {})", title, id));
-            Ok(ActionResult::RecordCreated {
-                collection: "phases".to_string(),
-                id,
-            })
-        }
-        AgentAction::CreateWork {
-            phase_id,
-            title,
-            description,
-            resource_tags,
-            acceptance_criteria,
-            dependencies,
-        } => {
-            let resp = bridge.request(
-                "work.create",
-                serde_json::json!({
-                    "phase_id": phase_id,
-                    "title": title,
-                    "description": description,
-                    "resource_tags": resource_tags,
-                    "acceptance_criteria": acceptance_criteria,
-                    "dependencies": dependencies,
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("create_work failed: {}", msg)));
-            }
-            let id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!("CreateWork: {} (id: {}, deps: {:?})", title, id, dependencies));
-            Ok(ActionResult::RecordCreated {
-                collection: "works".to_string(),
-                id,
-            })
-        }
-
-        // --- Coordinator agent management actions ---
-        AgentAction::AssignAgent { agent_type, target_id } => {
-            // For implementer assignments, check dependencies and auto-transition work
-            if agent_type == "implementer" {
-                let get_resp = bridge.request("work.get", serde_json::json!({ "id": target_id }));
-
-                // Check dependencies: all must be Done before assignment
-                if let Some(result) = &get_resp.result {
-                    let deps: Vec<String> = result
-                        .get("dependencies")
-                        .and_then(|v| serde_json::from_value(v.clone()).ok())
-                        .unwrap_or_default();
-
-                    for dep_id in &deps {
-                        let dep_resp = bridge.request("work.get", serde_json::json!({ "id": dep_id }));
-                        let dep_status = dep_resp
-                            .result
-                            .as_ref()
-                            .and_then(|v| v.get("status"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-
-                        if dep_status != "Done" {
-                            let dep_title = dep_resp
-                                .result
-                                .as_ref()
-                                .and_then(|v| v.get("title"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            return Ok(ActionResult::DependencyNotMet {
-                                work_id: target_id.clone(),
-                                message: format!(
-                                    "dependency '{}' ({}) is {} (must be Done)",
-                                    dep_title, dep_id, dep_status
-                                ),
-                            });
-                        }
-                    }
-                }
-
-                let wi_status = get_resp
-                    .result
-                    .as_ref()
-                    .and_then(|v| v.get("status"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                match wi_status {
-                    "Draft" => {
-                        // Draft → Ready → InProgress (assignee set on InProgress transition)
-                        let r1 = bridge.request(
-                            "work.transition",
-                            serde_json::json!({ "id": target_id, "target_status": "Ready", "role": "coordinator" }),
-                        );
-                        if r1.is_error() {
-                            let msg = r1.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                            return Ok(ActionResult::ActionError(format!(
-                                "auto-transition Draft→Ready failed: {}",
-                                msg
-                            )));
-                        }
-                        let r2 = bridge.request(
-                            "work.transition",
-                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator", "assignee": agent_type }),
-                        );
-                        if r2.is_error() {
-                            let msg = r2.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                            return Ok(ActionResult::ActionError(format!(
-                                "auto-transition Ready→InProgress failed: {}",
-                                msg
-                            )));
-                        }
-                        agent_log.info(&format!(
-                            "AssignAgent: auto-transitioned work {} Draft→Ready→InProgress",
-                            target_id
-                        ));
-                    }
-                    "Ready" => {
-                        // Ready → InProgress
-                        let r = bridge.request(
-                            "work.transition",
-                            serde_json::json!({ "id": target_id, "target_status": "InProgress", "role": "coordinator", "assignee": agent_type }),
-                        );
-                        if r.is_error() {
-                            let msg = r.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                            return Ok(ActionResult::ActionError(format!(
-                                "auto-transition Ready→InProgress failed: {}",
-                                msg
-                            )));
-                        }
-                        agent_log.info(&format!(
-                            "AssignAgent: auto-transitioned work {} Ready→InProgress",
-                            target_id
-                        ));
-                    }
-                    "InProgress" => {
-                        // Already correct
-                    }
-                    other => {
-                        return Ok(ActionResult::ActionError(format!(
-                            "INVALID: Work '{}' is in state '{}' and cannot be assigned an agent. \
-                             Only Draft, Ready, or InProgress works are assignable. \
-                             You MUST NOT assign agents to completed or abandoned work. \
-                             Review the Actionable Works list and assign agents to Ready tasks instead.",
-                            target_id, other
-                        )));
-                    }
-                }
-            }
-
-            // Map target_id to the correct param based on agent type
-            let mut params = serde_json::json!({ "agent_type": agent_type });
-            match agent_type.as_str() {
-                "implementer" => {
-                    if !target_id.starts_with("wk-") {
-                        return Ok(ActionResult::ActionError(format!(
-                            "assign_agent implementer: '{}' is not a work ID (expected wk-* prefix)",
-                            target_id
-                        )));
-                    }
-                    params["work_id"] = serde_json::json!(target_id);
-                }
-                "reviewer" => {
-                    if !target_id.starts_with("bd-") {
-                        return Ok(ActionResult::ActionError(format!(
-                            "assign_agent reviewer: '{}' is not a bundle ID (expected bd-* prefix)",
-                            target_id
-                        )));
-                    }
-                    params["bundle_id"] = serde_json::json!(target_id);
-                }
-                _ => {
-                    params["target_id"] = serde_json::json!(target_id);
-                }
-            }
-            let resp = bridge.request("agent.start", params);
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("assign_agent failed: {}", msg)));
-            }
-            let session_id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!(
-                "AssignAgent: {} → {} (session: {})",
-                agent_type, target_id, session_id
-            ));
-            Ok(ActionResult::AgentSpawned {
-                session_id,
-                agent_type: agent_type.clone(),
-            })
-        }
-        AgentAction::SpawnResearcher { query, scope_id } => {
-            let resp = bridge.request(
-                "agent.start",
-                serde_json::json!({
-                    "agent_type": "researcher",
-                    "target_id": scope_id,
-                    "query": query,
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("spawn_researcher failed: {}", msg)));
-            }
-            let session_id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!(
-                "SpawnResearcher: {} (scope: {}, session: {})",
-                query, scope_id, session_id
-            ));
-            Ok(ActionResult::AgentSpawned {
-                session_id,
-                agent_type: "researcher".to_string(),
-            })
-        }
-        AgentAction::ValidateDocument { collection, id } => {
-            let resp = bridge.request(
-                "validator.validate",
-                serde_json::json!({ "collection": collection, "id": id }),
-            );
-            if resp.is_error() {
-                let msg = resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.message.clone())
-                    .unwrap_or_else(|| "unknown validation error".to_string());
-                return Ok(ActionResult::ActionError(format!(
-                    "validate_document {}/{} failed: {}",
-                    collection, id, msg
-                )));
-            }
-            let verdict = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("verdict"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let summary = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("summary"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let issues: Vec<String> = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("issues"))
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|issue| issue.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            agent_log.info(&format!(
-                "ValidateDocument {}/{}: verdict={}, issues={}",
-                collection,
-                id,
-                verdict,
-                issues.len()
-            ));
-            Ok(ActionResult::DocumentValidated {
-                verdict,
-                summary,
-                issues,
-            })
-        }
-        AgentAction::EvaluateCoverage {
-            parent_collection,
-            parent_id,
-        } => {
-            let resp = bridge.request(
-                "coverage.evaluate",
-                serde_json::json!({ "parent_collection": parent_collection, "parent_id": parent_id }),
-            );
-            if resp.is_error() {
-                let msg = resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.message.clone())
-                    .unwrap_or_else(|| "unknown coverage error".to_string());
-                return Ok(ActionResult::ActionError(format!(
-                    "evaluate_coverage {}/{} failed: {}",
-                    parent_collection, parent_id, msg
-                )));
-            }
-            let verdict = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("verdict"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let summary = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("summary"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let gaps: Vec<String> = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("gaps"))
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|gap| gap.get("description").and_then(|d| d.as_str()).map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            agent_log.info(&format!(
-                "EvaluateCoverage {}/{}: verdict={}, gaps={}",
-                parent_collection,
-                parent_id,
-                verdict,
-                gaps.len()
-            ));
-            Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
-        }
-        AgentAction::InterviewQuestion { questions } => {
-            let interview_mode = bridge.config().agents.coordinator.interview_mode;
-            if interview_mode == crate::config::InterviewMode::Auto {
-                // Auto mode: synthesize answer from goal + repo context
-                let goal_text = {
-                    let goals = ctx.stores.read_coordinator_goals()?;
-                    goals
-                        .values()
-                        .find(|g| g.active)
-                        .map(|g| g.goal.clone())
-                        .unwrap_or_else(|| "No goal set.".to_string())
-                };
-                let repo_path = &bridge.config().project.repo_path;
-                let readme = std::fs::read_to_string(repo_path.join("README.md"))
-                    .unwrap_or_else(|_| "no README found".to_string());
-                let file_tree = std::fs::read_dir(repo_path)
-                    .map(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .map(|e| e.file_name().to_string_lossy().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_else(|_| "could not list files".to_string());
-                let synthetic_answer = format!(
-                    "Based on the goal: \"{}\"\nRepository context: {}\nFile tree: {}",
-                    goal_text, readme, file_tree
-                );
-                // Call interview_respond to record the exchange
-                let resp = bridge.request(
-                    "coordinator.interview_respond",
-                    serde_json::json!({ "answer": synthetic_answer }),
-                );
-                if resp.is_error() {
-                    let msg = resp
-                        .error
-                        .as_ref()
-                        .map(|e| e.message.clone())
-                        .unwrap_or_else(|| "interview auto-respond failed".to_string());
-                    return Ok(ActionResult::ActionError(msg));
-                }
-                agent_log.info(&format!(
-                    "InterviewQuestion: auto-answered {} question(s)",
-                    questions.len()
-                ));
-                Ok(ActionResult::Done(format!(
-                    "auto-answered {} interview question(s)",
-                    questions.len()
-                )))
-            } else {
-                // Interactive mode: send questions to TUI via bridge event
-                let resp = bridge.request(
-                    "coordinator.interview_question",
-                    serde_json::json!({ "questions": questions }),
-                );
-                if resp.is_error() {
-                    let msg = resp
-                        .error
-                        .as_ref()
-                        .map(|e| e.message.clone())
-                        .unwrap_or_else(|| "interview question failed".to_string());
-                    return Ok(ActionResult::ActionError(msg));
-                }
-                agent_log.info(&format!("InterviewQuestion: {} questions sent", questions.len()));
-                Ok(ActionResult::Done(format!(
-                    "sent {} interview question(s)",
-                    questions.len()
-                )))
-            }
-        }
-        AgentAction::ProposePlan {
-            title,
-            description,
-            acceptance_criteria,
-        } => {
-            // Create Plan as Draft via bridge
-            let resp = bridge.request(
-                "plan.create",
-                serde_json::json!({
-                    "title": title,
-                    "description": description,
-                    "acceptance_criteria": acceptance_criteria,
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.message.clone())
-                    .unwrap_or_else(|| "plan creation failed".to_string());
-                return Ok(ActionResult::ActionError(msg));
-            }
-            let plan_id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!("ProposePlan: created draft plan {}", plan_id));
-            // Auto-approve Plan in non-Interactive modes
-            if bridge.config().agents.coordinator.interview_mode != crate::config::InterviewMode::Interactive {
-                let approve_resp = bridge.request("coordinator.accept_plan", serde_json::json!({ "plan_id": plan_id }));
-                if approve_resp.is_error() {
-                    agent_log.warn(&format!(
-                        "auto-approve failed for plan {}: {:?}",
-                        plan_id, approve_resp.error
-                    ));
-                } else {
-                    agent_log.info(&format!(
-                        "auto-approved plan {} (interview_mode != interactive)",
-                        plan_id
-                    ));
-                }
-            }
-            Ok(ActionResult::RecordCreated {
-                collection: "plans".to_string(),
-                id: plan_id,
-            })
-        }
-        AgentAction::ReviseParent {
-            collection,
-            id,
-            reason,
-            diagnostic,
-        } => {
-            // Transition parent back to Draft
-            let transition_resp = bridge.request(
-                "record.transition",
-                serde_json::json!({
-                    "collection": collection,
-                    "id": id,
-                    "target_status": "draft",
-                    "role": "coordinator",
-                    "skip_validation": true,
-                    "skip_reason": "bubble-up revision: parent needs refinement"
-                }),
-            );
-            if transition_resp.is_error() {
-                let msg = transition_resp
-                    .error
-                    .as_ref()
-                    .map(|e| e.message.clone())
-                    .unwrap_or_else(|| "unknown transition error".to_string());
-                return Ok(ActionResult::ActionError(format!(
-                    "revise_parent {}/{} transition failed: {}",
-                    collection, id, msg
-                )));
-            }
-
-            // Create a diagnostic Learning with scope derived from the collection
-            let scope = match collection.as_str() {
-                "plans" | "plan" => "plan",
-                "specs" | "spec" => "spec",
-                "phases" | "phase" => "phase",
-                _ => "plan",
-            };
-            let learning_content = format!(
-                "Bubble-up revision for {}/{}: {}\nDiagnostic: {}",
-                collection, id, reason, diagnostic
-            );
-            let _learning_resp = bridge.request(
-                "learning.create",
-                serde_json::json!({
-                    "content": learning_content,
-                    "scope": scope,
-                    "source_id": id,
-                }),
-            );
-
-            agent_log.info(&format!(
-                "ReviseParent {}/{}: reason={}, diagnostic={}",
-                collection, id, reason, diagnostic
-            ));
-            Ok(ActionResult::Transitioned(format!(
-                "{}/{} → draft (bubble-up: {})",
-                collection, id, reason
-            )))
-        }
-        AgentAction::AcquireLock { resource, holder_id } => {
-            // Check if there's already an active lock on this resource
-            let check_resp = bridge.request(
-                "lock.list",
-                serde_json::json!({ "resource": resource, "active_only": true }),
-            );
-            if check_resp.is_error() {
-                return Err(eyre!("lock.list failed: {:?}", check_resp.error));
-            }
-            if let Some(result) = &check_resp.result
-                && let Some(locks) = result.as_array()
-                && !locks.is_empty()
-            {
-                // Resource already locked — return as ActionError so the LLM can self-correct
-                let existing_holder = locks[0]
-                    .get("holder_id")
-                    .and_then(|v: &serde_json::Value| v.as_str())
-                    .unwrap_or("unknown");
-                let existing_id = locks[0]
-                    .get("id")
-                    .and_then(|v: &serde_json::Value| v.as_str())
-                    .unwrap_or("unknown");
-                return Ok(ActionResult::ActionError(format!(
-                    "resource '{}' already locked by {} (lock_id: {})",
-                    resource, existing_holder, existing_id
-                )));
-            }
-
-            // Create the lock — granted_by is the holder_id (self-granted by coordinator)
-            let resp = bridge.request(
-                "lock.create",
-                serde_json::json!({
-                    "resource": resource,
-                    "holder_id": holder_id,
-                    "granted_by": holder_id,
-                }),
-            );
-            if resp.is_error() {
-                return Err(eyre!("lock.create failed: {:?}", resp.error));
-            }
-            let lock_id = resp
-                .result
-                .as_ref()
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            agent_log.info(&format!(
-                "Lock acquired: {} on '{}' for {}",
-                lock_id, resource, holder_id
-            ));
-            Ok(ActionResult::LockAcquired(lock_id))
-        }
-        AgentAction::ReleaseLock { lock_id } => {
-            let resp = bridge.request("lock.release", serde_json::json!({ "id": lock_id }));
-            if resp.is_error() {
-                return Err(eyre!("lock.release failed: {:?}", resp.error));
-            }
-            agent_log.info(&format!("Lock released: {}", lock_id));
-            Ok(ActionResult::LockReleased(lock_id.clone()))
-        }
-        AgentAction::TriageBundle { bundle_id } => {
-            if !bundle_id.starts_with("bd-") {
-                return Ok(ActionResult::ActionError(format!(
-                    "triage_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
-                    bundle_id
-                )));
-            }
-            // Pre-flight status guard: only Proposed bundles can be triaged
-            let bundles = bridge.stores().read_bundles()?;
-            match bundles.get(bundle_id) {
-                None => {
-                    return Ok(ActionResult::ActionError(format!(
-                        "triage_bundle: bundle {} not found",
-                        bundle_id
-                    )));
-                }
-                Some(bundle) if bundle.status != BundleStatus::Proposed => {
-                    let hint = match bundle.status {
-                        BundleStatus::Reviewed => "Use accept_bundle instead.",
-                        _ => "No triage action needed.",
-                    };
-                    return Ok(ActionResult::ActionError(format!(
-                        "triage_bundle: bundle {} is {} not Proposed. {}",
-                        bundle_id, bundle.status, hint
-                    )));
-                }
-                _ => {}
-            }
-            drop(bundles);
-            let resp = bridge.request(
-                "bundle.transition",
-                serde_json::json!({
-                    "id": bundle_id,
-                    "target_status": "Triaged",
-                    "role": "coordinator",
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("triage_bundle failed: {}", msg)));
-            }
-            agent_log.info(&format!("TriageBundle: {} → Triaged", bundle_id));
-            Ok(ActionResult::Transitioned(format!("bundle/{} → Triaged", bundle_id)))
-        }
-        AgentAction::AcceptBundle { bundle_id } => {
-            if !bundle_id.starts_with("bd-") {
-                return Ok(ActionResult::ActionError(format!(
-                    "accept_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
-                    bundle_id
-                )));
-            }
-            // Pre-flight status guard: only Triaged or Reviewed bundles can be accepted
-            let bundles = bridge.stores().read_bundles()?;
-            match bundles.get(bundle_id) {
-                None => {
-                    return Ok(ActionResult::ActionError(format!(
-                        "accept_bundle: bundle {} not found",
-                        bundle_id
-                    )));
-                }
-                Some(bundle) if !matches!(bundle.status, BundleStatus::Triaged | BundleStatus::Reviewed) => {
-                    let hint = match bundle.status {
-                        BundleStatus::Proposed => "Use triage_bundle first.",
-                        _ => "No accept action needed.",
-                    };
-                    return Ok(ActionResult::ActionError(format!(
-                        "accept_bundle: bundle {} is {} not Triaged/Reviewed. {}",
-                        bundle_id, bundle.status, hint
-                    )));
-                }
-                _ => {}
-            }
-            drop(bundles);
-            let resp = bridge.request(
-                "bundle.transition",
-                serde_json::json!({
-                    "id": bundle_id,
-                    "target_status": "Accepted",
-                    "role": "coordinator",
-                }),
-            );
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                return Ok(ActionResult::ActionError(format!("accept_bundle failed: {}", msg)));
-            }
-            agent_log.info(&format!("AcceptBundle: {} → Accepted", bundle_id));
-            Ok(ActionResult::Transitioned(format!("bundle/{} → Accepted", bundle_id)))
-        }
-
-        AgentAction::OverrideWork {
-            work_id,
-            target_status,
-            reason,
-        } => {
-            // Guard: reject override-to-Ready if any bundle is Merged or Integrating
-            if target_status == "Ready" {
-                let bundles = bridge.stores().read_bundles()?;
-                let blocking = bundles.values().find(|b| {
-                    b.work_id == *work_id && matches!(b.status, BundleStatus::Merged | BundleStatus::Integrating)
-                });
-                let blocked = blocking.map(|b| (b.id.clone(), b.status));
-                drop(bundles);
-                if let Some((bundle_id, status)) = blocked {
-                    let msg = format!(
-                        "Cannot override Work {} to Ready: bundle {} is {:?}. \
-                         Code is merged or merge is in flight. \
-                         Do not retry this override - let the Integrator finish.",
-                        work_id, bundle_id, status
-                    );
-                    agent_log.warn(&format!("OverrideWork: {}", msg));
-                    return Ok(ActionResult::ActionError(msg));
-                }
-            }
-
-            // Kill any active agent sessions on this Work
-            {
-                let sessions = bridge.stores().read_agent_sessions()?;
-                let active_sessions: Vec<String> = sessions
-                    .values()
-                    .filter(|s| s.work_id.as_deref() == Some(work_id) && !s.status.is_terminal())
-                    .map(|s| s.id.clone())
-                    .collect();
-                drop(sessions);
-
-                for sid in &active_sessions {
-                    let stop_resp = bridge.request("agent.stop", serde_json::json!({ "session_id": sid }));
-                    if stop_resp.is_error() {
-                        agent_log.warn(&format!(
-                            "OverrideWork: failed to stop session {}: {:?}",
-                            sid, stop_resp.error
-                        ));
-                    } else {
-                        agent_log.info(&format!("OverrideWork: stopped session {}", sid));
-                    }
-                }
-            }
-
-            // Override transition
-            let resp = bridge.request(
-                "work.transition",
-                serde_json::json!({
-                    "id": work_id,
-                    "target_status": target_status,
-                    "role": "coordinator",
-                    "override": true,
-                    "reason": reason,
-                }),
-            );
-
-            if resp.is_error() {
-                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                agent_log.warn(&format!(
-                    "OverrideWork: transition failed for {} (may have already recovered): {}",
-                    work_id, msg
-                ));
-                return Ok(ActionResult::ActionError(format!(
-                    "override_work transition failed: {}",
-                    msg
-                )));
-            }
-
-            // Release any active locks held by this Work
-            {
-                let locks = bridge.stores().read_locks()?;
-                let work_locks: Vec<String> = locks
-                    .values()
-                    .filter(|l| l.holder_id == *work_id && matches!(l.status, crate::domain::lock::LockStatus::Active))
-                    .map(|l| l.id.clone())
-                    .collect();
-                drop(locks);
-
-                for lid in &work_locks {
-                    let release_resp = bridge.request("lock.release", serde_json::json!({ "id": lid }));
-                    if release_resp.is_error() {
-                        agent_log.warn(&format!(
-                            "OverrideWork: failed to release lock {}: {:?}",
-                            lid, release_resp.error
-                        ));
-                    } else {
-                        agent_log.info(&format!("OverrideWork: released lock {}", lid));
-                    }
-                }
-            }
-
-            // Create audit Learning
-            let _ = bridge.request(
-                "learning.create",
-                serde_json::json!({
-                    "content": format!("Override: Work {} → {} (reason: {})", work_id, target_status, reason),
-                    "scope": "work",
-                    "source_id": work_id,
-                    "applicable_roles": ["coordinator"],
-                    "resource_tags": ["override", "audit"],
-                }),
-            );
-
-            agent_log.info(&format!(
-                "OverrideWork: {} → {} (reason: {})",
-                work_id, target_status, reason
-            ));
-            Ok(ActionResult::Transitioned(format!(
-                "override: work/{} → {}",
-                work_id, target_status
-            )))
-        }
-
-        // --- Researcher actions (wired in Phase 4 researcher.rs) ---
-        AgentAction::SearchCode { pattern, glob, path } => {
-            let repo_root = worktree_path; // For Researcher, worktree_path is the repo root
-            match researcher::execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref(), agent_log).await
-            {
-                Ok(output) => Ok(ActionResult::FileRead(output)),
-                Err(e) => Ok(ActionResult::ActionError(e.to_string())),
-            }
-        }
-        AgentAction::SearchFiles { pattern, path } => {
-            let repo_root = worktree_path;
-            match researcher::execute_search_files(repo_root, pattern, path.as_deref(), agent_log).await {
-                Ok(output) => Ok(ActionResult::FileRead(output)),
-                Err(e) => Ok(ActionResult::ActionError(e.to_string())),
-            }
-        }
-        AgentAction::ListDirectory { path } => {
-            let repo_root = worktree_path;
-            match researcher::execute_list_directory(repo_root, path, agent_log).await {
-                Ok(output) => Ok(ActionResult::FileRead(output)),
-                Err(e) => Ok(ActionResult::ActionError(e.to_string())),
-            }
-        }
-    }
-}
-
-/// Result of executing a single agent action.
-#[derive(Debug)]
-pub enum ActionResult {
-    ToolRun(ToolResult),
-    FileWritten(String),
-    FileEdited(String),
-    FileRead(String),
-    Committed(String),
-    BundleProposed(String),
-    Transitioned(String),
-    LearningCreated(String),
-    /// Tool registered via tools.register IPC — contains tool name.
-    ToolRegistered(String),
-    /// Lock acquired — contains lock_id.
-    LockAcquired(String),
-    /// Lock released — contains lock_id.
-    LockReleased(String),
-    /// Document validated — contains (verdict, summary, issue_messages).
-    DocumentValidated {
-        verdict: String,
-        summary: String,
-        issues: Vec<String>,
-    },
-    /// Coverage evaluated — contains (verdict, summary, gap_descriptions).
-    CoverageEvaluated {
-        verdict: String,
-        summary: String,
-        gaps: Vec<String>,
-    },
-    Done(String),
-    NeedHelp(String),
-    /// Non-fatal error — fed back to the LLM so it can self-correct.
-    ActionError(String),
-    /// Record created via bridge — contains (collection, id).
-    RecordCreated {
-        collection: String,
-        id: String,
-    },
-    /// Agent session spawned — contains (session_id, agent_type).
-    AgentSpawned {
-        session_id: String,
-        agent_type: String,
-    },
-    /// Work dependency not met — cannot assign agent until deps are Done.
-    DependencyNotMet {
-        work_id: String,
-        message: String,
-    },
-    // M10-12: DuplicateDetected, PhaseCompleted, GoalCompleted removed — never produced by any code path.
-}
 
 /// Run a single Work item through the full Implementer lifecycle.
 ///
 /// This is the entry point for pull-based workers. It:
-/// 1. Transitions Work Ready → InProgress (returns Ok if already claimed)
+/// 1. Transitions Work Ready -> InProgress (returns Ok if already claimed)
 /// 2. Creates an AgentSession
 /// 3. Delegates to `run_agent_task` for the full lifecycle (worktree, LLM, agent loop, handback, cleanup)
 ///
-/// Race handling: if the Ready → InProgress transition fails (another worker grabbed it),
-/// returns Ok(()) immediately — this is expected contention, not an error.
+/// Race handling: if the Ready -> InProgress transition fails (another worker grabbed it),
+/// returns Ok(()) immediately - this is expected contention, not an error.
 pub async fn run_single_work(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -1974,7 +41,7 @@ pub async fn run_single_work(
 ) -> Result<()> {
     info!("Worker {} attempting Work {}", worker_id, work_id);
 
-    // Step 1: Transition Work Ready → InProgress.
+    // Step 1: Transition Work Ready -> InProgress.
     // Use the bridge to go through the handler (FSM validation + persistence).
     let bridge = crate::agents::bridge::AgentIpcBridge::new(
         stores.clone(),
@@ -2024,7 +91,7 @@ pub async fn run_single_work(
         });
         if has_existing {
             info!(
-                "Worker {} skipping Work {} — implementer already running",
+                "Worker {} skipping Work {} - implementer already running",
                 worker_id, work_id
             );
             return Ok(());
@@ -2067,26 +134,28 @@ pub async fn run_single_work(
     Ok(())
 }
 
-fn persist_session(stores: &Stores, session: &AgentSession) {
-    debug!("persist_session(session_id={})", session.id);
-    if let Some(store) = &stores.store
-        && let Ok(mut s) = store.lock().map_err(|_| eyre!("store lock poisoned"))
-        && let Err(e) = s.update(session.clone())
-    {
-        warn!("Failed to persist agent session {} to TaskStore: {}", session.id, e);
-    }
-}
-
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::agent_logger::AgentLogger;
+    use crate::agents::bridge::AgentIpcBridge;
+    use crate::agents::{AgentContext, AgentType};
     use crate::config::{Config, ProjectConfig, ToolEntry};
     use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
+    use std::path::Path;
+    use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use taskstore::Store;
+    use tokio::sync::broadcast;
+
+    // Re-import types used in tests from submodules
+    use crate::agents::AgentAction;
+    use crate::domain::bundle::BundleStatus;
+    use crate::domain::tick::TickStatus;
+    use util::{determine_work_handback, release_agent_locks, resolve_latest_published_tick_id};
 
     fn test_agent_logger(dir: &Path) -> AgentLogger {
         use crate::agents::AgentType;
@@ -2186,7 +255,7 @@ mod tests {
         }
     }
 
-    /// Helper: create a full Plan→Spec→Phase→Work hierarchy in stores via bridge.
+    /// Helper: create a full Plan->Spec->Phase->Work hierarchy in stores via bridge.
     fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String, String, String) {
         let plan_resp = bridge.request(
             "plan.create",
@@ -2232,8 +301,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Transition Ready → Abandoned via execute_action (auto-promoted from Draft since acceptance_criteria present)
-        // Using Abandoned since InProgress requires assignee which Transition action doesn't support
         let action = AgentAction::Transition {
             collection: "work".to_string(),
             id: wi_id.clone(),
@@ -2242,7 +309,6 @@ mod tests {
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
-        // Should succeed (not "target_status required" error)
         assert!(
             matches!(result, ActionResult::Transitioned(_)),
             "expected Transitioned, got: {:?}",
@@ -2259,15 +325,12 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Work item starts as Ready (auto-promoted from Draft) — AssignAgent should auto-transition to InProgress
         let action = AgentAction::AssignAgent {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
 
-        // The agent.start may fail (no LLM key) but the auto-transition should have happened
-        // Check work item status is InProgress
         let wi_resp = ctx.bridge.request("work.get", serde_json::json!({"id": wi_id}));
         let wi_status = wi_resp
             .result
@@ -2282,8 +345,6 @@ mod tests {
             "work item should be InProgress after auto-transition"
         );
 
-        // The overall result should be either AgentSpawned or ActionError (if agent.start failed due to no LLM)
-        // but the transition should have succeeded regardless
         assert!(
             matches!(result, ActionResult::AgentSpawned { .. } | ActionResult::ActionError(_)),
             "expected AgentSpawned or ActionError, got: {:?}",
@@ -2351,14 +412,12 @@ mod tests {
         };
         let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
 
-        // Create a lock on "src/main.rs" held by agent-1
         let lock_resp = ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
         assert!(!lock_resp.is_error());
 
-        // Agent-2 attempts to write to locked path — should be blocked
         let action = AgentAction::WriteFile {
             path: "src/main.rs".to_string(),
             content: "should be blocked".to_string(),
@@ -2387,14 +446,12 @@ mod tests {
         };
         let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
 
-        // Create a lock on "src/main.rs" held by wi-abc
         let lock_resp = ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-abc", "granted_by": "wi-abc" }),
         );
         assert!(!lock_resp.is_error());
 
-        // Same holder (wi-abc) writes to the locked path — should succeed, not self-block
         let action = AgentAction::WriteFile {
             path: "src/main.rs".to_string(),
             content: "holder can rewrite".to_string(),
@@ -2412,17 +469,14 @@ mod tests {
         let dir = TestDir::new("loopr-exec-lockadvisory");
 
         let stores = test_stores(&dir);
-        // Default config has LockAdvisory
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
-        // Create a lock on "src/main.rs"
         let lock_resp = ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
         assert!(!lock_resp.is_error());
 
-        // Write should succeed under advisory policy
         let action = AgentAction::WriteFile {
             path: "test.txt".to_string(),
             content: "should work".to_string(),
@@ -2526,7 +580,6 @@ mod tests {
             result
         );
 
-        // Verify the tool is now in runtime_tools
         let rt = stores.read_runtime_tools().unwrap();
         assert!(rt.contains_key("my-echo"));
         assert_eq!(rt["my-echo"].command, "echo hello");
@@ -2559,7 +612,6 @@ mod tests {
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        // Acquire first lock
         let action = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-100".to_string(),
@@ -2567,7 +619,6 @@ mod tests {
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::LockAcquired(_)));
 
-        // Try to acquire again on same resource — should get ActionError
         let action2 = AgentAction::AcquireLock {
             resource: "src/main.rs".to_string(),
             holder_id: "wi-200".to_string(),
@@ -2591,7 +642,6 @@ mod tests {
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        // Acquire a lock first
         let acquire_action = AgentAction::AcquireLock {
             resource: "src/lib.rs".to_string(),
             holder_id: "wi-456".to_string(),
@@ -2603,7 +653,6 @@ mod tests {
             panic!("expected LockAcquired");
         };
 
-        // Release it
         let release_action = AgentAction::ReleaseLock {
             lock_id: lock_id.clone(),
         };
@@ -2622,7 +671,6 @@ mod tests {
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        // Acquire
         let action1 = AgentAction::AcquireLock {
             resource: "src/config.rs".to_string(),
             holder_id: "wi-1".to_string(),
@@ -2634,13 +682,11 @@ mod tests {
             panic!("expected LockAcquired");
         };
 
-        // Release
         let release = AgentAction::ReleaseLock {
             lock_id: lock_id.clone(),
         };
         execute_action(&release, &ctx, &dir, None).await.unwrap();
 
-        // Re-acquire same resource by different holder — should succeed
         let action2 = AgentAction::AcquireLock {
             resource: "src/config.rs".to_string(),
             holder_id: "wi-2".to_string(),
@@ -2657,7 +703,6 @@ mod tests {
         let (event_tx, mut event_rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
 
-        // Create an agent session
         let session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
         let session_id = session.id.clone();
         stores
@@ -2666,7 +711,6 @@ mod tests {
             .unwrap()
             .insert(session_id.clone(), session);
 
-        // Run the agent task
         run_agent_task(
             session_id.clone(),
             AgentType::Implementer,
@@ -2676,12 +720,10 @@ mod tests {
         )
         .await;
 
-        // Check session reached a terminal state
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
         assert!(session.status.is_terminal());
 
-        // Drain events — should have status changes
         let mut events = vec![];
         while let Ok(e) = event_rx.try_recv() {
             events.push(e);
@@ -2767,7 +809,6 @@ mod tests {
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
-        // Transition existing WI out of Draft so draft guard doesn't block new creation
         ctx.bridge.request(
             "work.transition",
             serde_json::json!({
@@ -2798,7 +839,6 @@ mod tests {
     async fn test_execute_commit_success() {
         let dir = TestDir::new("loopr-exec-commit");
 
-        // Initialize a git repo
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -2824,7 +864,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Create a file to commit
         std::fs::write(dir.join("test.txt"), "hello").unwrap();
         let stores = test_stores(&dir);
 
@@ -2845,7 +884,6 @@ mod tests {
     async fn test_execute_commit_specific_paths() {
         let dir = TestDir::new("loopr-exec-commitpaths");
 
-        // Initialize git repo
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -2888,7 +926,6 @@ mod tests {
     async fn test_execute_propose_bundle() {
         let dir = TestDir::new("loopr-exec-propbundle");
 
-        // Initialize git repo
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -2913,7 +950,6 @@ mod tests {
             .output()
             .await
             .unwrap();
-        // Need an initial commit for branch name
         std::fs::write(dir.join("init.txt"), "init").unwrap();
         tokio::process::Command::new("git")
             .args(["add", "."])
@@ -2949,7 +985,6 @@ mod tests {
     async fn test_execute_propose_bundle_no_work() {
         let dir = TestDir::new("loopr-exec-propnowi");
 
-        // Initialize git repo
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -2994,7 +1029,6 @@ mod tests {
             claims: vec![],
             noop_reason: None,
         };
-        // work_id = None should fail
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;
         assert!(result.is_err());
@@ -3052,7 +1086,6 @@ mod tests {
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        // agent.start may fail (no LLM key), which returns ActionError
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
                 || matches!(result, ActionResult::ActionError(_)),
@@ -3074,7 +1107,6 @@ mod tests {
             id: plan_id,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        // Validation may fail (no LLM key) returning ActionError, or succeed with DocumentValidated
         assert!(
             matches!(
                 result,
@@ -3093,7 +1125,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create a bundle for the work item
         let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -3104,7 +1135,6 @@ mod tests {
         );
         let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // Bundle starts as Proposed — TriageBundle transitions Proposed → Triaged
         let action = AgentAction::TriageBundle {
             bundle_id: bundle_id.clone(),
         };
@@ -3124,7 +1154,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create and transition bundle through Proposed → Triaged → Reviewed
         let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -3194,14 +1223,11 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Transition without explicit role — should infer from agent type
-        // WI is already Ready (auto-promoted from Draft since acceptance_criteria present)
-        // Using Abandoned since InProgress requires assignee which Transition action doesn't support
         let action = AgentAction::Transition {
             collection: "work".to_string(),
             id: wi_id,
             target_status: "Abandoned".to_string(),
-            role: None, // Should infer "coordinator" from AgentType::Coordinator
+            role: None,
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
@@ -3270,8 +1296,6 @@ mod tests {
     #[tokio::test]
     async fn test_run_agent_task_coordinator_restart_loop() {
         crate::prompts::init_defaults();
-        // Coordinator restart loop: will fail due to no API key. Cancel the session during restart
-        // to exercise the cancellation-during-restart path.
         let dir = TestDir::new("loopr-exec-coordrestart");
 
         let config = Config {
@@ -3306,14 +1330,12 @@ mod tests {
             .unwrap()
             .insert(session_id.clone(), session);
 
-        // Cancel the session after a short delay so the restart loop exits early
         let stores_clone = stores.clone();
         let sid_clone = session_id.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let mut sessions = stores_clone.agent_sessions.write().unwrap();
             if let Some(s) = sessions.get_mut(&sid_clone) {
-                // Force to Running first (needed for transition to Cancelled)
                 let _ = s.transition_to(AgentStatus::Running);
                 let _ = s.transition_to(AgentStatus::Cancelled);
             }
@@ -3328,7 +1350,6 @@ mod tests {
         )
         .await;
 
-        // Should reach a terminal state (either Failed from restarts or terminal from cancel)
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
         assert!(session.status.is_terminal(), "coordinator should be in terminal state");
@@ -3337,7 +1358,6 @@ mod tests {
     #[tokio::test]
     async fn test_run_agent_task_researcher_flow() {
         crate::prompts::init_defaults();
-        // Researcher flow — pre-cancel the session so it exits quickly from the loop
         let dir = TestDir::new("loopr-exec-resflow");
 
         let stores = test_stores(&dir);
@@ -3353,7 +1373,6 @@ mod tests {
             .unwrap()
             .insert(session_id.clone(), session);
 
-        // Cancel after short delay so the researcher exits quickly
         let stores_clone = stores.clone();
         let sid_clone = session_id.clone();
         tokio::spawn(async move {
@@ -3382,10 +1401,8 @@ mod tests {
     #[tokio::test]
     async fn test_run_agent_task_integrator_flow() {
         crate::prompts::init_defaults();
-        // Integrator flow — pre-cancel the session so it exits quickly from the loop
         let dir = TestDir::new("loopr-exec-integflow");
 
-        // Use custom config with interval_secs=0 so the integrator loop doesn't block
         let config = Config {
             project: ProjectConfig {
                 repo_path: dir.to_path_buf(),
@@ -3415,7 +1432,6 @@ mod tests {
             .unwrap()
             .insert(session_id.clone(), session);
 
-        // Cancel after short delay so the integrator exits quickly
         let stores_clone = stores.clone();
         let sid_clone = session_id.clone();
         tokio::spawn(async move {
@@ -3443,10 +1459,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_agent_task_worktree_cleanup() {
-        // Implementer with work_id should attempt worktree creation and cleanup
         let dir = TestDir::new("loopr-exec-wtcleanup");
 
-        // Initialize git repo (needed for worktree operations)
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -3507,7 +1521,6 @@ mod tests {
         )
         .await;
 
-        // Should reach terminal state (will fail due to no API key, but worktree path is exercised)
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
         assert!(session.status.is_terminal());
@@ -3515,14 +1528,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_transition_role_inference_all_collections() {
-        // Test normalize_collection with all collection variants
         let dir = TestDir::new("loopr-exec-transall");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         let (plan_id, spec_id, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
-        // Test "plans" (plural) → normalizes to "plan"
         let action = AgentAction::Transition {
             collection: "plans".to_string(),
             id: plan_id.clone(),
@@ -3536,7 +1547,6 @@ mod tests {
             result
         );
 
-        // Test "specs" (plural) → normalizes to "spec"
         let action = AgentAction::Transition {
             collection: "specs".to_string(),
             id: spec_id.clone(),
@@ -3546,7 +1556,6 @@ mod tests {
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result, ActionResult::Transitioned(_)));
 
-        // Test "phases" (plural) → normalizes to "phase"
         let action = AgentAction::Transition {
             collection: "phases".to_string(),
             id: phase_id.clone(),
@@ -3565,8 +1574,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Attempt InProgress transition without assignee using Transition action (role = coordinator)
-        // This should fail because InProgress requires an assignee
         let action = AgentAction::Transition {
             collection: "work".to_string(),
             id: wi_id.clone(),
@@ -3574,7 +1581,6 @@ mod tests {
             role: Some("coordinator".to_string()),
         };
         let result = execute_action(&action, &ctx, &dir, None).await;
-        // Should fail (transition error) since InProgress requires assignee
         assert!(result.is_err(), "InProgress without assignee should fail: {:?}", result);
     }
 
@@ -3583,7 +1589,6 @@ mod tests {
         let dir = TestDir::new("loopr-exec-plnerr");
         let stores = test_stores(&dir);
 
-        // Create a first plan (Draft)
         let action1 = AgentAction::CreatePlan {
             title: "First Plan".to_string(),
             description: "desc".to_string(),
@@ -3593,7 +1598,6 @@ mod tests {
         let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
-        // Try to create another plan — should get ActionError due to draft-awareness guard
         let action2 = AgentAction::CreatePlan {
             title: "Second Plan".to_string(),
             description: "desc".to_string(),
@@ -3615,8 +1619,6 @@ mod tests {
 
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
-        // The hierarchy already created a Draft spec under this plan (but it was transitioned to Active).
-        // Create a new spec (Draft) under same plan
         let action1 = AgentAction::CreateSpec {
             plan_id: plan_id.clone(),
             title: "New Spec".to_string(),
@@ -3625,7 +1627,6 @@ mod tests {
         let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
-        // Try to create another spec under same plan — should get draft-awareness error
         let action2 = AgentAction::CreateSpec {
             plan_id: plan_id.clone(),
             title: "Another Spec".to_string(),
@@ -3644,7 +1645,6 @@ mod tests {
         let dir = TestDir::new("loopr-exec-phaseerr");
         let stores = test_stores(&dir);
 
-        // Use a nonexistent spec_id — should get error from bridge
         let action = AgentAction::CreatePhase {
             spec_id: "nonexistent-spec".to_string(),
             title: "New Phase".to_string(),
@@ -3665,7 +1665,6 @@ mod tests {
         let dir = TestDir::new("loopr-exec-wierr");
         let stores = test_stores(&dir);
 
-        // Use a nonexistent phase_id — should get error from bridge
         let action = AgentAction::CreateWork {
             phase_id: "nonexistent-phase".to_string(),
             title: "New WI".to_string(),
@@ -3685,11 +1684,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_triage_bundle_full() {
-        // Test triage on a nonexistent bundle (error path)
         let dir = TestDir::new("loopr-exec-triagefull");
         let stores = test_stores(&dir);
 
-        // Triage a nonexistent bundle (with valid bd- prefix to pass validation)
         let action = AgentAction::TriageBundle {
             bundle_id: "bd-nonexistent".to_string(),
         };
@@ -3738,14 +1735,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_accept_bundle_full() {
-        // Test accept on a Proposed bundle — guard should reject with corrective hint
         let dir = TestDir::new("loopr-exec-acceptfull");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create a bundle but don't triage it — accept should fail with hint
         let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -3775,7 +1770,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create bundle and advance to Reviewed
         let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -3813,7 +1807,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create bundle — stays Proposed
         let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -3837,7 +1830,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_spawn_researcher_via_action() {
-        // Test SpawnResearcher action (exercises the spawn path)
         let dir = TestDir::new("loopr-exec-spawnres2");
         let stores = test_stores(&dir);
 
@@ -3847,7 +1839,6 @@ mod tests {
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        // agent.start will either succeed or fail (no LLM key) — both are acceptable
         assert!(
             matches!(result, ActionResult::AgentSpawned { ref agent_type, .. } if agent_type == "researcher")
                 || matches!(result, ActionResult::ActionError(_)),
@@ -3858,19 +1849,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_conflict_policy_ignore() {
-        // Under LockAdvisory (default), writes to locked paths should succeed
         let dir = TestDir::new("loopr-exec-lockign");
         let stores = test_stores(&dir);
-        // Default config: LockAdvisory
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        // Create a lock on the exact file we want to write to
         ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "locked.txt", "holder_id": "agent-other", "granted_by": "agent-other" }),
         );
 
-        // Write to the locked file — should succeed under advisory policy
         let action = AgentAction::WriteFile {
             path: "locked.txt".to_string(),
             content: "advisory allows this".to_string(),
@@ -3887,7 +1874,6 @@ mod tests {
     async fn test_lock_conflict_policy_warn() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
-        // Under LockStrict, writes to locked paths should return ActionError
         let dir = TestDir::new("loopr-exec-lockwarn");
         let stores = test_stores(&dir);
         let config = Config {
@@ -3899,13 +1885,11 @@ mod tests {
         };
         let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Coordinator, config);
 
-        // Create a lock on the path
         ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "strict.txt", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
 
-        // Write to locked path — should be blocked
         let action = AgentAction::WriteFile {
             path: "strict.txt".to_string(),
             content: "should be blocked".to_string(),
@@ -3934,7 +1918,6 @@ mod tests {
             let mut ticks = stores.ticks.write().unwrap();
             let mut t = crate::domain::tick::Tick::new(1);
             t.integration_sha = Some("abc123".to_string());
-            // Status is Open, not Published
             ticks.insert(t.id.clone(), t);
         }
         let base = resolve_worktree_base(&stores);
@@ -3975,7 +1958,7 @@ mod tests {
             let mut ticks = stores.ticks.write().unwrap();
             let mut t = crate::domain::tick::Tick::new(1);
             t.status = crate::domain::tick::TickStatus::Published;
-            t.integration_sha = None; // Published but no SHA
+            t.integration_sha = None;
             ticks.insert(t.id.clone(), t);
         }
         let base = resolve_worktree_base(&stores);
@@ -3990,7 +1973,6 @@ mod tests {
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
-        // Create dep_wi (the dependency) — stays in Ready status
         let dep_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
@@ -4003,7 +1985,6 @@ mod tests {
         );
         let dep_id = dep_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // Create work_wi that depends on dep_wi
         let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
@@ -4017,7 +1998,6 @@ mod tests {
         );
         let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // Try to assign implementer — should fail because dep is not Done
         let action = AgentAction::AssignAgent {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
@@ -4039,7 +2019,6 @@ mod tests {
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
-        // Create dep_wi and manually set to Done by modifying store directly
         let dep_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
@@ -4052,8 +2031,6 @@ mod tests {
         );
         let dep_id = dep_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // Transition dep to Done: Ready→InProgress→Abandoned (shorter path)
-        // Then directly set to Done in both stores and TaskStore
         {
             let mut wis = stores.works.write().unwrap();
             if let Some(wi) = wis.get_mut(&dep_id) {
@@ -4065,7 +2042,6 @@ mod tests {
             }
         }
 
-        // Create work_wi that depends on dep_wi (now Done)
         let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
@@ -4079,7 +2055,6 @@ mod tests {
         );
         let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // Try to assign implementer — should succeed because dep is Done
         let action = AgentAction::AssignAgent {
             agent_type: "implementer".to_string(),
             target_id: wi_id.clone(),
@@ -4101,7 +2076,6 @@ mod tests {
 
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create a second WI that depends on the first
         let action = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Dependent WI".to_string(),
@@ -4114,7 +2088,6 @@ mod tests {
 
         assert!(matches!(result, ActionResult::RecordCreated { .. }));
 
-        // Verify the dependency was stored
         if let ActionResult::RecordCreated { id, .. } = result {
             let wi = stores.works.read().unwrap().get(&id).cloned().unwrap();
             assert_eq!(wi.dependencies, vec![wi_id]);
@@ -4129,7 +2102,6 @@ mod tests {
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
-        // Create first WI
         let action1 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Unique WI".to_string(),
@@ -4141,7 +2113,6 @@ mod tests {
         let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
-        // Create duplicate WI with same title — should fail
         let action2 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Unique WI".to_string(),
@@ -4166,7 +2137,6 @@ mod tests {
 
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
-        // Create first WI
         let action1 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "Add Login".to_string(),
@@ -4177,7 +2147,6 @@ mod tests {
         };
         let _ = execute_action(&action1, &ctx, &dir, None).await;
 
-        // Create duplicate with different case — should also fail
         let action2 = AgentAction::CreateWork {
             phase_id: phase_id.clone(),
             title: "add login".to_string(),
@@ -4199,10 +2168,7 @@ mod tests {
     #[test]
     fn test_resolve_latest_published_tick_id_none_at_bootstrap() {
         let dir = TestDir::new("loopr-exec-tickid-none");
-
         let stores = test_stores(&dir);
-
-        // No ticks exist — should return None
         let result = resolve_latest_published_tick_id(&stores);
         assert!(result.is_none(), "expected None at bootstrap, got: {:?}", result);
     }
@@ -4210,10 +2176,8 @@ mod tests {
     #[test]
     fn test_resolve_latest_published_tick_id_returns_published() {
         let dir = TestDir::new("loopr-exec-tickid-pub");
-
         let stores = test_stores(&dir);
 
-        // Insert a Published tick directly into stores
         let tick = crate::domain::tick::Tick {
             id: "tick-1".to_string(),
             number: 1,
@@ -4235,7 +2199,6 @@ mod tests {
     async fn test_propose_bundle_includes_base_tick_id() {
         let dir = TestDir::new("loopr-exec-propbase");
 
-        // Initialize git repo
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -4276,7 +2239,6 @@ mod tests {
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        // Insert a Published tick
         let tick = crate::domain::tick::Tick {
             id: "tick-pub-1".to_string(),
             number: 1,
@@ -4297,7 +2259,6 @@ mod tests {
             claims: vec!["claim".to_string()],
             noop_reason: None,
         };
-        // The call succeeds — bundle.create receives base_tick_id and accepts it
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
             matches!(result, ActionResult::BundleProposed(ref d) if d == "Bundle with base tick"),
@@ -4308,20 +2269,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_propose_bundle_uses_deterministic_branch_name() {
-        // F2: ProposeBundle should use format!("agent/{}", work_id) not git rev-parse
         let dir = TestDir::new("loopr-exec-f2branch");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
-        // Create hierarchy so bundle.create has a valid work_id
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
-        // Transition work to InProgress
         ctx.bridge.request(
             "work.transition",
             serde_json::json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
         );
 
-        // Initialize a git repo in the dir so commit works
         let _ = tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -4360,13 +2317,11 @@ mod tests {
             noop_reason: None,
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
-        // The bundle should be created with branch_name "agent/<wi_id>"
         assert!(
             matches!(result, ActionResult::BundleProposed(_)),
             "expected BundleProposed, got: {:?}",
             result
         );
-        // Verify the bundle's branch name in stores
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.values().next().expect("should have one bundle");
         assert_eq!(
@@ -4382,7 +2337,6 @@ mod tests {
     fn test_handback_succeeded_no_bundles_returns_blocked() {
         let dir = TestDir::new("loopr-handback-ok");
         let stores = test_stores(&dir);
-        // succeeded=true but no bundles -> Blocked (not InReview)
         let result = determine_work_handback(&stores, "wi-1", "sess-1", true);
         assert_eq!(result, Some("Blocked"));
     }
@@ -4400,7 +2354,6 @@ mod tests {
         let dir = TestDir::new("loopr-handback-actbd");
         let stores = test_stores(&dir);
 
-        // Insert an Accepted bundle for the work
         let mut bundle = crate::domain::bundle::Bundle::new(
             "wi-1".to_string(),
             None,
@@ -4419,7 +2372,6 @@ mod tests {
         let dir = TestDir::new("loopr-handback-rejbd");
         let stores = test_stores(&dir);
 
-        // Insert a Rejected bundle for the work
         let mut bundle = crate::domain::bundle::Bundle::new(
             "wi-1".to_string(),
             None,
@@ -4438,7 +2390,6 @@ mod tests {
         let dir = TestDir::new("loopr-handback-sib");
         let stores = test_stores(&dir);
 
-        // Insert a non-terminal sibling implementer session for the same work_id
         let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
         sibling.work_id = Some("wi-1".to_string());
         sibling.transition_to(AgentStatus::Running).unwrap();
@@ -4457,7 +2408,6 @@ mod tests {
         let dir = TestDir::new("loopr-handback-sibterm");
         let stores = test_stores(&dir);
 
-        // Insert a terminal sibling implementer session — should NOT count as active
         let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
         sibling.work_id = Some("wi-1".to_string());
         sibling.transition_to(AgentStatus::Running).unwrap();
@@ -4468,7 +2418,6 @@ mod tests {
             .unwrap()
             .insert(sibling.id.clone(), sibling);
 
-        // No bundles → Blocked
         let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
         assert_eq!(result, Some("Blocked"));
     }
@@ -4489,7 +2438,6 @@ mod tests {
             limit: None,
         };
 
-        // First read: returns file content
         let r1 = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = &r1 {
             assert!(content.contains("line1"), "first read should return content");
@@ -4497,7 +2445,6 @@ mod tests {
             panic!("expected FileRead, got: {:?}", r1);
         }
 
-        // Second read (same file, unchanged): returns dedup message
         let r2 = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = &r2 {
             assert!(
@@ -4525,17 +2472,14 @@ mod tests {
             limit: None,
         };
 
-        // First read: populate cache
         execute_action(&read_action, &ctx, &dir, None).await.unwrap();
 
-        // Write to the file: should invalidate cache
         let write_action = AgentAction::WriteFile {
             path: "target.rs".to_string(),
             content: "updated\n".to_string(),
         };
         execute_action(&write_action, &ctx, &dir, None).await.unwrap();
 
-        // Third read: should return fresh content, not dedup
         let r3 = execute_action(&read_action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = &r3 {
             assert!(
@@ -4563,10 +2507,8 @@ mod tests {
             limit: None,
         };
 
-        // First read: populate cache
         execute_action(&read_action, &ctx, &dir, None).await.unwrap();
 
-        // Edit the file: should invalidate cache
         let edit_action = AgentAction::EditFile {
             path: "target.rs".to_string(),
             old_string: "hello".to_string(),
@@ -4574,7 +2516,6 @@ mod tests {
         };
         execute_action(&edit_action, &ctx, &dir, None).await.unwrap();
 
-        // Read again: should return fresh content
         let r3 = execute_action(&read_action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = &r3 {
             assert!(
@@ -4607,10 +2548,8 @@ mod tests {
             limit: None,
         };
 
-        // Read with no offset
         execute_action(&action1, &ctx, &dir, None).await.unwrap();
 
-        // Read with explicit offset=1: different cache key, should NOT dedup
         let r2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
         if let ActionResult::FileRead(content) = &r2 {
             assert!(
@@ -4638,7 +2577,6 @@ mod tests {
         };
         execute_action(&action, &ctx, &dir, Some("wi-100")).await.unwrap();
 
-        // Verify a lock was auto-acquired
         let lock_resp = ctx.bridge.request(
             "lock.list",
             serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-100", "active_only": true }),
@@ -4664,7 +2602,6 @@ mod tests {
         };
         execute_action(&action, &ctx, &dir, Some("wi-200")).await.unwrap();
 
-        // Verify a lock was auto-acquired
         let lock_resp = ctx.bridge.request(
             "lock.list",
             serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-200", "active_only": true }),
@@ -4679,7 +2616,6 @@ mod tests {
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
 
-        // Write same file twice with same work_id
         let action = AgentAction::WriteFile {
             path: "src/lib.rs".to_string(),
             content: "first".to_string(),
@@ -4691,7 +2627,6 @@ mod tests {
         };
         execute_action(&action2, &ctx, &dir, Some("wi-300")).await.unwrap();
 
-        // Should still be only 1 lock (no duplicates)
         let lock_resp = ctx.bridge.request(
             "lock.list",
             serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-300", "active_only": true }),
@@ -4712,7 +2647,6 @@ mod tests {
         };
         execute_action(&action, &ctx, &dir, None).await.unwrap();
 
-        // No lock should exist (work_id was None)
         let lock_resp = ctx.bridge.request(
             "lock.list",
             serde_json::json!({ "resource": "src/lib.rs", "active_only": true }),
@@ -4730,7 +2664,6 @@ mod tests {
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
         let agent_log = test_agent_logger(&dir);
 
-        // Create multiple locks for the same holder
         bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/a.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
@@ -4740,17 +2673,14 @@ mod tests {
             serde_json::json!({ "resource": "src/b.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
         );
 
-        // Verify locks exist
         let check = bridge.request(
             "lock.list",
             serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
         );
         assert_eq!(check.result.as_ref().unwrap().as_array().unwrap().len(), 2);
 
-        // Release
         release_agent_locks(&bridge, "wi-rel", &agent_log);
 
-        // Verify all released
         let after = bridge.request(
             "lock.list",
             serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
@@ -4781,13 +2711,11 @@ mod tests {
         };
         let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
 
-        // Create a lock held by wi-edit
         ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-edit", "granted_by": "wi-edit" }),
         );
 
-        // Same holder edits the file — should succeed
         let action = AgentAction::EditFile {
             path: "src/main.rs".to_string(),
             old_string: "original".to_string(),
@@ -4819,13 +2747,11 @@ mod tests {
         };
         let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
 
-        // Lock held by agent-1
         ctx.bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
         );
 
-        // agent-2 tries to edit — should be blocked
         let action = AgentAction::EditFile {
             path: "src/main.rs".to_string(),
             old_string: "original".to_string(),
@@ -4839,10 +2765,8 @@ mod tests {
         );
     }
 
-    // ── Phase 2: Session Timeout tests ──────────────────────────────────
+    // -- Phase 2: Session Timeout tests --
 
-    /// Helper: resolve session_timeout_secs from config for a given agent type,
-    /// matching the logic in run_agent_task().
     fn resolve_timeout(config: &Config, agent_type: AgentType) -> Option<u64> {
         match agent_type {
             AgentType::Implementer => config.agents.implementer.session_timeout_secs,
@@ -4927,9 +2851,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Dual-injection: set work to Done in both HashMap AND TaskStore
-        // to keep the dual-read-path in sync (work.get reads TaskStore first,
-        // work.transition reads HashMap).
         {
             let mut works = stores.works.write().unwrap();
             if let Some(wi) = works.get_mut(&wi_id) {
@@ -4966,8 +2887,6 @@ mod tests {
 
     // --- Merged Bundle Override Guard tests ---
 
-    /// Helper: create Work at InReview with a bundle at the given status.
-    /// Returns (work_id, bundle_id).
     fn create_work_at_inreview_with_bundle(
         bridge: &AgentIpcBridge,
         stores: &Arc<Stores>,
@@ -4975,7 +2894,6 @@ mod tests {
     ) -> (String, String) {
         let (_, _, _, wi_id) = create_test_hierarchy(bridge);
 
-        // Ready -> InProgress (needs assignee, use override with assignee)
         bridge.request(
             "work.transition",
             serde_json::json!({
@@ -4986,7 +2904,6 @@ mod tests {
             }),
         );
 
-        // Create a bundle for this work
         let bundle_resp = bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -4997,7 +2914,6 @@ mod tests {
         );
         let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
 
-        // InProgress -> InReview (implementer, requires active bundle)
         bridge.request(
             "work.transition",
             serde_json::json!({
@@ -5007,7 +2923,6 @@ mod tests {
             }),
         );
 
-        // Transition bundle to desired status through the chain
         let chain: Vec<(&str, &str)> = match bundle_status {
             "Proposed" => vec![],
             "Triaged" => vec![("Triaged", "coordinator")],
@@ -5046,8 +2961,6 @@ mod tests {
             bridge.request("bundle.transition", params);
         }
 
-        // Force-write bundle status directly for statuses that may have
-        // side-effect preconditions we can't easily satisfy in test
         {
             let mut bundles = stores.write_bundles().unwrap();
             if let Some(b) = bundles.get_mut(&bundle_id) {
@@ -5180,7 +3093,6 @@ mod tests {
 
         let (wi_id, _) = create_work_at_inreview_with_bundle(&ctx.bridge, &stores, "Merged");
 
-        // Create a second bundle that is Rejected
         let bundle2_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -5193,7 +3105,6 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        // Force the second bundle to Rejected
         {
             let mut bundles = stores.write_bundles().unwrap();
             if let Some(b) = bundles.get_mut(&bundle2_id) {
@@ -5237,7 +3148,6 @@ mod tests {
             result
         );
 
-        // Verify the bundle has empty branch_name and noop_reason set
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles
             .values()
@@ -5258,7 +3168,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Try creating a bundle with empty branch_name but no noop_reason
         let resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -5280,7 +3189,6 @@ mod tests {
     async fn test_noop_guard_rejects_dirty_worktree() {
         let dir = TestDir::new("loopr-exec-noop-dirty");
 
-        // Initialize git repo
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -5305,7 +3213,6 @@ mod tests {
             .output()
             .await
             .unwrap();
-        // Initial commit so git status works
         std::fs::write(dir.join("init.txt"), "init").unwrap();
         tokio::process::Command::new("git")
             .args(["add", "."])
@@ -5320,7 +3227,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Write a file but don't commit - worktree is dirty
         std::fs::write(dir.join("todo.lua"), "print('hello')").unwrap();
 
         let stores = test_stores(&dir);
@@ -5344,7 +3250,6 @@ mod tests {
     async fn test_noop_guard_allows_clean_worktree() {
         let dir = TestDir::new("loopr-exec-noop-clean");
 
-        // Initialize git repo with clean state
         tokio::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)
@@ -5383,7 +3288,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Gitignore test artifacts so the worktree appears clean
         std::fs::write(dir.join(".gitignore"), ".taskstore/\n*.log\n").unwrap();
         tokio::process::Command::new("git")
             .args(["add", ".gitignore"])
@@ -5398,7 +3302,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Worktree is clean - no uncommitted files
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
@@ -5424,7 +3327,6 @@ mod tests {
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create a bundle with empty branch_name and noop_reason
         let resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({

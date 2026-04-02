@@ -1,0 +1,382 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use eyre::{Result, eyre};
+use log::{debug, error, info};
+use tokio::sync::broadcast;
+
+use crate::agents::agent_logger::AgentLogger;
+use crate::agents::bridge::AgentIpcBridge;
+use crate::agents::{Agent, AgentContext, AgentStatus, AgentType};
+use crate::agents::{coordinator, implementer, integrator, researcher, reviewer};
+use crate::daemon::context::Stores;
+use crate::ipc::protocol::DaemonEvent;
+use crate::worktree::manager::WorktreeManager;
+
+use super::llm::create_llm_client;
+use super::util::{determine_work_handback, persist_session, release_agent_locks, resolve_worktree_base};
+
+/// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
+///
+/// Currently implements a minimal lifecycle: Starting -> Running -> Completed/Failed.
+/// Phase 2 will add the full Implementer/Reviewer loops with LLM calls.
+pub async fn run_agent_task(
+    session_id: String,
+    agent_type: AgentType,
+    stores: Arc<Stores>,
+    event_tx: broadcast::Sender<DaemonEvent>,
+    worktree_mgr: WorktreeManager,
+) {
+    debug!("run_agent_task(session_id={}, agent_type={})", session_id, agent_type);
+    info!("Agent task started: {} ({})", session_id, agent_type);
+
+    // Create a worktree for the agent before starting the loop.
+    // Thinking plane agents (Coordinator, Researcher, Integrator) don't use worktrees.
+    // Implementers key on work_id, Reviewers on bundle_id.
+    let worktree_key = if agent_type.is_thinking_plane() {
+        None
+    } else {
+        let Ok(sessions) = stores.read_agent_sessions() else {
+            error!("agent_sessions lock poisoned");
+            return;
+        };
+        let session = match sessions.get(&session_id) {
+            Some(s) => s,
+            None => {
+                error!("Agent {} session not found in stores", session_id);
+                return;
+            }
+        };
+        match agent_type {
+            AgentType::Implementer => session.work_id.clone(),
+            AgentType::Reviewer => session.bundle_id.clone(),
+            // Already handled by is_thinking_plane() above
+            AgentType::Coordinator | AgentType::Researcher | AgentType::Integrator | AgentType::Chat => None,
+        }
+    };
+
+    if let Some(ref key) = worktree_key {
+        let base_ref = resolve_worktree_base(&stores);
+        info!("Agent {} using worktree base: {}", session_id, base_ref);
+        let worktree_path = match worktree_mgr.get_or_create_branch(key, &base_ref) {
+            Ok(path) => path,
+            Err(e) => {
+                error!("Agent {} worktree creation failed: {}", session_id, e);
+                // Fail the session immediately - don't proceed without a worktree
+                let Ok(mut sessions) = stores.write_agent_sessions() else {
+                    error!("agent_sessions lock poisoned");
+                    return;
+                };
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    let _ = session.transition_to(AgentStatus::Failed);
+                    session.error_message = Some(format!("worktree creation failed: {}", e));
+                    persist_session(&stores, session);
+                }
+                debug!("[agent_status] {}: -> Failed (worktree creation)", session_id);
+                let _ = event_tx.send(DaemonEvent::agent_status_failed(
+                    &session_id,
+                    Some(format!("worktree creation failed: {}", e)),
+                ));
+                return;
+            }
+        };
+
+        {
+            let Ok(mut sessions) = stores.write_agent_sessions() else {
+                error!("agent_sessions lock poisoned");
+                return;
+            };
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.worktree_path = Some(worktree_path.to_string_lossy().to_string());
+                persist_session(&stores, session);
+            }
+            info!("Agent {} worktree created at {}", session_id, worktree_path.display());
+        }
+    }
+
+    // Retain a copy of the worktree manager for cleanup after the agent loop exits.
+    // The original is moved into the bridge.
+    let cleanup_mgr = worktree_mgr.clone();
+    let cleanup_key = worktree_key.clone();
+
+    // Create per-agent logger
+    let agent_log = match AgentLogger::new(agent_type, &session_id, stores.session_dir.as_deref()) {
+        Ok(al) => al,
+        Err(e) => {
+            error!("Agent {} failed to create logger: {}", session_id, e);
+            return;
+        }
+    };
+    agent_log.info(&format!("Agent task started: {} ({})", session_id, agent_type));
+
+    // Create the in-process IPC bridge for this agent
+    let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+
+    // Transition to Running
+    {
+        let Ok(mut sessions) = stores.write_agent_sessions() else {
+            error!("agent_sessions lock poisoned");
+            return;
+        };
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if let Err(e) = session.transition_to(AgentStatus::Running) {
+                agent_log.error(&format!("failed to start: {}", e));
+                return;
+            }
+            persist_session(&stores, session);
+        }
+    }
+    debug!("[agent_status] {}: -> Running", session_id);
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Running));
+
+    // Resolve session timeout from the agent's role config
+    let timeout_secs = match agent_type {
+        AgentType::Implementer => stores.config.agents.implementer.session_timeout_secs,
+        AgentType::Reviewer => stores.config.agents.reviewer.session_timeout_secs,
+        AgentType::Researcher => stores.config.agents.researcher.session_timeout_secs,
+        AgentType::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
+        AgentType::Integrator => stores.config.integrator.session_timeout_secs,
+        AgentType::Chat => None,
+    };
+
+    let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log);
+
+    let result = if let Some(secs) = timeout_secs {
+        match tokio::time::timeout(Duration::from_secs(secs), loop_future).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                agent_log.warn(&format!("session timeout after {}s", secs));
+                Err(eyre!("session timed out after {}s", secs))
+            }
+        }
+    } else {
+        loop_future.await
+    };
+
+    // Bundle-aware work handback (implementer only)
+    if agent_type == AgentType::Implementer
+        && let Some(ref wi_id) = worktree_key
+    {
+        if let Some(target_status) = determine_work_handback(&stores, wi_id, &session_id, result.is_ok()) {
+            let resp = bridge.request(
+                "work.transition",
+                serde_json::json!({ "id": wi_id, "target_status": target_status, "role": "implementer" }),
+            );
+            if resp.is_error() {
+                agent_log.warn(&format!(
+                    "failed to transition work {} -> {}: {:?}",
+                    wi_id, target_status, resp.error
+                ));
+            } else {
+                agent_log.info(&format!("transitioned work {} -> {}", wi_id, target_status));
+            }
+        } else {
+            agent_log.info(&format!(
+                "skipping work handback for {} - sibling implementer still active",
+                wi_id
+            ));
+        }
+    }
+
+    // Release all advisory locks held by this agent's work ID
+    if let Ok(sessions) = stores.read_agent_sessions()
+        && let Some(session) = sessions.get(&session_id)
+        && let Some(ref wi_id) = session.work_id
+    {
+        release_agent_locks(&bridge, wi_id, &agent_log);
+    }
+
+    // Clean up worktree after agent loop exits (only for non-thinking-plane agents)
+    if let Some(ref key) = cleanup_key {
+        if let Err(e) = cleanup_mgr.cleanup(key) {
+            agent_log.warn(&format!("worktree cleanup failed (key={}): {}", key, e));
+        } else {
+            agent_log.info(&format!("worktree cleaned up (key={})", key));
+        }
+    }
+
+    // Transition to terminal state based on result
+    let terminal_status = match result {
+        Ok(_) => AgentStatus::Completed,
+        Err(ref e) => {
+            agent_log.warn(&format!("failed: {}", e));
+            AgentStatus::Failed
+        }
+    };
+
+    {
+        let Ok(mut sessions) = stores.write_agent_sessions() else {
+            error!("agent_sessions lock poisoned");
+            return;
+        };
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if let Err(e) = session.transition_to(terminal_status) {
+                agent_log.error(&format!("failed to transition to {:?}: {}", terminal_status, e));
+                return;
+            }
+            if let Err(ref e) = result {
+                session.error_message = Some(e.to_string());
+                session.error_kind = Some(crate::agents::error::classify_error(e));
+            }
+            persist_session(&stores, session);
+        }
+    }
+    // Create a Learning from implementer failures so the Coordinator can adapt
+    if terminal_status == AgentStatus::Failed && agent_type == AgentType::Implementer {
+        let (wi_title, wi_id, iteration_count) = {
+            let Ok(sessions) = stores.read_agent_sessions() else {
+                error!("agent_sessions lock poisoned");
+                return;
+            };
+            let session = sessions.get(&session_id);
+            let wi_id = session.and_then(|s| s.work_id.clone()).unwrap_or_default();
+            let iteration = session.map(|s| s.iteration).unwrap_or(0);
+            let title = if !wi_id.is_empty() {
+                stores
+                    .read_works()
+                    .ok()
+                    .and_then(|works| works.get(&wi_id).map(|w| w.title.clone()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            (title, wi_id, iteration)
+        };
+
+        let error_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        let learning = crate::domain::learning::Learning::new(
+            wi_id.clone(),
+            crate::domain::learning::LearningScope::Phase,
+            format!(
+                "Implementer failed on '{}' after {} iterations. Error: {}. \
+                 Consider: splitting into smaller tasks, providing more context, \
+                 or checking dependency ordering.",
+                wi_title, iteration_count, error_msg
+            ),
+        );
+        let learning_id = learning.id.clone();
+        if let Ok(mut learnings) = stores.write_learnings() {
+            learnings.insert(learning_id.clone(), learning.clone());
+        } else {
+            error!("learnings lock poisoned");
+        }
+        if let Ok(Some(mut store_guard)) = stores.lock_store() {
+            let _ = store_guard.create(learning);
+        }
+        agent_log.info(&format!("created failure learning {} on '{}'", learning_id, wi_title));
+    }
+
+    debug!("[agent_status] {}: -> {:?} (terminal)", session_id, terminal_status);
+    if terminal_status == AgentStatus::Failed {
+        let error = result.as_ref().err().map(|e| e.to_string());
+        let _ = event_tx.send(DaemonEvent::agent_status_failed(&session_id, error));
+    } else {
+        let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
+    }
+
+    agent_log.info(&format!("task finished -> {:?}", terminal_status));
+}
+
+/// Agent loop - dispatches to the appropriate agent implementation based on type.
+pub(super) async fn run_agent_loop(
+    session_id: &str,
+    agent_type: AgentType,
+    stores: &Arc<Stores>,
+    bridge: &AgentIpcBridge,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    agent_log: &AgentLogger,
+) -> Result<()> {
+    agent_log.debug(&format!(
+        "run_agent_loop(session_id={}, agent_type={})",
+        session_id, agent_type
+    ));
+    // Verify the bridge works by checking system status
+    let status_resp = bridge.request("system.status", serde_json::json!(null));
+    if status_resp.is_error() {
+        return Err(eyre!("bridge health check failed: {:?}", status_resp.error));
+    }
+    agent_log.info("Bridge health check passed");
+
+    let mut ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
+
+    // Per-session tool resolution: 3-layer priority stack
+    //   Layer 1: config tools (from loopr.yml)
+    //   Layer 2: runtime tools (from tools.register IPC)
+    //   Layer 3: detected tools (from marker files)
+    if let Some(ref wt_path) = ctx.session.worktree_path {
+        let worktree = std::path::Path::new(wt_path);
+        let runtime_tools = stores.read_runtime_tools()?;
+        let resolved = crate::tools::resolve_tools(&stores.config.agents.tools, &runtime_tools, Some(worktree));
+        drop(runtime_tools);
+        ctx.tool_runner = Arc::new(crate::tools::ToolRunner::new(&resolved));
+        ctx.tool_executor = Arc::new(crate::tools::ToolExecutor::standard(&resolved));
+        agent_log.info(&format!(
+            "Session tool executor: {} tools (resolved from {})",
+            ctx.tool_executor.available_tools().len(),
+            wt_path
+        ));
+    }
+
+    let (result, iteration) = match agent_type {
+        AgentType::Implementer => {
+            let config = stores.config.agents.implementer.clone();
+            let llm = create_llm_client(&config, session_id, event_tx)?;
+            let work_id = ctx
+                .session
+                .work_id
+                .clone()
+                .ok_or_else(|| eyre!("implementer session missing work_id"))?;
+            let worktree_path = ctx
+                .session
+                .worktree_path
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| eyre!("implementer session missing worktree_path"))?;
+            let mut agent = implementer::ImplementerAgent::new(ctx, llm, config, work_id, worktree_path);
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
+        AgentType::Reviewer => {
+            let config = stores.config.agents.reviewer.clone();
+            let llm = create_llm_client(&config, session_id, event_tx)?;
+            let mut agent = reviewer::ReviewerAgent::new(ctx, llm, config)?;
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
+        AgentType::Coordinator => {
+            let config = stores.config.agents.coordinator.clone();
+            let llm = create_llm_client(&config.role, session_id, event_tx)?;
+            let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
+        AgentType::Researcher => {
+            let config = stores.config.agents.researcher.clone();
+            let llm = create_llm_client(&config, session_id, event_tx)?;
+            let mut agent = researcher::ResearcherAgent::new(ctx, llm, config);
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
+        AgentType::Integrator => {
+            let config = stores.config.integrator.clone();
+            let mut agent = integrator::IntegratorAgent::new(ctx, config);
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
+        AgentType::Chat => {
+            // Chat sessions are not started via run_agent_task - they use chat.submit IPC.
+            // This arm should never be reached.
+            return Ok(());
+        }
+    };
+
+    // Unified iteration writeback
+    {
+        let mut sessions = stores.write_agent_sessions()?;
+        if let Some(s) = sessions.get_mut(session_id) {
+            s.iteration = iteration;
+        }
+    }
+
+    result
+}
