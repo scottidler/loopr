@@ -219,8 +219,9 @@ impl Agent for ReviewerAgent {
                     }),
                 );
                 if resp.is_error() {
-                    // Bundle may have already advanced past Triaged (advisory review race).
-                    // Log and continue — the feedback Learning was already created above.
+                    // Advisory review race: bundle may have already advanced past Triaged
+                    // (e.g., Coordinator accepted directly). This is expected - log and continue
+                    // since the feedback Learning was already created above.
                     self.ctx.warn(&format!(
                         "bundle {} already advanced past Triaged (advisory review race): {:?}",
                         self.bundle_id, resp.error
@@ -232,13 +233,17 @@ impl Agent for ReviewerAgent {
             ReviewVerdict::RequestChanges => {
                 // Store rejection reason before transitioning so the coordinator
                 // and next implementer know why the bundle was rejected.
-                let _ = self.ctx.bridge.request(
+                let upd_resp = self.ctx.bridge.request(
                     "bundle.update",
                     serde_json::json!({
                         "id": self.bundle_id,
                         "verification": format!("Rejected: {}", review.summary),
                     }),
                 );
+                if upd_resp.is_error() {
+                    self.ctx
+                        .warn(&format!("failed to update verification on bundle {}", self.bundle_id));
+                }
                 let resp = self.ctx.bridge.request(
                     "bundle.transition",
                     serde_json::json!({
@@ -248,28 +253,28 @@ impl Agent for ReviewerAgent {
                     }),
                 );
                 if resp.is_error() {
-                    // Bundle may have already advanced (advisory review race).
-                    self.ctx.warn(&format!(
-                        "bundle {} already advanced (advisory review race): {:?}",
-                        self.bundle_id, resp.error
-                    ));
-                } else {
-                    self.ctx.info(&format!(
-                        "requested changes on bundle {} (→Rejected + Learning)",
-                        self.bundle_id
-                    ));
+                    let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                    return Err(eyre::eyre!("failed to reject bundle {}: {}", self.bundle_id, msg));
                 }
+                self.ctx.info(&format!(
+                    "requested changes on bundle {} (->Rejected + Learning)",
+                    self.bundle_id
+                ));
             }
             ReviewVerdict::Reject => {
                 // Store rejection reason before transitioning so the coordinator
                 // and next implementer know why the bundle was rejected.
-                let _ = self.ctx.bridge.request(
+                let upd_resp = self.ctx.bridge.request(
                     "bundle.update",
                     serde_json::json!({
                         "id": self.bundle_id,
                         "verification": format!("Rejected: {}", review.summary),
                     }),
                 );
+                if upd_resp.is_error() {
+                    self.ctx
+                        .warn(&format!("failed to update verification on bundle {}", self.bundle_id));
+                }
                 let resp = self.ctx.bridge.request(
                     "bundle.transition",
                     serde_json::json!({
@@ -279,14 +284,10 @@ impl Agent for ReviewerAgent {
                     }),
                 );
                 if resp.is_error() {
-                    // Bundle may have already advanced (advisory review race).
-                    self.ctx.warn(&format!(
-                        "bundle {} already advanced (advisory review race): {:?}",
-                        self.bundle_id, resp.error
-                    ));
-                } else {
-                    self.ctx.info(&format!("rejected bundle {}", self.bundle_id));
+                    let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                    return Err(eyre::eyre!("failed to reject bundle {}: {}", self.bundle_id, msg));
                 }
+                self.ctx.info(&format!("rejected bundle {}", self.bundle_id));
             }
         }
 
