@@ -197,7 +197,7 @@ impl Agent for ReviewerAgent {
 
         // Create feedback Learning tagged with review:feedback (advisory feedback for all verdicts)
         let feedback_tag = format!("review:{}", review.verdict);
-        let _ = self.ctx.bridge.request(
+        let learn_resp = self.ctx.bridge.request(
             "learning.create",
             serde_json::json!({
                 "content": format!("Review feedback ({}): {}", review.verdict, review.summary),
@@ -206,6 +206,12 @@ impl Agent for ReviewerAgent {
                 "resource_tags": [feedback_tag],
             }),
         );
+        if learn_resp.is_error() {
+            self.ctx.warn(&format!(
+                "failed to create review feedback learning for bundle {}",
+                self.bundle_id
+            ));
+        }
 
         match review.verdict {
             ReviewVerdict::Approve => {

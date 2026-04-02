@@ -815,7 +815,7 @@ impl IntegratorAgent {
                 }
             }
 
-            let _ = self.ctx.bridge.request(
+            let learn_resp = self.ctx.bridge.request(
                 "learning.create",
                 serde_json::json!({
                     "content": format!("Tick {} validation failed: {}", tick_id, validation_log),
@@ -823,6 +823,12 @@ impl IntegratorAgent {
                     "source_id": tick_id,
                 }),
             );
+            if learn_resp.is_error() {
+                self.ctx.warn(&format!(
+                    "failed to create validation failure learning for tick {}",
+                    tick_id
+                ));
+            }
 
             self.ctx.info(&format!("Tick {} validation failed", tick_id));
             Ok(IntegratorCycleResult::ValidationFailed {
@@ -857,7 +863,7 @@ impl IntegratorAgent {
                 work_id, reason
             ));
         }
-        let _ = self.ctx.bridge.request(
+        let learn_resp = self.ctx.bridge.request(
             "learning.create",
             serde_json::json!({
                 "content": format!("Bundle rejected ({}). Work reset to Ready for retry with updated main branch.", reason),
@@ -865,6 +871,12 @@ impl IntegratorAgent {
                 "source_id": work_id,
             }),
         );
+        if learn_resp.is_error() {
+            self.ctx.warn(&format!(
+                "failed to create bundle rejection learning for work {}",
+                work_id
+            ));
+        }
     }
 }
 

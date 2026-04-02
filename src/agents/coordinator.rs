@@ -1670,7 +1670,7 @@ impl CoordinatorAgent {
                     _ => unreachable!(),
                 };
                 self.ctx.warn(&reason);
-                let _ = bridge.request(
+                let abandon_resp = bridge.request(
                     "work.transition",
                     serde_json::json!({
                         "id": target_id,
@@ -1678,7 +1678,13 @@ impl CoordinatorAgent {
                         "role": "coordinator"
                     }),
                 );
-                let _ = bridge.request(
+                if abandon_resp.is_error() {
+                    self.ctx.error(&format!(
+                        "failed to abandon work {}: {:?}",
+                        target_id, abandon_resp.error
+                    ));
+                }
+                let learn_resp = bridge.request(
                     "learning.create",
                     serde_json::json!({
                         "content": reason,
@@ -1686,6 +1692,10 @@ impl CoordinatorAgent {
                         "source_id": target_id,
                     }),
                 );
+                if learn_resp.is_error() {
+                    self.ctx
+                        .warn(&format!("failed to create learning for work {}", target_id));
+                }
                 let summary = format!("Work {} abandoned (structural failure: {:?})", target_id, error_kind);
                 let _ = self
                     .ctx
@@ -1707,7 +1717,7 @@ impl CoordinatorAgent {
                         target_id, attempts, max_retries
                     ));
                     // Transition to Abandoned via bridge
-                    let _ = bridge.request(
+                    let abandon_resp = bridge.request(
                         "work.transition",
                         serde_json::json!({
                             "id": target_id,
@@ -1715,9 +1725,15 @@ impl CoordinatorAgent {
                             "role": "coordinator"
                         }),
                     );
+                    if abandon_resp.is_error() {
+                        self.ctx.error(&format!(
+                            "failed to abandon work {}: {:?}",
+                            target_id, abandon_resp.error
+                        ));
+                    }
                     // Create a Learning about the retry exhaustion
                     // M2: Use lowercase scope to match LearningScope serde format
-                    let _ = bridge.request(
+                    let learn_resp = bridge.request(
                         "learning.create",
                         serde_json::json!({
                             "content": format!("Work '{}' abandoned after {} failed attempts", target_id, attempts),
@@ -1725,6 +1741,10 @@ impl CoordinatorAgent {
                             "source_id": target_id,
                         }),
                     );
+                    if learn_resp.is_error() {
+                        self.ctx
+                            .warn(&format!("failed to create learning for work {}", target_id));
+                    }
                     let summary = format!("Work {} abandoned (max retries exceeded)", target_id);
                     let _ = self
                         .ctx
