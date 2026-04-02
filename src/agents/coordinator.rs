@@ -980,10 +980,9 @@ fn sweep_integrated_to_done(
             }),
         );
         if resp.is_error() {
-            log.warn(&format!(
-                "failed to transition WI {} Integrated→Done: {:?}",
-                wi_id, resp.error
-            ));
+            let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+            log.error(&format!("failed to transition WI {} Integrated->Done: {}", wi_id, msg));
+            continue;
         } else {
             log.info(&format!("Work {} transitioned Integrated → Done", wi_id));
         }
