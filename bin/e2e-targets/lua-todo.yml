@@ -1,58 +1,49 @@
-goal: "Build a Lua command-line todo application. The app should support: add, list, done, and delete commands. Persist todos to a JSON file using pure Lua (no external dependencies). Include tests in test_todo.lua that verify all operations. Entry point is cli.lua, core logic in todo.lua."
+goal: "Build a Lua command-line todo application. Entry point is cli.lua, core logic in todo.lua, tests in test_todo.lua. json.lua and test.lua are pre-provided in the repo."
 plan:
   title: "Lua Todo App"
-  description: "Build a Lua CLI todo app with CRUD operations, JSON persistence, and tests - pure Lua, no external dependencies."
+  description: "Build a Lua CLI todo app with CRUD operations, JSON persistence, and tests."
   spec:
     title: "Todo App Implementation"
     description: "Core todo module with CLI and tests"
     phases:
-      - title: "Core model with JSON persistence"
-        description: "Data model and pure-Lua JSON serialization"
+      - title: "Core model"
+        description: "TodoStore using pre-provided json.lua"
         validation-commands:
           - "lua -e \"dofile('todo.lua')\""
         works:
           - key: "todo-model"
-            title: "Create todo.lua with TodoStore and JSON persistence"
+            title: "Create todo.lua with TodoStore"
             description: |
-              Create todo.lua that exports a TodoStore module table.
+              Create todo.lua that exports a TodoStore module.
 
-              JSON helpers (inside todo.lua, no external deps):
-              - encode(value): serialize Lua tables/strings/numbers/booleans to JSON strings
-                - Must handle arrays of objects where each object has string, number, and boolean fields
-                - Strings must be properly escaped (quotes, backslashes, newlines)
-              - decode(str): parse a JSON string back into Lua tables
-                - Must handle the same structure: arrays of objects with string/number/boolean fields
-                - Can be simple/limited - only needs to handle the todo data format
+              Use `local json = require("json")` for JSON — json.lua is pre-provided. Do NOT write your own JSON code.
 
               TodoStore API:
-              - TodoStore.new(filepath): create a new store instance, filepath defaults to "todos.json"
-                - Returns a table with methods and internal state
-                - Load existing data from filepath if it exists
-              - store:load(): read todos from the JSON file, return empty table if file missing or parse error
-              - store:save(): write todos to the JSON file using the encode function
-              - store:add(title): create a new todo with fields {id=os.time(), title=title, done=false}
-                - Append to the list, save to file, return the new todo
+              - TodoStore.new(filepath): create a store instance, filepath defaults to "todos.json"
+                - Load existing data from file on creation (use store:load())
+              - store:add(title): create {id=<counter>, title=title, done=false}, append, save, return the todo
+                - id is a unique incrementing integer counter (NOT os.time())
               - store:list(filter): return todos filtered by "all" (default), "active", or "done"
-              - store:done(id): find todo by id (as number), set done=true, save, return true if found
-              - store:delete(id): find todo by id (as number), remove from list, save, return true if found
+              - store:done(id): find todo by numeric id, set done=true, save, return true if found
+              - store:delete(id): find todo by numeric id, remove from list, save, return true if found
+              - store:load(): read file, decode JSON, populate self.todos; return empty list if file missing
+              - store:save(): encode self.todos to JSON, write to file
 
-              Module pattern:
-              - Use standard Lua module pattern: local M = {} ... return M
-              - TodoStore.new returns a table with methods attached via : syntax
+              Module pattern (exact):
+              - Define `local TodoStore = {}`
+              - TodoStore.new returns a table instance with methods
+              - Last line: `return TodoStore`
+              - require("todo") returns a table where .new(filepath) is a function
 
-              IMPORTANT:
-              - Pure Lua only - no require of external modules
-              - All code in a single todo.lua file
-              - The JSON helpers can be local functions, not exported
-              - Use io.open for file I/O
+              Use io.open for file I/O, json.encode/json.decode for persistence.
             resource_tags: ["todo.lua"]
             acceptance_criteria:
-              - "TodoStore.new() creates a working store instance"
-              - "store:add() creates a todo with id, title, done=false"
-              - "store:list() returns all todos, filtered by status"
-              - "store:done() marks the correct todo as done"
-              - "store:delete() removes the correct todo"
-              - "JSON persistence survives creating a new store on the same file"
+              - "require('todo') returns a table with .new()"
+              - "store:add() creates a todo with unique integer id, title, done=false"
+              - "store:list() returns todos filtered by status"
+              - "store:done() marks the correct todo done, returns true"
+              - "store:delete() removes the correct todo, returns true"
+              - "JSON persistence survives new store on same file"
               - "lua -e \"dofile('todo.lua')\" exits without error"
       - title: "CLI and test suite"
         description: "Command-line interface and test coverage"
@@ -62,27 +53,17 @@ plan:
           - key: "cli-entry"
             title: "Create cli.lua with command-line interface"
             description: |
-              Create cli.lua as the user-facing entry point.
+              Create cli.lua as the entry point.
 
-              Parse command-line arguments from the arg table:
-              - lua cli.lua add <title>       -- add a new todo, print confirmation with id
-              - lua cli.lua list [filter]     -- list todos, optional filter: all (default), active, done
-              - lua cli.lua done <id>         -- mark todo as done by id
-              - lua cli.lua delete <id>       -- delete todo by id
-
-              Behavior:
-              - require("todo") to get the TodoStore module
-              - Create store with TodoStore.new() (default filepath)
-              - Parse arg[1] as the command, arg[2] as the argument
-              - For "add": arg[2] is the title string, print "Added: [id] title"
-              - For "list": arg[2] is optional filter, print each todo as "  [x] id: title" (done) or "  [ ] id: title" (active)
-              - For "done": arg[2] is the id (convert with tonumber), print "Done: id" or "Not found: id"
-              - For "delete": arg[2] is the id (convert with tonumber), print "Deleted: id" or "Not found: id"
-              - With no arguments or unknown command, print usage help
-
-              IMPORTANT:
-              - All code in a single cli.lua file
-              - Use require("todo") - do not copy TodoStore code
+              - `local TodoStore = require("todo")` to get the module
+              - Create store: `local store = TodoStore.new()`
+              - Parse arg[1] as command, arg[2] as argument
+              - Commands:
+                - add <title>: store:add(arg[2]), print "Added: [id] title"
+                - list [filter]: store:list(arg[2] or "all"), print "  [x] id: title" (done) or "  [ ] id: title" (active)
+                - done <id>: store:done(tonumber(arg[2])), print "Done: id" or "Not found: id"
+                - delete <id>: store:delete(tonumber(arg[2])), print "Deleted: id" or "Not found: id"
+                - no args / unknown: print usage
             resource_tags: ["cli.lua"]
             dependencies: ["todo-model"]
             acceptance_criteria:
@@ -90,37 +71,34 @@ plan:
               - "lua cli.lua list shows todos with status indicators"
               - "lua cli.lua done <id> marks a todo as done"
               - "lua cli.lua delete <id> removes a todo"
-              - "lua cli.lua with no args prints usage"
           - key: "test-suite"
             title: "Create test_todo.lua with tests"
             description: |
-              Create test_todo.lua that tests TodoStore operations.
+              Create test_todo.lua using the pre-provided test runner.
 
-              Test framework: simple assert-based tests (no external test framework).
-              - Define a helper: function test(name, fn) that prints "PASS: name" on success
-                or "FAIL: name: error" on failure (use pcall to catch errors)
-              - Track pass/fail counts, print summary at end
-              - Exit with os.exit(1) if any test failed, os.exit(0) if all passed
+              local test = require("test")        -- pre-provided, do NOT rewrite it
+              local TodoStore = require("todo")
 
-              Use temporary files for isolation:
-              - Each test should use a unique file path like "/tmp/test_todo_<name>.json"
-              - Clean up temp files after each test with os.remove()
+              Use unique relative file paths for test isolation (e.g. "test_add.json").
+              Clean up with os.remove() after each test.
+              Call test.summary() at the end.
+
+              The TodoStore API (exact — do NOT invent fields or methods):
+              - TodoStore.new(path)           -- constructor
+              - store:add(title)             -- returns {id=number, title=string, done=false}
+              - store:list(filter)           -- "all"/"active"/"done", returns table
+              - store:done(id)               -- numeric id, returns true if found
+              - store:delete(id)             -- numeric id, returns true if found
+              - fields: id (number), title (string), done (boolean) — nothing else
 
               Tests to write:
-              - test_add: create store, add a todo, verify it appears in list with correct fields
-              - test_done: add a todo, mark it done, verify done field is true
-              - test_delete: add a todo, delete it, verify list is empty
-              - test_list_filter: add 2 todos, mark one done, verify "active" filter returns 1, "done" filter returns 1, "all" returns 2
-              - test_persistence: add a todo, create a NEW store on the same file, verify the todo is still there
-
-              IMPORTANT:
-              - require("todo") to get TodoStore
-              - Pure Lua, no external test frameworks
-              - Each test must be independent (own temp file)
-              - Print a clear summary line at the end: "N/N tests passed"
+              - test_add: add a todo, check todos[1].title, todos[1].done==false, type(todos[1].id)=="number"
+              - test_done: add a todo, call store:done(todos[1].id), verify done==true
+              - test_delete: add a todo, delete it, verify #store:list("all")==0
+              - test_list_filter: add 2 todos, done one, verify #active==1, #done==1, #all==2
+              - test_persistence: add a todo, create new store on same file, verify todo is still there
             resource_tags: ["test_todo.lua"]
             dependencies: ["todo-model"]
             acceptance_criteria:
-              - "All tests pass when run with lua test_todo.lua"
-              - "Tests cover add, done, delete, list filtering, and persistence"
-              - "Exit code is 0 on success, 1 on failure"
+              - "All 5 tests pass when run with lua test_todo.lua"
+              - "Exit code 0 on success, 1 on failure"

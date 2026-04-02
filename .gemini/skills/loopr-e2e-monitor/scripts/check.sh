@@ -28,7 +28,7 @@ DAEMON_LOG="$TARGET/daemon.log"
 echo
 echo "--- daemon.log (last 20 lines) ---"
 if [ -f "$DAEMON_LOG" ]; then
-    tail -n 20 "$DAEMON_LOG"
+    /usr/bin/tail -n 20 "$DAEMON_LOG"
     if grep -qi "panic\|thread.*panicked\|SIGABRT" "$DAEMON_LOG"; then
         alert "Panic detected in daemon.log!"
     fi
@@ -66,22 +66,34 @@ fi
 section "3. Taskstore — Works (last 10)"
 WORKS="$TARGET/.taskstore/works.jsonl"
 SESSIONS="$TARGET/.taskstore/agent_sessions.jsonl"
+BUNDLES="$TARGET/.taskstore/bundles.jsonl"
 if [ -f "$WORKS" ]; then
-    tail -n 10 "$WORKS" | jq -c '{id, status, assignee}'
+    /usr/bin/tail -n 10 "$WORKS" | jq -c '{id, status, assignee}'
 
-    IN_PROGRESS_IDS=$(jq -r 'select(.status == "InProgress") | .id' "$WORKS")
+    # Deduplicate: JSONL is append-only so each ID may appear multiple times.
+    # Take the LAST record per ID to get current state (not historical InProgress states).
+    IN_PROGRESS_IDS=$(jq -rn '[inputs] | group_by(.id) | .[] | last | select(.status == "InProgress") | .id' "$WORKS")
     if [ -n "$IN_PROGRESS_IDS" ]; then
         if [ -f "$SESSIONS" ]; then
-            RUNNING_WORK_IDS=$(jq -r 'select(.agent_type == "Implementer" and .status == "Running") | .work_id // ""' "$SESSIONS")
+            # agent_type and status are lowercase in the JSONL (e.g. "implementer", "running")
+            RUNNING_WORK_IDS=$(jq -rn '[inputs] | group_by(.id) | .[] | last | select(.agent_type == "implementer" and .status == "running") | .work_id // ""' "$SESSIONS")
         else
             RUNNING_WORK_IDS=""
+        fi
+        # Build set of work IDs that have an active bundle (reviewer or integrator is processing them)
+        if [ -f "$BUNDLES" ]; then
+            BUNDLE_ACTIVE_WORK_IDS=$(jq -rn '[inputs] | group_by(.work_id) | .[] | last | select(.status != "Rejected") | .work_id' "$BUNDLES")
+        else
+            BUNDLE_ACTIVE_WORK_IDS=""
         fi
         while IFS= read -r wid; do
             [ -z "$wid" ] && continue
             if echo "$RUNNING_WORK_IDS" | grep -qF "$wid"; then
-                ok "Work $wid InProgress — active Implementer session found"
+                ok "Work $wid InProgress — active implementer session found"
+            elif echo "$BUNDLE_ACTIVE_WORK_IDS" | grep -qF "$wid"; then
+                ok "Work $wid InProgress — bundle active (Proposed/Reviewed/etc), pipeline processing"
             else
-                alert "Work $wid is InProgress but NO active Implementer session — possible handback failure"
+                alert "Work $wid is InProgress but NO active implementer session — possible handback failure"
             fi
         done <<< "$IN_PROGRESS_IDS"
     fi
@@ -92,9 +104,10 @@ fi
 # ── 4. Taskstore: Agent Sessions ─────────────────────────────────────────────
 section "4. Taskstore — Agent Sessions (last 10)"
 if [ -f "$SESSIONS" ]; then
-    tail -n 10 "$SESSIONS" | jq -c '{agent_type, status, error_message}'
+    /usr/bin/tail -n 10 "$SESSIONS" | jq -c '{agent_type, status, error_message}'
 
-    if jq -r '.error_message // ""' "$SESSIONS" | grep -qi "tool validation loop\|invalid transition"; then
+    # Check error_message across ALL session records (not just latest-per-ID) for validation loops
+    if jq -rn '[inputs] | .[].error_message // ""' "$SESSIONS" | grep -qi "tool validation loop\|invalid transition"; then
         alert "Rejection/validation cycle detected — system may be locked"
     fi
 else
@@ -103,11 +116,10 @@ fi
 
 # ── 5. Bundles ────────────────────────────────────────────────────────────────
 section "5. Taskstore — Bundles (last 5)"
-BUNDLES="$TARGET/.taskstore/bundles.jsonl"
 if [ -f "$BUNDLES" ]; then
-    tail -n 5 "$BUNDLES" | jq -c '{id, work_id, verdict, head_commit, is_noop}'
+    /usr/bin/tail -n 5 "$BUNDLES" | jq -c '{id, work_id, status, head_commit, noop_reason}'
 
-    NOOP_IDS=$(jq -r 'select(.is_noop == true or .head_commit == null) | .work_id // .id' "$BUNDLES")
+    NOOP_IDS=$(jq -r 'select(.noop_reason != null or .head_commit == null) | .work_id // .id' "$BUNDLES")
     if [ -n "$NOOP_IDS" ]; then
         while IFS= read -r bid; do
             [ -z "$bid" ] && continue
@@ -122,7 +134,7 @@ if [ -f "$BUNDLES" ]; then
         done <<< "$NOOP_IDS"
     fi
 
-    REJECTIONS=$(jq -r 'select(.verdict == "request_changes") | "\(.id): \(.reviewer_notes // "no notes")"' "$BUNDLES" | tail -n 5)
+    REJECTIONS=$(jq -r 'select(.status == "Rejected") | "\(.id): \(.verification // "no notes")"' "$BUNDLES" | /usr/bin/tail -n 5)
     if [ -n "$REJECTIONS" ]; then
         warn "Recent reviewer rejections:"
         echo "$REJECTIONS"
@@ -135,7 +147,7 @@ fi
 section "6. Taskstore — Learnings (last 5)"
 LEARNINGS="$TARGET/.taskstore/learnings.jsonl"
 if [ -f "$LEARNINGS" ]; then
-    tail -n 5 "$LEARNINGS" | jq -c '.'
+    /usr/bin/tail -n 5 "$LEARNINGS" | jq -c '.'
 else
     warn "learnings.jsonl not found"
 fi
