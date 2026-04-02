@@ -345,3 +345,169 @@ pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]
         )))
     }
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    
+    
+    use crate::agents::executor::{execute_action, ActionResult};
+    use crate::agents::executor::tests::{
+        test_stores, test_agent_context,
+        create_test_hierarchy,
+    };
+    use crate::agents::{AgentAction, AgentType};
+    
+    
+    
+    use crate::test_util::TestDir;
+    
+    
+    
+    
+    
+    
+    
+
+    #[tokio::test]
+    async fn test_execute_create_plan() {
+        let dir = TestDir::new("loopr-exec-createplan");
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::CreatePlan {
+            title: "New Plan".to_string(),
+            description: "Plan desc".to_string(),
+            acceptance_criteria: "Tests pass".to_string(),
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "plans");
+            assert!(!id.is_empty());
+            assert_ne!(id, "unknown");
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_spec() {
+        let dir = TestDir::new("loopr-exec-createspec");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::CreateSpec {
+            plan_id,
+            title: "New Spec".to_string(),
+            description: "Spec desc".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "specs");
+            assert!(!id.is_empty());
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_phase() {
+        let dir = TestDir::new("loopr-exec-createphase");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, spec_id, _, _) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::CreatePhase {
+            spec_id,
+            title: "New Phase".to_string(),
+            description: "Phase desc".to_string(),
+            order: 2,
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::RecordCreated { collection, id } = &result {
+            assert_eq!(collection, "phases");
+            assert!(!id.is_empty());
+        } else {
+            panic!("expected RecordCreated, got: {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_plan_error_path() {
+        let dir = TestDir::new("loopr-exec-plnerr");
+        let stores = test_stores(&dir);
+
+        let action1 = AgentAction::CreatePlan {
+            title: "First Plan".to_string(),
+            description: "desc".to_string(),
+            acceptance_criteria: "pass".to_string(),
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
+        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
+
+        let action2 = AgentAction::CreatePlan {
+            title: "Second Plan".to_string(),
+            description: "desc".to_string(),
+            acceptance_criteria: "pass".to_string(),
+        };
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Plan already exists")),
+            "expected draft-awareness error, got: {:?}",
+            result2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_spec_error_path() {
+        let dir = TestDir::new("loopr-exec-specerr");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
+
+        let action1 = AgentAction::CreateSpec {
+            plan_id: plan_id.clone(),
+            title: "New Spec".to_string(),
+            description: "desc".to_string(),
+        };
+        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
+        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
+
+        let action2 = AgentAction::CreateSpec {
+            plan_id: plan_id.clone(),
+            title: "Another Spec".to_string(),
+            description: "desc".to_string(),
+        };
+        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Spec already exists")),
+            "expected draft-awareness error for spec, got: {:?}",
+            result2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_create_phase_error_path() {
+        let dir = TestDir::new("loopr-exec-phaseerr");
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::CreatePhase {
+            spec_id: "nonexistent-spec".to_string(),
+            title: "New Phase".to_string(),
+            description: "desc".to_string(),
+            order: 1,
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_phase failed")),
+            "expected error for nonexistent spec, got: {:?}",
+            result
+        );
+    }
+}

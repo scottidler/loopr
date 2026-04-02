@@ -251,3 +251,631 @@ pub(super) async fn handle_list_directory(
         Err(e) => Ok(ActionResult::ActionError(e.to_string())),
     }
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    
+    
+    use crate::agents::executor::{execute_action, ActionResult};
+    use crate::agents::executor::tests::{
+        test_stores, test_agent_context, test_agent_context_with_config,
+    };
+    use crate::agents::{AgentAction, AgentType};
+    use crate::config::Config;
+    
+    
+    use crate::test_util::TestDir;
+    
+    
+    
+    
+    
+    
+    
+
+    #[tokio::test]
+    async fn test_execute_action_write_file() {
+        let dir = TestDir::new("loopr-exec-write");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::WriteFile {
+            path: "test.txt".to_string(),
+            content: "hello world".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(matches!(result, ActionResult::FileWritten(_)));
+
+        let content = std::fs::read_to_string(dir.join("test.txt")).unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_lock_strict_blocks_other_agent() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-lockstrict");
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        let lock_resp = ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+        assert!(!lock_resp.is_error());
+
+        let action = AgentAction::WriteFile {
+            path: "src/main.rs".to_string(),
+            content: "should be blocked".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("agent-2")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
+            "expected ActionError for locked file, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_lock_strict_allows_holder_rewrite() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-lockholderrewrite");
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        let lock_resp = ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-abc", "granted_by": "wi-abc" }),
+        );
+        assert!(!lock_resp.is_error());
+
+        let action = AgentAction::WriteFile {
+            path: "src/main.rs".to_string(),
+            content: "holder can rewrite".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("wi-abc")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::FileWritten(_)),
+            "expected FileWritten (holder should not self-block), got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_file_lock_advisory_allows() {
+        let dir = TestDir::new("loopr-exec-lockadvisory");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let lock_resp = ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+        assert!(!lock_resp.is_error());
+
+        let action = AgentAction::WriteFile {
+            path: "test.txt".to_string(),
+            content: "should work".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(matches!(result, ActionResult::FileWritten(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_read_file() {
+        let dir = TestDir::new("loopr-exec-read");
+        std::fs::write(dir.join("read-me.txt"), "file content").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::ReadFile {
+            path: "read-me.txt".to_string(),
+            offset: None,
+            limit: None,
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = result {
+            assert!(content.contains("file content"));
+        } else {
+            panic!("expected FileRead result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_commit_success() {
+        let dir = TestDir::new("loopr-exec-commit");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join("test.txt"), "hello").unwrap();
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::Commit {
+            message: "test commit".to_string(),
+            paths: vec![],
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::Committed(ref msg) if msg == "test commit"),
+            "expected Committed, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_commit_specific_paths() {
+        let dir = TestDir::new("loopr-exec-commitpaths");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join("a.txt"), "aaa").unwrap();
+        std::fs::write(dir.join("b.txt"), "bbb").unwrap();
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::Commit {
+            message: "add a.txt only".to_string(),
+            paths: vec!["a.txt".to_string()],
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(matches!(result, ActionResult::Committed(_)));
+    }
+
+    #[tokio::test]
+    async fn test_write_file_path_escape() {
+        let dir = TestDir::new("loopr-exec-escape");
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::WriteFile {
+            path: "../../../etc/passwd".to_string(),
+            content: "pwned".to_string(),
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("path traversal"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_not_found() {
+        let dir = TestDir::new("loopr-exec-readnf");
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::ReadFile {
+            path: "nonexistent.txt".to_string(),
+            offset: None,
+            limit: None,
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_write_file_creates_parent_dirs() {
+        let dir = TestDir::new("loopr-exec-writedirs");
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::WriteFile {
+            path: "deep/nested/dir/file.txt".to_string(),
+            content: "nested content".to_string(),
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(matches!(result, ActionResult::FileWritten(_)));
+        let content = std::fs::read_to_string(dir.join("deep/nested/dir/file.txt")).unwrap();
+        assert_eq!(content, "nested content");
+    }
+
+    #[tokio::test]
+    async fn test_search_code_action() {
+        let dir = TestDir::new("loopr-exec-searchcode");
+        std::fs::write(dir.join("example.rs"), "fn main() { println!(\"hello\"); }").unwrap();
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::SearchCode {
+            pattern: "fn main".to_string(),
+            glob: None,
+            path: None,
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::FileRead(ref content) if content.contains("fn main"))
+                || matches!(result, ActionResult::ActionError(_)),
+            "got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_action() {
+        let dir = TestDir::new("loopr-exec-listdir");
+        std::fs::write(dir.join("file1.txt"), "a").unwrap();
+        std::fs::write(dir.join("file2.txt"), "b").unwrap();
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::ListDirectory { path: ".".to_string() };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::FileRead(ref content) if content.contains("file1.txt")),
+            "got: {:?}",
+            result
+        );
+    }
+
+    // --- Task #6: Additional coverage tests ---
+
+    #[tokio::test]
+    async fn test_read_file_dedup_returns_unchanged_on_second_read() {
+        let dir = TestDir::new("loopr-exec-dedup");
+        std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        let r1 = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r1 {
+            assert!(content.contains("line1"), "first read should return content");
+        } else {
+            panic!("expected FileRead, got: {:?}", r1);
+        }
+
+        let r2 = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r2 {
+            assert!(
+                content.contains("File unchanged since last read"),
+                "second read should return dedup message, got: {}",
+                content
+            );
+            assert!(content.contains("3"), "should mention total lines");
+        } else {
+            panic!("expected FileRead, got: {:?}", r2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_dedup_invalidated_by_write() {
+        let dir = TestDir::new("loopr-exec-dedup-write");
+        std::fs::write(dir.join("target.rs"), "original\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let read_action = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+
+        let write_action = AgentAction::WriteFile {
+            path: "target.rs".to_string(),
+            content: "updated\n".to_string(),
+        };
+        execute_action(&write_action, &ctx, &dir, None).await.unwrap();
+
+        let r3 = execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r3 {
+            assert!(
+                content.contains("updated"),
+                "read after write should return fresh content, got: {}",
+                content
+            );
+            assert!(!content.contains("File unchanged"), "should not be dedup after write");
+        } else {
+            panic!("expected FileRead, got: {:?}", r3);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_dedup_invalidated_by_edit() {
+        let dir = TestDir::new("loopr-exec-dedup-edit");
+        std::fs::write(dir.join("target.rs"), "hello world\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let read_action = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+
+        execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+
+        let edit_action = AgentAction::EditFile {
+            path: "target.rs".to_string(),
+            old_string: "hello".to_string(),
+            new_string: "goodbye".to_string(),
+        };
+        execute_action(&edit_action, &ctx, &dir, None).await.unwrap();
+
+        let r3 = execute_action(&read_action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r3 {
+            assert!(
+                content.contains("goodbye"),
+                "read after edit should return fresh content, got: {}",
+                content
+            );
+            assert!(!content.contains("File unchanged"), "should not be dedup after edit");
+        } else {
+            panic!("expected FileRead, got: {:?}", r3);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_dedup_different_offset_no_dedup() {
+        let dir = TestDir::new("loopr-exec-dedup-offset");
+        std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action1 = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: None,
+            limit: None,
+        };
+        let action2 = AgentAction::ReadFile {
+            path: "target.rs".to_string(),
+            offset: Some(1),
+            limit: None,
+        };
+
+        execute_action(&action1, &ctx, &dir, None).await.unwrap();
+
+        let r2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::FileRead(content) = &r2 {
+            assert!(
+                !content.contains("File unchanged"),
+                "different offset should not dedup, got: {}",
+                content
+            );
+            assert!(content.contains("line1"));
+        } else {
+            panic!("expected FileRead, got: {:?}", r2);
+        }
+    }
+
+    // --- Phase 1: Auto-Lock tests ---
+
+    #[tokio::test]
+    async fn test_write_file_auto_acquires_lock() {
+        let dir = TestDir::new("loopr-exec-autolock-write");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "hello".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, Some("wi-100")).await.unwrap();
+
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-100", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock, got {}", locks.len());
+        assert_eq!(locks[0]["holder_id"].as_str().unwrap(), "wi-100");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_auto_acquires_lock() {
+        let dir = TestDir::new("loopr-exec-autolock-edit");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "old content").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::EditFile {
+            path: "src/lib.rs".to_string(),
+            old_string: "old content".to_string(),
+            new_string: "new content".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, Some("wi-200")).await.unwrap();
+
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-200", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_reuses_existing_lock() {
+        let dir = TestDir::new("loopr-exec-autolock-reuse");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "first".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, Some("wi-300")).await.unwrap();
+        let action2 = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "second".to_string(),
+        };
+        execute_action(&action2, &ctx, &dir, Some("wi-300")).await.unwrap();
+
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "holder_id": "wi-300", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert_eq!(locks.len(), 1, "expected 1 lock (reused), got {}", locks.len());
+    }
+
+    #[tokio::test]
+    async fn test_no_auto_lock_without_work_id() {
+        let dir = TestDir::new("loopr-exec-autolock-none");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let action = AgentAction::WriteFile {
+            path: "src/lib.rs".to_string(),
+            content: "hello".to_string(),
+        };
+        execute_action(&action, &ctx, &dir, None).await.unwrap();
+
+        let lock_resp = ctx.bridge.request(
+            "lock.list",
+            serde_json::json!({ "resource": "src/lib.rs", "active_only": true }),
+        );
+        let locks = lock_resp.result.as_ref().unwrap().as_array().unwrap();
+        assert!(locks.is_empty(), "expected no locks when work_id is None");
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_lock_strict_allows_holder() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-editlock-holder");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "original").unwrap();
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "wi-edit", "granted_by": "wi-edit" }),
+        );
+
+        let action = AgentAction::EditFile {
+            path: "src/main.rs".to_string(),
+            old_string: "original".to_string(),
+            new_string: "modified".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("wi-edit")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::FileEdited(_)),
+            "expected FileEdited (holder should not self-block on edit), got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_edit_file_lock_strict_blocks_other_agent() {
+        use crate::config::{ConflictPolicy, StrategyConfig};
+
+        let dir = TestDir::new("loopr-exec-editlock-other");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "original").unwrap();
+
+        let stores = test_stores(&dir);
+        let config = Config {
+            strategy: StrategyConfig {
+                conflict_policy: ConflictPolicy::LockStrict,
+                ..StrategyConfig::default()
+            },
+            ..Config::default()
+        };
+        let ctx = test_agent_context_with_config(&dir, &stores, AgentType::Implementer, config);
+
+        ctx.bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/main.rs", "holder_id": "agent-1", "granted_by": "agent-1" }),
+        );
+
+        let action = AgentAction::EditFile {
+            path: "src/main.rs".to_string(),
+            old_string: "original".to_string(),
+            new_string: "modified".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some("agent-2")).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("locked")),
+            "expected ActionError for locked file, got: {:?}",
+            result
+        );
+    }
+
+}

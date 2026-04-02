@@ -242,3 +242,714 @@ pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
     agent_log.info(&format!("AcceptBundle: {} -> Accepted", bundle_id));
     Ok(ActionResult::Transitioned(format!("bundle/{} -> Accepted", bundle_id)))
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    
+    
+    use crate::agents::executor::{execute_action, ActionResult};
+    use crate::agents::executor::tests::{
+        test_stores, test_agent_context,
+        create_test_hierarchy,
+    };
+    use crate::agents::{AgentAction, AgentType};
+    
+    
+    use crate::domain::tick::TickStatus;
+    use crate::test_util::TestDir;
+    
+    
+    
+    
+    
+    
+    
+
+    #[tokio::test]
+    async fn test_execute_propose_bundle() {
+        let dir = TestDir::new("loopr-exec-propbundle");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "My bundle".to_string(),
+            claims: vec!["Implemented feature X".to_string()],
+            noop_reason: None,
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref desc) if desc == "My bundle"),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_propose_bundle_no_work() {
+        let dir = TestDir::new("loopr-exec-propnowi");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::ProposeBundle {
+            description: "My bundle".to_string(),
+            claims: vec![],
+            noop_reason: None,
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("work_id"));
+    }
+
+    // --- Group C: Agent management + domain actions ---
+
+    #[tokio::test]
+    async fn test_execute_triage_bundle() {
+        let dir = TestDir::new("loopr-exec-triage");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/test",
+                "description": "Test bundle",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        let action = AgentAction::TriageBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Triaged")),
+            "expected Transitioned to Triaged, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_accept_bundle() {
+        let dir = TestDir::new("loopr-exec-accept");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/accept",
+                "description": "Accept test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        ctx.bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        ctx.bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        );
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Accepted")),
+            "expected Transitioned to Accepted, got: {:?}",
+            result
+        );
+    }
+
+    // --- Group D: Lifecycle paths ---
+
+    #[tokio::test]
+    async fn test_execute_triage_bundle_full() {
+        let dir = TestDir::new("loopr-exec-triagefull");
+        let stores = test_stores(&dir);
+
+        let action = AgentAction::TriageBundle {
+            bundle_id: "bd-nonexistent".to_string(),
+        };
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not found")),
+            "expected not-found error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_triage_bundle_rejects_work_id() {
+        let dir = TestDir::new("loopr-exec-triage-wkid");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let action = AgentAction::TriageBundle {
+            bundle_id: "wk-12345".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not a bundle ID")),
+            "expected prefix validation error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_accept_bundle_rejects_work_id() {
+        let dir = TestDir::new("loopr-exec-accept-wkid");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: "wk-12345".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not a bundle ID")),
+            "expected prefix validation error, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_accept_bundle_full() {
+        let dir = TestDir::new("loopr-exec-acceptfull");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/accepterr",
+                "description": "Accept err test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use triage_bundle first")),
+            "expected corrective hint for Proposed bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_triage_bundle_rejects_reviewed_bundle() {
+        let dir = TestDir::new("loopr-exec-triage-rev");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/triage-rev",
+                "description": "Triage reviewed test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        ctx.bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        ctx.bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        );
+
+        let action = AgentAction::TriageBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use accept_bundle instead")),
+            "expected corrective hint for Reviewed bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_bundle_rejects_proposed_bundle() {
+        let dir = TestDir::new("loopr-exec-accept-prop");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/accept-prop",
+                "description": "Accept proposed test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use triage_bundle first")),
+            "expected corrective hint for Proposed bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_propose_bundle_includes_base_tick_id() {
+        let dir = TestDir::new("loopr-exec-propbase");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let tick = crate::domain::tick::Tick {
+            id: "tick-pub-1".to_string(),
+            number: 1,
+            status: TickStatus::Published,
+            bundle_ids: vec![],
+            attempted_bundle_ids: vec![],
+            integration_sha: Some("abc123".to_string()),
+            validation_log: String::new(),
+            created_at: crate::id::now_millis(),
+            updated_at: crate::id::now_millis(),
+        };
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Bundle with base tick".to_string(),
+            claims: vec!["claim".to_string()],
+            noop_reason: None,
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref d) if d == "Bundle with base tick"),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_propose_bundle_uses_deterministic_branch_name() {
+        let dir = TestDir::new("loopr-exec-f2branch");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+        ctx.bridge.request(
+            "work.transition",
+            serde_json::json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator"}),
+        );
+
+        let _ = tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await;
+        std::fs::write(dir.join("impl.txt"), "implementation").unwrap();
+        let _ = tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&dir)
+            .output()
+            .await;
+
+        let action = AgentAction::ProposeBundle {
+            description: "Test bundle".to_string(),
+            claims: vec!["implemented feature".to_string()],
+            noop_reason: None,
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(_)),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.values().next().expect("should have one bundle");
+        assert_eq!(
+            bundle.branch_name,
+            format!("agent/{}", wi_id),
+            "bundle branch should be deterministic agent/<work_id>"
+        );
+    }
+
+    // --- determine_work_handback tests ---
+
+    #[tokio::test]
+    async fn test_noop_propose_bundle_creates_empty_branch() {
+        let dir = TestDir::new("loopr-exec-noop-branch");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Work already complete".to_string(),
+            claims: vec!["criteria satisfied".to_string()],
+            noop_reason: Some("Phase 1 already implemented this".to_string()),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref d) if d == "Work already complete"),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles
+            .values()
+            .find(|b| b.work_id == wi_id)
+            .expect("should have bundle");
+        assert!(
+            bundle.branch_name.is_empty(),
+            "noop bundle should have empty branch_name"
+        );
+        assert_eq!(bundle.noop_reason.as_deref(), Some("Phase 1 already implemented this"));
+    }
+
+    #[tokio::test]
+    async fn test_noop_bundle_handler_rejects_empty_branch_without_noop() {
+        let dir = TestDir::new("loopr-exec-noop-reject");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "",
+                "description": "should fail",
+            }),
+        );
+        assert!(resp.is_error(), "empty branch_name without noop_reason should fail");
+        let err_msg = resp.error.as_ref().unwrap().message.clone();
+        assert!(
+            err_msg.contains("branch_name"),
+            "error should mention branch_name: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_noop_guard_rejects_dirty_worktree() {
+        let dir = TestDir::new("loopr-exec-noop-dirty");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join("todo.lua"), "print('hello')").unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Work already complete".to_string(),
+            claims: vec!["criteria satisfied".to_string()],
+            noop_reason: Some("already done".to_string()),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("uncommitted changes")),
+            "expected ActionError for dirty worktree noop, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_noop_guard_allows_clean_worktree() {
+        let dir = TestDir::new("loopr-exec-noop-clean");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join(".gitignore"), ".taskstore/\n*.log\n").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Work already complete".to_string(),
+            claims: vec!["criteria satisfied".to_string()],
+            noop_reason: Some("Phase 1 already implemented this".to_string()),
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(ref d) if d == "Work already complete"),
+            "expected BundleProposed for clean noop, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_noop_bundle_handler_allows_empty_branch_with_noop() {
+        let dir = TestDir::new("loopr-exec-noop-allow");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "",
+                "noop_reason": "already done by phase 1",
+                "description": "noop bundle",
+            }),
+        );
+        assert!(
+            !resp.is_error(),
+            "empty branch_name with noop_reason should succeed: {:?}",
+            resp.error
+        );
+        let bundle_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap();
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.get(bundle_id).expect("bundle should exist");
+        assert!(bundle.branch_name.is_empty());
+        assert_eq!(bundle.noop_reason.as_deref(), Some("already done by phase 1"));
+    }
+}

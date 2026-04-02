@@ -172,3 +172,240 @@ pub(super) fn persist_session(stores: &Stores, session: &AgentSession) {
         warn!("Failed to persist agent session {} to TaskStore: {}", session.id, e);
     }
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use crate::agents::{AgentSession, AgentStatus, AgentType};
+    use crate::agents::bridge::AgentIpcBridge;
+    use crate::agents::executor::tests::{test_agent_logger, test_stores};
+    use crate::domain::bundle::BundleStatus;
+    use crate::domain::tick::TickStatus;
+    use crate::test_util::TestDir;
+    use crate::worktree::manager::WorktreeManager;
+    
+    use tokio::sync::broadcast;
+    use super::{determine_work_handback, release_agent_locks, resolve_latest_published_tick_id, resolve_worktree_base};
+
+    #[test]
+    fn test_resolve_worktree_base_no_ticks() {
+        let dir = TestDir::new("loopr-wt-base-none");
+        let stores = test_stores(&dir);
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "HEAD");
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_no_published_ticks() {
+        let dir = TestDir::new("loopr-wt-base-nopub");
+        let stores = test_stores(&dir);
+        {
+            let mut ticks = stores.ticks.write().unwrap();
+            let mut t = crate::domain::tick::Tick::new(1);
+            t.integration_sha = Some("abc123".to_string());
+            ticks.insert(t.id.clone(), t);
+        }
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "HEAD");
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_picks_latest_published() {
+        let dir = TestDir::new("loopr-wt-base-latest");
+        let stores = test_stores(&dir);
+        {
+            let mut ticks = stores.ticks.write().unwrap();
+
+            let mut t1 = crate::domain::tick::Tick::new(1);
+            t1.status = crate::domain::tick::TickStatus::Published;
+            t1.integration_sha = Some("sha_tick_1".to_string());
+            ticks.insert(t1.id.clone(), t1);
+
+            let mut t2 = crate::domain::tick::Tick::new(3);
+            t2.status = crate::domain::tick::TickStatus::Published;
+            t2.integration_sha = Some("sha_tick_3".to_string());
+            ticks.insert(t2.id.clone(), t2);
+
+            let mut t3 = crate::domain::tick::Tick::new(2);
+            t3.status = crate::domain::tick::TickStatus::Published;
+            t3.integration_sha = Some("sha_tick_2".to_string());
+            ticks.insert(t3.id.clone(), t3);
+        }
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "sha_tick_3");
+    }
+
+    #[test]
+    fn test_resolve_worktree_base_published_without_sha_falls_back() {
+        let dir = TestDir::new("loopr-wt-base-nosha");
+        let stores = test_stores(&dir);
+        {
+            let mut ticks = stores.ticks.write().unwrap();
+            let mut t = crate::domain::tick::Tick::new(1);
+            t.status = crate::domain::tick::TickStatus::Published;
+            t.integration_sha = None;
+            ticks.insert(t.id.clone(), t);
+        }
+        let base = resolve_worktree_base(&stores);
+        assert_eq!(base, "HEAD");
+    }
+
+    #[test]
+    fn test_resolve_latest_published_tick_id_none_at_bootstrap() {
+        let dir = TestDir::new("loopr-exec-tickid-none");
+        let stores = test_stores(&dir);
+        let result = resolve_latest_published_tick_id(&stores);
+        assert!(result.is_none(), "expected None at bootstrap, got: {:?}", result);
+    }
+
+    #[test]
+    fn test_resolve_latest_published_tick_id_returns_published() {
+        let dir = TestDir::new("loopr-exec-tickid-pub");
+        let stores = test_stores(&dir);
+
+        let tick = crate::domain::tick::Tick {
+            id: "tick-1".to_string(),
+            number: 1,
+            status: TickStatus::Published,
+            bundle_ids: vec![],
+            attempted_bundle_ids: vec![],
+            integration_sha: Some("abc123".to_string()),
+            validation_log: String::new(),
+            created_at: crate::id::now_millis(),
+            updated_at: crate::id::now_millis(),
+        };
+        stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+        let result = resolve_latest_published_tick_id(&stores);
+        assert_eq!(result, Some("tick-1".to_string()));
+    }
+
+    #[test]
+    fn test_handback_succeeded_no_bundles_returns_blocked() {
+        let dir = TestDir::new("loopr-handback-ok");
+        let stores = test_stores(&dir);
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", true);
+        assert_eq!(result, Some("Blocked"));
+    }
+
+    #[test]
+    fn test_handback_failed_no_bundles_returns_blocked() {
+        let dir = TestDir::new("loopr-handback-nobd");
+        let stores = test_stores(&dir);
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("Blocked"));
+    }
+
+    #[test]
+    fn test_handback_failed_with_active_bundle_returns_in_review() {
+        let dir = TestDir::new("loopr-handback-actbd");
+        let stores = test_stores(&dir);
+
+        let mut bundle = crate::domain::bundle::Bundle::new(
+            "wi-1".to_string(),
+            None,
+            "agent/wi-1".to_string(),
+            vec!["claim".into()],
+        );
+        bundle.status = BundleStatus::Accepted;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("InReview"));
+    }
+
+    #[test]
+    fn test_handback_failed_all_rejected_bundles_returns_blocked() {
+        let dir = TestDir::new("loopr-handback-rejbd");
+        let stores = test_stores(&dir);
+
+        let mut bundle = crate::domain::bundle::Bundle::new(
+            "wi-1".to_string(),
+            None,
+            "agent/wi-1".to_string(),
+            vec!["claim".into()],
+        );
+        bundle.status = BundleStatus::Rejected;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("Blocked"));
+    }
+
+    #[test]
+    fn test_handback_failed_sibling_active_returns_none() {
+        let dir = TestDir::new("loopr-handback-sib");
+        let stores = test_stores(&dir);
+
+        let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
+        sibling.work_id = Some("wi-1".to_string());
+        sibling.transition_to(AgentStatus::Running).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(sibling.id.clone(), sibling);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_handback_failed_sibling_terminal_checks_bundles() {
+        let dir = TestDir::new("loopr-handback-sibterm");
+        let stores = test_stores(&dir);
+
+        let mut sibling = AgentSession::new(AgentType::Implementer, "test-model".into());
+        sibling.work_id = Some("wi-1".to_string());
+        sibling.transition_to(AgentStatus::Running).unwrap();
+        sibling.transition_to(AgentStatus::Completed).unwrap();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(sibling.id.clone(), sibling);
+
+        let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
+        assert_eq!(result, Some("Blocked"));
+    }
+
+    // --- ReadFile dedup tests ---
+
+    #[test]
+    fn test_release_agent_locks_cleans_up() {
+        let dir = TestDir::new("loopr-exec-rellock-cleanup");
+        let stores = test_stores(&dir);
+        let (event_tx, _) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let agent_log = test_agent_logger(&dir);
+
+        bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/a.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
+        );
+        bridge.request(
+            "lock.create",
+            serde_json::json!({ "resource": "src/b.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
+        );
+
+        let check = bridge.request(
+            "lock.list",
+            serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
+        );
+        assert_eq!(check.result.as_ref().unwrap().as_array().unwrap().len(), 2);
+
+        release_agent_locks(&bridge, "wi-rel", &agent_log);
+
+        let after = bridge.request(
+            "lock.list",
+            serde_json::json!({ "holder_id": "wi-rel", "active_only": true }),
+        );
+        let remaining = after.result.as_ref().unwrap().as_array().unwrap();
+        assert!(
+            remaining.is_empty(),
+            "expected 0 active locks after release, got {}",
+            remaining.len()
+        );
+    }
+}

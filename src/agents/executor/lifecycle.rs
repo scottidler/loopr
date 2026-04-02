@@ -380,3 +380,381 @@ pub(super) async fn run_agent_loop(
 
     result
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    
+    
+    
+    use crate::agents::executor::tests::test_stores;
+    use crate::agents::AgentType;
+    use crate::config::{Config, ProjectConfig};
+    
+    
+    use crate::test_util::TestDir;
+    
+    
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+    use std::time::Duration;
+    use taskstore::Store;
+    use tokio::sync::broadcast;
+    use crate::agents::{AgentSession, AgentStatus};
+    use crate::agents::executor::run_agent_task;
+    
+    use crate::daemon::context::Stores;
+    use crate::worktree::manager::WorktreeManager;
+    
+    use eyre::eyre;
+
+    fn resolve_timeout(config: &Config, agent_type: AgentType) -> Option<u64> {
+        match agent_type {
+            AgentType::Implementer => config.agents.implementer.session_timeout_secs,
+            AgentType::Reviewer => config.agents.reviewer.session_timeout_secs,
+            AgentType::Researcher => config.agents.researcher.session_timeout_secs,
+            AgentType::Coordinator => config.agents.coordinator.role.session_timeout_secs,
+            AgentType::Integrator => config.integrator.session_timeout_secs,
+            AgentType::Chat => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_lifecycle() {
+        let dir = TestDir::new("loopr-agent-task");
+
+        let stores = test_stores(&dir);
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+
+        let session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Implementer,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal());
+
+        let mut events = vec![];
+        while let Ok(e) = event_rx.try_recv() {
+            events.push(e);
+        }
+        assert!(
+            events.iter().any(|e| e.event == "agent.status_changed"),
+            "expected agent status change events"
+        );
+    }
+
+    // --- Group A: Record creation actions ---
+
+    #[tokio::test]
+    async fn test_run_agent_task_coordinator_restart_loop() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-exec-coordrestart");
+
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            agents: crate::config::AgentConfig {
+                coordinator: crate::config::CoordinatorConfig {
+                    idle_interval_secs: 0,
+                    active_interval_secs: 0,
+                    ..crate::config::CoordinatorConfig::default()
+                },
+                ..crate::config::AgentConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(&dir).unwrap();
+        let mut custom_stores = Stores::new();
+        custom_stores.store = Some(Arc::new(StdMutex::new(store)));
+        custom_stores.config = config;
+        let stores = Arc::new(custom_stores);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+
+        let session = AgentSession::new(AgentType::Coordinator, "test-model".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let stores_clone = stores.clone();
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let mut sessions = stores_clone.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&sid_clone) {
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        });
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Coordinator,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal(), "coordinator should be in terminal state");
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_researcher_flow() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-exec-resflow");
+
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+
+        let mut session = AgentSession::new(AgentType::Researcher, "test-model".to_string());
+        session.target_id = Some("plan-1".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let stores_clone = stores.clone();
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut sessions = stores_clone.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&sid_clone) {
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        });
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Researcher,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal(), "researcher should reach terminal state");
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_integrator_flow() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-exec-integflow");
+
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            integrator: crate::config::IntegratorConfig {
+                interval_secs: 0,
+                enabled: true,
+                ..crate::config::IntegratorConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(&dir).unwrap();
+        let mut custom_stores = Stores::new();
+        custom_stores.store = Some(Arc::new(StdMutex::new(store)));
+        custom_stores.config = config;
+        let stores = Arc::new(custom_stores);
+
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+
+        let session = AgentSession::new(AgentType::Integrator, "test-model".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        let stores_clone = stores.clone();
+        let sid_clone = session_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut sessions = stores_clone.agent_sessions.write().unwrap();
+            if let Some(s) = sessions.get_mut(&sid_clone) {
+                let _ = s.transition_to(AgentStatus::Running);
+                let _ = s.transition_to(AgentStatus::Cancelled);
+            }
+        });
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Integrator,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal(), "integrator should reach terminal state");
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_task_worktree_cleanup() {
+        let dir = TestDir::new("loopr-exec-wtcleanup");
+
+        tokio::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["config", "commit.gpgsign", "false"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        std::fs::write(dir.join("init.txt"), "init").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let stores = test_stores(&dir);
+        let (event_tx, _rx) = broadcast::channel(16);
+        let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+
+        let mut session = AgentSession::new(AgentType::Implementer, "test-model".to_string());
+        session.work_id = Some("wi-test-123".to_string());
+        let session_id = session.id.clone();
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+
+        run_agent_task(
+            session_id.clone(),
+            AgentType::Implementer,
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+        )
+        .await;
+
+        let sessions = stores.agent_sessions.read().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.status.is_terminal());
+    }
+
+    #[test]
+    fn test_session_timeout_defaults_per_agent_type() {
+        let config = Config::default();
+
+        assert_eq!(resolve_timeout(&config, AgentType::Implementer), Some(1800));
+        assert_eq!(resolve_timeout(&config, AgentType::Reviewer), Some(600));
+        assert_eq!(resolve_timeout(&config, AgentType::Researcher), Some(600));
+        assert_eq!(resolve_timeout(&config, AgentType::Integrator), Some(1200));
+        assert_eq!(resolve_timeout(&config, AgentType::Coordinator), None);
+        assert_eq!(resolve_timeout(&config, AgentType::Chat), None);
+    }
+
+    #[tokio::test]
+    async fn test_session_timeout_terminates_slow_future() {
+        let slow_future = async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok::<(), eyre::Report>(())
+        };
+
+        let result = match tokio::time::timeout(Duration::from_millis(50), slow_future).await {
+            Ok(inner) => inner,
+            Err(_) => Err(eyre!("session timed out")),
+        };
+
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("timed out"), "expected timeout error, got: {}", msg);
+    }
+
+    #[tokio::test]
+    async fn test_session_timeout_none_allows_completion() {
+        let fast_future = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<(), eyre::Report>(())
+        };
+
+        let timeout_secs: Option<u64> = None;
+
+        let result = if let Some(secs) = timeout_secs {
+            match tokio::time::timeout(Duration::from_secs(secs), fast_future).await {
+                Ok(inner) => inner,
+                Err(_) => Err(eyre!("session timed out")),
+            }
+        } else {
+            fast_future.await
+        };
+
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_session_timeout_fast_future_completes_before_deadline() {
+        let fast_future = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<(), eyre::Report>(())
+        };
+
+        let result = match tokio::time::timeout(Duration::from_secs(5), fast_future).await {
+            Ok(inner) => inner,
+            Err(_) => Err(eyre!("session timed out")),
+        };
+
+        assert!(result.is_ok(), "fast future should complete before timeout");
+    }
+}

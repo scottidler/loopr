@@ -158,3 +158,80 @@ pub async fn execute_action(
         AgentAction::ListDirectory { path } => file::handle_list_directory(worktree_path, agent_log, path).await,
     }
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    
+    
+    use crate::agents::executor::{execute_action, ActionResult};
+    use crate::agents::executor::tests::{
+        test_stores, test_agent_context,
+    };
+    use crate::agents::{AgentAction, AgentType};
+    
+    
+    
+    use crate::test_util::TestDir;
+    
+    
+    
+    
+    
+    
+    
+
+    #[tokio::test]
+    async fn test_execute_action_done() {
+        let dir = TestDir::new("loopr-exec-done");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::Done {
+            summary: "All done".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::Done(summary) = result {
+            assert_eq!(summary, "All done");
+        } else {
+            panic!("expected Done result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_need_help() {
+        let dir = TestDir::new("loopr-exec-help");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::NeedHelp {
+            reason: "Ambiguous spec".to_string(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::NeedHelp(reason) = result {
+            assert_eq!(reason, "Ambiguous spec");
+        } else {
+            panic!("expected NeedHelp result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_action_unknown_tool() {
+        let dir = TestDir::new("loopr-exec-unk");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Implementer);
+
+        let action = AgentAction::RunTool {
+            tool: "nonexistent".to_string(),
+            args: vec![],
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"), "Expected 'not found' in: {err}");
+        assert!(err.contains("register_tool"), "Expected 'register_tool' hint in: {err}");
+    }
+}

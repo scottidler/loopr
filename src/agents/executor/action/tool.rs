@@ -49,3 +49,78 @@ pub(super) fn handle_register_tool(
     // Newly spawned agents will pick up the registered tool automatically.
     Ok(ActionResult::ToolRegistered(name.to_string()))
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    
+    
+    use crate::agents::executor::{execute_action, ActionResult};
+    use crate::agents::executor::tests::{
+        test_stores, test_agent_context,
+        test_agent_context_with_tools,
+    };
+    use crate::agents::{AgentAction, AgentType};
+    use crate::config::ToolEntry;
+    
+    
+    use crate::test_util::TestDir;
+    
+    
+    
+    
+    
+    
+    
+
+    #[tokio::test]
+    async fn test_execute_action_run_tool() {
+        let dir = TestDir::new("loopr-exec-test");
+
+        let entries = vec![ToolEntry {
+            name: "echo-test".to_string(),
+            command: "echo hello".to_string(),
+            timeout_secs: 10,
+            worktree: true,
+        }];
+        let stores = test_stores(&dir);
+        let ctx = test_agent_context_with_tools(&dir, &stores, AgentType::Implementer, &entries);
+
+        let action = AgentAction::RunTool {
+            tool: "echo-test".to_string(),
+            args: vec![],
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        if let ActionResult::ToolRun(tool_result) = result {
+            assert_eq!(tool_result.exit_code, 0);
+            assert_eq!(tool_result.stdout.trim(), "hello");
+        } else {
+            panic!("expected ToolRun result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_register_tool() {
+        let dir = TestDir::new("loopr-exec-regtool");
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Researcher);
+
+        let action = AgentAction::RegisterTool {
+            name: "my-echo".to_string(),
+            command: "echo hello".to_string(),
+            timeout_secs: 300,
+            worktree: true,
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ToolRegistered(ref n) if n == "my-echo"),
+            "Expected ToolRegistered, got: {:?}",
+            result
+        );
+
+        let rt = stores.read_runtime_tools().unwrap();
+        assert!(rt.contains_key("my-echo"));
+        assert_eq!(rt["my-echo"].command, "echo hello");
+    }
+}
