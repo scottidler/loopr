@@ -21,13 +21,10 @@ pub mod worktree;
 
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
-mod fsm_correctness_tests;
-#[allow(clippy::unwrap_used)]
-#[cfg(test)]
-mod integration_tests;
-#[allow(clippy::unwrap_used)]
-#[cfg(test)]
 pub mod test_util;
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests;
 
 use std::fs;
 
