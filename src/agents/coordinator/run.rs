@@ -553,3 +553,387 @@ impl CoordinatorAgent {
         Ok(IterationOutcome::Continue(last_summary))
     }
 }
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use crate::agents::coordinator::tests::{test_stores, test_coordinator, insert_test_goal};
+    use crate::agents::{Agent, AgentStatus};
+    use crate::agents::implementer::IterationOutcome;
+    use crate::agents::lifeguard::Lifeguard;
+    use crate::config::{CoordinatorConfig, InterviewMode};
+    use crate::domain::coordinator_state::CoordinatorState;
+    use crate::test_util::TestDir;
+
+    // --- is_cancelled tests (via AgentContext) ---
+
+    #[test]
+    fn test_is_cancelled_false() {
+        let dir = TestDir::new("loopr-coord-canc1");
+        let stores = test_stores(&dir);
+        let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
+
+        // Insert the agent's session as Running
+        let mut session = agent.ctx.session.clone();
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        assert!(!agent.ctx.is_cancelled());
+    }
+
+    #[test]
+    fn test_is_cancelled_true() {
+        let dir = TestDir::new("loopr-coord-canc2");
+        let stores = test_stores(&dir);
+        let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
+
+        // Insert the agent's session as Cancelled
+        let mut session = agent.ctx.session.clone();
+        let _ = session.transition_to(AgentStatus::Running);
+        let _ = session.transition_to(AgentStatus::Cancelled);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        assert!(agent.ctx.is_cancelled());
+    }
+
+    #[test]
+    fn test_is_cancelled_missing() {
+        let dir = TestDir::new("loopr-coord-canc3");
+        let stores = test_stores(&dir);
+        // Agent session not inserted into stores — should treat as cancelled
+        let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
+
+        assert!(agent.ctx.is_cancelled());
+    }
+
+    // --- run_iteration tests ---
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_done() {
+        let dir = TestDir::new("loopr-coord-itdone");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![r#"[{"action": "done", "summary": "Nothing to do"}]"#.to_string()],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Nothing to do")));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_need_help() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-ithelp");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![r#"[{"action": "need_help", "reason": "Unclear requirements"}]"#.to_string()],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, IterationOutcome::NeedHelp(ref s) if s.contains("Unclear")));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_continue_with_stub_actions() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-itstub");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![r#"[{"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"}]"#.to_string()],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        // CreatePlan is now wired — creates a real plan via bridge, returns Continue
+        assert!(matches!(outcome, IterationOutcome::Continue(_)));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_empty_actions_is_done() {
+        let dir = TestDir::new("loopr-coord-itempty");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(&dir, &stores, vec!["[]".to_string()], CoordinatorConfig::default());
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, IterationOutcome::Done(_)));
+    }
+
+    // --- Agent::run tests ---
+
+    #[tokio::test]
+    async fn test_coordinator_exits_on_need_help() {
+        let dir = TestDir::new("loopr-coord-runhelp");
+        let stores = test_stores(&dir);
+        insert_test_goal(&stores);
+
+        let mut agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![r#"[{"action": "need_help", "reason": "I'm stuck"}]"#.to_string()],
+            CoordinatorConfig::default(),
+        );
+
+        // Insert the session as Running
+        let mut session = agent.ctx.session.clone();
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let result = agent.run().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("needs help"));
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_exits_on_cancellation() {
+        let dir = TestDir::new("loopr-coord-runcanc");
+        let stores = test_stores(&dir);
+        insert_test_goal(&stores);
+
+        let mut agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
+
+        // Insert the session as Cancelled
+        let mut session = agent.ctx.session.clone();
+        let _ = session.transition_to(AgentStatus::Running);
+        let _ = session.transition_to(AgentStatus::Cancelled);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let result = agent.run().await;
+        assert!(result.is_ok()); // Cancelled = graceful exit
+    }
+
+    // --- test_coordinator_iteration_persists ---
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_persists() {
+        let dir = TestDir::new("loopr-coord-itpersist");
+        let stores = test_stores(&dir);
+        insert_test_goal(&stores);
+
+        let config = CoordinatorConfig {
+            active_interval_secs: 0,
+            idle_interval_secs: 0,
+            ..CoordinatorConfig::default()
+        };
+
+        // MockLlm: iterations 1,2 return Continue, iteration 3 returns NeedHelp to exit loop
+        let mut agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![
+                r#"[{"action": "create_learning", "content": "iter 1", "scope": "global", "source_id": "test"}]"#
+                    .to_string(),
+                r#"[{"action": "create_learning", "content": "iter 2", "scope": "global", "source_id": "test"}]"#
+                    .to_string(),
+                r#"[{"action": "need_help", "reason": "done testing"}]"#.to_string(),
+            ],
+            config,
+        );
+
+        // Insert the session as Running
+        let mut session = agent.ctx.session.clone();
+        let _ = session.transition_to(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let _ = agent.run().await;
+
+        // Session iteration should be 3 (need_help on iteration 3)
+        assert_eq!(agent.ctx.session.iteration, 3);
+
+        // The iteration should also be persisted in stores
+        let stored_iteration = stores
+            .agent_sessions
+            .read()
+            .unwrap()
+            .get(&agent.ctx.session.id)
+            .map(|s| s.iteration)
+            .unwrap_or(0);
+        assert_eq!(stored_iteration, 3, "iteration should be persisted in stores");
+    }
+
+    // --- multi-level action filter tests ---
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_filters_multi_level_actions() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-multilevel");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![r#"[
+                {"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"},
+                {"action": "create_spec", "plan_id": "plan-1", "title": "Spec1", "description": "desc"}
+            ]"#.to_string()],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        // Should still produce a Continue (plan created), but spec should have been filtered
+        assert!(matches!(outcome, IterationOutcome::Continue(_)));
+
+        // Only one plan should exist (the spec with nonexistent plan_id would have been filtered)
+        let plans = stores.plans.read().unwrap();
+        assert_eq!(plans.len(), 1, "only the plan-level action should have executed");
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_iteration_empty_after_filter() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-coord-emptyfilter");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![r#"[{"action": "done", "summary": "Finished planning"}]"#.to_string()],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Finished planning")),
+            "done action should yield Done outcome"
+        );
+    }
+
+    // --- Self-correction loop tests for Coordinator ---
+
+    #[tokio::test]
+    async fn test_coordinator_self_correction_parse_failure_then_success() {
+        // First LLM response is malformed, second is valid JSON.
+        // Self-correction loop should re-prompt and succeed within the same iteration.
+        let dir = TestDir::new("loopr-coord-selfcorr1");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![
+                "Let me think about the plan first.".to_string(), // malformed
+                r#"[{"action": "done", "summary": "Self-corrected coordinator"}]"#.to_string(), // valid
+            ],
+            CoordinatorConfig::default(),
+        );
+
+        let outcome = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Self-corrected")),
+            "expected Done after self-correction, got: {:?}",
+            outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_self_correction_max_requeries_exceeded() {
+        // All responses are malformed. After max_requeries retries, should return Err.
+        let dir = TestDir::new("loopr-coord-selfcorr2");
+        let stores = test_stores(&dir);
+
+        let agent = test_coordinator(
+            &dir,
+            &stores,
+            vec![
+                "bad 1".to_string(),
+                "bad 2".to_string(),
+                "bad 3".to_string(),
+                "bad 4".to_string(), // max_requeries=3: initial + 3 retries
+            ],
+            CoordinatorConfig::default(),
+        );
+
+        let result = agent
+            .run_iteration(
+                &mut CoordinatorState::new("test-goal".to_string(), InterviewMode::Interactive),
+                &mut Lifeguard::new(),
+            )
+            .await;
+
+        assert!(result.is_err(), "expected error when max_requeries exceeded");
+        assert!(
+            result.unwrap_err().to_string().contains("failed to parse"),
+            "error should be a parse error"
+        );
+    }
+}
