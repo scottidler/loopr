@@ -1,0 +1,106 @@
+src/agents/coordinator.rs:
+  31-44: src/agents/coordinator/util.rs              # infer_action_level
+  45-345: src/agents/coordinator/context/summary.rs  # build_state_summary, build_state_summary_with_sla
+  346-361: src/agents/coordinator/mod.rs             # CoordinatorAgent struct
+  362-398: src/agents/coordinator/context/learning.rs
+  399-638: src/agents/coordinator/generation/footer.rs
+  639-691: src/agents/coordinator/dependencies/resolve.rs
+  692-742: src/agents/coordinator/dependencies/prune.rs
+  743-771: src/agents/coordinator/phase/completion.rs  # mark_phase_record_complete
+  772-825: src/agents/coordinator/generation/validation.rs
+  826-848: src/agents/coordinator/phase/completion.rs  # check_phase_completion
+  849-899: src/agents/coordinator/state/persistence.rs
+  900-962: src/agents/coordinator/state/fsm.rs        # apply_fsm_transition
+  963-1012: src/agents/coordinator/state/cleanup.rs
+  1013-1059: src/agents/coordinator/phase/tools.rs
+  1060-1175: src/agents/coordinator/generation/fsm.rs
+  1176-1200: src/agents/coordinator/phase/activation.rs
+  1201-1315: src/agents/coordinator/phase/status.rs
+  1316-1406: src/agents/coordinator/state/fsm.rs      # check_fsm_transition
+  1407-1961: src/agents/coordinator/loop.rs           # impl CoordinatorAgent - run_fsm_loop etc (unsub-divided)
+  1962-2028: src/agents/coordinator/mod.rs            # impl Agent for CoordinatorAgent
+  2029-2077: src/agents/coordinator/util.rs           # last_error_kind_for_work, format_action_summary
+  2078-5048: src/agents/coordinator/tests.rs
+
+src/tui/run.rs:
+  38-56: src/tui/run/terminal.rs      # RECONNECT_INTERVAL, FRAME_INTERVAL, restore_terminal
+  57-120: src/tui/run/mod.rs          # run_tui
+  121-149: src/tui/run/terminal.rs    # try_connect
+  150-225: src/tui/run/events.rs      # CHAT_SESSION_ID, extract_llm_chunk, extract_tool_event
+  226-372: src/tui/run/mod.rs         # event_loop
+  373-509: src/tui/run/events.rs      # process_ipc_message, handle_daemon_event, format_orchestration_event
+  510-616: src/tui/run/ipc.rs         # dispatch_ipc_action, refresh_collection, event_collection
+  617-640: src/tui/run/mod.rs         # draw
+  641-815: src/tui/run/ui.rs          # render_header, render_content, render_footer
+  816-826: src/tui/run/mod.rs         # role_actions
+  827-882: src/tui/run/ui.rs          # draw_goal_input, draw_help_overlay
+  883-2552: src/tui/run/tests.rs
+
+src/agents/generation.rs:
+  25-44: src/agents/generation/mod.rs       # GenerationLevel enum + Display
+  45-344: src/agents/generation/prompts.rs  # GenerationPrompt, build_*_prompt
+  345-498: src/agents/generation/hierarchy.rs
+  499-737: src/agents/generation/validation.rs
+  738-935: src/agents/generation/coverage.rs
+  936-2293: src/agents/generation/tests.rs
+
+src/agents/integrator.rs:
+  21-101: src/agents/integrator/core.rs     # IntegratorAgent struct, new(), impl Agent
+  102-236: src/agents/integrator/state.rs   # impl IntegratorAgent - state/recovery helpers (undivided)
+  237-249: src/agents/integrator/cycle.rs   # IntegratorCycleResult enum
+  250-884: src/agents/integrator/cycle.rs   # impl IntegratorAgent - run_cycle (undivided)
+  885-954: src/agents/integrator/integration.rs
+  955-1026: src/agents/integrator/validation.rs
+  1027-1043: src/agents/integrator/git.rs
+  1044-2220: src/agents/integrator/tests.rs
+
+src/agents/implementer.rs:
+  20-61: src/agents/implementer/llm.rs
+  62-130: src/agents/implementer/parsing.rs
+  131-141: src/agents/implementer/errors.rs
+  142-188: src/agents/implementer/summary.rs
+  189-195: src/agents/implementer/iteration.rs  # IterationOutcome enum
+  196-426: src/agents/implementer/lifecycle.rs  # ImplementerAgent struct + impl
+  427-448: src/agents/implementer/events.rs
+  449-582: src/agents/implementer/lifecycle.rs  # impl Agent for ImplementerAgent
+  583-651: src/agents/implementer/output.rs
+  652-2078: src/agents/implementer/tests.rs
+
+src/agents/mod.rs:
+  41-207: src/agents/mod.rs             # helpers, Agent trait, AgentContext (stays)
+  208-258: src/agents/types/kind.rs
+  259-324: src/agents/types/status.rs
+  325-424: src/agents/types/session.rs
+  425-594: src/agents/types/action.rs
+  595-638: src/agents/event.rs
+  639-1805: src/agents/tests.rs
+
+src/agents/context.rs:
+  31-77: src/agents/context/learning.rs
+  78-143: src/agents/context/token.rs
+  144-212: src/agents/context/budget.rs
+  213-233: src/agents/context/assembled.rs
+  234-775: src/agents/context/builder.rs   # ContextBuilder struct + full impl (undivided)
+  776-1854: src/agents/context/tests.rs
+
+src/cli/dispatch.rs:
+  16-125: src/cli/dispatch/mod.rs           # run, command_to_ipc router
+  126-308: src/cli/dispatch/runner.rs
+  309-387: src/cli/dispatch/mappers/crud.rs
+  388-432: src/cli/dispatch/mappers/bundle.rs
+  433-456: src/cli/dispatch/mappers/tick.rs
+  457-471: src/cli/dispatch/mappers/worktree.rs
+  472-490: src/cli/dispatch/mappers/learning.rs
+  491-530: src/cli/dispatch/mappers/agent.rs
+  531-539: src/cli/dispatch/mappers/coordinator.rs
+  540-574: src/cli/dispatch/mappers/lock.rs
+  575-1591: src/cli/dispatch/tests.rs
+
+src/daemon/handlers/bundle.rs:
+  21-29: src/daemon/handlers/bundle/validators/staleness.rs
+  30-204: src/daemon/handlers/bundle/create.rs
+  205-243: src/daemon/handlers/bundle/get.rs
+  244-289: src/daemon/handlers/bundle/list.rs
+  290-438: src/daemon/handlers/bundle/transition.rs
+  439-535: src/daemon/handlers/bundle/update.rs
+  536-1564: src/daemon/handlers/bundle/tests.rs
