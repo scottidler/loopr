@@ -1679,6 +1679,28 @@ pub async fn execute_action(
                     bundle_id
                 )));
             }
+            // Pre-flight status guard: only Proposed bundles can be triaged
+            let bundles = bridge.stores().read_bundles()?;
+            match bundles.get(bundle_id) {
+                None => {
+                    return Ok(ActionResult::ActionError(format!(
+                        "triage_bundle: bundle {} not found",
+                        bundle_id
+                    )));
+                }
+                Some(bundle) if bundle.status != BundleStatus::Proposed => {
+                    let hint = match bundle.status {
+                        BundleStatus::Reviewed => "Use accept_bundle instead.",
+                        _ => "No triage action needed.",
+                    };
+                    return Ok(ActionResult::ActionError(format!(
+                        "triage_bundle: bundle {} is {} not Proposed. {}",
+                        bundle_id, bundle.status, hint
+                    )));
+                }
+                _ => {}
+            }
+            drop(bundles);
             let resp = bridge.request(
                 "bundle.transition",
                 serde_json::json!({
@@ -1701,6 +1723,28 @@ pub async fn execute_action(
                     bundle_id
                 )));
             }
+            // Pre-flight status guard: only Triaged or Reviewed bundles can be accepted
+            let bundles = bridge.stores().read_bundles()?;
+            match bundles.get(bundle_id) {
+                None => {
+                    return Ok(ActionResult::ActionError(format!(
+                        "accept_bundle: bundle {} not found",
+                        bundle_id
+                    )));
+                }
+                Some(bundle) if !matches!(bundle.status, BundleStatus::Triaged | BundleStatus::Reviewed) => {
+                    let hint = match bundle.status {
+                        BundleStatus::Proposed => "Use triage_bundle first.",
+                        _ => "No accept action needed.",
+                    };
+                    return Ok(ActionResult::ActionError(format!(
+                        "accept_bundle: bundle {} is {} not Triaged/Reviewed. {}",
+                        bundle_id, bundle.status, hint
+                    )));
+                }
+                _ => {}
+            }
+            drop(bundles);
             let resp = bridge.request(
                 "bundle.transition",
                 serde_json::json!({
@@ -3641,7 +3685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_triage_bundle_full() {
-        // Test triage on a bundle that's not in the right state (error path)
+        // Test triage on a nonexistent bundle (error path)
         let dir = TestDir::new("loopr-exec-triagefull");
         let stores = test_stores(&dir);
 
@@ -3652,8 +3696,8 @@ mod tests {
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("triage_bundle failed")),
-            "expected triage error, got: {:?}",
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not found")),
+            "expected not-found error, got: {:?}",
             result
         );
     }
@@ -3694,14 +3738,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_accept_bundle_full() {
-        // Test accept on a bundle that's not in the right state (error path)
+        // Test accept on a Proposed bundle — guard should reject with corrective hint
         let dir = TestDir::new("loopr-exec-acceptfull");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
 
-        // Create a bundle but don't triage it — accept should fail
+        // Create a bundle but don't triage it — accept should fail with hint
         let bundle_resp = ctx.bridge.request(
             "bundle.create",
             serde_json::json!({
@@ -3717,8 +3761,76 @@ mod tests {
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("accept_bundle failed")),
-            "expected accept error for un-triaged bundle, got: {:?}",
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use triage_bundle first")),
+            "expected corrective hint for Proposed bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_triage_bundle_rejects_reviewed_bundle() {
+        let dir = TestDir::new("loopr-exec-triage-rev");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        // Create bundle and advance to Reviewed
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/triage-rev",
+                "description": "Triage reviewed test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+        ctx.bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
+        );
+        ctx.bridge.request(
+            "bundle.transition",
+            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
+        );
+
+        let action = AgentAction::TriageBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use accept_bundle instead")),
+            "expected corrective hint for Reviewed bundle, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_accept_bundle_rejects_proposed_bundle() {
+        let dir = TestDir::new("loopr-exec-accept-prop");
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentType::Coordinator);
+
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        // Create bundle — stays Proposed
+        let bundle_resp = ctx.bridge.request(
+            "bundle.create",
+            serde_json::json!({
+                "work_id": wi_id,
+                "branch_name": "feature/accept-prop",
+                "description": "Accept proposed test",
+            }),
+        );
+        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
+
+        let action = AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        };
+        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use triage_bundle first")),
+            "expected corrective hint for Proposed bundle, got: {:?}",
             result
         );
     }

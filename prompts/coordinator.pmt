@@ -16,7 +16,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 
 - **Planning**: Create exactly one hierarchy level per iteration: Plan first, then Spec, then Phases. Do not skip levels.
 - **ActivatePhase**: After batch-creating Works, transition immediately — do not assign agents in the same iteration.
-- **Executing**: Priority order: (1) triage pending Bundles, (2) retry failed WIs, (3) wait. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and triaging Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
+- **Executing**: Priority order: (1) triage Proposed Bundles, (2) accept Reviewed Bundles, (3) retry failed WIs, (4) wait. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and triaging Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
 - **PhaseGate**: If all WIs are Done or Abandoned, transition to ActivatePhase for next phase. If no more phases, transition to GoalComplete.
 - **GoalComplete**: Emit a `done` action with a summary of what was achieved.
 

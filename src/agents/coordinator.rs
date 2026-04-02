@@ -101,19 +101,38 @@ pub fn build_state_summary_with_sla(
         }
     }
 
-    // --- Bundles (non-terminal) ---
+    // --- Proposed Bundles (use triage_bundle) ---
     {
         let Ok(bundles) = stores.read_bundles() else {
             return summary;
         };
-        let mut pending: Vec<_> = bundles
+        let mut proposed: Vec<_> = bundles
             .values()
-            .filter(|b| matches!(b.status, BundleStatus::Proposed | BundleStatus::Reviewed))
+            .filter(|b| matches!(b.status, BundleStatus::Proposed))
             .collect();
-        pending.sort_by_key(|b| b.created_at);
-        if !pending.is_empty() {
-            summary.push_str("### Bundles (actionable)\n");
-            for b in &pending {
+        proposed.sort_by_key(|b| b.created_at);
+        if !proposed.is_empty() {
+            summary.push_str("### Proposed Bundles (use triage_bundle)\n");
+            for b in &proposed {
+                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_id));
+            }
+            summary.push('\n');
+        }
+    }
+
+    // --- Reviewed Bundles (use accept_bundle) ---
+    {
+        let Ok(bundles) = stores.read_bundles() else {
+            return summary;
+        };
+        let mut reviewed: Vec<_> = bundles
+            .values()
+            .filter(|b| matches!(b.status, BundleStatus::Reviewed))
+            .collect();
+        reviewed.sort_by_key(|b| b.created_at);
+        if !reviewed.is_empty() {
+            summary.push_str("### Reviewed Bundles (use accept_bundle)\n");
+            for b in &reviewed {
                 summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_id));
             }
             summary.push('\n');
@@ -2244,13 +2263,31 @@ mod tests {
         let dir = TestDir::new("loopr-coord-bun");
         let stores = test_stores(&dir);
 
+        // Proposed bundle
         let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let agent_log = test_agent_logger(&dir);
         let summary = build_state_summary(&stores, &agent_log);
-        assert!(summary.contains("### Bundles"));
+        assert!(summary.contains("### Proposed Bundles (use triage_bundle)"));
         assert!(summary.contains("Proposed"));
+        assert!(!summary.contains("### Reviewed Bundles"));
+    }
+
+    #[test]
+    fn test_build_state_summary_with_reviewed_bundles() {
+        let dir = TestDir::new("loopr-coord-bun-rev");
+        let stores = test_stores(&dir);
+
+        // Reviewed bundle
+        let mut bundle = Bundle::new("wi-2".into(), None, "branch-2".into(), vec!["claims".into()]);
+        bundle.status = BundleStatus::Reviewed;
+        stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let agent_log = test_agent_logger(&dir);
+        let summary = build_state_summary(&stores, &agent_log);
+        assert!(summary.contains("### Reviewed Bundles (use accept_bundle)"));
+        assert!(!summary.contains("### Proposed Bundles"));
     }
 
     #[test]
