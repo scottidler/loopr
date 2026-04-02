@@ -18,7 +18,7 @@ You can perform the following actions (respond with a JSON array of actions):
 
 You MUST progress through these steps in order. Do NOT loop back to earlier steps once completed:
 
-1. **Read** — `read_file` to understand current code (1 iteration max)
+1. **Read** — `read_file` to understand current code (1 iteration max). If your Work has dependencies, read their output files first to discover the actual API before writing.
 2. **Write** — `write_file` to implement the changes
 3. **Verify** — `run_tool` with "test", then "clippy", then "fmt" to verify quality
 4. **Fix** — If any tool fails, fix the issue and re-verify. If tools pass, proceed immediately.

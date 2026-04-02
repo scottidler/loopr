@@ -220,6 +220,13 @@ pub struct AssembledContext {
 // ContextBuilder
 // =====================================================
 
+/// Resolved dependency metadata for hierarchy rendering.
+struct DependencySummary {
+    title: String,
+    status: String,
+    resource_tags: Vec<String>,
+}
+
 /// Role-agnostic context assembly with token budgeting.
 ///
 /// Replaces per-agent `load_context()` + `build_user_message()` with a generic builder.
@@ -233,6 +240,10 @@ pub struct ContextBuilder<'a> {
     spec: Option<(String, String)>,
     phase: Option<(String, String)>,
     work: Option<(String, String)>,
+    // Work enrichment: acceptance criteria, file scope, dependency context
+    work_acceptance_criteria: Vec<String>,
+    work_resource_tags: Vec<String>,
+    dependency_summaries: Vec<DependencySummary>,
     // Learning scope chain
     scope_ids: Vec<(String, LearningScope)>,
     // IDs for sibling lookups
@@ -275,6 +286,9 @@ impl<'a> ContextBuilder<'a> {
             spec: None,
             phase: None,
             work: None,
+            work_acceptance_criteria: Vec::new(),
+            work_resource_tags: Vec::new(),
+            dependency_summaries: Vec::new(),
             scope_ids: Vec::new(),
             work_id: None,
             phase_id: None,
@@ -296,10 +310,28 @@ impl<'a> ContextBuilder<'a> {
     /// Load the full hierarchy from a work ID: Work -> Phase -> Spec -> Plan.
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_work_hierarchy(work_id={})", work_id);
-        let (wi_title, wi_desc, phase_id) = {
+        let (wi_title, wi_desc, phase_id, wi_ac, wi_rt, dep_summaries) = {
             let guard = self.stores.read_works()?;
             let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
-            (wi.title.clone(), wi.description.clone(), wi.phase_id.clone())
+            let deps: Vec<DependencySummary> = wi
+                .dependencies
+                .iter()
+                .filter_map(|dep_id| {
+                    guard.get(dep_id).map(|dep| DependencySummary {
+                        title: dep.title.clone(),
+                        status: dep.status.to_string(),
+                        resource_tags: dep.resource_tags.clone(),
+                    })
+                })
+                .collect();
+            (
+                wi.title.clone(),
+                wi.description.clone(),
+                wi.phase_id.clone(),
+                wi.acceptance_criteria.clone(),
+                wi.resource_tags.clone(),
+                deps,
+            )
         };
 
         let (ph_title, ph_desc, spec_id, phase_id_owned) = {
@@ -340,6 +372,9 @@ impl<'a> ContextBuilder<'a> {
         self.spec = Some((spec_title, spec_desc));
         self.phase = Some((ph_title, ph_desc));
         self.work = Some((wi_title, wi_desc));
+        self.work_acceptance_criteria = wi_ac;
+        self.work_resource_tags = wi_rt;
+        self.dependency_summaries = dep_summaries;
         self.work_id = Some(work_id.to_string());
         self.phase_id = Some(phase_id_owned.clone());
         self.scope_ids = vec![
@@ -521,6 +556,25 @@ impl<'a> ContextBuilder<'a> {
             }
             if let Some((ref title, ref desc)) = self.work {
                 hierarchy.push_str(&format!("**Work:** {} — {}\n", title, desc));
+            }
+            if !self.work_acceptance_criteria.is_empty() {
+                hierarchy.push_str("\n**Acceptance Criteria:**\n");
+                for ac in &self.work_acceptance_criteria {
+                    hierarchy.push_str(&format!("- {}\n", ac));
+                }
+            }
+            if !self.work_resource_tags.is_empty() {
+                hierarchy.push_str("\n**Allowed Files:**\n");
+                for tag in &self.work_resource_tags {
+                    hierarchy.push_str(&format!("- {}\n", tag));
+                }
+            }
+            if !self.dependency_summaries.is_empty() {
+                hierarchy.push_str("\n**Dependencies:**\n");
+                for dep in &self.dependency_summaries {
+                    let files = dep.resource_tags.join(", ");
+                    hierarchy.push_str(&format!("- [{}] {} - files: {}\n", dep.status, dep.title, files));
+                }
             }
             hierarchy.push('\n');
 
@@ -1687,5 +1741,114 @@ mod tests {
             !assembled.user_message.contains("NO-OP BUNDLE"),
             "normal bundle should NOT contain noop directive"
         );
+    }
+
+    // --- Work enrichment: acceptance_criteria, resource_tags, dependencies ---
+
+    fn setup_stores_with_enrichment(dir: &std::path::Path) -> (Stores, String, String) {
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(StdMutex::new(store)));
+        stores.config = config;
+
+        let plan = Plan::new("Test Plan".into(), "A plan".into(), "criteria".into());
+        let plan_id = plan.id.clone();
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        let spec = Spec::new(plan_id, "Test Spec".into(), "A spec".into());
+        let spec_id = spec.id.clone();
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+        let phase = Phase::new(spec_id, "Test Phase".into(), "A phase".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+        // Dependency work (already done)
+        let mut dep_work = Work::new(phase_id.clone(), "Create model".into(), "Create the data model".into());
+        dep_work.resource_tags = vec!["src/model.rs".into()];
+        dep_work.status = crate::domain::work::WorkStatus::Done;
+        let dep_id = dep_work.id.clone();
+        stores.works.write().unwrap().insert(dep_work.id.clone(), dep_work);
+
+        // Main work (depends on dep_work)
+        let mut wi = Work::new(phase_id, "Write tests".into(), "Write tests for the model".into());
+        wi.resource_tags = vec!["tests/model.rs".into()];
+        wi.acceptance_criteria = vec!["All tests pass".into(), "Coverage above 80%".into()];
+        wi.dependencies = vec![dep_id.clone()];
+        let wi_id = wi.id.clone();
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        (stores, wi_id, dep_id)
+    }
+
+    #[test]
+    fn test_load_work_hierarchy_enrichment() {
+        let dir = TestDir::new("loopr-ctx-enrich");
+        let (stores, wi_id, dep_id) = setup_stores_with_enrichment(&dir);
+        let _ = dep_id;
+
+        let builder = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_hierarchy(&wi_id)
+            .unwrap();
+
+        assert_eq!(
+            builder.work_acceptance_criteria,
+            vec!["All tests pass", "Coverage above 80%"]
+        );
+        assert_eq!(builder.work_resource_tags, vec!["tests/model.rs"]);
+        assert_eq!(builder.dependency_summaries.len(), 1);
+        assert_eq!(builder.dependency_summaries[0].title, "Create model");
+        assert_eq!(builder.dependency_summaries[0].status, "Done");
+        assert_eq!(builder.dependency_summaries[0].resource_tags, vec!["src/model.rs"]);
+    }
+
+    #[test]
+    fn test_build_renders_enrichment() {
+        let dir = TestDir::new("loopr-ctx-enrich-build");
+        let (stores, wi_id, _) = setup_stores_with_enrichment(&dir);
+
+        let builder = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_iteration(1)
+            .with_footer("Go.".to_string());
+
+        let assembled = builder.build("system").unwrap();
+        assert!(assembled.user_message.contains("**Acceptance Criteria:**"));
+        assert!(assembled.user_message.contains("- All tests pass"));
+        assert!(assembled.user_message.contains("- Coverage above 80%"));
+        assert!(assembled.user_message.contains("**Allowed Files:**"));
+        assert!(assembled.user_message.contains("- tests/model.rs"));
+        assert!(assembled.user_message.contains("**Dependencies:**"));
+        assert!(
+            assembled
+                .user_message
+                .contains("[Done] Create model - files: src/model.rs")
+        );
+    }
+
+    #[test]
+    fn test_build_omits_empty_enrichment() {
+        let dir = TestDir::new("loopr-ctx-enrich-empty");
+        let (stores, wi_id) = setup_stores(&dir);
+
+        let builder = ContextBuilder::new(&stores, Role::Implementer)
+            .load_work_hierarchy(&wi_id)
+            .unwrap()
+            .with_iteration(1)
+            .with_footer("Go.".to_string());
+
+        let assembled = builder.build("system").unwrap();
+        // Work from setup_stores has no acceptance_criteria, resource_tags, or dependencies
+        assert!(!assembled.user_message.contains("**Acceptance Criteria:**"));
+        assert!(!assembled.user_message.contains("**Allowed Files:**"));
+        assert!(!assembled.user_message.contains("**Dependencies:**"));
     }
 }
