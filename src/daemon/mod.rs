@@ -226,6 +226,31 @@ fn remove_pid_file(ctx: &DaemonContext) {
     info!("Removed PID file: {}", ctx.config.daemon.pid_path.display());
 }
 
+/// Periodic reconciliation sweep task.
+/// Runs `ctx.reconcile()` every `interval_secs` seconds until `shutting_down` is set.
+async fn run_reconciler(
+    stores: std::sync::Arc<context::Stores>,
+    ctx: std::sync::Arc<tokio::sync::RwLock<DaemonContext>>,
+    interval_secs: u64,
+) {
+    use std::sync::atomic::Ordering;
+    let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker.tick().await; // skip the immediate first tick (startup reconcile already ran)
+    loop {
+        ticker.tick().await;
+        if stores.shutting_down.load(Ordering::Relaxed) {
+            break;
+        }
+        let c = ctx.read().await;
+        let fixed = c.reconcile();
+        if fixed > 0 {
+            info!("Reconciler: {} record(s) fixed in periodic sweep", fixed);
+        }
+    }
+    debug!("run_reconciler: exiting");
+}
+
 /// Main daemon entry point.
 /// Binds the Unix socket, accepts client connections, and runs the select! loop
 /// until SIGINT (ctrl_c) is received.
@@ -320,10 +345,30 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         ))
     };
 
+    // Spawn periodic reconciliation sweep
+    let reconciler_handle = {
+        let c = ctx.read().await;
+        if c.config.reconciler.enabled {
+            let interval = c.config.reconciler.interval_secs;
+            let s = c.stores.clone();
+            let ctx_clone = ctx.clone();
+            info!("Spawning reconciler with {}s interval", interval);
+            Some(tokio::spawn(run_reconciler(s, ctx_clone, interval)))
+        } else {
+            info!("Reconciler disabled by config");
+            None
+        }
+    };
+
     let result = accept_loop(listener, ctx.clone(), event_tx.clone()).await;
 
     // Abort the supervisor task on shutdown
     supervisor_handle.abort();
+
+    // Abort the reconciler task on shutdown
+    if let Some(h) = reconciler_handle {
+        h.abort();
+    }
 
     // Signal workers to shut down
     {

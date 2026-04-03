@@ -244,6 +244,25 @@ pub struct DaemonConfig {
     pub pid_path: PathBuf,
 }
 
+/// Periodic reconciliation sweep configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ReconcilerConfig {
+    /// Seconds between reconciliation sweeps. Default: 60.
+    pub interval_secs: u64,
+    /// Enable periodic reconciliation. Default: true.
+    pub enabled: bool,
+}
+
+impl Default for ReconcilerConfig {
+    fn default() -> Self {
+        Self {
+            interval_secs: 60,
+            enabled: true,
+        }
+    }
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         let base = dirs::data_local_dir()
@@ -522,6 +541,7 @@ pub struct Config {
     pub evaluator: EvaluatorConfig,
     pub agents: AgentConfig,
     pub strategy: StrategyConfig,
+    pub reconciler: ReconcilerConfig,
 }
 
 impl Default for Config {
@@ -537,6 +557,7 @@ impl Default for Config {
             evaluator: EvaluatorConfig::default(),
             agents: AgentConfig::default(),
             strategy: StrategyConfig::default(),
+            reconciler: ReconcilerConfig::default(),
         }
     }
 }
@@ -1147,5 +1168,27 @@ active_interval_secs: 10
 "#;
         let cc: CoordinatorConfig = serde_yaml::from_str(yaml).expect("should parse without interview_mode");
         assert_eq!(cc.interview_mode, InterviewMode::Interactive);
+    }
+
+    #[test]
+    fn test_reconciler_config_default() {
+        let rc = ReconcilerConfig::default();
+        assert_eq!(rc.interval_secs, 60);
+        assert!(rc.enabled);
+    }
+
+    #[test]
+    fn test_reconciler_config_serde() {
+        let yaml = "interval-secs: 120\nenabled: false\n";
+        let rc: ReconcilerConfig = serde_yaml::from_str(yaml).expect("should parse");
+        assert_eq!(rc.interval_secs, 120);
+        assert!(!rc.enabled);
+    }
+
+    #[test]
+    fn test_config_default_has_reconciler() {
+        let config = Config::default();
+        assert_eq!(config.reconciler.interval_secs, 60);
+        assert!(config.reconciler.enabled);
     }
 }
