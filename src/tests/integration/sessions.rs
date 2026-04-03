@@ -142,7 +142,7 @@ fn test_tick_lifecycle_via_dispatch() {
 
     // Verify final state
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Published);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Published);
 }
 
 #[test]

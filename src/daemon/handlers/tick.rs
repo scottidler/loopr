@@ -25,7 +25,7 @@ pub(super) fn handle_tick_create(
         // Singleton guard: at most one non-terminal Tick at a time
         {
             let ticks = stores.read_ticks()?;
-            let active = ticks.values().any(|t| !t.status.is_terminal());
+            let active = ticks.values().any(|t| !t.status().is_terminal());
             if active {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -148,7 +148,7 @@ pub(super) fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         let ticks = stores.read_ticks()?;
         let tick_list: Vec<&Tick> = ticks
             .values()
-            .filter(|t| status_filter.is_none() || Some(t.status) == status_filter)
+            .filter(|t| status_filter.is_none() || Some(t.status()) == status_filter)
             .collect();
 
         match serde_json::to_value(&tick_list) {
@@ -184,7 +184,7 @@ pub(super) fn handle_tick_transition(
 
         // Read current status immutably first for validation
         let from = match ticks.get(&id) {
-            Some(t) => t.status,
+            Some(t) => t.status(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &id))),
         };
 
@@ -213,7 +213,7 @@ pub(super) fn handle_tick_transition(
         if matches!(target_status, TickStatus::Sealing | TickStatus::Validating) {
             let has_active = ticks
                 .values()
-                .any(|t| t.id != id && matches!(t.status, TickStatus::Sealing | TickStatus::Validating));
+                .any(|t| t.id != id && matches!(t.status(), TickStatus::Sealing | TickStatus::Validating));
             if has_active {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -224,8 +224,7 @@ pub(super) fn handle_tick_transition(
 
         // Now get mutable reference and apply the transition
         let tick = ticks.get_mut(&id).ok_or_else(|| eyre!("record not found: {id}"))?;
-        tick.status = target_status;
-        tick.updated_at = crate::id::now_millis();
+        tick.force_status(target_status);
         let tick_clone = tick.clone();
         drop(ticks);
 

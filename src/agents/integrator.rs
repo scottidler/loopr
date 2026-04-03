@@ -106,7 +106,7 @@ impl IntegratorAgent {
         let ticks = self.ctx.stores.read_ticks().ok()?;
         ticks
             .values()
-            .filter(|t| t.status == TickStatus::Published)
+            .filter(|t| t.status() == TickStatus::Published)
             .max_by_key(|t| t.number)
             .map(|t| t.id.clone())
     }
@@ -124,7 +124,7 @@ impl IntegratorAgent {
         let ticks = self.ctx.stores.read_ticks()?;
         Ok(ticks.values().any(|t| {
             matches!(
-                t.status,
+                t.status(),
                 TickStatus::Open | TickStatus::Sealing | TickStatus::Validating
             )
         }))
@@ -139,9 +139,9 @@ impl IntegratorAgent {
             ticks
                 .values()
                 .filter(|t| {
-                    t.status == TickStatus::Open
-                        || t.status == TickStatus::Sealing
-                        || t.status == TickStatus::Validating
+                    t.status() == TickStatus::Open
+                        || t.status() == TickStatus::Sealing
+                        || t.status() == TickStatus::Validating
                 })
                 .map(|t| t.id.clone())
                 .collect()
@@ -151,7 +151,7 @@ impl IntegratorAgent {
         for tick_id in &stuck_tick_ids {
             let current_status = {
                 let ticks = self.ctx.stores.read_ticks()?;
-                ticks.get(tick_id.as_str()).map(|t| t.status)
+                ticks.get(tick_id.as_str()).map(|t| t.status())
             };
 
             let Some(status) = current_status else {

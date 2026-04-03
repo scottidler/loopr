@@ -180,12 +180,12 @@ fn test_latest_published_tick_id_some() {
     let stores = test_stores(&dir);
 
     let mut tick1 = Tick::new(1);
-    tick1.status = TickStatus::Published;
+    tick1.force_status(TickStatus::Published);
     let mut tick2 = Tick::new(2);
-    tick2.status = TickStatus::Published;
+    tick2.force_status(TickStatus::Published);
     let tick2_id = tick2.id.clone();
     let mut tick3 = Tick::new(3);
-    tick3.status = TickStatus::Failed;
+    tick3.force_status(TickStatus::Failed);
 
     stores.ticks.write().unwrap().insert(tick1.id.clone(), tick1);
     stores.ticks.write().unwrap().insert(tick2.id.clone(), tick2);
@@ -223,7 +223,7 @@ fn test_has_tick_in_progress_false() {
     assert!(!agent.has_tick_in_progress().unwrap());
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
     assert!(!agent.has_tick_in_progress().unwrap());
 }
@@ -256,7 +256,7 @@ fn test_recover_stuck_ticks_sealing() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Sealing;
+    tick.force_status(TickStatus::Sealing);
     let tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
@@ -264,7 +264,7 @@ fn test_recover_stuck_ticks_sealing() {
     assert_eq!(agent.recover_stuck_ticks().unwrap(), 1);
 
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn test_recover_stuck_ticks_validating() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(2);
-    tick.status = TickStatus::Validating;
+    tick.force_status(TickStatus::Validating);
     let tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
@@ -281,7 +281,7 @@ fn test_recover_stuck_ticks_validating() {
     assert_eq!(agent.recover_stuck_ticks().unwrap(), 1);
 
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
 }
 
 // --- run_cycle tests ---
@@ -313,7 +313,7 @@ fn test_cycle_recovers_open_tick() {
     assert_eq!(result, IntegratorCycleResult::Recovered { count: 1 });
 
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn test_cycle_recovers_stuck_tick() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Sealing;
+    tick.force_status(TickStatus::Sealing);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     let agent = test_integrator(&dir, stores, test_config());
@@ -380,7 +380,7 @@ fn test_cycle_stale_bundle_rejected() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     let tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
@@ -403,7 +403,7 @@ fn test_cycle_stale_bundle_rejected() {
 
     let ticks = stores.ticks.read().unwrap();
     assert_eq!(ticks.len(), 1);
-    assert_eq!(ticks[&tick_id].status, TickStatus::Published);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Published);
 }
 
 #[test]
@@ -412,7 +412,7 @@ fn test_cycle_mixed_stale_and_valid() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     let published_tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
@@ -473,28 +473,28 @@ fn test_has_tick_in_progress_all_states() {
 
     let stores = test_stores(&dir);
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Sealing;
+    tick.force_status(TickStatus::Sealing);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
     let agent = test_integrator(&dir, stores, test_config());
     assert!(agent.has_tick_in_progress().unwrap());
 
     let stores = test_stores(&dir);
     let mut tick = Tick::new(2);
-    tick.status = TickStatus::Validating;
+    tick.force_status(TickStatus::Validating);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
     let agent = test_integrator(&dir, stores, test_config());
     assert!(agent.has_tick_in_progress().unwrap());
 
     let stores = test_stores(&dir);
     let mut tick = Tick::new(3);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
     let agent = test_integrator(&dir, stores, test_config());
     assert!(!agent.has_tick_in_progress().unwrap());
 
     let stores = test_stores(&dir);
     let mut tick = Tick::new(4);
-    tick.status = TickStatus::Failed;
+    tick.force_status(TickStatus::Failed);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
     let agent = test_integrator(&dir, stores, test_config());
     assert!(!agent.has_tick_in_progress().unwrap());
@@ -517,7 +517,7 @@ fn test_stale_policy_replan_at_safe_point() {
     let stores = test_stores_with_config(&dir, config);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     let mut bundle = Bundle::new(
@@ -554,7 +554,7 @@ fn test_stale_rejection_resets_work_to_ready() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     // Create a Work in InReview status (with acceptance_criteria for Ready precondition)
@@ -593,7 +593,7 @@ fn test_stale_rejection_creates_learning() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     let mut wi = Work::new("ph-1".into(), "Task B".into(), "desc".into());
@@ -631,7 +631,7 @@ fn test_stale_rejection_handles_terminal_work() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     // Create a Work that's already Done (terminal)
@@ -674,7 +674,7 @@ fn test_stale_policy_auto_replay_and_verify() {
     let stores = test_stores_with_config(&dir, config);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     let published_tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
@@ -731,7 +731,7 @@ fn test_recover_stuck_ticks_learning_creation() {
     let stores = test_stores(&dir);
 
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Validating;
+    tick.force_status(TickStatus::Validating);
     let tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
@@ -740,7 +740,7 @@ fn test_recover_stuck_ticks_learning_creation() {
     assert_eq!(recovered, 1);
 
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
 
     let learnings = stores.learnings.read().unwrap();
     assert!(

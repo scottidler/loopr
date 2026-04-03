@@ -204,7 +204,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
     );
 
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Published);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Published);
 
     let wis = stores.works.read().unwrap();
     assert_eq!(wis[&wi_id].status, crate::domain::work::WorkStatus::Done);

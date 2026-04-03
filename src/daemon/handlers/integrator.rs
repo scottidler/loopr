@@ -89,12 +89,12 @@ pub(super) fn handle_integrator_validate(
                 Some(t) => t,
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &tick_id))),
             };
-            if tick.status != TickStatus::Sealing {
+            if tick.status() != TickStatus::Sealing {
                 return Ok(DaemonResponse::err(
                     req.id,
                     RpcError::transition_rejected(&format!(
                         "tick must be in Sealing state to validate (currently {:?})",
-                        tick.status
+                        tick.status()
                     )),
                 ));
             }
@@ -107,8 +107,7 @@ pub(super) fn handle_integrator_validate(
             let tick = ticks
                 .get_mut(&tick_id)
                 .ok_or_else(|| eyre!("record not found: {tick_id}"))?;
-            tick.status = TickStatus::Validating;
-            tick.updated_at = crate::id::now_millis();
+            tick.force_status(TickStatus::Validating);
 
             // Persist to TaskStore if available
             if let Some(store) = &stores.store
@@ -147,9 +146,8 @@ pub(super) fn handle_integrator_validate(
             let tick = ticks
                 .get_mut(&tick_id)
                 .ok_or_else(|| eyre!("record not found: {tick_id}"))?;
-            tick.status = final_status;
+            tick.force_status(final_status);
             tick.validation_log = validation_log;
-            tick.updated_at = crate::id::now_millis();
 
             if all_passed {
                 tick.integration_sha = get_git_head_sha(&stores.config.project.repo_path);
@@ -210,7 +208,7 @@ pub(super) fn handle_integrator_publish(
         let current_status = {
             let ticks = stores.read_ticks()?;
             match ticks.get(&tick_id) {
-                Some(t) => t.status,
+                Some(t) => t.status(),
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("tick", &tick_id))),
             }
         };
@@ -221,8 +219,7 @@ pub(super) fn handle_integrator_publish(
             let tick = ticks
                 .get_mut(&tick_id)
                 .ok_or_else(|| eyre!("record not found: {tick_id}"))?;
-            tick.status = TickStatus::Sealing;
-            tick.updated_at = crate::id::now_millis();
+            tick.force_status(TickStatus::Sealing);
 
             // Persist to TaskStore if available
             if let Some(store) = &stores.store

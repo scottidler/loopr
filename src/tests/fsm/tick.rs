@@ -150,10 +150,10 @@ fn is_terminal_correct() {
 fn tick_serde_all_statuses() {
     for status in &ALL_STATES {
         let mut t = Tick::new(1);
-        t.status = *status;
+        t.force_status(*status);
         let json = serde_json::to_string(&t).unwrap();
         let restored: Tick = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.status, *status);
+        assert_eq!(restored.status(), *status);
     }
 }
 

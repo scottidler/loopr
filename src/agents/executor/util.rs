@@ -33,7 +33,7 @@ pub fn resolve_worktree_base(stores: &Stores) -> String {
     };
     ticks
         .values()
-        .filter(|t| t.status == TickStatus::Published)
+        .filter(|t| t.status() == TickStatus::Published)
         .max_by_key(|t| t.number)
         .and_then(|t| t.integration_sha.clone())
         .unwrap_or_else(|| "HEAD".to_string())
@@ -46,7 +46,7 @@ pub(super) fn resolve_latest_published_tick_id(stores: &Stores) -> Option<String
     let ticks = stores.read_ticks().ok()?;
     ticks
         .values()
-        .filter(|t| t.status == TickStatus::Published)
+        .filter(|t| t.status() == TickStatus::Published)
         .max_by_key(|t| t.number)
         .map(|t| t.id.clone())
 }
@@ -219,17 +219,17 @@ mod tests {
             let mut ticks = stores.ticks.write().unwrap();
 
             let mut t1 = crate::domain::tick::Tick::new(1);
-            t1.status = crate::domain::tick::TickStatus::Published;
+            t1.force_status(crate::domain::tick::TickStatus::Published);
             t1.integration_sha = Some("sha_tick_1".to_string());
             ticks.insert(t1.id.clone(), t1);
 
             let mut t2 = crate::domain::tick::Tick::new(3);
-            t2.status = crate::domain::tick::TickStatus::Published;
+            t2.force_status(crate::domain::tick::TickStatus::Published);
             t2.integration_sha = Some("sha_tick_3".to_string());
             ticks.insert(t2.id.clone(), t2);
 
             let mut t3 = crate::domain::tick::Tick::new(2);
-            t3.status = crate::domain::tick::TickStatus::Published;
+            t3.force_status(crate::domain::tick::TickStatus::Published);
             t3.integration_sha = Some("sha_tick_2".to_string());
             ticks.insert(t3.id.clone(), t3);
         }
@@ -244,7 +244,7 @@ mod tests {
         {
             let mut ticks = stores.ticks.write().unwrap();
             let mut t = crate::domain::tick::Tick::new(1);
-            t.status = crate::domain::tick::TickStatus::Published;
+            t.force_status(crate::domain::tick::TickStatus::Published);
             t.integration_sha = None;
             ticks.insert(t.id.clone(), t);
         }
@@ -265,21 +265,14 @@ mod tests {
         let dir = TestDir::new("loopr-exec-tickid-pub");
         let stores = test_stores(&dir);
 
-        let tick = crate::domain::tick::Tick {
-            id: "tick-1".to_string(),
-            number: 1,
-            status: TickStatus::Published,
-            bundle_ids: vec![],
-            attempted_bundle_ids: vec![],
-            integration_sha: Some("abc123".to_string()),
-            validation_log: String::new(),
-            created_at: crate::id::now_millis(),
-            updated_at: crate::id::now_millis(),
-        };
+        let mut tick = crate::domain::tick::Tick::new(1);
+        tick.force_status(TickStatus::Published);
+        tick.integration_sha = Some("abc123".to_string());
+        let tick_id = tick.id.clone();
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let result = resolve_latest_published_tick_id(&stores);
-        assert_eq!(result, Some("tick-1".to_string()));
+        assert_eq!(result, Some(tick_id));
     }
 
     #[test]

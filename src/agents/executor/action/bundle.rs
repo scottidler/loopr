@@ -690,17 +690,9 @@ mod tests {
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
-        let tick = crate::domain::tick::Tick {
-            id: "tick-pub-1".to_string(),
-            number: 1,
-            status: TickStatus::Published,
-            bundle_ids: vec![],
-            attempted_bundle_ids: vec![],
-            integration_sha: Some("abc123".to_string()),
-            validation_log: String::new(),
-            created_at: crate::id::now_millis(),
-            updated_at: crate::id::now_millis(),
-        };
+        let mut tick = crate::domain::tick::Tick::new(1);
+        tick.force_status(TickStatus::Published);
+        tick.integration_sha = Some("abc123".to_string());
         stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);

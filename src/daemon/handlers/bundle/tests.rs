@@ -99,7 +99,7 @@ fn create_test_bundle(
 /// Helper: insert a Published Tick into the store and return its ID.
 fn insert_published_tick(stores: &Arc<Stores>, number: u32) -> String {
     let mut tick = Tick::new(number);
-    tick.status = TickStatus::Published;
+    tick.force_status(TickStatus::Published);
     tick.integration_sha = Some(format!("sha-{number}"));
     let id = tick.id.clone();
     stores.ticks.write().unwrap().insert(id.clone(), tick);

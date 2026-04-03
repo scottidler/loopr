@@ -462,13 +462,12 @@ impl DaemonContext {
             };
             let store_lock = self.stores.store.as_ref();
             for (id, tick) in ticks.iter_mut() {
-                if tick.status == TickStatus::Open
-                    || tick.status == TickStatus::Sealing
-                    || tick.status == TickStatus::Validating
+                if tick.status() == TickStatus::Open
+                    || tick.status() == TickStatus::Sealing
+                    || tick.status() == TickStatus::Validating
                 {
-                    warn!("Recovering stuck Tick in {:?} state: {}", tick.status, id);
-                    tick.status = TickStatus::Failed;
-                    tick.updated_at = crate::id::now_millis();
+                    warn!("Recovering stuck Tick in {:?} state: {}", tick.status(), id);
+                    tick.force_status(TickStatus::Failed);
                     if let Some(store_arc) = store_lock
                         && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
                         && let Err(e) = s.update(tick.clone())
@@ -1058,7 +1057,7 @@ mod tests {
         .unwrap();
 
         let mut tick = Tick::new(1);
-        tick.status = TickStatus::Sealing;
+        tick.force_status(TickStatus::Sealing);
         let tick_id = tick.id.clone();
         ctx.stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
 
@@ -1066,7 +1065,7 @@ mod tests {
         assert_eq!(recovered, 1);
 
         let ticks = ctx.stores.ticks.read().unwrap();
-        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+        assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
     }
 
     #[test]
@@ -1082,7 +1081,7 @@ mod tests {
         .unwrap();
 
         let mut tick = Tick::new(2);
-        tick.status = TickStatus::Validating;
+        tick.force_status(TickStatus::Validating);
         let tick_id = tick.id.clone();
         ctx.stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
 
@@ -1090,7 +1089,7 @@ mod tests {
         assert_eq!(recovered, 1);
 
         let ticks = ctx.stores.ticks.read().unwrap();
-        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+        assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
     }
 
     #[test]
@@ -1113,7 +1112,7 @@ mod tests {
         assert_eq!(recovered, 1);
 
         let ticks = ctx.stores.ticks.read().unwrap();
-        assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
+        assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
     }
 
     #[test]
@@ -1135,7 +1134,7 @@ mod tests {
 
         // Stuck Sealing Tick
         let mut tick = Tick::new(1);
-        tick.status = TickStatus::Sealing;
+        tick.force_status(TickStatus::Sealing);
         ctx.stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
         // Orphaned Integrating Bundle

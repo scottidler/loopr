@@ -245,13 +245,13 @@ pub fn build_state_summary_with_sla(
         };
         let mut active: Vec<_> = ticks
             .values()
-            .filter(|t| !matches!(t.status, TickStatus::Published | TickStatus::Failed))
+            .filter(|t| !matches!(t.status(), TickStatus::Published | TickStatus::Failed))
             .collect();
         active.sort_by_key(|t| t.created_at);
         if !active.is_empty() {
             summary.push_str("### Ticks\n");
             for t in &active {
-                summary.push_str(&format!("- [{}] {}\n", t.id, t.status));
+                summary.push_str(&format!("- [{}] {}\n", t.id, t.status()));
             }
             summary.push('\n');
         }

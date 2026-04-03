@@ -35,12 +35,37 @@ pub struct Tick {
     #[serde(default)]
     pub attempted_bundle_ids: Vec<String>,
     pub validation_log: String,
-    pub status: TickStatus,
+    status: TickStatus,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 impl Tick {
+    /// Read current status.
+    pub fn status(&self) -> TickStatus {
+        self.status
+    }
+
+    /// Validated FSM transition. Returns Err if invalid.
+    pub fn transition(
+        &mut self,
+        target: TickStatus,
+        role: crate::domain::role::Role,
+    ) -> crate::error::Result<crate::domain::transition::Transition> {
+        let result = self.status.validate_transition(target, role)?;
+        if result == crate::domain::transition::Transition::Changed {
+            self.status = target;
+            self.updated_at = crate::id::now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: TickStatus) {
+        self.status = target;
+        self.updated_at = crate::id::now_millis();
+    }
+
     pub fn new(number: u32) -> Self {
         log::debug!("Tick::new(number={})", number);
         let now = id::now_millis();
@@ -143,7 +168,7 @@ mod tests {
         assert!(t.integration_sha.is_none());
         assert!(t.bundle_ids.is_empty());
         assert!(t.validation_log.is_empty());
-        assert_eq!(t.status, TickStatus::Open);
+        assert_eq!(t.status(), TickStatus::Open);
         assert!(!t.id.is_empty());
         assert!(t.created_at > 0);
         assert_eq!(t.created_at, t.updated_at);
@@ -163,7 +188,7 @@ mod tests {
         assert_eq!(t.integration_sha, deserialized.integration_sha);
         assert_eq!(t.bundle_ids, deserialized.bundle_ids);
         assert_eq!(t.validation_log, deserialized.validation_log);
-        assert_eq!(t.status, deserialized.status);
+        assert_eq!(t.status(), deserialized.status());
     }
 
     #[test]
@@ -417,7 +442,7 @@ mod tests {
     #[test]
     fn test_record_indexed_fields_reflect_status() {
         let mut t = Tick::new(1);
-        t.status = TickStatus::Published;
+        t.force_status(TickStatus::Published);
         let fields = t.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Published".to_string())));
     }

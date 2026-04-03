@@ -13,7 +13,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|t| {
             let sha = t.integration_sha.as_deref().unwrap_or("none");
-            ListItem::new(Line::from(format!("Tick #{} [{}] SHA: {}", t.number, t.status, sha)))
+            ListItem::new(Line::from(format!("Tick #{} [{}] SHA: {}", t.number, t.status(), sha)))
         })
         .collect();
 

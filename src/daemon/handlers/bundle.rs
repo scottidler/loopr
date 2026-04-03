@@ -22,7 +22,7 @@ pub(super) fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
     let ticks = stores.read_ticks().ok()?;
     ticks
         .values()
-        .filter(|t| t.status == TickStatus::Published)
+        .filter(|t| t.status() == TickStatus::Published)
         .max_by_key(|t| t.number)
         .cloned()
 }

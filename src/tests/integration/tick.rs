@@ -14,13 +14,13 @@ fn test_tick_crash_recovery_state() {
 
     // Simulate a crash: directly insert a tick stuck in Sealing state
     let mut tick = Tick::new(1);
-    tick.status = TickStatus::Sealing;
+    tick.force_status(TickStatus::Sealing);
     let tick_id = tick.id.clone();
     stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
 
     // Also insert one in Validating state
     let mut tick2 = Tick::new(2);
-    tick2.status = TickStatus::Validating;
+    tick2.force_status(TickStatus::Validating);
     let tick2_id = tick2.id.clone();
     stores.ticks.write().unwrap().insert(tick2_id.clone(), tick2);
 
@@ -28,16 +28,16 @@ fn test_tick_crash_recovery_state() {
     {
         let mut ticks = stores.ticks.write().unwrap();
         for tick in ticks.values_mut() {
-            if matches!(tick.status, TickStatus::Sealing | TickStatus::Validating) {
-                tick.status = TickStatus::Failed;
+            if matches!(tick.status(), TickStatus::Sealing | TickStatus::Validating) {
+                tick.force_status(TickStatus::Failed);
             }
         }
     }
 
     // Both ticks should be Failed
     let ticks = stores.ticks.read().unwrap();
-    assert_eq!(ticks[&tick_id].status, TickStatus::Failed);
-    assert_eq!(ticks[&tick2_id].status, TickStatus::Failed);
+    assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
+    assert_eq!(ticks[&tick2_id].status(), TickStatus::Failed);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn test_worktree_base_uses_published_tick() {
         let ticks = stores.ticks.read().unwrap();
         let latest_published = ticks
             .values()
-            .filter(|t| t.status == TickStatus::Published)
+            .filter(|t| t.status() == TickStatus::Published)
             .max_by_key(|t| t.number)
             .cloned();
         assert!(latest_published.is_some());
@@ -172,7 +172,7 @@ fn test_worktree_base_uses_published_tick() {
     let ticks = stores.ticks.read().unwrap();
     let latest_published = ticks
         .values()
-        .filter(|t| t.status == TickStatus::Published)
+        .filter(|t| t.status() == TickStatus::Published)
         .max_by_key(|t| t.number)
         .cloned();
     assert!(latest_published.is_some());

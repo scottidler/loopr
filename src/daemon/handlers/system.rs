@@ -144,7 +144,7 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
             let ticks_map = stores.read_ticks()?;
             ticks_map
                 .values()
-                .filter(|t| t.status == TickStatus::Published)
+                .filter(|t| t.status() == TickStatus::Published)
                 .max_by_key(|t| t.number)
                 .and_then(|t| t.integration_sha.clone())
         };
@@ -154,7 +154,7 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
             let ticks_map = stores.read_ticks()?;
             ticks_map
                 .values()
-                .filter(|t| t.status == TickStatus::Published)
+                .filter(|t| t.status() == TickStatus::Published)
                 .max_by_key(|t| t.number)
                 .map(|t| t.id.clone())
         };
