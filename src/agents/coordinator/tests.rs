@@ -1280,6 +1280,33 @@ fn test_fsm_goal_complete_returns_none() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
+#[test]
+fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
+    // Regression: when ActivatePhase finds no next phase (all phases complete),
+    // the goal must be deactivated so `run` can detect completion via get_goal.
+    let dir = TestDir::new("loopr-fsm-goaldeact");
+    let stores = test_stores(&dir);
+
+    let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("Test goal".to_string());
+    let goal_id = goal.id.clone();
+    stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
+
+    let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+
+    let log = test_agent_logger(&dir);
+    // No phases in stores — find_next_phase_to_activate returns None
+    apply_fsm_transition(CoordinatorFsmState::ActivatePhase, &mut coord_state, &stores, &log);
+
+    assert_eq!(coord_state.fsm_state, CoordinatorFsmState::GoalComplete);
+    let goals = stores.coordinator_goals.read().unwrap();
+    let goal = goals.get(&goal_id).unwrap();
+    assert!(
+        !goal.active,
+        "goal must be deactivated when coordinator reaches GoalComplete"
+    );
+}
+
 // --- Phase timeout vs goal timeout priority ---
 
 #[test]

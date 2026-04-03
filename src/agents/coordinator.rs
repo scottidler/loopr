@@ -940,6 +940,13 @@ fn apply_fsm_transition(
             coord_state.updated_at = crate::id::now_millis();
         } else {
             coord_state.transition_to(CoordinatorFsmState::GoalComplete);
+            // Deactivate the goal - the normal completion path goes through ActivatePhase
+            // (no next phase found), not through the explicit GoalComplete branch below.
+            if let Ok(mut goals) = stores.write_coordinator_goals()
+                && let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id)
+            {
+                goal.deactivate();
+            }
         }
     } else if new_state == CoordinatorFsmState::PhaseGate {
         // Transition to PhaseGate but DON'T complete_phase() yet —
