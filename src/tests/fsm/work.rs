@@ -261,9 +261,9 @@ fn full_lifecycle_happy_path() {
 fn work_serde_all_statuses() {
     for status in &ALL_STATES {
         let mut wi = Work::new("ph-1".into(), "T".into(), "D".into());
-        wi.status = *status;
+        wi.force_status(*status);
         let json = serde_json::to_string(&wi).unwrap();
         let restored: Work = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.status, *status);
+        assert_eq!(restored.status(), *status);
     }
 }

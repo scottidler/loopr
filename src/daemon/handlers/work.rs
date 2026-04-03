@@ -101,14 +101,17 @@ pub(super) fn handle_work_create(
             let duplicate = works.values().find(|wi| {
                 wi.phase_id == phase_id
                     && wi.title.to_lowercase() == title.to_lowercase()
-                    && !matches!(wi.status, WorkStatus::Abandoned)
+                    && !matches!(wi.status(), WorkStatus::Abandoned)
             });
             if let Some(dup) = duplicate {
                 return Ok(DaemonResponse::err(
                     req.id,
                     RpcError::precondition_failed(&format!(
                         "Duplicate work '{}' already exists in phase {} with status {} (ID: {})",
-                        title, phase_id, dup.status, dup.id
+                        title,
+                        phase_id,
+                        dup.status(),
+                        dup.id
                     )),
                 ));
             }
@@ -185,7 +188,7 @@ pub(super) fn handle_work_create(
         // Auto-promote to Ready if acceptance_criteria are provided.
         // Draft→Ready is always valid for Coordinator role.
         if !acceptance_criteria.is_empty() {
-            work.status = WorkStatus::Ready;
+            work.force_status(WorkStatus::Ready);
             work.updated_at = crate::id::now_millis();
         }
 
@@ -332,7 +335,7 @@ pub(super) fn handle_work_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("work", &id))),
         };
 
-        let from = wi.status;
+        let from = wi.status();
         let result = if is_override {
             from.validate_override(target_status, role)
         } else {
@@ -398,7 +401,7 @@ pub(super) fn handle_work_transition(
             }
         }
 
-        wi.status = target_status;
+        wi.force_status(target_status);
         wi.updated_at = crate::id::now_millis();
         let wi_clone = wi.clone();
         drop(works);
@@ -1273,7 +1276,7 @@ mod tests {
         let retrieved: Option<Work> = store.get(&wi_id).unwrap();
         assert!(retrieved.is_some());
         let wi = retrieved.unwrap();
-        assert_eq!(wi.status, WorkStatus::InProgress);
+        assert_eq!(wi.status(), WorkStatus::InProgress);
     }
 
     // --- work update tests ---

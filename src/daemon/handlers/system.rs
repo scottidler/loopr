@@ -165,7 +165,7 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
             let bundles_map = stores.read_bundles()?;
             if let Some(ref latest_tid) = latest_tick_id {
                 wis.values()
-                    .filter(|wi| wi.status == WorkStatus::InProgress)
+                    .filter(|wi| wi.status() == WorkStatus::InProgress)
                     .filter(|wi| {
                         bundles_map.values().any(|b| {
                             b.work_id == wi.id

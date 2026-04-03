@@ -65,7 +65,7 @@ pub fn build_state_summary_with_sla(
         };
         let mut non_terminal: Vec<_> = works
             .values()
-            .filter(|w| !matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
+            .filter(|w| !matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
             .collect();
         non_terminal.sort_by_key(|w| w.created_at);
         if !non_terminal.is_empty() {
@@ -94,7 +94,11 @@ pub fn build_state_summary_with_sla(
                 };
                 summary.push_str(&format!(
                     "- [{}] {} ({}, phase: {}){}\n",
-                    w.id, w.title, w.status, w.phase_id, sla_annotation
+                    w.id,
+                    w.title,
+                    w.status(),
+                    w.phase_id,
+                    sla_annotation
                 ));
             }
             summary.push('\n');
@@ -153,7 +157,7 @@ pub fn build_state_summary_with_sla(
             .filter(|b| {
                 works
                     .get(&b.work_id)
-                    .map(|w| !matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
+                    .map(|w| !matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
                     .unwrap_or(true)
             })
             .collect();
@@ -163,7 +167,7 @@ pub fn build_state_summary_with_sla(
             for b in &actionable_merged {
                 let wi_status = works
                     .get(&b.work_id)
-                    .map(|w| w.status.to_string())
+                    .map(|w| w.status().to_string())
                     .unwrap_or_else(|| "unknown".to_string());
                 summary.push_str(&format!(
                     "- [{}] Merged (wi: {} [{}], branch: {})\n",
@@ -188,7 +192,7 @@ pub fn build_state_summary_with_sla(
             .filter(|b| {
                 works
                     .get(&b.work_id)
-                    .map(|w| w.status == WorkStatus::InReview)
+                    .map(|w| w.status() == WorkStatus::InReview)
                     .unwrap_or(false)
             })
             .collect();
@@ -992,7 +996,7 @@ fn sweep_integrated_to_done(
         };
         works
             .values()
-            .filter(|w| w.phase_id == *phase_id && w.status == WorkStatus::Integrated)
+            .filter(|w| w.phase_id == *phase_id && w.status() == WorkStatus::Integrated)
             .map(|w| w.id.clone())
             .collect()
     };
@@ -1228,7 +1232,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
     let mut actionable = Vec::new();
     let mut terminal = Vec::new();
     for wi in &phase_wis {
-        if matches!(wi.status, WorkStatus::Done | WorkStatus::Abandoned) {
+        if matches!(wi.status(), WorkStatus::Done | WorkStatus::Abandoned) {
             terminal.push(*wi);
         } else {
             actionable.push(*wi);
@@ -1255,7 +1259,10 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
             let attempt_note = if attempts > 0 { format!(" [{} attempts]", attempts) } else { String::new() };
             summary.push_str(&format!(
                 "- [{}] {} (status: {}){}\n",
-                wi.id, wi.title, wi.status, attempt_note
+                wi.id,
+                wi.title,
+                wi.status(),
+                attempt_note
             ));
             // Show dependency info inline
             if !wi.dependencies.is_empty() {
@@ -1265,15 +1272,17 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
                     .map(|dep_id| {
                         let status = works
                             .get(dep_id)
-                            .map(|d| format!("{}", d.status))
+                            .map(|d| format!("{}", d.status()))
                             .unwrap_or_else(|| "unknown".to_string());
                         format!("{}={}", dep_id, status)
                     })
                     .collect();
-                let all_met = wi
-                    .dependencies
-                    .iter()
-                    .all(|dep_id| works.get(dep_id).map(|d| d.status == WorkStatus::Done).unwrap_or(false));
+                let all_met = wi.dependencies.iter().all(|dep_id| {
+                    works
+                        .get(dep_id)
+                        .map(|d| d.status() == WorkStatus::Done)
+                        .unwrap_or(false)
+                });
                 summary.push_str(&format!(
                     "    deps: [{}] ({})\n",
                     dep_status.join(", "),
@@ -1288,7 +1297,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
     if !terminal.is_empty() {
         summary.push_str("### Terminal Works (COMPLETED - do NOT assign agents to these)\n");
         for wi in &terminal {
-            summary.push_str(&format!("- [{}] {} ({})\n", wi.id, wi.title, wi.status));
+            summary.push_str(&format!("- [{}] {} ({})\n", wi.id, wi.title, wi.status()));
         }
         summary.push('\n');
     }
@@ -1391,7 +1400,7 @@ fn check_fsm_transition(
                 }
                 if wis
                     .iter()
-                    .all(|w| matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
+                    .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
                 {
                     return Some(CoordinatorFsmState::PhaseGate);
                 }

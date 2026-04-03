@@ -292,7 +292,7 @@ fn test_build_state_summary_excludes_done_works() {
     let stores = test_stores(&dir);
 
     let mut wi = Work::new("ph-1".into(), "Done Work".into(), "desc".into());
-    wi.status = WorkStatus::Done;
+    wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let agent_log = test_agent_logger(&dir);
@@ -597,11 +597,11 @@ fn test_check_phase_completion_all_done() {
 
     // Create works that are all Done
     let mut w1 = Work::new(phase_id.clone(), "Work 1".into(), "desc".into());
-    w1.status = WorkStatus::Done;
+    w1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w1.id.clone(), w1);
 
     let mut w2 = Work::new(phase_id.clone(), "Work 2".into(), "desc".into());
-    w2.status = WorkStatus::Done;
+    w2.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
     let completed = check_phase_completion(&stores);
@@ -637,11 +637,11 @@ fn test_check_phase_completion_partial() {
 
     // One work Done, one still InProgress
     let mut w1 = Work::new(phase_id.clone(), "Work 1".into(), "desc".into());
-    w1.status = WorkStatus::Done;
+    w1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w1.id.clone(), w1);
 
     let mut w2 = Work::new(phase_id.clone(), "Work 2".into(), "desc".into());
-    w2.status = WorkStatus::InProgress;
+    w2.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
     let completed = check_phase_completion(&stores);
@@ -707,7 +707,7 @@ fn test_check_phase_completion_multiple_phases() {
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
     let mut w1 = Work::new(phase1_id.clone(), "Work 1".into(), "desc".into());
-    w1.status = WorkStatus::Done;
+    w1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w1.id.clone(), w1);
 
     // Phase 2: one work still InProgress
@@ -717,7 +717,7 @@ fn test_check_phase_completion_multiple_phases() {
     stores.phases.write().unwrap().insert(phase2_id.clone(), phase2);
 
     let mut w2 = Work::new(phase2_id.clone(), "Work 2".into(), "desc".into());
-    w2.status = WorkStatus::InProgress;
+    w2.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
     let completed = check_phase_completion(&stores);
@@ -836,7 +836,7 @@ fn test_check_fsm_transition_executing_to_phase_gate() {
 
     // Create a Done work item in the phase
     let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
-    wi.status = WorkStatus::Done;
+    wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -899,7 +899,7 @@ fn test_build_phase_status_with_works() {
 
     let wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
     let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
-    wi2.status = WorkStatus::Done;
+    wi2.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -925,9 +925,9 @@ fn test_build_phase_status_all_terminal() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
-    wi2.status = WorkStatus::Abandoned;
+    wi2.force_status(WorkStatus::Abandoned);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -1070,7 +1070,7 @@ fn test_fsm_executing_stays_when_wis_in_progress() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
-    wi.status = WorkStatus::InProgress;
+    wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1091,9 +1091,9 @@ fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi1 = Work::new(phase_id.clone(), "WI Done".into(), "desc".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     let mut wi2 = Work::new(phase_id.clone(), "WI Abandoned".into(), "desc".into());
-    wi2.status = WorkStatus::Abandoned;
+    wi2.force_status(WorkStatus::Abandoned);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -1118,9 +1118,9 @@ fn test_fsm_executing_stays_when_partial_done() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi1 = Work::new(phase_id.clone(), "WI Done".into(), "desc".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     let mut wi2 = Work::new(phase_id.clone(), "WI Ready".into(), "desc".into());
-    wi2.status = WorkStatus::Ready;
+    wi2.force_status(WorkStatus::Ready);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -1165,7 +1165,7 @@ fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
 
     // WI in progress — would normally stay Executing
     let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
-    wi.status = WorkStatus::InProgress;
+    wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1195,7 +1195,7 @@ fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
-    wi.status = WorkStatus::InProgress;
+    wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1293,7 +1293,7 @@ fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
 
     // All WIs are Done — would normally trigger PhaseGate via WI check
     let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
-    wi.status = WorkStatus::Done;
+    wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1323,7 +1323,7 @@ fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
-    wi.status = WorkStatus::InProgress;
+    wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1732,7 +1732,7 @@ fn test_build_phase_status_shows_dependencies() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi1 = Work::new(phase_id.clone(), "Setup".into(), "d".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     let wi1_id = wi1.id.clone();
     stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
@@ -1816,7 +1816,7 @@ fn test_build_phase_status_includes_failure_learnings() {
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     let mut wi1 = Work::new(phase_id.clone(), "Failing WI".into(), "d".into());
-    wi1.status = WorkStatus::InProgress;
+    wi1.force_status(WorkStatus::InProgress);
     let wi1_id = wi1.id.clone();
     stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
@@ -1862,7 +1862,7 @@ fn test_build_state_summary_includes_recently_merged_bundles() {
 
     // Create a WI in Integrated status (not Done)
     let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
-    wi.status = WorkStatus::Integrated;
+    wi.force_status(WorkStatus::Integrated);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -1889,7 +1889,7 @@ fn test_build_state_summary_excludes_merged_when_wi_done() {
 
     // Create a WI in Done status
     let mut wi = Work::new("phase-1".into(), "Done WI".into(), "desc".into());
-    wi.status = WorkStatus::Done;
+    wi.force_status(WorkStatus::Done);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -1916,7 +1916,7 @@ fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() {
 
     // Create a WI in InReview status
     let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
-    wi.status = WorkStatus::InReview;
+    wi.force_status(WorkStatus::InReview);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -1952,7 +1952,7 @@ fn test_build_state_summary_rejected_bundle_includes_verification_reason() {
     let stores = test_stores(&dir);
 
     let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
-    wi.status = WorkStatus::InReview;
+    wi.force_status(WorkStatus::InReview);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -1976,7 +1976,7 @@ fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
     let stores = test_stores(&dir);
 
     let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
-    wi.status = WorkStatus::InReview;
+    wi.force_status(WorkStatus::InReview);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -2001,7 +2001,7 @@ fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
 
     // Work already transitioned back to InProgress
     let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
-    wi.status = WorkStatus::InProgress;
+    wi.force_status(WorkStatus::InProgress);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -2097,7 +2097,7 @@ fn test_sweep_integrated_to_done_transitions_works() {
 
     // Insert a Work directly at Integrated status
     let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
-    wi.status = WorkStatus::Integrated;
+    wi.force_status(WorkStatus::Integrated);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -2115,7 +2115,7 @@ fn test_sweep_integrated_to_done_transitions_works() {
     // Verify the Work is now Done
     let works = stores.works.read().unwrap();
     let updated = works.get(&wi_id).unwrap();
-    assert_eq!(updated.status, WorkStatus::Done);
+    assert_eq!(updated.status(), WorkStatus::Done);
 }
 
 #[test]
@@ -2146,7 +2146,7 @@ fn test_sweep_noop_when_no_integrated_works() {
     // Work should still be Draft (unchanged by sweep)
     let works = stores.works.read().unwrap();
     let unchanged = works.get(&wi_id).unwrap();
-    assert_eq!(unchanged.status, WorkStatus::Draft);
+    assert_eq!(unchanged.status(), WorkStatus::Draft);
 }
 
 #[test]
@@ -2160,11 +2160,11 @@ fn test_sweep_then_fsm_advances_to_phase_gate() {
 
     // All Works in phase are Integrated — sweep should transition them to Done
     let mut wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
-    wi1.status = WorkStatus::Integrated;
+    wi1.force_status(WorkStatus::Integrated);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
     let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
-    wi2.status = WorkStatus::Integrated;
+    wi2.force_status(WorkStatus::Integrated);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);

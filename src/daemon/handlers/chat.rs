@@ -25,7 +25,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
             .values()
             .filter(|w| {
                 !matches!(
-                    w.status,
+                    w.status(),
                     crate::domain::work::WorkStatus::Done | crate::domain::work::WorkStatus::Abandoned
                 )
             })
@@ -33,7 +33,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
         if !active.is_empty() {
             status.push_str(&format!("Works ({} active):\n", active.len()));
             for w in &active {
-                status.push_str(&format!("  {} [{}] {}\n", w.id, w.status, w.title));
+                status.push_str(&format!("  {} [{}] {}\n", w.id, w.status(), w.title));
             }
         }
     }

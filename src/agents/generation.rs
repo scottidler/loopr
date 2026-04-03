@@ -297,7 +297,11 @@ pub fn build_work_prompt(
             };
             msg.push_str(&format!(
                 "- ID: {} | Title: \"{}\" | Status: {} | {} — {}\n",
-                wi.id, wi.title, wi.status, deps, wi.description
+                wi.id,
+                wi.title,
+                wi.status(),
+                deps,
+                wi.description
             ));
         }
         msg.push_str("\nWhen declaring `dependencies`, use the exact IDs above.\n\n");
@@ -489,7 +493,7 @@ pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
     !phase_wis.is_empty()
         && phase_wis
             .iter()
-            .all(|w| matches!(w.status, WorkStatus::Done | WorkStatus::Abandoned))
+            .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
 }
 
 /// Query failed validation reports for a specific document from TaskStore.

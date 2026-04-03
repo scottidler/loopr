@@ -41,7 +41,7 @@ fn test_work_fsm_enforcement_via_dispatch() {
 
     // Verify state unchanged (auto-promoted to Ready since acceptance_criteria present)
     let wis = stores.works.read().unwrap();
-    assert_eq!(wis[&wi_id].status, crate::domain::work::WorkStatus::Ready);
+    assert_eq!(wis[&wi_id].status(), crate::domain::work::WorkStatus::Ready);
 }
 
 #[test]

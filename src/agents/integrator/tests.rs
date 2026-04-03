@@ -559,7 +559,7 @@ fn test_stale_rejection_resets_work_to_ready() {
 
     // Create a Work in InReview status (with acceptance_criteria for Ready precondition)
     let mut wi = Work::new("ph-1".into(), "Task A".into(), "desc".into());
-    wi.status = WorkStatus::InReview;
+    wi.force_status(WorkStatus::InReview);
     wi.acceptance_criteria = vec!["tests pass".into()];
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
@@ -581,7 +581,7 @@ fn test_stale_rejection_resets_work_to_ready() {
     // Work should be reset to Ready
     let works = stores.works.read().unwrap();
     assert_eq!(
-        works[&wi_id].status,
+        works[&wi_id].status(),
         WorkStatus::Ready,
         "Work should be reset to Ready after stale bundle rejection"
     );
@@ -597,7 +597,7 @@ fn test_stale_rejection_creates_learning() {
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     let mut wi = Work::new("ph-1".into(), "Task B".into(), "desc".into());
-    wi.status = WorkStatus::InReview;
+    wi.force_status(WorkStatus::InReview);
     wi.acceptance_criteria = vec!["tests pass".into()];
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
@@ -636,7 +636,7 @@ fn test_stale_rejection_handles_terminal_work() {
 
     // Create a Work that's already Done (terminal)
     let mut wi = Work::new("ph-1".into(), "Task C".into(), "desc".into());
-    wi.status = WorkStatus::Done;
+    wi.force_status(WorkStatus::Done);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -656,7 +656,7 @@ fn test_stale_rejection_handles_terminal_work() {
 
     // Work stays in Done (terminal state, transition should fail gracefully)
     let works = stores.works.read().unwrap();
-    assert_eq!(works[&wi_id].status, WorkStatus::Done);
+    assert_eq!(works[&wi_id].status(), WorkStatus::Done);
 }
 
 #[test]

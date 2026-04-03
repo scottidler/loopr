@@ -319,7 +319,7 @@ impl<'a> ContextBuilder<'a> {
                 .filter_map(|dep_id| {
                     guard.get(dep_id).map(|dep| DependencySummary {
                         title: dep.title.clone(),
-                        status: dep.status.to_string(),
+                        status: dep.status().to_string(),
                         resource_tags: dep.resource_tags.clone(),
                     })
                 })
@@ -593,7 +593,7 @@ impl<'a> ContextBuilder<'a> {
             let siblings: Vec<String> = works
                 .values()
                 .filter(|wi| wi.phase_id == *phase_id && wi.id != *current_wi_id)
-                .map(|wi| format!("- [{}] {}", wi.status, wi.title))
+                .map(|wi| format!("- [{}] {}", wi.status(), wi.title))
                 .collect();
             if !siblings.is_empty() {
                 msg.push_str("## Sibling Works\n\n");

@@ -207,7 +207,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
     assert_eq!(ticks[&tick_id].status(), TickStatus::Published);
 
     let wis = stores.works.read().unwrap();
-    assert_eq!(wis[&wi_id].status, crate::domain::work::WorkStatus::Done);
+    assert_eq!(wis[&wi_id].status(), crate::domain::work::WorkStatus::Done);
 
     // Goal is still active
     let goals = stores.coordinator_goals.read().unwrap();
@@ -561,7 +561,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     );
     {
         let wis = stores.works.read().unwrap();
-        assert_eq!(wis[&wi1_id].status, crate::domain::work::WorkStatus::Done);
+        assert_eq!(wis[&wi1_id].status(), crate::domain::work::WorkStatus::Done);
     }
 
     // --- 6. Bundle full lifecycle: Proposed -> Triaged -> Reviewed -> Accepted -> Integrating -> Merged ---

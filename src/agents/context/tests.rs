@@ -992,7 +992,7 @@ fn setup_stores_with_enrichment(dir: &std::path::Path) -> (Stores, String, Strin
     // Dependency work (already done)
     let mut dep_work = Work::new(phase_id.clone(), "Create model".into(), "Create the data model".into());
     dep_work.resource_tags = vec!["src/model.rs".into()];
-    dep_work.status = crate::domain::work::WorkStatus::Done;
+    dep_work.force_status(crate::domain::work::WorkStatus::Done);
     let dep_id = dep_work.id.clone();
     stores.works.write().unwrap().insert(dep_work.id.clone(), dep_work);
 

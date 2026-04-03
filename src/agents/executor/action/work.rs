@@ -705,8 +705,7 @@ mod tests {
         {
             let mut wis = stores.works.write().unwrap();
             if let Some(wi) = wis.get_mut(&dep_id) {
-                wi.status = crate::domain::work::WorkStatus::Done;
-                wi.updated_at = crate::id::now_millis();
+                wi.force_status(crate::domain::work::WorkStatus::Done);
                 if let Some(store_arc) = &stores.store {
                     let _ = store_arc.lock().unwrap().update(wi.clone());
                 }
@@ -847,7 +846,7 @@ mod tests {
         {
             let mut works = stores.works.write().unwrap();
             if let Some(wi) = works.get_mut(&wi_id) {
-                wi.status = crate::domain::work::WorkStatus::Done;
+                wi.force_status(crate::domain::work::WorkStatus::Done);
                 let wi_clone = wi.clone();
                 if let Some(store) = &stores.store {
                     let _ = store.lock().unwrap().update(wi_clone);

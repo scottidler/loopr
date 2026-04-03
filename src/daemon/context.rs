@@ -418,9 +418,9 @@ impl DaemonContext {
             };
             let store_lock = self.stores.store.as_ref();
             for (id, wi) in works.iter_mut() {
-                if wi.status == WorkStatus::InProgress {
+                if wi.status() == WorkStatus::InProgress {
                     warn!("Recovering orphaned InProgress Work: {}", id);
-                    wi.status = WorkStatus::Blocked;
+                    wi.force_status(WorkStatus::Blocked);
                     wi.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = store_lock
                         && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
@@ -918,7 +918,7 @@ mod tests {
 
         // Insert a Work in InProgress state (orphaned)
         let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
-        wi.status = WorkStatus::InProgress;
+        wi.force_status(WorkStatus::InProgress);
         let wi_id = wi.id.clone();
         ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -931,8 +931,8 @@ mod tests {
         assert_eq!(recovered, 1);
 
         let works = ctx.stores.works.read().unwrap();
-        assert_eq!(works[&wi_id].status, WorkStatus::Blocked);
-        assert_eq!(works[&wi2_id].status, WorkStatus::Draft);
+        assert_eq!(works[&wi_id].status(), WorkStatus::Blocked);
+        assert_eq!(works[&wi2_id].status(), WorkStatus::Draft);
     }
 
     #[test]
@@ -989,7 +989,7 @@ mod tests {
         .unwrap();
 
         let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
-        wi.status = WorkStatus::InProgress;
+        wi.force_status(WorkStatus::InProgress);
         ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let mut bundle = Bundle::new(
@@ -1129,7 +1129,7 @@ mod tests {
 
         // Orphaned InProgress Work
         let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
-        wi.status = WorkStatus::InProgress;
+        wi.force_status(WorkStatus::InProgress);
         ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Stuck Sealing Tick

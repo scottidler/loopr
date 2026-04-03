@@ -119,7 +119,7 @@ fn test_bundle_create_rejects_done_work() {
     {
         let mut works = stores.works.write().unwrap();
         let work = works.get_mut(&wi_id).unwrap();
-        work.status = WorkStatus::Done;
+        work.force_status(WorkStatus::Done);
     }
 
     let req = DaemonRequest::new(

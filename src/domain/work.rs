@@ -48,7 +48,7 @@ pub struct Work {
     pub title: String,
     pub description: String,
     pub assignee: Option<String>,
-    pub status: WorkStatus,
+    status: WorkStatus,
     pub resource_tags: Vec<String>,
     pub dependencies: Vec<String>,
     #[serde(default)]
@@ -60,6 +60,45 @@ pub struct Work {
 }
 
 impl Work {
+    /// Read current status.
+    pub fn status(&self) -> WorkStatus {
+        self.status
+    }
+
+    /// Validated FSM transition. Returns Err if invalid.
+    pub fn transition(
+        &mut self,
+        target: WorkStatus,
+        role: crate::domain::role::Role,
+    ) -> crate::error::Result<crate::domain::transition::Transition> {
+        let result = self.status.validate_transition(target, role)?;
+        if result == crate::domain::transition::Transition::Changed {
+            self.status = target;
+            self.updated_at = id::now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Validated FSM override transition (Work has override edges).
+    pub fn transition_override(
+        &mut self,
+        target: WorkStatus,
+        role: crate::domain::role::Role,
+    ) -> crate::error::Result<crate::domain::transition::Transition> {
+        let result = self.status.validate_override(target, role)?;
+        if result == crate::domain::transition::Transition::Changed {
+            self.status = target;
+            self.updated_at = id::now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: WorkStatus) {
+        self.status = target;
+        self.updated_at = id::now_millis();
+    }
+
     pub fn new(phase_id: String, title: String, description: String) -> Self {
         log::debug!("Work::new(phase_id={}, title={})", phase_id, title);
         let now = id::now_millis();
@@ -153,7 +192,7 @@ mod tests {
         assert_eq!(wi.phase_id, "phase-123");
         assert_eq!(wi.title, "Implement JWT");
         assert_eq!(wi.description, "Add JWT signing");
-        assert_eq!(wi.status, WorkStatus::Draft);
+        assert_eq!(wi.status(), WorkStatus::Draft);
         assert!(wi.assignee.is_none());
         assert!(wi.resource_tags.is_empty());
         assert!(wi.dependencies.is_empty());
@@ -180,7 +219,7 @@ mod tests {
         assert_eq!(wi.assignee, deserialized.assignee);
         assert_eq!(wi.resource_tags, deserialized.resource_tags);
         assert_eq!(wi.dependencies, deserialized.dependencies);
-        assert_eq!(wi.status, deserialized.status);
+        assert_eq!(wi.status(), deserialized.status());
     }
 
     #[test]

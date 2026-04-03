@@ -375,13 +375,15 @@ impl CoordinatorAgent {
             if let AgentAction::AssignAgent { target_id, .. } = action_ref
                 && let Ok(works) = stores.read_works()
                 && let Some(wi) = works.get(target_id)
-                && matches!(wi.status, WorkStatus::Done | WorkStatus::Abandoned)
+                && matches!(wi.status(), WorkStatus::Done | WorkStatus::Abandoned)
             {
                 let err_msg = format!(
                     "INVALID: Work '{}' ({}) is already '{}'. \
                      You MUST NOT assign agents to completed or abandoned work. \
                      Review the Actionable Works list and assign agents to Ready tasks instead.",
-                    target_id, wi.title, wi.status
+                    target_id,
+                    wi.title,
+                    wi.status()
                 );
                 self.ctx.warn(&err_msg);
                 let (verdict, warning) = guard.record_error(&err_msg);

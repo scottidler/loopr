@@ -107,7 +107,7 @@ pub fn parse_manifest(yaml: &str) -> eyre::Result<ResolvedManifest> {
             work.resource_tags = mw.resource_tags.clone();
             work.acceptance_criteria = mw.acceptance_criteria.clone();
             // Mark as Ready (not Draft) so the worker pool can pick them up
-            work.status = crate::domain::work::WorkStatus::Ready;
+            work.force_status(crate::domain::work::WorkStatus::Ready);
             work.updated_at = id::now_millis();
             key_to_id.insert(mw.key.clone(), work.id.clone());
             all_works.push((work, mw.dependencies.clone()));
@@ -178,7 +178,7 @@ plan:
         assert_eq!(resolved.works[1].dependencies.len(), 1);
         assert_eq!(resolved.works[1].dependencies[0], resolved.works[0].id);
         // Works should be Ready status
-        assert_eq!(resolved.works[0].status, crate::domain::work::WorkStatus::Ready);
+        assert_eq!(resolved.works[0].status(), crate::domain::work::WorkStatus::Ready);
     }
 
     #[test]

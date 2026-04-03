@@ -11,7 +11,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         .state
         .works
         .iter()
-        .map(|wi| ListItem::new(Line::from(format!("[{}] {} ({})", wi.status, wi.title, wi.id))))
+        .map(|wi| ListItem::new(Line::from(format!("[{}] {} ({})", wi.status(), wi.title, wi.id))))
         .collect();
 
     let list = List::new(items)

@@ -122,7 +122,7 @@ fn test_preformed_todo_app_plan() {
 
     // All works should be Ready (auto-promoted from Draft since acceptance_criteria present)
     for work in work_store.values() {
-        assert_eq!(work.status.to_string(), "Ready");
+        assert_eq!(work.status().to_string(), "Ready");
     }
 }
 
@@ -220,7 +220,7 @@ fn test_preformed_calculator_app_plan() {
 
     let work_store = stores.works.read().unwrap();
     for work in work_store.values() {
-        assert_eq!(work.status.to_string(), "Ready");
+        assert_eq!(work.status().to_string(), "Ready");
     }
 
     // Verify phase ordering within spec
@@ -275,6 +275,6 @@ fn test_preformed_plan_work_can_transition_to_in_progress() {
     // Verify the work is assigned
     let work_store = stores.works.read().unwrap();
     let work = &work_store[work_id];
-    assert_eq!(work.status.to_string(), "InProgress");
+    assert_eq!(work.status().to_string(), "InProgress");
     assert_eq!(work.assignee.as_deref(), Some("agent-impl-1"));
 }

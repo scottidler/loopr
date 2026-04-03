@@ -737,7 +737,7 @@ impl IntegratorAgent {
                 let should_transition = {
                     let wis = self.ctx.stores.read_works()?;
                     wis.get(wi_id)
-                        .map(|w| w.status == crate::domain::work::WorkStatus::InReview)
+                        .map(|w| w.status() == crate::domain::work::WorkStatus::InReview)
                         .unwrap_or(false)
                 };
                 if should_transition {

@@ -503,7 +503,7 @@ fn test_is_phase_complete_true() {
     let stores = test_stores(&dir);
 
     let mut wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
-    wi.status = WorkStatus::Done;
+    wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     assert!(is_phase_complete(&stores, "phase-1"));
@@ -535,11 +535,11 @@ fn test_is_phase_complete_true_with_abandoned() {
     let stores = test_stores(&dir);
 
     let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
     let mut wi2 = Work::new("phase-1".into(), "WI Abandoned".into(), "desc".into());
-    wi2.status = WorkStatus::Abandoned;
+    wi2.force_status(WorkStatus::Abandoned);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
     assert!(is_phase_complete(&stores, "phase-1"));
@@ -551,7 +551,7 @@ fn test_is_phase_complete_false_mixed_nonterminal() {
     let stores = test_stores(&dir);
 
     let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
     let wi2 = Work::new("phase-1".into(), "WI InProgress".into(), "desc".into());
@@ -1034,9 +1034,9 @@ fn test_find_works_for_phase_ordering() {
     let stores = test_stores(&dir);
 
     let mut wi1 = Work::new("phase-x".into(), "WI A".into(), "desc a".into());
-    wi1.status = WorkStatus::Done;
+    wi1.force_status(WorkStatus::Done);
     let mut wi2 = Work::new("phase-x".into(), "WI B".into(), "desc b".into());
-    wi2.status = WorkStatus::InProgress;
+    wi2.force_status(WorkStatus::InProgress);
     let wi3 = Work::new("phase-x".into(), "WI C".into(), "desc c".into());
     // wi3 stays Draft (default)
     let wi_other = Work::new("phase-y".into(), "WI Other".into(), "not this phase".into());

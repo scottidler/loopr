@@ -31,14 +31,14 @@ pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>
 
     let mut candidates: Vec<WorkPriority> = works
         .values()
-        .filter(|w| w.status == WorkStatus::Ready)
+        .filter(|w| w.status() == WorkStatus::Ready)
         .filter(|w| current_phase_id.map(|pid| w.phase_id == pid).unwrap_or(true))
         // Exclude Works whose dependencies aren't Done
         .filter(|w| {
             w.dependencies.iter().all(|dep_id| {
                 works
                     .get(dep_id)
-                    .map(|dep| dep.status == WorkStatus::Done)
+                    .map(|dep| dep.status() == WorkStatus::Done)
                     .unwrap_or(false)
             })
         })
@@ -101,7 +101,7 @@ mod tests {
 
     fn ready_work(stores: &Stores, phase_id: &str, title: &str) -> String {
         let mut w = Work::new(phase_id.to_string(), title.to_string(), String::new());
-        w.status = WorkStatus::Ready;
+        w.force_status(WorkStatus::Ready);
         let id = w.id.clone();
         stores.works.write().unwrap().insert(id.clone(), w);
         id
@@ -139,13 +139,13 @@ mod tests {
         let stores = test_stores();
         // Create dependency work in Draft (not Done)
         let mut dep = Work::new("phase-1".to_string(), "Dep".to_string(), String::new());
-        dep.status = WorkStatus::Draft;
+        dep.force_status(WorkStatus::Draft);
         let dep_id = dep.id.clone();
         stores.works.write().unwrap().insert(dep_id.clone(), dep);
 
         // Create work with unmet dependency
         let mut w = Work::new("phase-1".to_string(), "Work".to_string(), String::new());
-        w.status = WorkStatus::Ready;
+        w.force_status(WorkStatus::Ready);
         w.dependencies = vec![dep_id];
         let id = w.id.clone();
         stores.works.write().unwrap().insert(id.clone(), w);
@@ -158,13 +158,13 @@ mod tests {
         let stores = test_stores();
         // Create dependency work in Done
         let mut dep = Work::new("phase-1".to_string(), "Dep".to_string(), String::new());
-        dep.status = WorkStatus::Done;
+        dep.force_status(WorkStatus::Done);
         let dep_id = dep.id.clone();
         stores.works.write().unwrap().insert(dep_id.clone(), dep);
 
         // Create work with met dependency
         let mut w = Work::new("phase-1".to_string(), "Work".to_string(), String::new());
-        w.status = WorkStatus::Ready;
+        w.force_status(WorkStatus::Ready);
         w.dependencies = vec![dep_id];
         let id = w.id.clone();
         stores.works.write().unwrap().insert(id.clone(), w);
@@ -213,7 +213,7 @@ mod tests {
         let stores = test_stores();
         // Work A: has contention (active lock on its resource_tag)
         let mut wa = Work::new("phase-1".to_string(), "Work A".to_string(), String::new());
-        wa.status = WorkStatus::Ready;
+        wa.force_status(WorkStatus::Ready);
         wa.resource_tags = vec!["src/main.rs".to_string()];
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
@@ -224,7 +224,7 @@ mod tests {
 
         // Work B: no contention
         let mut wb = Work::new("phase-1".to_string(), "Work B".to_string(), String::new());
-        wb.status = WorkStatus::Ready;
+        wb.force_status(WorkStatus::Ready);
         wb.resource_tags = vec!["src/lib.rs".to_string()];
         let wb_id = wb.id.clone();
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
@@ -239,25 +239,25 @@ mod tests {
 
         // Create two Done dependencies
         let mut dep1 = Work::new("phase-1".to_string(), "Dep1".to_string(), String::new());
-        dep1.status = WorkStatus::Done;
+        dep1.force_status(WorkStatus::Done);
         let dep1_id = dep1.id.clone();
         stores.works.write().unwrap().insert(dep1_id.clone(), dep1);
 
         let mut dep2 = Work::new("phase-1".to_string(), "Dep2".to_string(), String::new());
-        dep2.status = WorkStatus::Done;
+        dep2.force_status(WorkStatus::Done);
         let dep2_id = dep2.id.clone();
         stores.works.write().unwrap().insert(dep2_id.clone(), dep2);
 
         // Work A: 2 deps (score: 100 + 80 = 180)
         let mut wa = Work::new("phase-1".to_string(), "Work A".to_string(), String::new());
-        wa.status = WorkStatus::Ready;
+        wa.force_status(WorkStatus::Ready);
         wa.dependencies = vec![dep1_id.clone(), dep2_id.clone()];
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
 
         // Work B: 0 deps (score: 100 + 100 = 200)
         let mut wb = Work::new("phase-1".to_string(), "Work B".to_string(), String::new());
-        wb.status = WorkStatus::Ready;
+        wb.force_status(WorkStatus::Ready);
         let wb_id = wb.id.clone();
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
@@ -274,12 +274,12 @@ mod tests {
 
         // InProgress work
         let mut w2 = Work::new("phase-1".to_string(), "InProgress".to_string(), String::new());
-        w2.status = WorkStatus::InProgress;
+        w2.force_status(WorkStatus::InProgress);
         stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
         // Done work
         let mut w3 = Work::new("phase-1".to_string(), "Done".to_string(), String::new());
-        w3.status = WorkStatus::Done;
+        w3.force_status(WorkStatus::Done);
         stores.works.write().unwrap().insert(w3.id.clone(), w3);
 
         assert!(next_assignable_work(&stores, None).is_none());
@@ -291,7 +291,7 @@ mod tests {
 
         // Work A: has resource tags that are locked
         let mut wa = Work::new("phase-1".to_string(), "Locked".to_string(), String::new());
-        wa.status = WorkStatus::Ready;
+        wa.force_status(WorkStatus::Ready);
         wa.resource_tags = vec!["contested.rs".to_string()];
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
@@ -301,7 +301,7 @@ mod tests {
 
         // Work B: no contention, no deps
         let mut wb = Work::new("phase-1".to_string(), "Free".to_string(), String::new());
-        wb.status = WorkStatus::Ready;
+        wb.force_status(WorkStatus::Ready);
         let wb_id = wb.id.clone();
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
