@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use eyre::eyre;
 use log::debug;
@@ -182,6 +183,15 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
             }
         };
 
+        // Reconciliation health (populated by run_reconciler once it runs)
+        let reconciliation = json!({
+            "last_sweep_at": stores.reconciliation_last_sweep_at.load(Ordering::Relaxed),
+            "checked": stores.reconciliation_checked.load(Ordering::Relaxed),
+            "fixed": stores.reconciliation_fixed.load(Ordering::Relaxed),
+            "catastrophic": stores.reconciliation_catastrophic.load(Ordering::Relaxed),
+            "degraded": stores.degraded.load(Ordering::Relaxed),
+        });
+
         Ok(DaemonResponse::ok(
             req.id,
             json!({
@@ -202,6 +212,7 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
                 "current_tick_sha": current_tick_sha,
                 "stale_works": stale_works,
                 "session_id": stores.session_dir.as_ref().and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string())),
+                "reconciliation": reconciliation,
             }),
         ))
     })

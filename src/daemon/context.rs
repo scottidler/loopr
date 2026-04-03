@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, RwLock as StdRwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eyre::{Result, eyre};
@@ -84,6 +84,15 @@ pub struct Stores {
     pub chat_sessions: StdRwLock<HashMap<String, ChatHistory>>,
     /// Daemon session ID (timestamp-based), set once at startup.
     pub session_id: String,
+    /// Degraded mode: set when a catastrophic reconciliation fracture is detected.
+    /// Blocks new Tick creation and Implementer spawning until cleared via system.clear_degraded.
+    /// Not persisted - re-detected on restart via Integrator git audit.
+    pub degraded: AtomicBool,
+    /// Reconciliation health stats from the last sweep (updated by run_reconciler).
+    pub reconciliation_last_sweep_at: AtomicU64,
+    pub reconciliation_checked: AtomicU64,
+    pub reconciliation_fixed: AtomicU64,
+    pub reconciliation_catastrophic: AtomicU64,
 }
 
 macro_rules! store_accessors {
@@ -160,6 +169,42 @@ impl Stores {
     pub fn lock_git(&self) -> Result<MutexGuard<'_, ()>> {
         self.git_lock.lock().map_err(|_| eyre!("git_lock poisoned"))
     }
+
+    /// Path to the reconciliation log for this daemon session.
+    pub fn reconciliation_log_path(&self) -> Option<std::path::PathBuf> {
+        self.session_dir.as_ref().map(|d| d.join("reconciliation.log"))
+    }
+
+    /// Append a line to the reconciliation log (best-effort, no error propagation).
+    /// Format: `[timestamp LEVEL] collection:id from->to reason`
+    pub fn append_reconciliation_log(
+        &self,
+        level: &str,
+        collection: &str,
+        id: &str,
+        from: &str,
+        to: &str,
+        reason: &str,
+    ) {
+        let Some(path) = self.reconciliation_log_path() else {
+            return;
+        };
+        let ts = crate::id::now_millis() as u64;
+        let line = format!("[{ts} {level}] {collection}:{id} {from}->{to} {reason}\n");
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+
+    /// Update reconciliation health stats after a sweep completes.
+    pub fn update_reconciliation_stats(&self, checked: u64, fixed: u64, catastrophic: u64) {
+        self.reconciliation_last_sweep_at
+            .store(crate::id::now_millis() as u64, Ordering::Relaxed);
+        self.reconciliation_checked.store(checked, Ordering::Relaxed);
+        self.reconciliation_fixed.store(fixed, Ordering::Relaxed);
+        self.reconciliation_catastrophic.store(catastrophic, Ordering::Relaxed);
+    }
 }
 
 impl Stores {
@@ -194,6 +239,11 @@ impl Stores {
             session_dir: None,
             chat_sessions: StdRwLock::new(HashMap::new()),
             session_id: String::new(),
+            degraded: AtomicBool::new(false),
+            reconciliation_last_sweep_at: AtomicU64::new(0),
+            reconciliation_checked: AtomicU64::new(0),
+            reconciliation_fixed: AtomicU64::new(0),
+            reconciliation_catastrophic: AtomicU64::new(0),
         }
     }
 }
@@ -1247,5 +1297,42 @@ mod tests {
         assert_eq!(goals.len(), 1);
         assert_eq!(goals[&id].goal, "Build auth system");
         assert!(goals[&id].active);
+    }
+
+    #[test]
+    fn test_stores_degraded_initializes_false() {
+        let stores = Stores::new();
+        assert!(!stores.degraded.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_stores_reconciliation_stats_initialize_zero() {
+        let stores = Stores::new();
+        assert_eq!(stores.reconciliation_last_sweep_at.load(Ordering::Relaxed), 0);
+        assert_eq!(stores.reconciliation_checked.load(Ordering::Relaxed), 0);
+        assert_eq!(stores.reconciliation_fixed.load(Ordering::Relaxed), 0);
+        assert_eq!(stores.reconciliation_catastrophic.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_stores_update_reconciliation_stats() {
+        let stores = Stores::new();
+        stores.update_reconciliation_stats(42, 3, 0);
+        assert!(stores.reconciliation_last_sweep_at.load(Ordering::Relaxed) > 0);
+        assert_eq!(stores.reconciliation_checked.load(Ordering::Relaxed), 42);
+        assert_eq!(stores.reconciliation_fixed.load(Ordering::Relaxed), 3);
+        assert_eq!(stores.reconciliation_catastrophic.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_stores_reconciliation_log_path() {
+        let mut stores = Stores::new();
+        // No session_dir set: returns None
+        assert!(stores.reconciliation_log_path().is_none());
+        // With session_dir set: returns path in that dir
+        stores.session_dir = Some(std::path::PathBuf::from("/tmp/loopr-test-session"));
+        let path = stores.reconciliation_log_path().unwrap();
+        assert_eq!(path.file_name().unwrap(), "reconciliation.log");
+        assert!(path.to_str().unwrap().contains("loopr-test-session"));
     }
 }

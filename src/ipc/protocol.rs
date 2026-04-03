@@ -148,6 +148,23 @@ impl DaemonResponse {
     }
 }
 
+// --- Reconciliation reason constants (used in reconciliation.fixed / reconciliation.failed events) ---
+
+// Recoverable reasons
+pub const REASON_MISSING_HANDLE: &str = "MissingHandle";
+pub const REASON_HANDLE_FINISHED: &str = "HandleFinished";
+pub const REASON_SESSION_TIMEOUT: &str = "SessionTimeout";
+pub const REASON_HOLDER_TERMINAL: &str = "HolderTerminal";
+pub const REASON_HOLDER_WORK_DONE: &str = "HolderWorkDone";
+pub const REASON_LOCK_EXPIRED: &str = "LockExpired";
+pub const REASON_STALE_WORKTREE: &str = "StaleWorktree";
+pub const REASON_MISSING_BRANCH: &str = "MissingBranch";
+
+// Catastrophic reasons
+pub const REASON_SHA_UNREACHABLE: &str = "ShaUnreachable";
+pub const REASON_SHA_MISSING: &str = "ShaMissing";
+pub const REASON_MERGE_NOT_ANCESTOR: &str = "MergeNotAncestor";
+
 impl DaemonEvent {
     pub fn new(event: impl Into<String>, data: serde_json::Value) -> Self {
         Self {
@@ -329,6 +346,34 @@ impl DaemonEvent {
         Self::new(
             "learning.policy_contradicted",
             serde_json::json!({ "learning_id": learning_id }),
+        )
+    }
+
+    /// Emitted when reconciliation detects and fixes a state fracture.
+    pub fn reconciled(collection: &str, id: &str, from: &str, to: &str, reason: &str) -> Self {
+        Self::new(
+            "reconciliation.fixed",
+            serde_json::json!({
+                "collection": collection,
+                "id": id,
+                "from": from,
+                "to": to,
+                "reason": reason,
+            }),
+        )
+    }
+
+    /// Emitted when reconciliation detects a catastrophic fracture requiring manual intervention.
+    pub fn reconciliation_failed(collection: &str, id: &str, status: &str, reason: &str) -> Self {
+        Self::new(
+            "reconciliation.failed",
+            serde_json::json!({
+                "collection": collection,
+                "id": id,
+                "status": status,
+                "reason": reason,
+                "severity": "catastrophic",
+            }),
         )
     }
 }
@@ -572,5 +617,42 @@ mod tests {
         let parsed: DaemonEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.event, "agent.timing_info");
         assert_eq!(event, parsed);
+    }
+
+    #[test]
+    fn test_event_reconciled() {
+        let event = DaemonEvent::reconciled("work", "wi-1", "InProgress", "Blocked", REASON_MISSING_HANDLE);
+        assert_eq!(event.event, "reconciliation.fixed");
+        assert_eq!(event.data["collection"], "work");
+        assert_eq!(event.data["id"], "wi-1");
+        assert_eq!(event.data["from"], "InProgress");
+        assert_eq!(event.data["to"], "Blocked");
+        assert_eq!(event.data["reason"], REASON_MISSING_HANDLE);
+    }
+
+    #[test]
+    fn test_event_reconciliation_failed() {
+        let event = DaemonEvent::reconciliation_failed("tick", "tk-1", "Published", REASON_SHA_UNREACHABLE);
+        assert_eq!(event.event, "reconciliation.failed");
+        assert_eq!(event.data["collection"], "tick");
+        assert_eq!(event.data["id"], "tk-1");
+        assert_eq!(event.data["status"], "Published");
+        assert_eq!(event.data["reason"], REASON_SHA_UNREACHABLE);
+        assert_eq!(event.data["severity"], "catastrophic");
+    }
+
+    #[test]
+    fn test_reason_constants() {
+        assert_eq!(REASON_MISSING_HANDLE, "MissingHandle");
+        assert_eq!(REASON_HANDLE_FINISHED, "HandleFinished");
+        assert_eq!(REASON_SESSION_TIMEOUT, "SessionTimeout");
+        assert_eq!(REASON_HOLDER_TERMINAL, "HolderTerminal");
+        assert_eq!(REASON_HOLDER_WORK_DONE, "HolderWorkDone");
+        assert_eq!(REASON_LOCK_EXPIRED, "LockExpired");
+        assert_eq!(REASON_STALE_WORKTREE, "StaleWorktree");
+        assert_eq!(REASON_MISSING_BRANCH, "MissingBranch");
+        assert_eq!(REASON_SHA_UNREACHABLE, "ShaUnreachable");
+        assert_eq!(REASON_SHA_MISSING, "ShaMissing");
+        assert_eq!(REASON_MERGE_NOT_ANCESTOR, "MergeNotAncestor");
     }
 }
