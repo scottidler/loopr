@@ -227,7 +227,7 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
     // Verify bundle is Triaged
     {
         let bundles = stores.bundles.read().unwrap();
-        assert_eq!(bundles[&bundle_id].status, BundleStatus::Triaged);
+        assert_eq!(bundles[&bundle_id].status(), BundleStatus::Triaged);
     }
 
     // Review the bundle (needed before Accept)
@@ -260,6 +260,6 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
     // Verify bundle is Accepted
     {
         let bundles = stores.bundles.read().unwrap();
-        assert_eq!(bundles[&bundle_id].status, BundleStatus::Accepted);
+        assert_eq!(bundles[&bundle_id].status(), BundleStatus::Accepted);
     }
 }

@@ -440,9 +440,9 @@ impl DaemonContext {
             };
             let store_lock = self.stores.store.as_ref();
             for (id, bundle) in bundles.iter_mut() {
-                if bundle.status == BundleStatus::Integrating {
+                if bundle.status() == BundleStatus::Integrating {
                     warn!("Recovering orphaned Integrating Bundle: {}", id);
-                    bundle.status = BundleStatus::Accepted;
+                    bundle.force_status(BundleStatus::Accepted);
                     bundle.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = store_lock
                         && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
@@ -954,7 +954,7 @@ mod tests {
             "feature/orphaned".into(),
             vec!["claims".into()],
         );
-        bundle.status = BundleStatus::Integrating;
+        bundle.force_status(BundleStatus::Integrating);
         let b_id = bundle.id.clone();
         ctx.stores.bundles.write().unwrap().insert(b_id.clone(), bundle);
 
@@ -972,8 +972,8 @@ mod tests {
         assert_eq!(recovered, 1);
 
         let bundles = ctx.stores.bundles.read().unwrap();
-        assert_eq!(bundles[&b_id].status, BundleStatus::Accepted);
-        assert_eq!(bundles[&b2_id].status, BundleStatus::Proposed);
+        assert_eq!(bundles[&b_id].status(), BundleStatus::Accepted);
+        assert_eq!(bundles[&b2_id].status(), BundleStatus::Proposed);
     }
 
     #[test]
@@ -998,7 +998,7 @@ mod tests {
             "feature/orphaned".into(),
             vec!["claims".into()],
         );
-        bundle.status = BundleStatus::Integrating;
+        bundle.force_status(BundleStatus::Integrating);
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let recovered = ctx.recover_orphaned_records();
@@ -1144,7 +1144,7 @@ mod tests {
             "feature/orphaned".into(),
             vec!["claims".into()],
         );
-        bundle.status = BundleStatus::Integrating;
+        bundle.force_status(BundleStatus::Integrating);
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let recovered = ctx.recover_orphaned_records();

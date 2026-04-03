@@ -92,12 +92,37 @@ pub struct Bundle {
     /// for downstream agents to detect scope gaps.
     #[serde(default)]
     pub loose_files: Vec<String>,
-    pub status: BundleStatus,
+    status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 impl Bundle {
+    /// Read current status.
+    pub fn status(&self) -> BundleStatus {
+        self.status
+    }
+
+    /// Validated FSM transition. Returns Err if invalid.
+    pub fn transition(
+        &mut self,
+        target: BundleStatus,
+        role: crate::domain::role::Role,
+    ) -> crate::error::Result<crate::domain::transition::Transition> {
+        let result = self.status.validate_transition(target, role)?;
+        if result == crate::domain::transition::Transition::Changed {
+            self.status = target;
+            self.updated_at = id::now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: BundleStatus) {
+        self.status = target;
+        self.updated_at = id::now_millis();
+    }
+
     pub fn new(work_id: String, base_tick_id: Option<String>, branch_name: String, claims: Vec<String>) -> Self {
         log::debug!("Bundle::new(work_id={}, branch_name={})", work_id, branch_name);
         let now = id::now_millis();
@@ -200,7 +225,7 @@ mod tests {
         assert_eq!(b.branch_name, "feature/jwt");
         assert_eq!(b.claims, vec!["Add JWT signing".to_string()]);
         assert!(b.verification.is_empty());
-        assert_eq!(b.status, BundleStatus::Proposed);
+        assert_eq!(b.status(), BundleStatus::Proposed);
         assert!(b.touched_paths.is_empty());
         assert!(!b.id.is_empty());
         assert!(b.created_at > 0);
@@ -238,7 +263,7 @@ mod tests {
         assert_eq!(b.touched_paths, deserialized.touched_paths);
         assert_eq!(b.claims, deserialized.claims);
         assert_eq!(b.verification, deserialized.verification);
-        assert_eq!(b.status, deserialized.status);
+        assert_eq!(b.status(), deserialized.status());
     }
 
     #[test]
@@ -603,7 +628,7 @@ mod tests {
     #[test]
     fn test_record_indexed_fields_reflect_status() {
         let mut b = Bundle::new("wi-1".into(), None, "branch".into(), vec!["claims".into()]);
-        b.status = BundleStatus::Merged;
+        b.force_status(BundleStatus::Merged);
         let fields = b.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Merged".to_string())));
     }

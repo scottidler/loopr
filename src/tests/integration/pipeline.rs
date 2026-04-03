@@ -199,7 +199,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
 
     let bundles = stores.bundles.read().unwrap();
     assert_eq!(
-        bundles[&bundle_id].status,
+        bundles[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Accepted
     );
 
@@ -362,7 +362,7 @@ fn test_full_mvp4_pipeline() {
     {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(
-            bundles[&bundle_id].status,
+            bundles[&bundle_id].status(),
             crate::domain::bundle::BundleStatus::Accepted
         );
     }
@@ -628,7 +628,10 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     );
     {
         let bundles = stores.bundles.read().unwrap();
-        assert_eq!(bundles[&bundle_id].status, crate::domain::bundle::BundleStatus::Merged);
+        assert_eq!(
+            bundles[&bundle_id].status(),
+            crate::domain::bundle::BundleStatus::Merged
+        );
     }
 
     // --- 7. Reviewer rejection from Proposed (new FSM rule) ---
@@ -652,7 +655,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(
-            bundles[&bundle2_id].status,
+            bundles[&bundle2_id].status(),
             crate::domain::bundle::BundleStatus::Rejected
         );
     }
@@ -694,7 +697,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(
-            bundles[&bundle3_id].status,
+            bundles[&bundle3_id].status(),
             crate::domain::bundle::BundleStatus::Rejected
         );
     }

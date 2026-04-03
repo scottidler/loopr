@@ -44,7 +44,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
             .values()
             .filter(|b| {
                 !matches!(
-                    b.status,
+                    b.status(),
                     crate::domain::bundle::BundleStatus::Merged
                         | crate::domain::bundle::BundleStatus::Rejected
                         | crate::domain::bundle::BundleStatus::Superseded
@@ -54,7 +54,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
         if !active.is_empty() {
             status.push_str(&format!("Bundles ({} in flight):\n", active.len()));
             for b in &active {
-                status.push_str(&format!("  {} [{}]\n", b.id, b.status));
+                status.push_str(&format!("  {} [{}]\n", b.id, b.status()));
             }
         }
     }

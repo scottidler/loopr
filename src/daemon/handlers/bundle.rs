@@ -356,7 +356,7 @@ pub(super) fn handle_bundle_transition(
         // Read bundle info first for validation
         let (from, bundle_wi_id, touched_paths, mut verification) = match bundles.get(&id) {
             Some(b) => (
-                b.status,
+                b.status(),
                 b.work_id.clone(),
                 b.touched_paths.clone(),
                 b.verification.clone(),
@@ -394,7 +394,7 @@ pub(super) fn handle_bundle_transition(
         if target_status == BundleStatus::Accepted {
             let has_accepted = bundles
                 .values()
-                .any(|b| b.work_id == bundle_wi_id && b.id != id && b.status == BundleStatus::Accepted);
+                .any(|b| b.work_id == bundle_wi_id && b.id != id && b.status() == BundleStatus::Accepted);
             if has_accepted {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -438,7 +438,7 @@ pub(super) fn handle_bundle_transition(
 
         // Now get mutable reference and apply the transition
         let bundle = bundles.get_mut(&id).ok_or_else(|| eyre!("record not found: {id}"))?;
-        bundle.status = target_status;
+        bundle.force_status(target_status);
         bundle.updated_at = crate::id::now_millis();
         // Apply verification from transition params if provided
         if !verification.is_empty() && bundle.verification.is_empty() {

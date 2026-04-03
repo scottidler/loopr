@@ -386,7 +386,7 @@ pub(super) fn handle_work_transition(
             let has_active_bundle = bundles.values().any(|b| {
                 b.work_id == wi.id
                     && !matches!(
-                        b.status,
+                        b.status(),
                         BundleStatus::Rejected | BundleStatus::Merged | BundleStatus::Superseded
                     )
             });

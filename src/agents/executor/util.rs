@@ -85,7 +85,7 @@ pub(super) fn determine_work_handback(
     let bundles = stores.read_bundles().ok()?;
     let has_active_bundle = bundles
         .values()
-        .any(|b| b.work_id == work_id && !matches!(b.status, BundleStatus::Rejected | BundleStatus::Superseded));
+        .any(|b| b.work_id == work_id && !matches!(b.status(), BundleStatus::Rejected | BundleStatus::Superseded));
 
     Some(if has_active_bundle { "InReview" } else { "Blocked" })
 }
@@ -302,7 +302,7 @@ mod tests {
             "agent/wi-1".to_string(),
             vec!["claim".into()],
         );
-        bundle.status = BundleStatus::Accepted;
+        bundle.force_status(BundleStatus::Accepted);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
@@ -320,7 +320,7 @@ mod tests {
             "agent/wi-1".to_string(),
             vec!["claim".into()],
         );
-        bundle.status = BundleStatus::Rejected;
+        bundle.force_status(BundleStatus::Rejected);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let result = determine_work_handback(&stores, "wi-1", "sess-1", false);

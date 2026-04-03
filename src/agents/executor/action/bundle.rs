@@ -228,14 +228,16 @@ pub(super) fn handle_triage_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
                 bundle_id
             )));
         }
-        Some(bundle) if bundle.status != BundleStatus::Proposed => {
-            let hint = match bundle.status {
+        Some(bundle) if bundle.status() != BundleStatus::Proposed => {
+            let hint = match bundle.status() {
                 BundleStatus::Reviewed => "Use accept_bundle instead.",
                 _ => "No triage action needed.",
             };
             return Ok(ActionResult::ActionError(format!(
                 "triage_bundle: bundle {} is {} not Proposed. {}",
-                bundle_id, bundle.status, hint
+                bundle_id,
+                bundle.status(),
+                hint
             )));
         }
         _ => {}
@@ -277,14 +279,16 @@ pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
                 bundle_id
             )));
         }
-        Some(bundle) if !matches!(bundle.status, BundleStatus::Triaged | BundleStatus::Reviewed) => {
-            let hint = match bundle.status {
+        Some(bundle) if !matches!(bundle.status(), BundleStatus::Triaged | BundleStatus::Reviewed) => {
+            let hint = match bundle.status() {
                 BundleStatus::Proposed => "Use triage_bundle first.",
                 _ => "No accept action needed.",
             };
             return Ok(ActionResult::ActionError(format!(
                 "accept_bundle: bundle {} is {} not Triaged/Reviewed. {}",
-                bundle_id, bundle.status, hint
+                bundle_id,
+                bundle.status(),
+                hint
             )));
         }
         _ => {}

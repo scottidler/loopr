@@ -67,7 +67,7 @@ fn test_advisory_review_bundle_accepted_directly() {
             "feature/test".to_string(),
             vec!["test claim".to_string()],
         );
-        bundle.status = BundleStatus::Proposed;
+        bundle.force_status(BundleStatus::Proposed);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
     }
 
@@ -83,7 +83,7 @@ fn test_advisory_review_bundle_accepted_directly() {
         json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
     );
     assert_eq!(
-        stores.bundles.read().unwrap()[&bundle_id].status,
+        stores.bundles.read().unwrap()[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Triaged
     );
 
@@ -97,7 +97,7 @@ fn test_advisory_review_bundle_accepted_directly() {
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct accept"}),
     );
     assert_eq!(
-        stores.bundles.read().unwrap()[&bundle_id].status,
+        stores.bundles.read().unwrap()[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Accepted
     );
 }
@@ -175,7 +175,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
     {
         use crate::domain::bundle::{Bundle, BundleStatus};
         let mut bundle = Bundle::new(work_id.to_string(), None, "f/t".to_string(), vec!["claim".to_string()]);
-        bundle.status = BundleStatus::Proposed;
+        bundle.force_status(BundleStatus::Proposed);
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
     }
     let bundle_id = stores.bundles.read().unwrap().keys().next().unwrap().clone();
@@ -219,7 +219,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct"}),
     );
     assert_eq!(
-        stores.bundles.read().unwrap()[&bundle_id].status,
+        stores.bundles.read().unwrap()[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Accepted
     );
 }

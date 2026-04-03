@@ -170,7 +170,7 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
                         bundles_map.values().any(|b| {
                             b.work_id == wi.id
                                 && !matches!(
-                                    b.status,
+                                    b.status(),
                                     BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
                                 )
                                 && b.base_tick_id.as_ref().is_some_and(|btid| btid != latest_tid)

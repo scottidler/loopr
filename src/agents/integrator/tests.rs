@@ -305,7 +305,7 @@ fn test_cycle_recovers_open_tick() {
     stores.ticks.write().unwrap().insert(tick_id.clone(), tick);
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores.clone(), test_config());
@@ -336,7 +336,7 @@ fn test_cycle_publishes_tick() {
     let stores = test_stores(&dir);
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -349,7 +349,7 @@ fn test_cycle_publishes_tick() {
     );
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&bundle_id].status, BundleStatus::Merged);
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Merged);
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn test_cycle_validation_failure() {
     let stores = test_stores(&dir);
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -371,7 +371,7 @@ fn test_cycle_validation_failure() {
     );
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&bundle_id].status, BundleStatus::Rejected);
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
 }
 
 #[test]
@@ -390,7 +390,7 @@ fn test_cycle_stale_bundle_rejected() {
         "feature/x".into(),
         vec!["claims".into()],
     );
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -399,7 +399,7 @@ fn test_cycle_stale_bundle_rejected() {
     assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&bundle_id].status, BundleStatus::Rejected);
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
 
     let ticks = stores.ticks.read().unwrap();
     assert_eq!(ticks.len(), 1);
@@ -422,7 +422,7 @@ fn test_cycle_mixed_stale_and_valid() {
         "feature/valid".into(),
         vec!["claims".into()],
     );
-    valid_bundle.status = BundleStatus::Accepted;
+    valid_bundle.force_status(BundleStatus::Accepted);
     let valid_id = valid_bundle.id.clone();
     stores
         .bundles
@@ -436,7 +436,7 @@ fn test_cycle_mixed_stale_and_valid() {
         "feature/stale".into(),
         vec!["claims".into()],
     );
-    stale_bundle.status = BundleStatus::Accepted;
+    stale_bundle.force_status(BundleStatus::Accepted);
     let stale_id = stale_bundle.id.clone();
     stores
         .bundles
@@ -453,8 +453,8 @@ fn test_cycle_mixed_stale_and_valid() {
     );
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&valid_id].status, BundleStatus::Merged);
-    assert_eq!(bundles[&stale_id].status, BundleStatus::Rejected);
+    assert_eq!(bundles[&valid_id].status(), BundleStatus::Merged);
+    assert_eq!(bundles[&stale_id].status(), BundleStatus::Rejected);
 }
 
 fn test_stores_with_config(dir: &std::path::Path, config: Config) -> Arc<Stores> {
@@ -526,7 +526,7 @@ fn test_stale_policy_replan_at_safe_point() {
         "feature/x".into(),
         vec!["claims".into()],
     );
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -536,7 +536,7 @@ fn test_stale_policy_replan_at_safe_point() {
     assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&bundle_id].status, BundleStatus::Rejected);
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
 
     let mut found_replan = false;
     while let Ok(event) = event_rx.try_recv() {
@@ -571,7 +571,7 @@ fn test_stale_rejection_resets_work_to_ready() {
         "feature/x".into(),
         vec!["claims".into()],
     );
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores.clone(), test_config());
@@ -608,7 +608,7 @@ fn test_stale_rejection_creates_learning() {
         "feature/y".into(),
         vec!["claims".into()],
     );
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores.clone(), test_config());
@@ -646,7 +646,7 @@ fn test_stale_rejection_handles_terminal_work() {
         "feature/z".into(),
         vec!["claims".into()],
     );
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores.clone(), test_config());
@@ -684,7 +684,7 @@ fn test_stale_policy_auto_replay_and_verify() {
         "feature/x".into(),
         vec!["claims".into()],
     );
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -693,7 +693,7 @@ fn test_stale_policy_auto_replay_and_verify() {
     assert_eq!(result, IntegratorCycleResult::StaleRejected { count: 1 });
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&bundle_id].status, BundleStatus::Rejected);
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
     drop(bundles);
 
     let mut valid_bundle = Bundle::new(
@@ -702,7 +702,7 @@ fn test_stale_policy_auto_replay_and_verify() {
         "feature/valid".into(),
         vec!["claims".into()],
     );
-    valid_bundle.status = BundleStatus::Accepted;
+    valid_bundle.force_status(BundleStatus::Accepted);
     let valid_id = valid_bundle.id.clone();
     stores
         .bundles
@@ -710,7 +710,13 @@ fn test_stale_policy_auto_replay_and_verify() {
         .unwrap()
         .insert(valid_bundle.id.clone(), valid_bundle);
 
-    stores.bundles.write().unwrap().get_mut(&bundle_id).unwrap().status = BundleStatus::Accepted;
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .get_mut(&bundle_id)
+        .unwrap()
+        .force_status(BundleStatus::Accepted);
 
     let result = agent.run_cycle().unwrap();
     assert!(
@@ -720,7 +726,7 @@ fn test_stale_policy_auto_replay_and_verify() {
     );
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&valid_id].status, BundleStatus::Merged);
+    assert_eq!(bundles[&valid_id].status(), BundleStatus::Merged);
 }
 
 // --- recover_stuck_ticks learning creation ---
@@ -766,7 +772,7 @@ fn test_cycle_tick_creation_error_handling() {
     };
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores, config);
@@ -786,7 +792,7 @@ fn test_cycle_bundle_sealing_error_handling() {
     let stores = test_stores(&dir);
 
     let mut b1 = Bundle::new("wi-1".into(), None, "feature/a".into(), vec!["claims".into()]);
-    b1.status = BundleStatus::Accepted;
+    b1.force_status(BundleStatus::Accepted);
     let b1_id = b1.id.clone();
     stores.bundles.write().unwrap().insert(b1.id.clone(), b1);
 
@@ -799,7 +805,7 @@ fn test_cycle_bundle_sealing_error_handling() {
     );
 
     let bundles = stores.bundles.read().unwrap();
-    assert_eq!(bundles[&b1_id].status, BundleStatus::Merged);
+    assert_eq!(bundles[&b1_id].status(), BundleStatus::Merged);
 }
 
 // --- Validation with multiple commands ---
@@ -817,7 +823,7 @@ fn test_cycle_validation_multi_command_sequence() {
     };
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores.clone(), config);
@@ -844,7 +850,7 @@ fn test_cycle_validation_multi_command_sequence() {
     };
 
     let mut bundle2 = Bundle::new("wi-2".into(), None, "feature/y".into(), vec!["claims".into()]);
-    bundle2.status = BundleStatus::Accepted;
+    bundle2.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle2.id.clone(), bundle2);
 
     // Need a new agent with the pass config
@@ -865,7 +871,7 @@ fn test_cycle_tick_publish_learning_creation() {
     let stores = test_stores(&dir);
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Accepted;
+    bundle.force_status(BundleStatus::Accepted);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent = test_integrator(&dir, stores.clone(), failing_config());

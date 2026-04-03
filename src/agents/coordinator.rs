@@ -108,13 +108,13 @@ pub fn build_state_summary_with_sla(
         };
         let mut proposed: Vec<_> = bundles
             .values()
-            .filter(|b| matches!(b.status, BundleStatus::Proposed))
+            .filter(|b| matches!(b.status(), BundleStatus::Proposed))
             .collect();
         proposed.sort_by_key(|b| b.created_at);
         if !proposed.is_empty() {
             summary.push_str("### Proposed Bundles (use triage_bundle)\n");
             for b in &proposed {
-                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_id));
+                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status(), b.work_id));
             }
             summary.push('\n');
         }
@@ -127,13 +127,13 @@ pub fn build_state_summary_with_sla(
         };
         let mut reviewed: Vec<_> = bundles
             .values()
-            .filter(|b| matches!(b.status, BundleStatus::Reviewed))
+            .filter(|b| matches!(b.status(), BundleStatus::Reviewed))
             .collect();
         reviewed.sort_by_key(|b| b.created_at);
         if !reviewed.is_empty() {
             summary.push_str("### Reviewed Bundles (use accept_bundle)\n");
             for b in &reviewed {
-                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status, b.work_id));
+                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status(), b.work_id));
             }
             summary.push('\n');
         }
@@ -149,7 +149,7 @@ pub fn build_state_summary_with_sla(
         };
         let mut actionable_merged: Vec<_> = bundles
             .values()
-            .filter(|b| b.status == BundleStatus::Merged)
+            .filter(|b| b.status() == BundleStatus::Merged)
             .filter(|b| {
                 works
                     .get(&b.work_id)
@@ -184,7 +184,7 @@ pub fn build_state_summary_with_sla(
         };
         let mut rejected: Vec<_> = bundles
             .values()
-            .filter(|b| b.status == BundleStatus::Rejected)
+            .filter(|b| b.status() == BundleStatus::Rejected)
             .filter(|b| {
                 works
                     .get(&b.work_id)

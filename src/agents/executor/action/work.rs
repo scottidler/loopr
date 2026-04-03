@@ -279,11 +279,11 @@ pub(super) fn handle_override_work(
         let blocking = bundles.values().find(|b| {
             b.work_id == *work_id
                 && matches!(
-                    b.status,
+                    b.status(),
                     crate::domain::bundle::BundleStatus::Merged | crate::domain::bundle::BundleStatus::Integrating
                 )
         });
-        let blocked = blocking.map(|b| (b.id.clone(), b.status));
+        let blocked = blocking.map(|b| (b.id.clone(), b.status()));
         drop(bundles);
         if let Some((bundle_id, status)) = blocked {
             let msg = format!(
@@ -957,12 +957,15 @@ mod tests {
         {
             let mut bundles = stores.write_bundles().unwrap();
             if let Some(b) = bundles.get_mut(&bundle_id) {
-                b.status = match bundle_status {
-                    "Merged" => BundleStatus::Merged,
-                    "Integrating" => BundleStatus::Integrating,
-                    "Rejected" => BundleStatus::Rejected,
-                    _ => b.status,
+                let new_status = match bundle_status {
+                    "Merged" => Some(BundleStatus::Merged),
+                    "Integrating" => Some(BundleStatus::Integrating),
+                    "Rejected" => Some(BundleStatus::Rejected),
+                    _ => None,
                 };
+                if let Some(s) = new_status {
+                    b.force_status(s);
+                }
             }
         }
 
@@ -1101,7 +1104,7 @@ mod tests {
         {
             let mut bundles = stores.write_bundles().unwrap();
             if let Some(b) = bundles.get_mut(&bundle2_id) {
-                b.status = BundleStatus::Rejected;
+                b.force_status(BundleStatus::Rejected);
             }
         }
 

@@ -273,7 +273,7 @@ impl IntegratorAgent {
             let bundles = self.ctx.stores.read_bundles()?;
             bundles
                 .values()
-                .filter(|b| b.status == BundleStatus::Accepted)
+                .filter(|b| b.status() == BundleStatus::Accepted)
                 .map(|b| (b.id.clone(), b.base_tick_id.clone()))
                 .collect()
         };

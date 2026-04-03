@@ -194,7 +194,7 @@ fn test_bundle_lifecycle_via_dispatch() {
     // Verify final state
     let bundles = stores.bundles.read().unwrap();
     assert_eq!(
-        bundles[&bundle_id].status,
+        bundles[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Accepted
     );
 }

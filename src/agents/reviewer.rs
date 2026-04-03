@@ -432,7 +432,7 @@ mod tests {
             "feature/test".into(),
             vec!["Added test module with basic functionality".into()],
         );
-        bundle.status = BundleStatus::Triaged;
+        bundle.force_status(BundleStatus::Triaged);
         bundle.touched_paths = vec!["src/test.rs".into(), "src/main.rs".into()];
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
@@ -648,7 +648,7 @@ mod tests {
 
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
-        assert_eq!(bundle.status, BundleStatus::Reviewed);
+        assert_eq!(bundle.status(), BundleStatus::Reviewed);
     }
 
     #[tokio::test]
@@ -665,7 +665,7 @@ mod tests {
 
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
-        assert_eq!(bundle.status, BundleStatus::Rejected);
+        assert_eq!(bundle.status(), BundleStatus::Rejected);
         assert!(
             bundle.verification.contains("Rejected: Fundamentally wrong"),
             "verification should contain rejection reason: {}",
@@ -688,7 +688,7 @@ mod tests {
         // #21: request_changes now transitions to Rejected (not Reviewed)
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
-        assert_eq!(bundle.status, BundleStatus::Rejected);
+        assert_eq!(bundle.status(), BundleStatus::Rejected);
         assert!(
             bundle.verification.contains("Rejected: Needs work"),
             "verification should contain rejection reason: {}",
@@ -768,7 +768,7 @@ mod tests {
 
         let bundles = stores.bundles.read().unwrap();
         let bundle = bundles.get(&bundle_id).unwrap();
-        assert_eq!(bundle.status, BundleStatus::Reviewed);
+        assert_eq!(bundle.status(), BundleStatus::Reviewed);
     }
 
     #[tokio::test]
@@ -802,7 +802,7 @@ mod tests {
         {
             let mut bundles = stores.bundles.write().unwrap();
             let bundle = bundles.get_mut(&bundle_id).unwrap();
-            bundle.status = BundleStatus::Accepted;
+            bundle.force_status(BundleStatus::Accepted);
         }
 
         let llm = Box::new(MockReviewLlm::new(

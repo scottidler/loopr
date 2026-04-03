@@ -203,7 +203,7 @@ fn test_build_state_summary_with_reviewed_bundles() {
 
     // Reviewed bundle
     let mut bundle = Bundle::new("wi-2".into(), None, "branch-2".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Reviewed;
+    bundle.force_status(BundleStatus::Reviewed);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent_log = test_agent_logger(&dir);
@@ -306,7 +306,7 @@ fn test_build_state_summary_excludes_merged_bundles_from_active() {
     let stores = test_stores(&dir);
 
     let mut bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
-    bundle.status = BundleStatus::Merged;
+    bundle.force_status(BundleStatus::Merged);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent_log = test_agent_logger(&dir);
@@ -1868,7 +1868,7 @@ fn test_build_state_summary_includes_recently_merged_bundles() {
 
     // Create a merged bundle for that WI
     let mut bundle = Bundle::new(wi_id.clone(), None, "feature/test".into(), vec!["claim".into()]);
-    bundle.status = BundleStatus::Merged;
+    bundle.force_status(BundleStatus::Merged);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
 
@@ -1895,7 +1895,7 @@ fn test_build_state_summary_excludes_merged_when_wi_done() {
 
     // Create a merged bundle for that WI
     let mut bundle = Bundle::new(wi_id.clone(), None, "feature/done".into(), vec!["claim".into()]);
-    bundle.status = BundleStatus::Merged;
+    bundle.force_status(BundleStatus::Merged);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent_log = test_agent_logger(&dir);
@@ -1922,7 +1922,7 @@ fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() {
 
     // Create a rejected bundle for that WI
     let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
-    bundle.status = BundleStatus::Rejected;
+    bundle.force_status(BundleStatus::Rejected);
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
 
@@ -1957,7 +1957,7 @@ fn test_build_state_summary_rejected_bundle_includes_verification_reason() {
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
     let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
-    bundle.status = BundleStatus::Rejected;
+    bundle.force_status(BundleStatus::Rejected);
     bundle.verification = "Rejected: missing error handling".to_string();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -1981,7 +1981,7 @@ fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
     let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
-    bundle.status = BundleStatus::Rejected;
+    bundle.force_status(BundleStatus::Rejected);
     // verification left empty
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -2006,7 +2006,7 @@ fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
     let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec!["claim".into()]);
-    bundle.status = BundleStatus::Rejected;
+    bundle.force_status(BundleStatus::Rejected);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let agent_log = test_agent_logger(&dir);
