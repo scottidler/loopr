@@ -261,7 +261,7 @@ When a catastrophic fracture is detected, the system enters degraded mode:
 - A `DaemonEvent::reconciliation_failed` is emitted for logging/alerting
 - Recovery requires human intervention (inspect git state, potentially `git reflog` to recover)
 
-Degraded mode is a flag on `Stores` (e.g., `stores.degraded: AtomicBool`). The Integrator checks this flag at the start of each cycle and skips tick creation if set. The flag is cleared by an explicit daemon IPC command (`system.clear_degraded`).
+Degraded mode is a flag on `Stores` (e.g., `stores.degraded: AtomicBool`). The Integrator checks this flag at the start of each cycle and skips tick creation if set. The flag is cleared by an explicit daemon IPC command (`system.recover`).
 
 The flag is not persisted to disk. On daemon restart, the Integrator's first `audit_git_state()` call will re-detect the catastrophic condition and re-set the flag. This is correct because the Integrator is the authority on git state - the daemon startup sweep should not attempt SHA reachability checks.
 
@@ -315,7 +315,7 @@ Add `audit_git_state()` as the first step of the Integrator's `run_cycle()`, bef
 2. `audit_tick_shas()` - for each Published Tick with `integration_sha`, verify reachability via `git merge-base --is-ancestor`
 3. `audit_merge_ancestry()` - for each Merged Bundle, verify `head_commit` is reachable from its Tick's `integration_sha` via `git merge-base --is-ancestor`
 
-Add `degraded` flag to Stores. Add `system.clear_degraded` IPC command.
+Add `degraded` flag to Stores. Add `system.recover` IPC command.
 
 **Files:** `src/agents/integrator.rs`, `src/daemon/stores.rs`, `src/daemon/handlers/system.rs`
 
