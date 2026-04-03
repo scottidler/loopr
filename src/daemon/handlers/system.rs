@@ -226,3 +226,14 @@ pub(super) fn handle_shutdown(event_tx: &broadcast::Sender<DaemonEvent>, req: Da
         Ok(DaemonResponse::ok(req.id, json!({ "status": "shutting_down" })))
     })
 }
+
+pub(super) fn handle_clear_degraded(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_handler!(req.id, {
+        debug!("handle_clear_degraded()");
+        let was_degraded = stores.degraded.swap(false, Ordering::Relaxed);
+        Ok(DaemonResponse::ok(
+            req.id,
+            json!({ "was_degraded": was_degraded, "degraded": false }),
+        ))
+    })
+}

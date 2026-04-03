@@ -5,17 +5,21 @@
 //! if/then/else on data from the stores — no prompts, no parsing, no temperature.
 
 use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use eyre::{Result, eyre};
+use log::error;
 
 use crate::agents::{Agent, AgentContext, AgentKind};
 use crate::config::IntegratorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::tick::TickStatus;
-use crate::ipc::protocol::DaemonEvent;
+use crate::ipc::protocol::{
+    DaemonEvent, REASON_MERGE_NOT_ANCESTOR, REASON_MISSING_BRANCH, REASON_SHA_MISSING, REASON_SHA_UNREACHABLE,
+};
 
 /// The Integrator agent — wraps AgentContext + IntegratorConfig.
 pub struct IntegratorAgent {
@@ -257,6 +261,14 @@ impl IntegratorAgent {
     /// 5. Create Tick, seal it, run validation, publish or fail.
     pub fn run_cycle(&self) -> Result<IntegratorCycleResult> {
         self.ctx.debug("run_cycle()");
+        // 0. Git state audit — detects divergence between DB and git history
+        self.audit_git_state();
+        if self.ctx.stores.degraded.load(Ordering::Relaxed) {
+            self.ctx
+                .warn("Integrator skipping Tick creation: system is DEGRADED (git state fracture detected)");
+            return Ok(IntegratorCycleResult::Idle);
+        }
+
         // 1. Recover stuck ticks from crash
         let recovered = self.recover_stuck_ticks()?;
         if recovered > 0 {
@@ -835,6 +847,187 @@ impl IntegratorAgent {
                 tick_id: tick_id.clone(),
                 log: validation_log,
             })
+        }
+    }
+
+    /// Git state audit: verifies DB state matches git history. Sets degraded flag on catastrophic
+    /// fractures so run_cycle() can skip Tick creation. Safe to call every cycle — fast for
+    /// small repos and limits SHA reachability checks to recent bundles.
+    fn audit_git_state(&self) {
+        let repo_path = &self.ctx.stores.config.project.repo_path;
+        if !repo_path.join(".git").exists() {
+            return;
+        }
+        let mut catastrophic = false;
+        self.audit_branches(repo_path, &mut catastrophic);
+        self.audit_tick_shas(repo_path, &mut catastrophic);
+        self.audit_merge_ancestry(repo_path, &mut catastrophic);
+        if catastrophic {
+            self.ctx.stores.degraded.store(true, Ordering::Relaxed);
+            error!("Integrator entering DEGRADED mode: catastrophic git state fracture detected");
+        }
+    }
+
+    /// Check that every non-terminal Bundle still has its agent branch in git.
+    /// Recoverable: missing branch → force Bundle to Rejected.
+    fn audit_branches(&self, repo_path: &std::path::Path, catastrophic: &mut bool) {
+        let _ = catastrophic; // branch audit is recoverable only
+        let bundles: Vec<(String, String, String)> = {
+            match self.ctx.stores.read_bundles() {
+                Ok(bs) => bs
+                    .values()
+                    .filter(|b| {
+                        !matches!(
+                            b.status(),
+                            BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
+                        )
+                    })
+                    .map(|b| (b.id.clone(), b.work_id.clone(), format!("{:?}", b.status())))
+                    .collect(),
+                Err(_) => return,
+            }
+        };
+        for (bundle_id, work_id, from_status) in &bundles {
+            let branch = format!("agent/{}", work_id);
+            let exists = std::process::Command::new("git")
+                .args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", branch)])
+                .current_dir(repo_path)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !exists {
+                self.ctx.warn(&format!(
+                    "Reconciliation: Bundle {} branch {} missing (status={})",
+                    bundle_id, branch, from_status
+                ));
+                if let Ok(mut bundles_w) = self.ctx.stores.write_bundles()
+                    && let Some(bundle) = bundles_w.get_mut(bundle_id.as_str())
+                {
+                    bundle.force_status(BundleStatus::Rejected);
+                    bundle.updated_at = crate::id::now_millis();
+                    if let Some(store_arc) = self.ctx.stores.store.as_ref()
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(bundle.clone())
+                    {
+                        self.ctx.warn(&format!(
+                            "audit_branches: failed to persist bundle {}: {}",
+                            bundle_id, e
+                        ));
+                    }
+                    let _ = self.ctx.event_tx.send(DaemonEvent::reconciled(
+                        "bundle",
+                        bundle_id,
+                        from_status,
+                        "Rejected",
+                        REASON_MISSING_BRANCH,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Verify Published Tick integration SHAs are reachable from HEAD.
+    /// Catastrophic: SHA unreachable or missing → enter degraded mode.
+    fn audit_tick_shas(&self, repo_path: &std::path::Path, catastrophic: &mut bool) {
+        let published: Vec<(String, Option<String>)> = {
+            match self.ctx.stores.read_ticks() {
+                Ok(ticks) => ticks
+                    .values()
+                    .filter(|t| t.status() == TickStatus::Published)
+                    .map(|t| (t.id.clone(), t.integration_sha.clone()))
+                    .collect(),
+                Err(_) => return,
+            }
+        };
+        for (tick_id, sha_opt) in &published {
+            match sha_opt {
+                None => {
+                    error!(
+                        "Reconciliation CATASTROPHIC: Tick {} Published with no integration_sha",
+                        tick_id
+                    );
+                    let _ = self.ctx.event_tx.send(DaemonEvent::reconciliation_failed(
+                        "tick",
+                        tick_id,
+                        "Published",
+                        REASON_SHA_MISSING,
+                    ));
+                    *catastrophic = true;
+                }
+                Some(sha) => {
+                    let reachable = std::process::Command::new("git")
+                        .args(["merge-base", "--is-ancestor", sha, "HEAD"])
+                        .current_dir(repo_path)
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    if !reachable {
+                        error!(
+                            "Reconciliation CATASTROPHIC: Tick {} integration_sha {} unreachable from HEAD",
+                            tick_id, sha
+                        );
+                        let _ = self.ctx.event_tx.send(DaemonEvent::reconciliation_failed(
+                            "tick",
+                            tick_id,
+                            "Published",
+                            REASON_SHA_UNREACHABLE,
+                        ));
+                        *catastrophic = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Verify recently Merged bundles: head_commit must be ancestor of the Tick's integration_sha.
+    /// Catastrophic: ancestry broken → enter degraded mode.
+    /// Limited to last 100 merged bundles within 30 days to avoid full-history scans.
+    fn audit_merge_ancestry(&self, repo_path: &std::path::Path, catastrophic: &mut bool) {
+        let cutoff_ms = crate::id::now_millis() - (30 * 24 * 60 * 60 * 1000_i64);
+        let recent_merged: Vec<(String, String)> = {
+            match self.ctx.stores.read_bundles() {
+                Ok(bs) => {
+                    let mut v: Vec<(String, String, i64)> = bs
+                        .values()
+                        .filter(|b| {
+                            b.status() == BundleStatus::Merged && b.updated_at >= cutoff_ms && b.head_commit.is_some()
+                        })
+                        .map(|b| (b.id.clone(), b.head_commit.clone().unwrap_or_default(), b.updated_at))
+                        .collect();
+                    v.sort_by(|a, b| b.2.cmp(&a.2)); // most recent first
+                    v.truncate(100);
+                    v.into_iter().map(|(id, hc, _)| (id, hc)).collect()
+                }
+                Err(_) => return,
+            }
+        };
+        for (bundle_id, head_commit) in &recent_merged {
+            let tick_sha: Option<String> = self.ctx.stores.read_ticks().ok().and_then(|ticks| {
+                ticks
+                    .values()
+                    .find(|t| t.status() == TickStatus::Published && t.bundle_ids.contains(bundle_id))
+                    .and_then(|t| t.integration_sha.clone())
+            });
+            let Some(tick_sha) = tick_sha else { continue };
+            let is_ancestor = std::process::Command::new("git")
+                .args(["merge-base", "--is-ancestor", head_commit, &tick_sha])
+                .current_dir(repo_path)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !is_ancestor {
+                error!(
+                    "Reconciliation CATASTROPHIC: Bundle {} head_commit {} not ancestor of Tick integration_sha {}",
+                    bundle_id, head_commit, tick_sha
+                );
+                let _ = self.ctx.event_tx.send(DaemonEvent::reconciliation_failed(
+                    "bundle",
+                    bundle_id,
+                    "Merged",
+                    REASON_MERGE_NOT_ANCESTOR,
+                ));
+                *catastrophic = true;
+            }
         }
     }
 

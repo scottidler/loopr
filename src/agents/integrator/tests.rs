@@ -1179,3 +1179,125 @@ fn test_effective_validation_commands_empty_phase() {
     let result = effective_validation_commands(&global, &[bundle_id], &stores);
     assert_eq!(result, vec!["echo global"]);
 }
+
+// --- audit_git_state tests ---
+
+/// Initialize a bare git repo with a single commit so git operations work in tests.
+fn init_test_git_repo(dir: &std::path::Path) {
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    // Create an initial commit so HEAD is valid
+    std::fs::write(dir.join("readme.md"), "test").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+}
+
+#[test]
+fn test_audit_git_state_skips_non_git_dir() {
+    let dir = TestDir::new("loopr-intg-audit-nogit");
+    let stores = test_stores(&dir);
+    // Put a Published tick with no SHA into stores — would be catastrophic if git exists
+    let mut tick = Tick::new(1);
+    tick.force_status(crate::domain::tick::TickStatus::Published);
+    stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+    let intg = test_integrator(&dir, stores.clone(), test_config());
+    // Should not panic or set degraded (no .git directory)
+    intg.audit_git_state();
+    assert!(!stores.degraded.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[test]
+fn test_audit_tick_shas_sets_degraded_on_missing_sha() {
+    let dir = TestDir::new("loopr-intg-audit-sha");
+    init_test_git_repo(&dir);
+    let stores = test_stores(&dir);
+
+    // Published tick with no integration_sha
+    let mut tick = Tick::new(1);
+    tick.force_status(crate::domain::tick::TickStatus::Published);
+    // integration_sha is None by default
+    stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
+
+    let intg = test_integrator(&dir, stores.clone(), test_config());
+    intg.audit_git_state();
+    assert!(stores.degraded.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[test]
+fn test_audit_branches_rejects_bundle_with_missing_branch() {
+    let dir = TestDir::new("loopr-intg-audit-branch");
+    init_test_git_repo(&dir);
+    let stores = test_stores(&dir);
+
+    // Non-terminal bundle whose work_id branch does NOT exist in git
+    let work = Work::new("phase-1".into(), "Test Work".into(), "".into());
+    let work_id = work.id.clone();
+    stores.works.write().unwrap().insert(work_id.clone(), work);
+
+    let bundle = Bundle::new(work_id.clone(), None, format!("agent/{}", work_id), vec![]);
+    let bundle_id = bundle.id.clone();
+    stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+    let intg = test_integrator(&dir, stores.clone(), test_config());
+    intg.audit_git_state();
+
+    // Bundle should be rejected since the branch doesn't exist
+    let bundles = stores.bundles.read().unwrap();
+    assert_eq!(
+        bundles[&bundle_id].status(),
+        BundleStatus::Rejected,
+        "bundle with missing branch should be Rejected"
+    );
+}
+
+#[test]
+fn test_run_cycle_returns_idle_when_degraded() {
+    let dir = TestDir::new("loopr-intg-degraded");
+    init_test_git_repo(&dir);
+    let stores = test_stores(&dir);
+
+    // Set degraded flag directly
+    stores.degraded.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // Add an Accepted bundle to make cycle want to work
+    let work = Work::new("phase-1".into(), "W".into(), "".into());
+    let work_id = work.id.clone();
+    stores.works.write().unwrap().insert(work_id.clone(), work);
+    let mut bundle = Bundle::new(work_id.clone(), None, format!("agent/{}", work_id), vec![]);
+    bundle.force_status(BundleStatus::Accepted);
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let intg = test_integrator(&dir, stores.clone(), test_config());
+    // run_cycle() should return Idle because degraded = true
+    // (audit_git_state will re-check and might clear/reset, but degraded is already set)
+    // Since git repo has no Ticks with bad SHAs and no bundles with bad branches after branch check,
+    // degraded stays true from the manual set
+    let result = intg.run_cycle().unwrap();
+    assert_eq!(
+        result,
+        IntegratorCycleResult::Idle,
+        "run_cycle should return Idle when degraded"
+    );
+}
