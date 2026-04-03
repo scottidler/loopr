@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, RwLock as StdRwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -29,7 +29,10 @@ use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
 use crate::domain::work::{Work, WorkStatus};
 use crate::guidance::AgentGuidance;
-use crate::ipc::protocol::DaemonEvent;
+use crate::ipc::protocol::{
+    DaemonEvent, REASON_HANDLE_FINISHED, REASON_HOLDER_TERMINAL, REASON_HOLDER_WORK_DONE, REASON_LOCK_EXPIRED,
+    REASON_MISSING_HANDLE, REASON_STALE_WORKTREE,
+};
 use crate::tools::ToolExecutor;
 use crate::tools::ToolRunner;
 use crate::validator::DocValidator;
@@ -580,6 +583,424 @@ impl DaemonContext {
         }
 
         recovered
+    }
+
+    /// Runtime reconciliation sweep. Detects and recovers from state fractures where
+    /// DB state (TaskStore) has diverged from physical state (process handles, worktrees).
+    ///
+    /// Supersedes `recover_orphaned_records()` for runtime use. At startup, `agent_handles`
+    /// is empty so all non-terminal sessions are correctly failed (same result as the old
+    /// conservative reset). At runtime, sessions with live handles are left untouched.
+    ///
+    /// Returns the number of records fixed.
+    pub fn reconcile(&self) -> usize {
+        let mut fixed = 0usize;
+        let mut checked = 0usize;
+
+        // Pre-compute handle state snapshot to avoid holding mutex across lock acquisitions.
+        let handles_state: HashMap<String, bool> = {
+            match self.stores.lock_agent_handles() {
+                Ok(handles) => handles.iter().map(|(id, h)| (id.clone(), h.is_finished())).collect(),
+                Err(e) => {
+                    warn!("Reconciliation: cannot read agent_handles: {}", e);
+                    HashMap::new()
+                }
+            }
+        };
+
+        // Pre-compute work_ids of sessions with live handles (neither missing nor finished).
+        let active_work_ids: HashSet<String> = {
+            match self.stores.read_agent_sessions() {
+                Ok(sessions) => sessions
+                    .values()
+                    .filter(|s| !s.status().is_terminal())
+                    .filter(|s| handles_state.get(&s.id) == Some(&false))
+                    .filter_map(|s| s.work_id.clone())
+                    .collect(),
+                Err(_) => HashSet::new(),
+            }
+        };
+
+        // Pre-compute terminal work_ids (Done or Abandoned).
+        let terminal_work_ids: HashSet<String> = {
+            match self.stores.read_works() {
+                Ok(works) => works
+                    .values()
+                    .filter(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+                    .map(|w| w.id.clone())
+                    .collect(),
+                Err(_) => HashSet::new(),
+            }
+        };
+
+        // --- Session vs Handle cross-check ---
+        {
+            let session_timeout_secs = self.config.agents.implementer.session_timeout_secs.unwrap_or(30);
+            let now_ms = crate::id::now_millis();
+            let Ok(mut sessions) = self.stores.write_agent_sessions() else {
+                warn!("Reconciliation: cannot write agent_sessions, skipping");
+                return 0;
+            };
+            let store_lock = self.stores.store.as_ref();
+            for (id, session) in sessions.iter_mut() {
+                checked += 1;
+                if session.status().is_terminal() {
+                    continue;
+                }
+                let from = format!("{:?}", session.status());
+                match handles_state.get(id) {
+                    None => {
+                        // Starting: allow a grace period before declaring failure
+                        if session.status() == AgentStatus::Starting {
+                            let age_secs = ((now_ms - session.created_at) / 1000) as u64;
+                            if age_secs <= session_timeout_secs {
+                                continue; // still within startup grace period
+                            }
+                        }
+                        warn!(
+                            "Reconciliation: Session {} no handle (status={}, age={}s)",
+                            id,
+                            from,
+                            (now_ms - session.created_at) / 1000
+                        );
+                        session.force_status(AgentStatus::Failed);
+                        session.error_message = Some("Reconciliation: no task handle found".to_string());
+                        session.updated_at = crate::id::now_millis();
+                        if let Some(store_arc) = store_lock
+                            && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                            && let Err(e) = s.update(session.clone())
+                        {
+                            warn!("Reconciliation: failed to persist session {}: {}", id, e);
+                        }
+                        self.stores.append_reconciliation_log(
+                            "WARN",
+                            "agent_session",
+                            id,
+                            &from,
+                            "Failed",
+                            REASON_MISSING_HANDLE,
+                        );
+                        let _ = self.event_tx.send(DaemonEvent::reconciled(
+                            "agent_session",
+                            id,
+                            &from,
+                            "Failed",
+                            REASON_MISSING_HANDLE,
+                        ));
+                        fixed += 1;
+                    }
+                    Some(true) => {
+                        // Handle exists but is finished - task ended without updating status
+                        warn!("Reconciliation: Session {} handle finished but status={}", id, from);
+                        session.force_status(AgentStatus::Failed);
+                        session.error_message =
+                            Some("Reconciliation: task handle finished without status update".to_string());
+                        session.updated_at = crate::id::now_millis();
+                        if let Some(store_arc) = store_lock
+                            && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                            && let Err(e) = s.update(session.clone())
+                        {
+                            warn!("Reconciliation: failed to persist session {}: {}", id, e);
+                        }
+                        self.stores.append_reconciliation_log(
+                            "WARN",
+                            "agent_session",
+                            id,
+                            &from,
+                            "Failed",
+                            REASON_HANDLE_FINISHED,
+                        );
+                        let _ = self.event_tx.send(DaemonEvent::reconciled(
+                            "agent_session",
+                            id,
+                            &from,
+                            "Failed",
+                            REASON_HANDLE_FINISHED,
+                        ));
+                        fixed += 1;
+                    }
+                    Some(false) => {
+                        // Handle exists and is running - agent is active, skip
+                    }
+                }
+            }
+            // Cleanup: remove handles for terminal sessions (no status change needed)
+            drop(sessions);
+            if let Ok(mut handles) = self.stores.lock_agent_handles()
+                && let Ok(sessions) = self.stores.read_agent_sessions()
+            {
+                handles.retain(|id, _| sessions.get(id.as_str()).is_none_or(|s| !s.status().is_terminal()));
+            }
+        }
+
+        // --- Work: InProgress with no active session → Blocked ---
+        {
+            let Ok(mut works) = self.stores.write_works() else {
+                warn!("Reconciliation: cannot write works, skipping");
+                return fixed;
+            };
+            let store_lock = self.stores.store.as_ref();
+            for (id, wi) in works.iter_mut() {
+                checked += 1;
+                if wi.status() != WorkStatus::InProgress {
+                    continue;
+                }
+                if active_work_ids.contains(id) {
+                    continue; // active agent is running this work
+                }
+                let from = "InProgress";
+                warn!("Reconciliation: Work {} InProgress with no active session", id);
+                wi.force_status(WorkStatus::Blocked);
+                wi.updated_at = crate::id::now_millis();
+                if let Some(store_arc) = store_lock
+                    && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                    && let Err(e) = s.update(wi.clone())
+                {
+                    warn!("Reconciliation: failed to persist work {}: {}", id, e);
+                }
+                self.stores
+                    .append_reconciliation_log("WARN", "work", id, from, "Blocked", REASON_MISSING_HANDLE);
+                let _ = self.event_tx.send(DaemonEvent::reconciled(
+                    "work",
+                    id,
+                    from,
+                    "Blocked",
+                    REASON_MISSING_HANDLE,
+                ));
+                fixed += 1;
+            }
+        }
+
+        // --- Bundle: Integrating → Accepted ---
+        {
+            let Ok(mut bundles) = self.stores.write_bundles() else {
+                warn!("Reconciliation: cannot write bundles, skipping");
+                return fixed;
+            };
+            let store_lock = self.stores.store.as_ref();
+            for (id, bundle) in bundles.iter_mut() {
+                checked += 1;
+                if bundle.status() != BundleStatus::Integrating {
+                    continue;
+                }
+                let from = "Integrating";
+                warn!("Reconciliation: Bundle {} stuck in Integrating", id);
+                bundle.force_status(BundleStatus::Accepted);
+                bundle.updated_at = crate::id::now_millis();
+                if let Some(store_arc) = store_lock
+                    && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                    && let Err(e) = s.update(bundle.clone())
+                {
+                    warn!("Reconciliation: failed to persist bundle {}: {}", id, e);
+                }
+                self.stores
+                    .append_reconciliation_log("WARN", "bundle", id, from, "Accepted", REASON_MISSING_HANDLE);
+                let _ = self.event_tx.send(DaemonEvent::reconciled(
+                    "bundle",
+                    id,
+                    from,
+                    "Accepted",
+                    REASON_MISSING_HANDLE,
+                ));
+                fixed += 1;
+            }
+        }
+
+        // --- Tick: stuck Open/Sealing/Validating → Failed ---
+        {
+            let Ok(mut ticks) = self.stores.write_ticks() else {
+                warn!("Reconciliation: cannot write ticks, skipping");
+                return fixed;
+            };
+            let store_lock = self.stores.store.as_ref();
+            for (id, tick) in ticks.iter_mut() {
+                checked += 1;
+                let status = tick.status();
+                if !matches!(status, TickStatus::Open | TickStatus::Sealing | TickStatus::Validating) {
+                    continue;
+                }
+                let from = format!("{:?}", status);
+                warn!("Reconciliation: Tick {} stuck in {:?}", id, status);
+                tick.force_status(TickStatus::Failed);
+                if let Some(store_arc) = store_lock
+                    && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                    && let Err(e) = s.update(tick.clone())
+                {
+                    warn!("Reconciliation: failed to persist tick {}: {}", id, e);
+                }
+                self.stores
+                    .append_reconciliation_log("WARN", "tick", id, &from, "Failed", REASON_MISSING_HANDLE);
+                let _ = self.event_tx.send(DaemonEvent::reconciled(
+                    "tick",
+                    id,
+                    &from,
+                    "Failed",
+                    REASON_MISSING_HANDLE,
+                ));
+                fixed += 1;
+            }
+        }
+
+        // --- Lock: expired TTL + holder-status-aware release ---
+        {
+            let Ok(mut locks) = self.stores.write_locks() else {
+                warn!("Reconciliation: cannot write locks, skipping");
+                return fixed;
+            };
+            let store_lock = self.stores.store.as_ref();
+            for (id, lock) in locks.iter_mut() {
+                checked += 1;
+                if !lock.is_active() {
+                    continue;
+                }
+                // Check expired TTL first
+                if lock.is_expired() {
+                    let from = "Active";
+                    warn!("Reconciliation: Lock {} expired (resource={})", id, lock.resource);
+                    lock.expire();
+                    if let Some(store_arc) = store_lock
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(lock.clone())
+                    {
+                        warn!("Reconciliation: failed to persist lock {}: {}", id, e);
+                    }
+                    self.stores
+                        .append_reconciliation_log("WARN", "lock", id, from, "Expired", REASON_LOCK_EXPIRED);
+                    let _ = self.event_tx.send(DaemonEvent::reconciled(
+                        "lock",
+                        id,
+                        from,
+                        "Expired",
+                        REASON_LOCK_EXPIRED,
+                    ));
+                    fixed += 1;
+                    continue;
+                }
+                // Holder work is Done/Abandoned → release lock
+                if terminal_work_ids.contains(&lock.holder_id) {
+                    let from = "Active";
+                    warn!(
+                        "Reconciliation: Lock {} released (holder work {} is terminal)",
+                        id, lock.holder_id
+                    );
+                    lock.release();
+                    if let Some(store_arc) = store_lock
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(lock.clone())
+                    {
+                        warn!("Reconciliation: failed to persist lock {}: {}", id, e);
+                    }
+                    self.stores.append_reconciliation_log(
+                        "WARN",
+                        "lock",
+                        id,
+                        from,
+                        "Released",
+                        REASON_HOLDER_WORK_DONE,
+                    );
+                    let _ = self.event_tx.send(DaemonEvent::reconciled(
+                        "lock",
+                        id,
+                        from,
+                        "Released",
+                        REASON_HOLDER_WORK_DONE,
+                    ));
+                    fixed += 1;
+                    continue;
+                }
+                // Holder agent has no active session → release lock
+                if !active_work_ids.contains(&lock.holder_id) {
+                    // Double-check: is the holder work even in a working state?
+                    let holder_is_working = {
+                        self.stores
+                            .read_works()
+                            .ok()
+                            .and_then(|ws| ws.get(lock.holder_id.as_str()).map(|w| w.status()))
+                            .is_some_and(|s| {
+                                matches!(s, WorkStatus::InProgress | WorkStatus::InReview | WorkStatus::Ready)
+                            })
+                    };
+                    if holder_is_working {
+                        // Work is in an active state but has no running session - could be transient
+                        // during agent startup. Let the Work reconciliation handle it.
+                        continue;
+                    }
+                    let from = "Active";
+                    warn!(
+                        "Reconciliation: Lock {} released (holder {} has no active session)",
+                        id, lock.holder_id
+                    );
+                    lock.release();
+                    if let Some(store_arc) = store_lock
+                        && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                        && let Err(e) = s.update(lock.clone())
+                    {
+                        warn!("Reconciliation: failed to persist lock {}: {}", id, e);
+                    }
+                    self.stores
+                        .append_reconciliation_log("WARN", "lock", id, from, "Released", REASON_HOLDER_TERMINAL);
+                    let _ = self.event_tx.send(DaemonEvent::reconciled(
+                        "lock",
+                        id,
+                        from,
+                        "Released",
+                        REASON_HOLDER_TERMINAL,
+                    ));
+                    fixed += 1;
+                }
+            }
+        }
+
+        // --- Stale worktree cleanup ---
+        // Work is Done/Abandoned AND worktree exists AND no active agent session for this work.
+        {
+            let Ok(works) = self.stores.read_works() else {
+                warn!("Reconciliation: cannot read works for worktree check");
+                return fixed;
+            };
+            let done_work_ids: Vec<String> = works
+                .values()
+                .filter(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+                .filter(|w| !active_work_ids.contains(&w.id))
+                .map(|w| w.id.clone())
+                .collect();
+            drop(works);
+
+            for work_id in done_work_ids {
+                checked += 1;
+                if self.worktree_manager.exists(&work_id) {
+                    warn!("Reconciliation: stale worktree for Done/Abandoned Work {}", work_id);
+                    if let Err(e) = self.worktree_manager.cleanup(&work_id) {
+                        warn!("Reconciliation: failed to cleanup worktree for {}: {}", work_id, e);
+                    } else {
+                        self.stores.append_reconciliation_log(
+                            "WARN",
+                            "work",
+                            &work_id,
+                            "Done/Abandoned",
+                            "NoWorktree",
+                            REASON_STALE_WORKTREE,
+                        );
+                        let _ = self.event_tx.send(DaemonEvent::reconciled(
+                            "work",
+                            &work_id,
+                            "Done/Abandoned",
+                            "NoWorktree",
+                            REASON_STALE_WORKTREE,
+                        ));
+                        fixed += 1;
+                    }
+                }
+            }
+        }
+
+        info!(
+            "Reconciliation sweep completed: checked={} fixed={} catastrophic=0",
+            checked, fixed
+        );
+        self.stores.update_reconciliation_stats(checked as u64, fixed as u64, 0);
+
+        fixed
     }
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
@@ -1334,5 +1755,170 @@ mod tests {
         let path = stores.reconciliation_log_path().unwrap();
         assert_eq!(path.file_name().unwrap(), "reconciliation.log");
         assert!(path.to_str().unwrap().contains("loopr-test-session"));
+    }
+
+    // --- reconcile() tests ---
+
+    #[test]
+    fn test_reconcile_inprogress_work_no_active_session() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        // InProgress work with no session → should be reset to Blocked
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        wi.force_status(WorkStatus::InProgress);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 1);
+        let works = ctx.stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].status(), WorkStatus::Blocked);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_reconcile_inprogress_work_with_active_session_is_skipped() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        let mut wi = Work::new("phase-1".into(), "Active WI".into(), "".into());
+        wi.force_status(WorkStatus::InProgress);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        // Spawn a task that never completes to simulate an active agent handle
+        let handle = tokio::spawn(std::future::pending::<()>());
+        assert!(!handle.is_finished(), "handle should not be finished");
+
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".to_string());
+        session.work_id = Some(wi_id.clone());
+        session.force_status(AgentStatus::Running);
+        let session_id = session.id.clone();
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+        ctx.stores.agent_handles.lock().unwrap().insert(session_id, handle);
+
+        let fixed = ctx.reconcile();
+        // Work should NOT be reset since it has an active session with a live handle
+        assert_eq!(fixed, 0);
+        let works = ctx.stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].status(), WorkStatus::InProgress);
+    }
+
+    #[test]
+    fn test_reconcile_session_no_handle() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".to_string());
+        session.force_status(AgentStatus::Running);
+        let session_id = session.id.clone();
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
+        // No handle inserted
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 1);
+        let sessions = ctx.stores.agent_sessions.read().unwrap();
+        assert_eq!(sessions[&session_id].status(), AgentStatus::Failed);
+    }
+
+    #[test]
+    fn test_reconcile_integrating_bundle() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        let mut bundle = Bundle::new("wi-1".into(), None, "feature/test".into(), vec![]);
+        bundle.force_status(BundleStatus::Integrating);
+        let b_id = bundle.id.clone();
+        ctx.stores.bundles.write().unwrap().insert(b_id.clone(), bundle);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 1);
+        let bundles = ctx.stores.bundles.read().unwrap();
+        assert_eq!(bundles[&b_id].status(), BundleStatus::Accepted);
+    }
+
+    #[test]
+    fn test_reconcile_lock_released_when_holder_work_done() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        let mut wi = Work::new("phase-1".into(), "Done WI".into(), "".into());
+        wi.force_status(WorkStatus::Done);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let lock = Lock::new("src/lib.rs".into(), wi_id.clone(), "coordinator".into());
+        let lock_id = lock.id.clone();
+        ctx.stores.locks.write().unwrap().insert(lock_id.clone(), lock);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 1);
+        let locks = ctx.stores.locks.read().unwrap();
+        assert!(!locks[&lock_id].is_active());
+    }
+
+    #[test]
+    fn test_reconcile_no_action_needed() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        // Draft work and proposed bundle — both in safe states
+        let wi = Work::new("phase-1".into(), "Normal WI".into(), "".into());
+        ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
+        let bundle = Bundle::new("wi-1".into(), None, "feature/ok".into(), vec![]);
+        ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 0);
     }
 }

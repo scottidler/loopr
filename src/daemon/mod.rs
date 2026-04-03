@@ -236,8 +236,8 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         ensure_one_daemon(&c)?;
         write_pid_file(&c)?;
         write_version_file(&c)?;
-        // Crash recovery: reset any orphaned InProgress/Integrating records
-        c.recover_orphaned_records();
+        // Startup reconciliation: detect and recover state fractures from crash
+        c.reconcile();
         c.config.daemon.socket_path.clone()
     };
 
