@@ -120,7 +120,7 @@ pub fn dispatch(
         "system.init" => handle_system_init(stores, req),
         "system.status" => handle_status(stores, req),
         "system.shutdown" => handle_shutdown(event_tx, req),
-        "system.clear_degraded" => handle_clear_degraded(stores, req),
+        "system.recover" => handle_recover(stores, req),
         "plan.create" => handle_plan_create(stores, event_tx, req),
         "plan.get" => handle_plan_get(stores, req),
         "plan.list" => handle_plan_list(stores, req),

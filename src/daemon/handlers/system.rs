@@ -227,9 +227,9 @@ pub(super) fn handle_shutdown(event_tx: &broadcast::Sender<DaemonEvent>, req: Da
     })
 }
 
-pub(super) fn handle_clear_degraded(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+pub(super) fn handle_recover(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_clear_degraded()");
+        debug!("handle_recover()");
         let was_degraded = stores.degraded.swap(false, Ordering::Relaxed);
         Ok(DaemonResponse::ok(
             req.id,
