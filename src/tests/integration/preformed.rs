@@ -90,7 +90,7 @@ fn test_preformed_todo_app_plan() {
 
     // Verify plan is active
     let plans = stores.plans.read().unwrap();
-    assert_eq!(plans[&plan_id].status.to_string(), "active");
+    assert_eq!(plans[&plan_id].status().to_string(), "active");
 
     // Verify spec->plan relationship
     let (ref spec_id, ref phases) = spec_results[0];
@@ -103,7 +103,7 @@ fn test_preformed_todo_app_plan() {
         let phase = &phase_store[phase_id];
         assert_eq!(&phase.spec_id, spec_id);
         assert_eq!(phase.order, (i + 1) as u32);
-        assert_eq!(phase.status.to_string(), "active");
+        assert_eq!(phase.status().to_string(), "active");
     }
 
     // Verify work->phase relationships
@@ -211,11 +211,11 @@ fn test_preformed_calculator_app_plan() {
 
     // Verify everything is active/ready
     let plans = stores.plans.read().unwrap();
-    assert_eq!(plans[&plan_id].status.to_string(), "active");
+    assert_eq!(plans[&plan_id].status().to_string(), "active");
 
     let phase_store = stores.phases.read().unwrap();
     for phase in phase_store.values() {
-        assert_eq!(phase.status.to_string(), "active");
+        assert_eq!(phase.status().to_string(), "active");
     }
 
     let work_store = stores.works.read().unwrap();

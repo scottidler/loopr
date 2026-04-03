@@ -279,7 +279,7 @@ pub fn build_state_summary_with_sla(
         };
         let mut non_terminal: Vec<_> = phases
             .values()
-            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
             .collect();
         non_terminal.sort_by(|a, b| a.order.cmp(&b.order).then(a.created_at.cmp(&b.created_at)));
         if !non_terminal.is_empty() {
@@ -287,7 +287,11 @@ pub fn build_state_summary_with_sla(
             for p in &non_terminal {
                 summary.push_str(&format!(
                     "- [{}] {} ({}, spec: {}, order: {})\n",
-                    p.id, p.title, p.status, p.spec_id, p.order
+                    p.id,
+                    p.title,
+                    p.status(),
+                    p.spec_id,
+                    p.order
                 ));
             }
             summary.push('\n');
@@ -301,7 +305,7 @@ pub fn build_state_summary_with_sla(
         };
         let mut non_terminal: Vec<_> = specs
             .values()
-            .filter(|s| !matches!(s.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .filter(|s| !matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
             .collect();
         non_terminal.sort_by_key(|s| s.created_at);
         if !non_terminal.is_empty() {
@@ -309,7 +313,10 @@ pub fn build_state_summary_with_sla(
             for s in &non_terminal {
                 summary.push_str(&format!(
                     "- [{}] {} ({}, plan: {})\n",
-                    s.id, s.title, s.status, s.plan_id
+                    s.id,
+                    s.title,
+                    s.status(),
+                    s.plan_id
                 ));
             }
             summary.push('\n');
@@ -323,13 +330,13 @@ pub fn build_state_summary_with_sla(
         };
         let mut non_terminal: Vec<_> = plans
             .values()
-            .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
             .collect();
         non_terminal.sort_by_key(|p| p.created_at);
         if !non_terminal.is_empty() {
             summary.push_str("### Plans\n");
             for p in &non_terminal {
-                summary.push_str(&format!("- [{}] {} ({})\n", p.id, p.title, p.status));
+                summary.push_str(&format!("- [{}] {} ({})\n", p.id, p.title, p.status()));
             }
             summary.push('\n');
         }
@@ -749,7 +756,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
                 return;
             };
             if let Some(phase) = phases.get_mut(phase_id) {
-                phase.status = HierarchyStatus::Complete;
+                phase.force_status(HierarchyStatus::Complete);
                 phase.updated_at = crate::id::now_millis();
                 agent_log.info(&format!("Phase {} marked Complete (record status updated)", phase_id));
                 Some(phase.clone())
@@ -775,14 +782,14 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
         let plans = stores.read_plans().ok()?;
         plans
             .values()
-            .find(|p| p.status == HierarchyStatus::Active)
+            .find(|p| p.status() == HierarchyStatus::Active)
             .map(|p| p.id.clone())
     };
 
     // Check for Draft Plan (only if no Active Plan exists)
     if active_plan_id.is_none() {
         let plans = stores.read_plans().ok()?;
-        if let Some(draft) = plans.values().find(|p| p.status == HierarchyStatus::Draft) {
+        if let Some(draft) = plans.values().find(|p| p.status() == HierarchyStatus::Draft) {
             return Some(("Plan", draft.id.clone(), draft.title.clone()));
         }
         return None;
@@ -793,7 +800,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
         let specs = stores.read_specs().ok()?;
         specs
             .values()
-            .find(|s| s.status == HierarchyStatus::Active && Some(&s.plan_id) == active_plan_id.as_ref())
+            .find(|s| s.status() == HierarchyStatus::Active && Some(&s.plan_id) == active_plan_id.as_ref())
             .map(|s| s.id.clone())
     };
 
@@ -802,7 +809,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
         let specs = stores.read_specs().ok()?;
         if let Some(draft) = specs
             .values()
-            .find(|s| s.status == HierarchyStatus::Draft && Some(&s.plan_id) == active_plan_id.as_ref())
+            .find(|s| s.status() == HierarchyStatus::Draft && Some(&s.plan_id) == active_plan_id.as_ref())
         {
             return Some(("Spec", draft.id.clone(), draft.title.clone()));
         }
@@ -813,7 +820,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
     let phases = stores.read_phases().ok()?;
     if let Some(draft) = phases
         .values()
-        .find(|p| p.status == HierarchyStatus::Draft && Some(&p.spec_id) == active_spec_id.as_ref())
+        .find(|p| p.status() == HierarchyStatus::Draft && Some(&p.spec_id) == active_spec_id.as_ref())
     {
         return Some(("Phase", draft.id.clone(), draft.title.clone()));
     }
@@ -1191,7 +1198,7 @@ fn find_next_phase_to_activate(stores: &Stores, coord_state: &CoordinatorState) 
     let mut ordered: Vec<_> = phases
         .values()
         .filter(|p| !coord_state.phases_completed.contains(&p.id))
-        .filter(|p| !matches!(p.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+        .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
         .collect();
     ordered.sort_by_key(|p| p.order);
     ordered.first().map(|p| (p.id.clone(), p.title.clone()))

@@ -39,12 +39,13 @@ pub(super) fn handle_phase_create(
             let specs = stores.read_specs()?;
             match specs.get(&spec_id) {
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &spec_id))),
-                Some(spec) if matches!(spec.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                Some(spec) if matches!(spec.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
                             "Cannot create phase under {} spec '{}'",
-                            spec.status, spec_id
+                            spec.status(),
+                            spec_id
                         )),
                     ));
                 }
@@ -78,7 +79,7 @@ pub(super) fn handle_phase_create(
             let phases = stores.read_phases()?;
             if phases
                 .values()
-                .any(|p| p.spec_id == spec_id && p.status == HierarchyStatus::Draft)
+                .any(|p| p.spec_id == spec_id && p.status() == HierarchyStatus::Draft)
             {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -233,7 +234,7 @@ pub(super) fn handle_phase_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &id))),
         };
 
-        let from = phase.status;
+        let from = phase.status();
         match from.validate_transition(target_status, role) {
             Err(e) => {
                 let _ = event_tx.send(DaemonEvent::transition_rejected(
@@ -270,7 +271,7 @@ pub(super) fn handle_phase_transition(
             return Ok(DaemonResponse::err(req.id, err));
         }
 
-        phase.status = target_status;
+        phase.force_status(target_status);
         phase.updated_at = crate::id::now_millis();
         let phase_clone = phase.clone();
         drop(phases);
@@ -1028,7 +1029,7 @@ mod tests {
         let retrieved: Option<Phase> = store.get(&phase_id).unwrap();
         assert!(retrieved.is_some());
         let phase = retrieved.unwrap();
-        assert_eq!(phase.status, PhaseStatus::Active);
+        assert_eq!(phase.status(), PhaseStatus::Active);
     }
 
     // --- phase validation gate tests ---

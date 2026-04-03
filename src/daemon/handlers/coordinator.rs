@@ -313,7 +313,7 @@ pub(super) fn handle_coordinator_accept_plan(
             let mut plans = stores.write_plans()?;
             match plans.get_mut(&plan_id) {
                 Some(plan) => {
-                    plan.status = HierarchyStatus::Active;
+                    plan.force_status(HierarchyStatus::Active);
                     plan.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = &stores.store
                         && let Err(e) = store_arc
@@ -455,7 +455,7 @@ pub(super) fn handle_coordinator_seed_manifest(
 
         // Activate Plan
         let mut plan = resolved.plan;
-        plan.status = HierarchyStatus::Active;
+        plan.force_status(HierarchyStatus::Active);
         plan.updated_at = crate::id::now_millis();
         let plan_id = plan.id.clone();
         if let Some(store) = &stores.store {
@@ -469,7 +469,7 @@ pub(super) fn handle_coordinator_seed_manifest(
 
         // Activate Spec
         let mut spec = resolved.spec;
-        spec.status = HierarchyStatus::Active;
+        spec.force_status(HierarchyStatus::Active);
         spec.updated_at = crate::id::now_millis();
         let spec_id = spec.id.clone();
         if let Some(store) = &stores.store {
@@ -483,7 +483,7 @@ pub(super) fn handle_coordinator_seed_manifest(
 
         // Activate Phases
         for mut phase in resolved.phases {
-            phase.status = HierarchyStatus::Active;
+            phase.force_status(HierarchyStatus::Active);
             phase.updated_at = crate::id::now_millis();
             let phase_id = phase.id.clone();
             if let Some(store) = &stores.store {
@@ -724,7 +724,7 @@ mod tests {
         assert!(result["goal_id"].as_str().is_some());
 
         let plans = stores.read_plans().unwrap();
-        assert_eq!(plans[&plan_id].status, HierarchyStatus::Active);
+        assert_eq!(plans[&plan_id].status(), HierarchyStatus::Active);
 
         let goals = stores.read_coordinator_goals().unwrap();
         assert!(goals.values().any(|g| g.active));
@@ -757,7 +757,7 @@ mod tests {
         let plan = &plans[plan_id];
         assert_eq!(plan.title, "My Plan Title");
         assert_eq!(plan.description, "My Plan Title\nGoal: Build auth");
-        assert_eq!(plan.status, HierarchyStatus::Active);
+        assert_eq!(plan.status(), HierarchyStatus::Active);
 
         let goals = stores.read_coordinator_goals().unwrap();
         let goal = &goals[goal_id];

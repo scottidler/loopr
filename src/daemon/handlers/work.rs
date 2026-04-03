@@ -61,12 +61,13 @@ pub(super) fn handle_work_create(
             let phases = stores.read_phases()?;
             match phases.get(&phase_id) {
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &phase_id))),
-                Some(phase) if matches!(phase.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                Some(phase) if matches!(phase.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
                             "Cannot create work under {} phase '{}'",
-                            phase.status, phase_id
+                            phase.status(),
+                            phase_id
                         )),
                     ));
                 }

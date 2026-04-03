@@ -45,12 +45,37 @@ pub struct Plan {
     pub title: String,
     pub description: String,
     pub acceptance_criteria: String,
-    pub status: PlanStatus,
+    status: PlanStatus,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 impl Plan {
+    /// Read current status.
+    pub fn status(&self) -> PlanStatus {
+        self.status
+    }
+
+    /// Validated FSM transition. Returns Err if invalid.
+    pub fn transition(
+        &mut self,
+        target: PlanStatus,
+        role: crate::domain::role::Role,
+    ) -> crate::error::Result<crate::domain::transition::Transition> {
+        let result = self.status.validate_transition(target, role)?;
+        if result == crate::domain::transition::Transition::Changed {
+            self.status = target;
+            self.updated_at = id::now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: PlanStatus) {
+        self.status = target;
+        self.updated_at = id::now_millis();
+    }
+
     pub fn new(title: String, description: String, acceptance_criteria: String) -> Self {
         log::debug!("Plan::new(title={})", title);
         let now = id::now_millis();
@@ -254,7 +279,7 @@ mod tests {
         assert_eq!(plan.title, "Test Plan");
         assert_eq!(plan.description, "A test plan");
         assert_eq!(plan.acceptance_criteria, "It works");
-        assert_eq!(plan.status, HierarchyStatus::Draft);
+        assert_eq!(plan.status(), HierarchyStatus::Draft);
         assert!(!plan.id.is_empty());
         assert!(plan.created_at > 0);
         assert_eq!(plan.created_at, plan.updated_at);
@@ -271,7 +296,7 @@ mod tests {
         let deserialized: Plan = serde_json::from_str(&json).unwrap();
         assert_eq!(plan.id, deserialized.id);
         assert_eq!(plan.title, deserialized.title);
-        assert_eq!(plan.status, deserialized.status);
+        assert_eq!(plan.status(), deserialized.status());
         assert_eq!(plan.created_at, deserialized.created_at);
     }
 

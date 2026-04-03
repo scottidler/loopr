@@ -259,7 +259,7 @@ fn test_determine_level_spec_when_active_plan_no_specs() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
     assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Spec));
@@ -271,7 +271,7 @@ fn test_determine_level_none_when_draft_spec_exists() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -287,12 +287,12 @@ fn test_determine_level_phase_when_active_spec_no_phases() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
     assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Phase));
@@ -304,17 +304,17 @@ fn test_determine_level_work_when_active_phase_no_wis() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase = Phase::new(spec_id, "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
     assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Work));
@@ -326,17 +326,17 @@ fn test_determine_level_none_when_all_levels_populated() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase = Phase::new(spec_id, "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -361,7 +361,7 @@ fn test_find_active_plan_some() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Active".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan.clone());
 
     let found = find_active_plan(&stores).unwrap();
@@ -385,14 +385,14 @@ fn test_find_active_specs_for_plan() {
     let stores = test_stores(&dir);
 
     let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into(), "desc".into());
-    spec1.status = HierarchyStatus::Active;
+    spec1.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
 
     let spec2 = Spec::new("plan-1".into(), "Draft Spec".into(), "desc".into());
     stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
 
     let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into(), "desc".into());
-    spec3.status = HierarchyStatus::Active;
+    spec3.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec3.id.clone(), spec3);
 
     let active = find_active_specs_for_plan(&stores, "plan-1");
@@ -406,11 +406,11 @@ fn test_find_active_phases_for_spec_sorted() {
     let stores = test_stores(&dir);
 
     let mut p2 = Phase::new("spec-1".into(), "Phase 2".into(), "desc".into(), 2);
-    p2.status = HierarchyStatus::Active;
+    p2.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
     let mut p1 = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
-    p1.status = HierarchyStatus::Active;
+    p1.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(p1.id.clone(), p1);
 
     let phases = find_active_phases_for_spec(&stores, "spec-1");
@@ -441,22 +441,22 @@ fn test_find_phase_needing_works() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase1.status = HierarchyStatus::Active;
+    phase1.force_status(HierarchyStatus::Active);
     let phase1_id = phase1.id.clone();
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
     let mut phase2 = Phase::new(spec_id, "Phase 2".into(), "desc".into(), 2);
-    phase2.status = HierarchyStatus::Active;
+    phase2.force_status(HierarchyStatus::Active);
     let phase2_id = phase2.id.clone();
     stores.phases.write().unwrap().insert(phase2_id, phase2);
 
@@ -475,17 +475,17 @@ fn test_find_phase_needing_works_none_when_all_have() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase = Phase::new(spec_id, "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -801,11 +801,11 @@ fn test_determine_level_multiple_active_plans() {
     let stores = test_stores(&dir);
 
     let mut plan1 = Plan::new("Plan A".into(), "desc".into(), "crit".into());
-    plan1.status = HierarchyStatus::Active;
+    plan1.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan1.id.clone(), plan1);
 
     let mut plan2 = Plan::new("Plan B".into(), "desc".into(), "crit".into());
-    plan2.status = HierarchyStatus::Active;
+    plan2.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan2.id.clone(), plan2);
 
     // With active plans but no specs, should want Spec
@@ -819,16 +819,16 @@ fn test_determine_level_multiple_active_specs() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec1 = Spec::new(plan_id.clone(), "Spec A".into(), "desc".into());
-    spec1.status = HierarchyStatus::Active;
+    spec1.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
 
     let mut spec2 = Spec::new(plan_id, "Spec B".into(), "desc".into());
-    spec2.status = HierarchyStatus::Active;
+    spec2.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
 
     assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Phase));
@@ -841,7 +841,7 @@ fn test_determine_level_draft_spec_with_active_plan() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -860,7 +860,7 @@ fn test_find_draft_regen_spec_with_failures() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -893,12 +893,12 @@ fn test_find_draft_regen_phase_with_failures() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -1058,7 +1058,7 @@ fn test_find_works_for_phase_ordering() {
 fn test_build_spec_prompt_with_learnings_and_findings() {
     crate::prompts::init_defaults();
     let mut plan = Plan::new("Auth".into(), "JWT auth".into(), "Must secure".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
 
     let learnings = vec!["Use bcrypt".to_string(), "Rate limit".to_string()];
     let findings = vec!["Found auth.rs".to_string()];
@@ -1079,7 +1079,7 @@ fn test_build_spec_prompt_with_learnings_and_findings() {
 fn test_build_phase_prompt_with_learnings() {
     crate::prompts::init_defaults();
     let mut spec = Spec::new("plan-1".into(), "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
 
     let learnings = vec!["Always test edge cases".to_string()];
     let failures: Vec<String> = vec![];
@@ -1116,7 +1116,7 @@ fn test_is_validation_cap_reached_at_spec_level() {
 
     // Active plan
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -1149,13 +1149,13 @@ fn test_is_validation_cap_reached_at_phase_level() {
 
     // Active plan
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Active spec
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -1187,12 +1187,12 @@ fn test_find_draft_regen_returns_none_for_phase_at_cap() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -1256,12 +1256,12 @@ fn test_find_pending_coverage_check_plan_with_specs_no_report() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
     let check = find_pending_coverage_check(&stores);
@@ -1277,12 +1277,12 @@ fn test_find_pending_coverage_check_complete_report() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
     let report = make_coverage_report("plan", &plan_id, CoverageVerdict::Complete);
@@ -1305,7 +1305,7 @@ fn test_find_incomplete_decomposition() {
     let coord_state = CoordinatorState::new("goal-1".into(), crate::config::InterviewMode::Auto);
 
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -1331,7 +1331,7 @@ fn test_is_decomposition_cap_reached() {
     let mut coord_state = CoordinatorState::new("goal-1".into(), crate::config::InterviewMode::Auto);
 
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 

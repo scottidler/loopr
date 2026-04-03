@@ -16,7 +16,7 @@ pub struct Phase {
     pub title: String,
     pub description: String,
     pub order: u32,
-    pub status: PhaseStatus,
+    status: PhaseStatus,
     #[serde(default)]
     pub validation_commands: Vec<String>,
     pub created_at: i64,
@@ -24,6 +24,31 @@ pub struct Phase {
 }
 
 impl Phase {
+    /// Read current status.
+    pub fn status(&self) -> PhaseStatus {
+        self.status
+    }
+
+    /// Validated FSM transition. Returns Err if invalid.
+    pub fn transition(
+        &mut self,
+        target: PhaseStatus,
+        role: crate::domain::role::Role,
+    ) -> crate::error::Result<crate::domain::transition::Transition> {
+        let result = self.status.validate_transition(target, role)?;
+        if result == crate::domain::transition::Transition::Changed {
+            self.status = target;
+            self.updated_at = crate::id::now_millis();
+        }
+        Ok(result)
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: PhaseStatus) {
+        self.status = target;
+        self.updated_at = crate::id::now_millis();
+    }
+
     pub fn new(spec_id: String, title: String, description: String, order: u32) -> Self {
         log::debug!("Phase::new(spec_id={}, title={}, order={})", spec_id, title, order);
         let now = id::now_millis();
@@ -82,7 +107,7 @@ mod tests {
         assert_eq!(phase.title, "Token generation");
         assert_eq!(phase.description, "Implement JWT token generation");
         assert_eq!(phase.order, 1);
-        assert_eq!(phase.status, HierarchyStatus::Draft);
+        assert_eq!(phase.status(), HierarchyStatus::Draft);
         assert!(!phase.id.is_empty());
         assert!(phase.created_at > 0);
         assert_eq!(phase.created_at, phase.updated_at);
@@ -103,7 +128,7 @@ mod tests {
         assert_eq!(phase.title, deserialized.title);
         assert_eq!(phase.description, deserialized.description);
         assert_eq!(phase.order, deserialized.order);
-        assert_eq!(phase.status, deserialized.status);
+        assert_eq!(phase.status(), deserialized.status());
         assert_eq!(phase.created_at, deserialized.created_at);
         assert_eq!(phase.updated_at, deserialized.updated_at);
     }

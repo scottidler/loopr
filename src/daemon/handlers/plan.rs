@@ -51,7 +51,7 @@ pub(super) fn handle_plan_create(
         // Reject if a Draft Plan already exists — Coordinator must abandon the old one first
         {
             let plans = stores.read_plans()?;
-            if plans.values().any(|p| p.status == HierarchyStatus::Draft) {
+            if plans.values().any(|p| p.status() == HierarchyStatus::Draft) {
                 return Ok(DaemonResponse::err(
                     req.id,
                     RpcError::precondition_failed("A Draft Plan already exists; abandon it before creating a new one"),
@@ -188,7 +188,7 @@ pub(super) fn handle_plan_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &id))),
         };
 
-        let from = plan.status;
+        let from = plan.status();
         match from.validate_transition(target_status, role) {
             Err(e) => {
                 let _ = event_tx.send(DaemonEvent::transition_rejected(
@@ -225,7 +225,7 @@ pub(super) fn handle_plan_transition(
             return Ok(DaemonResponse::err(req.id, err));
         }
 
-        plan.status = target_status;
+        plan.force_status(target_status);
         plan.updated_at = crate::id::now_millis();
         let plan_clone = plan.clone();
         drop(plans);
@@ -773,7 +773,7 @@ mod tests {
         let retrieved: Option<Plan> = store.get(&plan_id).unwrap();
         assert!(retrieved.is_some());
         let plan = retrieved.unwrap();
-        assert_eq!(plan.status, PlanStatus::Active);
+        assert_eq!(plan.status(), PlanStatus::Active);
     }
 
     // --- plan validation gate tests ---

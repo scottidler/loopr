@@ -157,7 +157,7 @@ fn test_build_state_summary_excludes_completed() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Done Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Complete;
+    plan.force_status(HierarchyStatus::Complete);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
     let agent_log = test_agent_logger(&dir);
@@ -579,19 +579,19 @@ fn test_check_phase_completion_all_done() {
 
     // Create an Active plan
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Create an Active spec
     let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     // Create an Active phase
     let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -621,17 +621,17 @@ fn test_check_phase_completion_partial() {
 
     // Active plan → Active spec → Active phase
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -660,17 +660,17 @@ fn test_check_phase_completion_no_works() {
 
     // Active plan → Active spec → Active phase, but NO works
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -691,18 +691,18 @@ fn test_check_phase_completion_multiple_phases() {
 
     // Active plan → Active spec → 2 Active phases
     let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     // Phase 1: all works Done
     let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase1.status = HierarchyStatus::Active;
+    phase1.force_status(HierarchyStatus::Active);
     let phase1_id = phase1.id.clone();
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
@@ -712,7 +712,7 @@ fn test_check_phase_completion_multiple_phases() {
 
     // Phase 2: one work still InProgress
     let mut phase2 = Phase::new(spec_id.clone(), "Phase 2".into(), "desc".into(), 2);
-    phase2.status = HierarchyStatus::Active;
+    phase2.force_status(HierarchyStatus::Active);
     let phase2_id = phase2.id.clone();
     stores.phases.write().unwrap().insert(phase2_id.clone(), phase2);
 
@@ -804,17 +804,17 @@ fn test_check_fsm_transition_planning_to_activate() {
 
     // Create Plan → Spec → Phase hierarchy (all Active)
     let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id.clone(), "Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -961,7 +961,7 @@ fn test_fsm_planning_stays_when_plan_but_no_spec() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("P".into(), "d".into(), "c".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
     let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -975,12 +975,12 @@ fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("P".into(), "d".into(), "c".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "S".into(), "d".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
     let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1236,22 +1236,22 @@ fn test_fsm_phase_gate_to_activate_when_more_phases() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("P".into(), "d".into(), "c".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "S".into(), "d".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
-    phase1.status = HierarchyStatus::Active;
+    phase1.force_status(HierarchyStatus::Active);
     let phase1_id = phase1.id.clone();
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
     let mut phase2 = Phase::new(spec_id, "Phase 2".into(), "desc".into(), 2);
-    phase2.status = HierarchyStatus::Active;
+    phase2.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(phase2.id.clone(), phase2);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1353,22 +1353,22 @@ fn test_find_next_phase_skips_completed() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("P".into(), "d".into(), "c".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "S".into(), "d".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), "d".into(), 1);
-    p1.status = HierarchyStatus::Active;
+    p1.force_status(HierarchyStatus::Active);
     let p1_id = p1.id.clone();
     stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
     let mut p2 = Phase::new(spec_id, "Phase 2".into(), "d".into(), 2);
-    p2.status = HierarchyStatus::Active;
+    p2.force_status(HierarchyStatus::Active);
     let p2_id = p2.id.clone();
     stores.phases.write().unwrap().insert(p2_id.clone(), p2);
 
@@ -1403,22 +1403,22 @@ fn test_fsm_transition_handler_complete_phase_on_activate() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("P".into(), "d".into(), "c".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     let mut spec = Spec::new(plan_id, "S".into(), "d".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), "d".into(), 1);
-    p1.status = HierarchyStatus::Active;
+    p1.force_status(HierarchyStatus::Active);
     let p1_id = p1.id.clone();
     stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
     let mut p2 = Phase::new(spec_id, "Phase 2".into(), "d".into(), 2);
-    p2.status = HierarchyStatus::Active;
+    p2.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
     // Coordinator is in PhaseGate with phase 1 as current
@@ -1466,7 +1466,7 @@ fn test_find_pending_draft_none_when_active() {
     let stores = test_stores(&dir);
 
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
     assert!(find_pending_draft_for_validation(&stores).is_none());
@@ -1480,7 +1480,7 @@ fn test_build_generation_footer_draft_validator_disabled_activates_directly() {
 
     // Create an Active plan
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -1517,7 +1517,7 @@ fn test_build_generation_footer_draft_validator_enabled_validates() {
 
     // Create an Active plan
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -1544,7 +1544,7 @@ fn test_mark_phase_record_complete() {
     let stores = test_stores(&dir);
 
     let mut phase = Phase::new("spec-1".into(), "Test Phase".into(), "desc".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -1556,7 +1556,7 @@ fn test_mark_phase_record_complete() {
 
     let phases = stores.phases.read().unwrap();
     let updated = phases.get(&phase_id).unwrap();
-    assert_eq!(updated.status, HierarchyStatus::Complete);
+    assert_eq!(updated.status(), HierarchyStatus::Complete);
 }
 
 // --- Fix #2: resolve_batch_dependencies tests ---
@@ -2027,13 +2027,13 @@ fn test_find_draft_scoped_to_active_plan() {
 
     // Create an active plan
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Create a Draft Spec for the active plan
     let mut spec = Spec::new(plan_id.clone(), "Draft Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Draft;
+    spec.force_status(HierarchyStatus::Draft);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -2051,19 +2051,19 @@ fn test_find_draft_ignores_orphan_from_other_plan() {
 
     // Create an active plan
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "crit".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Create an active spec for the active plan
     let mut spec = Spec::new(plan_id, "Active Spec".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     // Create a Draft Spec from a DIFFERENT plan (orphan)
     let mut orphan_spec = Spec::new("old-plan-id".into(), "Orphan Spec".into(), "desc".into());
-    orphan_spec.status = HierarchyStatus::Draft;
+    orphan_spec.force_status(HierarchyStatus::Draft);
     stores
         .specs
         .write()
@@ -2254,13 +2254,13 @@ fn test_build_generation_footer_case0_revise_parent() {
 
     // Active Plan
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Active Spec under plan (so decomposition target is spec, not plan)
     let mut spec = Spec::new(plan_id, "Spec 1".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -2321,13 +2321,13 @@ fn test_build_generation_footer_case0_need_help_depth_exhausted() {
 
     // Active Plan
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Active Spec
     let mut spec = Spec::new(plan_id, "Spec 1".into(), "desc".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -2385,7 +2385,7 @@ fn test_build_generation_footer_case0_need_help_plan_level() {
 
     // Active Plan (the parent that has incomplete coverage)
     let mut plan = Plan::new("Active Plan".into(), "desc".into(), "criteria".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 

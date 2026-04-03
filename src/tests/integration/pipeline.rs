@@ -195,7 +195,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
 
     // Verify final state across all stores
     let plans = stores.plans.read().unwrap();
-    assert_eq!(plans[&plan_id].status, crate::domain::plan::HierarchyStatus::Active);
+    assert_eq!(plans[&plan_id].status(), crate::domain::plan::HierarchyStatus::Active);
 
     let bundles = stores.bundles.read().unwrap();
     assert_eq!(

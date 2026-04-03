@@ -159,7 +159,7 @@ fn test_generation_level_progression() {
 
     // Add active Plan -> needs Spec
     let mut plan = Plan::new("P".into(), "d".into(), "c".into());
-    plan.status = HierarchyStatus::Active;
+    plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
@@ -167,7 +167,7 @@ fn test_generation_level_progression() {
 
     // Add active Spec -> needs Phase
     let mut spec = Spec::new(plan_id.clone(), "S".into(), "d".into());
-    spec.status = HierarchyStatus::Active;
+    spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
@@ -175,7 +175,7 @@ fn test_generation_level_progression() {
 
     // Add active Phase -> needs Work
     let mut phase = Phase::new(spec_id.clone(), "Ph".into(), "d".into(), 1);
-    phase.status = HierarchyStatus::Active;
+    phase.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
     assert_eq!(determine_generation_level(&stores), Some(GenerationLevel::Work));

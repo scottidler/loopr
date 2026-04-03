@@ -39,12 +39,13 @@ pub(super) fn handle_spec_create(
             let plans = stores.read_plans()?;
             match plans.get(&plan_id) {
                 None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id))),
-                Some(plan) if matches!(plan.status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                Some(plan) if matches!(plan.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
                             "Cannot create spec under {} plan '{}'",
-                            plan.status, plan_id
+                            plan.status(),
+                            plan_id
                         )),
                     ));
                 }
@@ -77,7 +78,7 @@ pub(super) fn handle_spec_create(
             let specs = stores.read_specs()?;
             if specs
                 .values()
-                .any(|s| s.plan_id == plan_id && s.status == HierarchyStatus::Draft)
+                .any(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Draft)
             {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -232,7 +233,7 @@ pub(super) fn handle_spec_transition(
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &id))),
         };
 
-        let from = spec.status;
+        let from = spec.status();
         match from.validate_transition(target_status, role) {
             Err(e) => {
                 let _ = event_tx.send(DaemonEvent::transition_rejected(
@@ -269,7 +270,7 @@ pub(super) fn handle_spec_transition(
             return Ok(DaemonResponse::err(req.id, err));
         }
 
-        spec.status = target_status;
+        spec.force_status(target_status);
         spec.updated_at = crate::id::now_millis();
         let spec_clone = spec.clone();
         drop(specs);
@@ -953,7 +954,7 @@ mod tests {
         let retrieved: Option<Spec> = store.get(&spec_id).unwrap();
         assert!(retrieved.is_some());
         let spec = retrieved.unwrap();
-        assert_eq!(spec.status, SpecStatus::Active);
+        assert_eq!(spec.status(), SpecStatus::Active);
     }
 
     // --- spec validation gate tests ---
