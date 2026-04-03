@@ -222,7 +222,7 @@ pub fn build_state_summary_with_sla(
         let Ok(sessions) = stores.read_agent_sessions() else {
             return summary;
         };
-        let mut active: Vec<_> = sessions.values().filter(|s| !s.status.is_terminal()).collect();
+        let mut active: Vec<_> = sessions.values().filter(|s| !s.status().is_terminal()).collect();
         active.sort_by_key(|s| s.created_at);
         if !active.is_empty() {
             summary.push_str("### Active Agents\n");
@@ -235,7 +235,10 @@ pub fn build_state_summary_with_sla(
                     .unwrap_or("global");
                 summary.push_str(&format!(
                     "- [{}] {} {} (target: {})\n",
-                    s.id, s.agent_type, s.status, target
+                    s.id,
+                    s.agent_type,
+                    s.status(),
+                    target
                 ));
             }
             summary.push('\n');
@@ -1494,7 +1497,9 @@ fn last_error_kind_for_work(stores: &Stores, work_id: &str) -> Option<AgentError
     let sessions = stores.agent_sessions.read().ok()?;
     sessions
         .values()
-        .filter(|s| s.work_id.as_deref() == Some(work_id) && s.status == AgentStatus::Failed && s.error_kind.is_some())
+        .filter(|s| {
+            s.work_id.as_deref() == Some(work_id) && s.status() == AgentStatus::Failed && s.error_kind.is_some()
+        })
         .max_by_key(|s| s.updated_at)
         .and_then(|s| s.error_kind)
 }

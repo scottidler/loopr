@@ -302,7 +302,7 @@ pub(super) fn handle_override_work(
         let sessions = bridge.stores().read_agent_sessions()?;
         let active_sessions: Vec<String> = sessions
             .values()
-            .filter(|s| s.work_id.as_deref() == Some(work_id) && !s.status.is_terminal())
+            .filter(|s| s.work_id.as_deref() == Some(work_id) && !s.status().is_terminal())
             .map(|s| s.id.clone())
             .collect();
         drop(sessions);

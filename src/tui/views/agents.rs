@@ -47,13 +47,13 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             };
             let line = format!(
                 "[{}] {} ({}){}{}",
-                session.status,
+                session.status(),
                 session.agent_type,
                 &session.id[..session.id.len().min(8)],
                 target,
                 iter_info
             );
-            ListItem::new(Line::from(line)).style(Style::default().fg(status_color(session.status)))
+            ListItem::new(Line::from(line)).style(Style::default().fg(status_color(session.status())))
         })
         .collect();
 

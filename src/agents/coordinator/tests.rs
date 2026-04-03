@@ -250,7 +250,7 @@ fn test_build_state_summary_excludes_terminal_sessions() {
     let stores = test_stores(&dir);
 
     let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
-    session.status = AgentStatus::Completed;
+    session.force_status(AgentStatus::Completed);
     stores
         .agent_sessions
         .write()
@@ -2483,7 +2483,7 @@ fn test_last_error_kind_for_work_returns_structural_error() {
 
     let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
     session.work_id = Some("wi-1".to_string());
-    session.status = AgentStatus::Failed;
+    session.force_status(AgentStatus::Failed);
     session.error_kind = Some(AgentErrorKind::ContextOverflow);
     stores
         .agent_sessions
@@ -2502,7 +2502,7 @@ fn test_last_error_kind_for_work_ignores_non_failed_sessions() {
 
     let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
     session.work_id = Some("wi-1".to_string());
-    session.status = AgentStatus::Completed;
+    session.force_status(AgentStatus::Completed);
     session.error_kind = Some(AgentErrorKind::ContextOverflow);
     stores
         .agent_sessions
@@ -2520,7 +2520,7 @@ fn test_last_error_kind_for_work_ignores_other_works() {
 
     let mut session = AgentSession::new(AgentKind::Implementer, "model".into());
     session.work_id = Some("wi-2".to_string());
-    session.status = AgentStatus::Failed;
+    session.force_status(AgentStatus::Failed);
     session.error_kind = Some(AgentErrorKind::ContextOverflow);
     stores
         .agent_sessions

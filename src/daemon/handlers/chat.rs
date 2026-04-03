@@ -61,11 +61,11 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
 
     // Running agents
     if let Ok(sessions) = stores.read_agent_sessions() {
-        let running: Vec<_> = sessions.values().filter(|s| !s.status.is_terminal()).collect();
+        let running: Vec<_> = sessions.values().filter(|s| !s.status().is_terminal()).collect();
         if !running.is_empty() {
             status.push_str(&format!("Agents ({} running):\n", running.len()));
             for s in &running {
-                status.push_str(&format!("  {} [{:?}] {:?}\n", s.id, s.status, s.agent_type));
+                status.push_str(&format!("  {} [{:?}] {:?}\n", s.id, s.status(), s.agent_type));
             }
         }
     }

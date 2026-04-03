@@ -486,9 +486,9 @@ impl DaemonContext {
             };
             let store_lock = self.stores.store.as_ref();
             for (id, session) in sessions.iter_mut() {
-                if !session.status.is_terminal() {
-                    warn!("Recovering stuck AgentSession in {:?} state: {}", session.status, id);
-                    session.status = AgentStatus::Failed;
+                if !session.status().is_terminal() {
+                    warn!("Recovering stuck AgentSession in {:?} state: {}", session.status(), id);
+                    session.force_status(AgentStatus::Failed);
                     session.error_message = Some("Recovered after daemon crash".to_string());
                     session.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = store_lock
@@ -1164,7 +1164,7 @@ mod tests {
         .unwrap();
 
         let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
-        session.status = AgentStatus::Running;
+        session.force_status(AgentStatus::Running);
         let session_id = session.id.clone();
         ctx.stores
             .agent_sessions
@@ -1176,7 +1176,7 @@ mod tests {
         assert!(recovered >= 1);
 
         let sessions = ctx.stores.agent_sessions.read().unwrap();
-        assert_eq!(sessions[&session_id].status, AgentStatus::Failed);
+        assert_eq!(sessions[&session_id].status(), AgentStatus::Failed);
         assert!(sessions[&session_id].error_message.as_ref().unwrap().contains("crash"));
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
         .unwrap();
 
         let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
-        session.status = AgentStatus::Running;
+        session.force_status(AgentStatus::Running);
         session.transition_to(AgentStatus::WaitingForLlm).unwrap();
         let session_id = session.id.clone();
         ctx.stores
@@ -1206,7 +1206,7 @@ mod tests {
         assert!(recovered >= 1);
 
         let sessions = ctx.stores.agent_sessions.read().unwrap();
-        assert_eq!(sessions[&session_id].status, AgentStatus::Failed);
+        assert_eq!(sessions[&session_id].status(), AgentStatus::Failed);
     }
 
     #[test]
@@ -1222,7 +1222,7 @@ mod tests {
         .unwrap();
 
         let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
-        session.status = AgentStatus::Completed;
+        session.force_status(AgentStatus::Completed);
         let session_id = session.id.clone();
         ctx.stores
             .agent_sessions
@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(recovered, 0);
 
         let sessions = ctx.stores.agent_sessions.read().unwrap();
-        assert_eq!(sessions[&session_id].status, AgentStatus::Completed);
+        assert_eq!(sessions[&session_id].status(), AgentStatus::Completed);
     }
 
     #[test]

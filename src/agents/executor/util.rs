@@ -73,7 +73,7 @@ pub(super) fn determine_work_handback(
         s.id != session_id
             && s.agent_type == AgentKind::Implementer
             && s.work_id.as_deref() == Some(work_id)
-            && !s.status.is_terminal()
+            && !s.status().is_terminal()
     });
     drop(sessions);
 

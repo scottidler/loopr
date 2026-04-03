@@ -74,7 +74,7 @@ pub async fn run_single_work(
         let sessions = stores.read_agent_sessions()?;
         let active_count = sessions
             .values()
-            .filter(|s| s.agent_type == AgentKind::Implementer && !s.status.is_terminal())
+            .filter(|s| s.agent_type == AgentKind::Implementer && !s.status().is_terminal())
             .count();
         let max_pool = stores.config.agents.implementer.max_pool as usize;
         if active_count >= max_pool {
@@ -87,7 +87,7 @@ pub async fn run_single_work(
 
         // Dedup: if an implementer is already running on this work, skip
         let has_existing = sessions.values().any(|s| {
-            s.agent_type == AgentKind::Implementer && !s.status.is_terminal() && s.work_id.as_deref() == Some(work_id)
+            s.agent_type == AgentKind::Implementer && !s.status().is_terminal() && s.work_id.as_deref() == Some(work_id)
         });
         if has_existing {
             info!(

@@ -165,7 +165,7 @@ pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &Age
         };
         let siblings: Vec<_> = sessions
             .values()
-            .filter(|s| !s.status.is_terminal() && s.work_id.as_deref() != Some(work_id) && s.work_id.is_some())
+            .filter(|s| !s.status().is_terminal() && s.work_id.as_deref() != Some(work_id) && s.work_id.is_some())
             .collect();
         if !siblings.is_empty() {
             summary.push_str("### Sibling Agents\n");
@@ -173,7 +173,7 @@ pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &Age
                 summary.push_str(&format!(
                     "- {} {} (wi: {})\n",
                     s.agent_type,
-                    s.status,
+                    s.status(),
                     s.work_id.as_deref().unwrap_or("?")
                 ));
             }

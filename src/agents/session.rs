@@ -15,7 +15,7 @@ pub struct AgentSession {
     pub agent_type: AgentKind,
     pub work_id: Option<String>,
     pub bundle_id: Option<String>,
-    pub status: AgentStatus,
+    status: AgentStatus,
     pub iteration: u32,
     pub model: String,
     pub worktree_path: Option<String>,
@@ -59,6 +59,17 @@ impl AgentSession {
             daemon_session_id: None,
             error_kind: None,
         }
+    }
+
+    /// Read current status.
+    pub fn status(&self) -> AgentStatus {
+        self.status
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: AgentStatus) {
+        self.status = target;
+        self.updated_at = id::now_millis();
     }
 
     /// Transition the agent to a new status, updating the timestamp.
@@ -120,7 +131,7 @@ mod tests {
         let session = AgentSession::new(AgentKind::Implementer, "claude-sonnet-4-6".to_string());
         assert!(!session.id.is_empty());
         assert_eq!(session.agent_type, AgentKind::Implementer);
-        assert_eq!(session.status, AgentStatus::Starting);
+        assert_eq!(session.status(), AgentStatus::Starting);
         assert_eq!(session.iteration, 0);
         assert_eq!(session.model, "claude-sonnet-4-6");
         assert!(session.work_id.is_none());
@@ -162,7 +173,7 @@ mod tests {
     fn test_agent_session_transition_valid() {
         let mut session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         assert!(session.transition_to(AgentStatus::Running).is_ok());
-        assert_eq!(session.status, AgentStatus::Running);
+        assert_eq!(session.status(), AgentStatus::Running);
         assert!(session.updated_at >= session.created_at);
     }
 
@@ -171,7 +182,7 @@ mod tests {
         let mut session = AgentSession::new(AgentKind::Implementer, "m".to_string());
         let result = session.transition_to(AgentStatus::Completed);
         assert!(result.is_err());
-        assert_eq!(session.status, AgentStatus::Starting); // unchanged
+        assert_eq!(session.status(), AgentStatus::Starting); // unchanged
     }
 
     #[test]
@@ -181,7 +192,7 @@ mod tests {
         assert!(session.transition_to(AgentStatus::WaitingForLlm).is_ok());
         assert!(session.transition_to(AgentStatus::Running).is_ok());
         assert!(session.transition_to(AgentStatus::Completed).is_ok());
-        assert!(session.status.is_terminal());
+        assert!(session.status().is_terminal());
     }
 
     #[test]
@@ -193,7 +204,7 @@ mod tests {
         let deserialized: AgentSession = serde_json::from_str(&json).unwrap();
         assert_eq!(session.id, deserialized.id);
         assert_eq!(session.agent_type, deserialized.agent_type);
-        assert_eq!(session.status, deserialized.status);
+        assert_eq!(session.status(), deserialized.status());
         assert_eq!(session.work_id, deserialized.work_id);
         assert_eq!(session.worktree_path, deserialized.worktree_path);
         assert_eq!(session.target_id, deserialized.target_id);

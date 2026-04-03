@@ -267,7 +267,7 @@ impl App {
         self.state
             .agent_sessions
             .iter()
-            .find(|s| s.agent_type == AgentKind::Coordinator && s.status == target)
+            .find(|s| s.agent_type == AgentKind::Coordinator && s.status() == target)
             .map(|s| s.id.clone())
     }
 

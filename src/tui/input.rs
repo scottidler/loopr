@@ -816,7 +816,7 @@ mod tests {
         let mut app = App::new();
         let mut session =
             crate::agents::AgentSession::new(crate::agents::AgentKind::Coordinator, "test-model".to_string());
-        session.status = crate::agents::AgentStatus::Running;
+        session.force_status(crate::agents::AgentStatus::Running);
         let session_id = session.id.clone();
         app.state.agent_sessions.push(session);
         apply_action(&mut app, Action::PauseCoordinator);
@@ -828,7 +828,7 @@ mod tests {
         let mut app = App::new();
         let mut session =
             crate::agents::AgentSession::new(crate::agents::AgentKind::Coordinator, "test-model".to_string());
-        session.status = crate::agents::AgentStatus::Paused;
+        session.force_status(crate::agents::AgentStatus::Paused);
         let session_id = session.id.clone();
         app.state.agent_sessions.push(session);
         apply_action(&mut app, Action::ResumeCoordinator);
@@ -840,7 +840,7 @@ mod tests {
         let mut app = App::new();
         let mut session =
             crate::agents::AgentSession::new(crate::agents::AgentKind::Coordinator, "test-model".to_string());
-        session.status = crate::agents::AgentStatus::Running;
+        session.force_status(crate::agents::AgentStatus::Running);
         let session_id = session.id.clone();
         app.state.agent_sessions.push(session);
         apply_action(&mut app, Action::StopCoordinator);

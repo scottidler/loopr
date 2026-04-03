@@ -137,7 +137,7 @@ impl AgentContext {
         };
         sessions
             .get(&self.session.id)
-            .map(|s| s.status == AgentStatus::Cancelled)
+            .map(|s| s.status() == AgentStatus::Cancelled)
             .unwrap_or(true)
     }
 
@@ -314,7 +314,7 @@ mod tests {
 
         // Insert session with Cancelled status
         let mut session = ctx.session.clone();
-        session.status = AgentStatus::Cancelled;
+        session.force_status(AgentStatus::Cancelled);
         stores
             .agent_sessions
             .write()

@@ -442,7 +442,7 @@ mod tests {
 
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
-        assert!(session.status.is_terminal());
+        assert!(session.status().is_terminal());
 
         let mut events = vec![];
         while let Ok(e) = event_rx.try_recv() {
@@ -515,7 +515,10 @@ mod tests {
 
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
-        assert!(session.status.is_terminal(), "coordinator should be in terminal state");
+        assert!(
+            session.status().is_terminal(),
+            "coordinator should be in terminal state"
+        );
     }
 
     #[tokio::test]
@@ -558,7 +561,7 @@ mod tests {
 
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
-        assert!(session.status.is_terminal(), "researcher should reach terminal state");
+        assert!(session.status().is_terminal(), "researcher should reach terminal state");
     }
 
     #[tokio::test]
@@ -617,7 +620,7 @@ mod tests {
 
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
-        assert!(session.status.is_terminal(), "integrator should reach terminal state");
+        assert!(session.status().is_terminal(), "integrator should reach terminal state");
     }
 
     #[tokio::test]
@@ -686,7 +689,7 @@ mod tests {
 
         let sessions = stores.agent_sessions.read().unwrap();
         let session = sessions.get(&session_id).unwrap();
-        assert!(session.status.is_terminal());
+        assert!(session.status().is_terminal());
     }
 
     #[test]

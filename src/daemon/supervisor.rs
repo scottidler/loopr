@@ -98,7 +98,7 @@ pub async fn run_supervisor(
             };
             sessions
                 .values()
-                .any(|s| s.agent_type == AgentKind::Coordinator && !s.status.is_terminal())
+                .any(|s| s.agent_type == AgentKind::Coordinator && !s.status().is_terminal())
         };
 
         if has_active_coordinator {
@@ -165,7 +165,7 @@ mod tests {
         // Insert an implementer session that fails
         let mut session = AgentSession::new(AgentKind::Implementer, "test-model".into());
         let session_id = session.id.clone();
-        session.status = AgentStatus::Failed;
+        session.force_status(AgentStatus::Failed);
         stores
             .agent_sessions
             .write()
@@ -207,7 +207,7 @@ mod tests {
         // Insert a coordinator session
         let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
         let session_id = session.id.clone();
-        session.status = AgentStatus::Running;
+        session.force_status(AgentStatus::Running);
         stores
             .agent_sessions
             .write()
@@ -271,7 +271,7 @@ mod tests {
         // Send a coordinator failure event
         let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
         let session_id = session.id.clone();
-        session.status = AgentStatus::Failed;
+        session.force_status(AgentStatus::Failed);
         stores
             .agent_sessions
             .write()
@@ -297,12 +297,12 @@ mod tests {
         // Insert a failed coordinator
         let mut failed = AgentSession::new(AgentKind::Coordinator, "test-model".into());
         let failed_id = failed.id.clone();
-        failed.status = AgentStatus::Failed;
+        failed.force_status(AgentStatus::Failed);
         stores.agent_sessions.write().unwrap().insert(failed_id.clone(), failed);
 
         // Insert an active (Running) coordinator — supervisor should skip restart
         let mut active = AgentSession::new(AgentKind::Coordinator, "test-model".into());
-        active.status = AgentStatus::Running;
+        active.force_status(AgentStatus::Running);
         stores.agent_sessions.write().unwrap().insert(active.id.clone(), active);
 
         let _ = event_tx.send(DaemonEvent::agent_status_changed(&failed_id, AgentStatus::Failed));
@@ -337,7 +337,7 @@ mod tests {
         // Insert a coordinator session that fails
         let mut session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
         let session_id = session.id.clone();
-        session.status = AgentStatus::Failed;
+        session.force_status(AgentStatus::Failed);
         stores
             .agent_sessions
             .write()

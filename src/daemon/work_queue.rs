@@ -45,7 +45,9 @@ pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>
         // Exclude Works that already have a non-terminal Implementer
         .filter(|w| {
             !sessions.values().any(|s| {
-                s.agent_type == AgentKind::Implementer && s.work_id.as_deref() == Some(&w.id) && !s.status.is_terminal()
+                s.agent_type == AgentKind::Implementer
+                    && s.work_id.as_deref() == Some(&w.id)
+                    && !s.status().is_terminal()
             })
         })
         .map(|w| {
@@ -180,7 +182,7 @@ mod tests {
         // Create an active implementer session for this work
         let mut session = AgentSession::new(AgentKind::Implementer, "model".to_string());
         session.work_id = Some(id.clone());
-        session.status = AgentStatus::Running;
+        session.force_status(AgentStatus::Running);
         stores
             .agent_sessions
             .write()
@@ -198,7 +200,7 @@ mod tests {
         // Create a completed implementer session for this work
         let mut session = AgentSession::new(AgentKind::Implementer, "model".to_string());
         session.work_id = Some(id.clone());
-        session.status = AgentStatus::Completed;
+        session.force_status(AgentStatus::Completed);
         stores
             .agent_sessions
             .write()

@@ -386,7 +386,7 @@ async fn graceful_shutdown(stores: &Arc<Stores>, event_tx: &tokio::sync::broadca
             return;
         };
         for session in sessions.values_mut() {
-            if !session.status.is_terminal() {
+            if !session.status().is_terminal() {
                 let _ = session.transition_to(AgentStatus::Cancelled);
             }
         }
@@ -773,7 +773,7 @@ mod tests {
             let mut sessions = stores.agent_sessions.write().unwrap();
             let mut session =
                 crate::agents::AgentSession::new(crate::agents::AgentKind::Implementer, "test-model".to_string());
-            session.status = AgentStatus::Running;
+            session.force_status(AgentStatus::Running);
             sessions.insert(session.id.clone(), session);
         }
 
@@ -793,9 +793,9 @@ mod tests {
         let sessions = stores.agent_sessions.read().unwrap();
         for session in sessions.values() {
             assert!(
-                session.status.is_terminal(),
+                session.status().is_terminal(),
                 "expected terminal status, got {:?}",
-                session.status
+                session.status()
             );
         }
 

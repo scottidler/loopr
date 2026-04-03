@@ -120,7 +120,7 @@ pub(super) fn handle_agent_start(
             let mut sessions = stores.write_agent_sessions()?;
             let active_count = sessions
                 .values()
-                .filter(|s| s.agent_type == agent_type && !s.status.is_terminal())
+                .filter(|s| s.agent_type == agent_type && !s.status().is_terminal())
                 .count();
             let max_pool = super::max_pool_for(agent_type, &stores.config) as usize;
             if active_count >= max_pool {
@@ -134,7 +134,7 @@ pub(super) fn handle_agent_start(
             }
 
             // Global agent cap: 20 total active sessions
-            let total_active = sessions.values().filter(|s| !s.status.is_terminal()).count();
+            let total_active = sessions.values().filter(|s| !s.status().is_terminal()).count();
             if total_active >= 20 {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -148,7 +148,7 @@ pub(super) fn handle_agent_start(
             {
                 let has_existing = sessions.values().any(|s| {
                     s.agent_type == AgentKind::Researcher
-                        && !s.status.is_terminal()
+                        && !s.status().is_terminal()
                         && s.target_id.as_deref() == Some(tid)
                 });
                 if has_existing {
@@ -168,7 +168,7 @@ pub(super) fn handle_agent_start(
             {
                 let has_existing = sessions.values().any(|s| {
                     s.agent_type == AgentKind::Implementer
-                        && !s.status.is_terminal()
+                        && !s.status().is_terminal()
                         && s.work_id.as_deref() == Some(wi_id)
                 });
                 if has_existing {
@@ -273,10 +273,10 @@ pub(super) fn handle_agent_stop(
             }
         };
 
-        if session.status.is_terminal() {
+        if session.status().is_terminal() {
             return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
+                RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status())),
             ));
         }
 
@@ -334,10 +334,10 @@ pub(super) fn handle_agent_pause(
             }
         };
 
-        if session.status.is_terminal() {
+        if session.status().is_terminal() {
             return Ok(DaemonResponse::err(
                 req.id,
-                RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status)),
+                RpcError::transition_rejected(&format!("agent is already in terminal state: {}", session.status())),
             ));
         }
 
@@ -512,7 +512,7 @@ pub(super) fn handle_agent_list(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
         let mut result: Vec<&AgentSession> = sessions.values().collect();
 
         if let Some(status) = status_filter {
-            result.retain(|s| s.status == status);
+            result.retain(|s| s.status() == status);
         }
         if let Some(agent_type) = type_filter {
             result.retain(|s| s.agent_type == agent_type);
@@ -589,7 +589,7 @@ mod tests {
         let wm = test_worktree_mgr();
 
         let mut session = crate::agents::AgentSession::new(AgentKind::Coordinator, "model".to_string());
-        session.status = crate::agents::AgentStatus::Completed;
+        session.force_status(crate::agents::AgentStatus::Completed);
         stores
             .agent_sessions
             .write()
