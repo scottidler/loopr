@@ -262,7 +262,7 @@ pub fn build_state_summary_with_sla(
         let Ok(locks) = stores.read_locks() else {
             return summary;
         };
-        let active: Vec<_> = locks.values().filter(|l| l.status == LockStatus::Active).collect();
+        let active: Vec<_> = locks.values().filter(|l| l.status() == LockStatus::Active).collect();
         if !active.is_empty() {
             summary.push_str("### Active Locks\n");
             for l in &active {

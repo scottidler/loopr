@@ -5,17 +5,17 @@ use crate::domain::lock::{Lock, LockStatus};
 #[test]
 fn valid_release_from_active() {
     let mut lock = Lock::new("file.rs".into(), "wi-1".into(), "coord".into());
-    assert_eq!(lock.status, LockStatus::Active);
+    assert_eq!(lock.status(), LockStatus::Active);
     lock.release();
-    assert_eq!(lock.status, LockStatus::Released);
+    assert_eq!(lock.status(), LockStatus::Released);
 }
 
 #[test]
 fn valid_expire_from_active() {
     let mut lock = Lock::new("file.rs".into(), "wi-1".into(), "coord".into());
-    assert_eq!(lock.status, LockStatus::Active);
+    assert_eq!(lock.status(), LockStatus::Active);
     lock.expire();
-    assert_eq!(lock.status, LockStatus::Expired);
+    assert_eq!(lock.status(), LockStatus::Expired);
 }
 
 // --- is_active correctness ---
@@ -66,10 +66,10 @@ fn double_release_succeeds_currently() {
     // KNOWN GAP: release() doesn't check current status
     let mut lock = Lock::new("file.rs".into(), "wi-1".into(), "coord".into());
     lock.release();
-    assert_eq!(lock.status, LockStatus::Released);
+    assert_eq!(lock.status(), LockStatus::Released);
     // This should arguably fail but currently succeeds
     lock.release();
-    assert_eq!(lock.status, LockStatus::Released);
+    assert_eq!(lock.status(), LockStatus::Released);
 }
 
 #[test]
@@ -77,10 +77,10 @@ fn expire_after_release_succeeds_currently() {
     // KNOWN GAP: expire() doesn't check current status
     let mut lock = Lock::new("file.rs".into(), "wi-1".into(), "coord".into());
     lock.release();
-    assert_eq!(lock.status, LockStatus::Released);
+    assert_eq!(lock.status(), LockStatus::Released);
     // This should arguably fail but currently succeeds
     lock.expire();
-    assert_eq!(lock.status, LockStatus::Expired);
+    assert_eq!(lock.status(), LockStatus::Expired);
 }
 
 #[test]
@@ -88,10 +88,10 @@ fn release_after_expire_succeeds_currently() {
     // KNOWN GAP: release() doesn't check current status
     let mut lock = Lock::new("file.rs".into(), "wi-1".into(), "coord".into());
     lock.expire();
-    assert_eq!(lock.status, LockStatus::Expired);
+    assert_eq!(lock.status(), LockStatus::Expired);
     // This should arguably fail but currently succeeds
     lock.release();
-    assert_eq!(lock.status, LockStatus::Released);
+    assert_eq!(lock.status(), LockStatus::Released);
 }
 
 // --- Serde roundtrip ---
@@ -100,10 +100,10 @@ fn release_after_expire_succeeds_currently() {
 fn lock_serde_all_statuses() {
     for status in [LockStatus::Active, LockStatus::Released, LockStatus::Expired] {
         let mut lock = Lock::new("file.rs".into(), "wi-1".into(), "coord".into());
-        lock.status = status;
+        lock.force_status(status);
         let json = serde_json::to_string(&lock).unwrap();
         let restored: Lock = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.status, status);
+        assert_eq!(restored.status(), status);
     }
 }
 

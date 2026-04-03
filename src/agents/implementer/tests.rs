@@ -952,7 +952,7 @@ fn test_build_implementer_summary_with_locks_and_siblings() {
 
     // Add an active lock
     let mut lock = Lock::new("src/main.rs".into(), "wi-other".into(), "coordinator".into());
-    lock.status = LockStatus::Active;
+    lock.force_status(LockStatus::Active);
     stores.locks.write().unwrap().insert(lock.id.clone(), lock);
 
     // Add a sibling agent session (different work_id, not terminal)

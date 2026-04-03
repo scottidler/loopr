@@ -75,7 +75,7 @@ fn compute_priority(
     let has_contention = work.resource_tags.iter().any(|tag| {
         locks
             .values()
-            .any(|l| l.resource == *tag && l.status == LockStatus::Active)
+            .any(|l| l.resource == *tag && l.status() == LockStatus::Active)
     });
     if !has_contention {
         score += 100;

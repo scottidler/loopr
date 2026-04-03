@@ -37,5 +37,5 @@ fn test_lock_lifecycle_via_dispatch() {
 
     // Lock should be released
     let lock_state = stores.locks.read().unwrap();
-    assert_eq!(lock_state[&lock_id].status, crate::domain::lock::LockStatus::Released);
+    assert_eq!(lock_state[&lock_id].status(), crate::domain::lock::LockStatus::Released);
 }

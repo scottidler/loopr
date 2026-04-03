@@ -15,7 +15,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
             let expires = l.expires_at.map(|ts| format!(", expires={ts}")).unwrap_or_default();
             ListItem::new(Line::from(format!(
                 "[{}] {} holder={} granted_by={}{}",
-                l.status, l.resource, l.holder_id, l.granted_by, expires
+                l.status(),
+                l.resource,
+                l.holder_id,
+                l.granted_by,
+                expires
             )))
         })
         .collect();

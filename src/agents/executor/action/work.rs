@@ -349,7 +349,7 @@ pub(super) fn handle_override_work(
         let locks = bridge.stores().read_locks()?;
         let work_locks: Vec<String> = locks
             .values()
-            .filter(|l| l.holder_id == *work_id && matches!(l.status, crate::domain::lock::LockStatus::Active))
+            .filter(|l| l.holder_id == *work_id && matches!(l.status(), crate::domain::lock::LockStatus::Active))
             .map(|l| l.id.clone())
             .collect();
         drop(locks);

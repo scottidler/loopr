@@ -711,7 +711,7 @@ mod tests {
         let store = stores.store.as_ref().unwrap().lock().unwrap();
         let lock: Option<Lock> = store.get(&lock_id).unwrap();
         assert!(lock.is_some());
-        assert_eq!(lock.unwrap().status.to_string(), "Released");
+        assert_eq!(lock.unwrap().status().to_string(), "Released");
     }
 
     #[test]
@@ -745,7 +745,7 @@ mod tests {
         let store = stores.store.as_ref().unwrap().lock().unwrap();
         let lock: Option<Lock> = store.get(&lock_id).unwrap();
         assert!(lock.is_some());
-        assert_eq!(lock.unwrap().status.to_string(), "Expired");
+        assert_eq!(lock.unwrap().status().to_string(), "Expired");
     }
 
     #[test]

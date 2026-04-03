@@ -148,7 +148,7 @@ pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &Age
     // Active locks on resources
     {
         let Ok(locks) = stores.read_locks() else { return summary };
-        let active: Vec<_> = locks.values().filter(|l| l.status == LockStatus::Active).collect();
+        let active: Vec<_> = locks.values().filter(|l| l.status() == LockStatus::Active).collect();
         if !active.is_empty() {
             summary.push_str("### Active Locks\n");
             for l in &active {

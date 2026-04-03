@@ -34,7 +34,7 @@ pub struct Lock {
     pub resource: String,
     pub holder_id: String,
     pub granted_by: String,
-    pub status: LockStatus,
+    status: LockStatus,
     #[serde(default)]
     pub expires_at: Option<i64>,
     #[serde(default)]
@@ -44,6 +44,17 @@ pub struct Lock {
 }
 
 impl Lock {
+    /// Read current status.
+    pub fn status(&self) -> LockStatus {
+        self.status
+    }
+
+    /// Bypass FSM validation. For recovery, bootstrap, and test fixtures ONLY.
+    pub fn force_status(&mut self, target: LockStatus) {
+        self.status = target;
+        self.updated_at = id::now_millis();
+    }
+
     pub fn new(resource: String, holder_id: String, granted_by: String) -> Self {
         log::debug!("Lock::new(resource={}, holder_id={})", resource, holder_id);
         let now = id::now_millis();
@@ -147,7 +158,7 @@ mod tests {
         assert_eq!(lock.resource, "src/main.rs");
         assert_eq!(lock.holder_id, "wi-123");
         assert_eq!(lock.granted_by, "coord-456");
-        assert_eq!(lock.status, LockStatus::Active);
+        assert_eq!(lock.status(), LockStatus::Active);
         assert!(lock.is_active());
         assert!(!lock.id.is_empty());
         assert!(lock.created_at > 0);
@@ -163,7 +174,7 @@ mod tests {
         assert_eq!(lock.resource, deserialized.resource);
         assert_eq!(lock.holder_id, deserialized.holder_id);
         assert_eq!(lock.granted_by, deserialized.granted_by);
-        assert_eq!(lock.status, deserialized.status);
+        assert_eq!(lock.status(), deserialized.status());
         assert_eq!(lock.created_at, deserialized.created_at);
         assert_eq!(lock.updated_at, deserialized.updated_at);
     }
@@ -180,7 +191,7 @@ mod tests {
         let mut lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
         assert!(lock.is_active());
         lock.release();
-        assert_eq!(lock.status, LockStatus::Released);
+        assert_eq!(lock.status(), LockStatus::Released);
         assert!(!lock.is_active());
     }
 
@@ -189,7 +200,7 @@ mod tests {
         let mut lock = Lock::new("file.rs".to_string(), "wi-1".to_string(), "coord-1".to_string());
         assert!(lock.is_active());
         lock.expire();
-        assert_eq!(lock.status, LockStatus::Expired);
+        assert_eq!(lock.status(), LockStatus::Expired);
         assert!(!lock.is_active());
     }
 
