@@ -278,7 +278,7 @@ grep -rn 'force_status' src/ --include='*.rs' | grep -v tests | grep -v '#\[cfg(
 | Agent-side mutations that should be IPC get `force_status()` instead | Medium | Medium | Each site reviewed individually. Comment every `force_status()` with why it bypasses. |
 | `force_status()` becomes the new `pub status` - used everywhere | Medium | Medium | Code review norm: `force_status()` in non-test, non-recovery code requires justification. Grep audit in CI. |
 | Large mechanical diff obscures logic changes | Low | Low | Separate commits per struct. Read changes are purely mechanical. |
-| Precondition check ordering bug in handlers | Medium | Medium | Handlers currently validate FSM then check preconditions. After refactor, preconditions come first. Review each handler to ensure precondition checks don't depend on the status already being validated. |
+| ~~Precondition check ordering bug in handlers~~ | ~~Medium~~ | ~~Medium~~ | **Resolved:** All 6 handlers audited (2026-04-02). Every precondition checks either `target_status` (from request params) or `from` (captured before mutation). None depend on the FSM validation having run first. The bundle verification gate uses `from` but only as data inspection. The `check_validation_gate` in Plan/Spec/Phase uses `from` and `target` as values, not validation results. Reorder is safe for all handlers. |
 
 ## Open Questions
 
