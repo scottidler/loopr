@@ -1,0 +1,182 @@
+goal: "Build a 'notes' CLI tool in Rust with subcommands: add, list, get, delete, search. Store notes in a SQLite database (rusqlite with bundled feature). Use clap (derive) for CLI. Note: id (INTEGER PRIMARY KEY AUTOINCREMENT), title (TEXT), content (TEXT default ''), tags (TEXT default ''). Database path configurable via --db flag (default: notes.db in current directory). Include a full cargo test suite with unit tests for the database layer and integration tests for CLI behavior."
+plan:
+  title: "Rust Notes CLI"
+  description: "Multi-subcommand 'notes' CLI with SQLite storage, clap derive, and comprehensive cargo tests."
+  spec:
+    title: "Notes CLI"
+    description: "Database layer, CLI subcommands, and cargo test suite"
+    phases:
+      - title: "Database layer"
+        description: "SQLite CRUD module using rusqlite"
+        validation-commands:
+          - "cargo check"
+        works:
+          - key: "database-layer"
+            title: "Create src/db.rs with SQLite CRUD"
+            description: |
+              Create src/db.rs.
+
+              use rusqlite::{Connection, Result, params};
+
+              pub struct Db {
+                  conn: Connection,
+              }
+
+              #[derive(Debug)]
+              pub struct Note {
+                  pub id: i64,
+                  pub title: String,
+                  pub content: String,
+                  pub tags: String,
+              }
+
+              impl Db {
+                  pub fn open(path: &str) -> Result<Self> {
+                    Open a rusqlite Connection at path.
+                    Execute CREATE TABLE IF NOT EXISTS notes (
+                      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                      title   TEXT NOT NULL,
+                      content TEXT NOT NULL DEFAULT '',
+                      tags    TEXT NOT NULL DEFAULT ''
+                    );
+                    Return Ok(Db { conn }).
+
+                  pub fn create(&self, title: &str, content: &str, tags: &str) -> Result<Note>
+                    INSERT and return the created Note with last_insert_rowid().
+
+                  pub fn list(&self) -> Result<Vec<Note>>
+                    SELECT all notes ordered by id.
+
+                  pub fn get(&self, id: i64) -> Result<Option<Note>>
+                    SELECT by id, return None if not found.
+
+                  pub fn update(&self, id: i64, title: Option<&str>, content: Option<&str>, tags: Option<&str>) -> Result<bool>
+                    UPDATE only non-None fields. Return true if a row was affected.
+
+                  pub fn delete(&self, id: i64) -> Result<bool>
+                    DELETE by id. Return true if a row was affected.
+
+                  pub fn search(&self, query: &str) -> Result<Vec<Note>>
+                    SELECT notes WHERE title LIKE %query% OR content LIKE %query%.
+
+              Add unit tests in a #[cfg(test)] mod tests block:
+              - test_create_and_list: open in-memory (":memory:"), create note, list returns it
+              - test_get_existing: create note, get by id, verify fields
+              - test_get_missing: get id 99999, expect None
+              - test_delete_existing: create note, delete by id, verify list is empty
+              - test_delete_missing: delete id 99999, expect false
+              - test_search_matches: create two notes with different titles, search finds only matching one
+            resource_tags: ["src/db.rs"]
+            acceptance_criteria:
+              - "cargo check passes"
+              - "All 6 unit tests in src/db.rs pass"
+              - "Db::open(\":memory:\") works for testing"
+
+      - title: "CLI subcommands"
+        description: "clap derive CLI with add, list, get, delete, search subcommands"
+        validation-commands:
+          - "cargo build"
+        works:
+          - key: "cli-commands"
+            title: "Implement CLI in src/main.rs using clap derive"
+            description: |
+              Implement src/main.rs with clap derive CLI.
+
+              use clap::{Parser, Subcommand};
+
+              #[derive(Parser)]
+              #[command(name = "notes", version, about = "A simple notes CLI")]
+              struct Cli {
+                  /// Path to the SQLite database file
+                  #[arg(long, default_value = "notes.db")]
+                  db: String,
+                  #[command(subcommand)]
+                  command: Commands,
+              }
+
+              #[derive(Subcommand)]
+              enum Commands {
+                  /// Add a new note
+                  Add {
+                      title: String,
+                      #[arg(long, default_value = "")]
+                      content: String,
+                      #[arg(long, default_value = "")]
+                      tags: String,
+                  },
+                  /// List all notes
+                  List,
+                  /// Get a note by ID
+                  Get { id: i64 },
+                  /// Delete a note by ID
+                  Delete { id: i64 },
+                  /// Search notes by title or content
+                  Search { query: String },
+              }
+
+              fn main() -> eyre::Result<()> {
+                  let cli = Cli::parse();
+                  let db = db::Db::open(&cli.db)?;
+                  match cli.command {
+                    Commands::Add { title, content, tags } =>
+                      print note after creating: "[{id}] {title}"
+                    Commands::List =>
+                      print each note as "[{id}] {title}" or "No notes." if empty
+                    Commands::Get { id } =>
+                      print note fields or "Note {id} not found."
+                    Commands::Delete { id } =>
+                      print "Deleted note {id}." or "Note {id} not found."
+                    Commands::Search { query } =>
+                      print matching notes or "No notes matching '{query}'."
+                  }
+                  Ok(())
+              }
+
+              Use mod db; to include src/db.rs.
+            resource_tags: ["src/main.rs"]
+            dependencies: ["database-layer"]
+            acceptance_criteria:
+              - "cargo build succeeds"
+              - "notes add 'Test' prints the new note id and title"
+              - "notes list prints all notes"
+              - "notes get <id> prints the note"
+              - "notes delete <id> prints confirmation"
+              - "notes search <query> prints matching notes"
+
+      - title: "Integration tests"
+        description: "CLI integration tests using std::process::Command"
+        validation-commands:
+          - "cargo test"
+        works:
+          - key: "integration-tests"
+            title: "Add integration tests in tests/cli.rs"
+            description: |
+              Create tests/cli.rs with integration tests that run the compiled binary.
+
+              use std::process::Command;
+              use tempfile::NamedTempFile;
+
+              Helper: build the binary path from env!("CARGO_BIN_EXE_notes") or
+              using `cargo build` and resolving target/debug/notes.
+
+              Use a temp file as the database for each test to ensure isolation.
+              Pass --db <tempfile_path> to every notes invocation.
+
+              Tests to implement:
+              - test_add_creates_note: run `notes add "Hello"`, assert output contains "Hello"
+              - test_list_empty: run `notes list` on empty db, output contains "No notes"
+              - test_list_after_add: add a note, list, assert note appears
+              - test_get_note: add a note, get by id (parse id from add output), assert title shown
+              - test_get_missing: run `notes get 99999`, assert output contains "not found"
+              - test_delete_note: add a note, delete by id, list shows empty
+              - test_delete_missing: run `notes delete 99999`, assert output contains "not found"
+              - test_search_finds_match: add two notes, search for one, assert only it appears
+              - test_search_no_match: search for nonexistent term, assert no matches output
+
+              Add tempfile = "3" to [dev-dependencies] in Cargo.toml for temp file creation.
+            resource_tags: ["tests/cli.rs"]
+            dependencies: ["cli-commands"]
+            acceptance_criteria:
+              - "All 9 integration tests pass"
+              - "cargo test passes (unit tests + integration tests)"
+              - "Each test uses an isolated temp database"

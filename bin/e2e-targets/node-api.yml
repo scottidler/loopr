@@ -1,0 +1,152 @@
+goal: "Build a notes REST API with Express and SQLite (better-sqlite3). Endpoints: GET /health, GET /notes, POST /notes, GET /notes/{id}, PUT /notes/{id}, DELETE /notes/{id}. Note: id (int, auto), title (str), content (str, default ''), tags (str, comma-separated, default ''). Read database path from DATABASE_PATH env var, default 'data/notes.db'. Pass: docker compose run --rm test."
+plan:
+  title: "Node.js Notes API"
+  description: "Express + better-sqlite3 notes REST API containerized with Docker, tested with Jest and supertest."
+  spec:
+    title: "Notes API"
+    description: "Database module, Express routes, and Jest test suite"
+    phases:
+      - title: "Database layer"
+        description: "SQLite CRUD module for notes using better-sqlite3"
+        validation-commands:
+          - "docker compose build"
+        works:
+          - key: "database-layer"
+            title: "Create db.js with SQLite CRUD using better-sqlite3"
+            description: |
+              Create db.js using better-sqlite3 (sync API, no async needed).
+
+              const Database = require('better-sqlite3');
+              const path = require('path');
+              const fs = require('fs');
+
+              function getDbPath() {
+                return process.env.DATABASE_PATH || 'data/notes.db';
+              }
+
+              function openDb(dbPath) {
+                const dir = path.dirname(dbPath);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                const db = new Database(dbPath);
+                db.exec(`CREATE TABLE IF NOT EXISTS notes (
+                  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                  title   TEXT NOT NULL,
+                  content TEXT NOT NULL DEFAULT '',
+                  tags    TEXT NOT NULL DEFAULT ''
+                )`);
+                return db;
+              }
+
+              CRUD functions (each takes dbPath as first arg, opens/closes db internally):
+
+              function createNote(dbPath, title, content = '', tags = '') -> { id, title, content, tags }
+              function listNotes(dbPath) -> [{ id, title, content, tags }, ...]
+              function getNote(dbPath, id) -> { id, title, content, tags } | null
+              function updateNote(dbPath, id, fields) -> { id, title, content, tags } | null
+                fields is an object with optional title, content, tags keys.
+                Only update fields that are present in the object.
+                Return null if note not found.
+              function deleteNote(dbPath, id) -> boolean (true if deleted, false if not found)
+
+              module.exports = { getDbPath, createNote, listNotes, getNote, updateNote, deleteNote };
+            resource_tags: ["db.js"]
+            acceptance_criteria:
+              - "docker compose build succeeds"
+              - "createNote returns object with id, title, content, tags"
+              - "listNotes returns an array"
+              - "getNote returns null for non-existent id"
+              - "deleteNote returns false for non-existent id"
+
+      - title: "API routes"
+        description: "Express CRUD endpoints using the database layer"
+        validation-commands:
+          - "docker compose build"
+        works:
+          - key: "api-routes"
+            title: "Implement CRUD endpoints in app.js"
+            description: |
+              Replace the stub app.js with a full Express application.
+
+              const express = require('express');
+              const db = require('./db');
+
+              const app = express();
+              app.use(express.json());
+
+              GET /health -> { status: 'ok' }
+
+              GET /notes -> db.listNotes(db.getDbPath())
+
+              POST /notes (body: { title, content?, tags? }) ->
+                db.createNote(db.getDbPath(), title, content, tags)
+                Respond with 201 and the created note.
+                Return 400 if title is missing.
+
+              GET /notes/:id ->
+                db.getNote(db.getDbPath(), Number(id))
+                Return 404 JSON { error: 'Not found' } if null.
+
+              PUT /notes/:id (body: { title?, content?, tags? }) ->
+                db.updateNote(db.getDbPath(), Number(id), body)
+                Return 404 JSON { error: 'Not found' } if null.
+
+              DELETE /notes/:id ->
+                db.deleteNote(db.getDbPath(), Number(id))
+                Return 404 JSON { error: 'Not found' } if false.
+                Return { deleted: Number(id) } on success.
+
+              module.exports = app;
+
+              Do NOT call app.listen() in app.js - that is handled by server.js.
+            resource_tags: ["app.js"]
+            dependencies: ["database-layer"]
+            acceptance_criteria:
+              - "docker compose build succeeds"
+              - "GET /health returns { status: 'ok' }"
+              - "POST /notes returns 201 with the created note"
+              - "GET /notes/:id returns 404 for unknown id"
+              - "POST /notes returns 400 if title missing"
+
+      - title: "Test suite"
+        description: "Jest + supertest tests for all CRUD endpoints"
+        validation-commands:
+          - "docker compose run --rm test"
+        works:
+          - key: "test-suite"
+            title: "Create test/notes.test.js with Jest tests"
+            description: |
+              Create test/notes.test.js using supertest against the Express app.
+
+              const request = require('supertest');
+              const path = require('path');
+              const fs = require('fs');
+              const app = require('../app');
+
+              Use a per-test temp database for isolation:
+                beforeEach(() => {
+                  process.env.DATABASE_PATH = path.join(os.tmpdir(), `test-${Date.now()}.db`);
+                });
+                afterEach(() => {
+                  if (fs.existsSync(process.env.DATABASE_PATH)) {
+                    fs.unlinkSync(process.env.DATABASE_PATH);
+                  }
+                });
+
+              Tests to implement:
+              - GET /health returns { status: 'ok' }
+              - POST /notes creates a note with id, title, content, tags
+              - POST /notes returns 400 when title is missing
+              - GET /notes returns [] on empty database
+              - GET /notes returns two notes after creating two
+              - GET /notes/:id returns the created note
+              - GET /notes/:id returns 404 for unknown id
+              - PUT /notes/:id updates the title
+              - PUT /notes/:id returns 404 for unknown id
+              - DELETE /notes/:id deletes and returns { deleted: id }
+              - DELETE /notes/:id returns 404 for unknown id
+            resource_tags: ["test/notes.test.js"]
+            dependencies: ["api-routes"]
+            acceptance_criteria:
+              - "All 11 tests pass"
+              - "docker compose run --rm test exits 0"
+              - "Each test uses an isolated database (no shared state)"

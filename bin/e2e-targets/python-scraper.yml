@@ -1,0 +1,210 @@
+goal: "Build an HTML link harvester in Python. It reads all .html files from an 'input/' directory, extracts every <a href> link (href + link text + source filename), stores results in SQLite, and writes a markdown report to 'report.md' showing: total links found, unique domains, and top 10 domains by link count (descending). HTML fixtures are pre-provided in input/. Pass: docker compose run --rm test."
+plan:
+  title: "Python Link Harvester"
+  description: "HTML link extractor with SQLite storage and markdown report, containerized with Docker."
+  spec:
+    title: "Link Harvester"
+    description: "Parser + database layer, report generator, entry point, and pytest suite"
+    phases:
+      - title: "Parser and database layer"
+        description: "HTML link extraction and SQLite storage"
+        validation-commands:
+          - "docker compose build"
+        works:
+          - key: "parser-and-database"
+            title: "Create scraper.py and database.py"
+            description: |
+              Create database.py using sqlite3 stdlib:
+
+              DB_PATH = os.environ.get("DATABASE_PATH", "data/links.db")
+
+              def init_db(db_path: str) -> None:
+                Create parent dir if needed.
+                CREATE TABLE IF NOT EXISTS links (
+                  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                  source_file TEXT NOT NULL,
+                  href        TEXT NOT NULL,
+                  text        TEXT NOT NULL DEFAULT ''
+                )
+
+              def insert_links(db_path, links: list[dict]) -> None:
+                Bulk insert. Each dict has keys: source_file, href, text.
+
+              def count_links(db_path) -> int:
+                Return total row count.
+
+              def list_links(db_path) -> list[dict]:
+                Return all rows as list of dicts (id, source_file, href, text).
+
+              def domain_counts(db_path) -> list[tuple[str, int]]:
+                Return list of (domain, count) tuples sorted by count descending.
+                Extract domain from href using urllib.parse.urlparse(href).netloc.
+                Skip hrefs with no netloc (relative links, anchors, mailto:).
+
+              ---
+
+              Create scraper.py using html.parser (stdlib):
+
+              from html.parser import HTMLParser
+
+              class LinkParser(HTMLParser):
+                Collect (href, text) tuples for all <a href="..."> tags.
+                Track current link text between <a> and </a>.
+
+              def extract_links(html_content: str, source_file: str) -> list[dict]:
+                Parse html_content, return list of dicts:
+                  { "source_file": source_file, "href": href, "text": text.strip() }
+                Skip hrefs that are empty strings.
+
+              def harvest_directory(input_dir: str, db_path: str) -> int:
+                For each .html file in input_dir (sorted):
+                  Read the file, call extract_links, call database.insert_links.
+                Return total number of links inserted.
+            resource_tags: ["scraper.py", "database.py"]
+            acceptance_criteria:
+              - "docker compose build succeeds"
+              - "extract_links returns list of dicts with source_file, href, text keys"
+              - "domain_counts skips relative/empty hrefs"
+              - "harvest_directory returns integer count of links inserted"
+
+      - title: "Report and entry point"
+        description: "Markdown report generator and main orchestration script"
+        validation-commands:
+          - "docker compose build"
+        works:
+          - key: "report-and-entry"
+            title: "Create report.py and main.py"
+            description: |
+              Create report.py:
+
+              def generate_report(db_path: str, output_path: str) -> str:
+                Build a markdown string with these sections:
+
+                # Link Harvest Report
+
+                ## Summary
+                - Total links: {count_links(db_path)}
+                - Unique domains: {len(domain_counts(db_path))}
+
+                ## Top Domains
+
+                | Domain | Links |
+                |--------|-------|
+                | domain1 | N |
+                | ... (top 10 only) |
+
+                Write the markdown to output_path.
+                Return the markdown string.
+
+              ---
+
+              Create main.py as the entry point:
+
+              import sys
+              import os
+              import database
+              import scraper
+              import report
+
+              INPUT_DIR = os.environ.get("INPUT_DIR", "input")
+              DB_PATH = os.environ.get("DATABASE_PATH", "data/links.db")
+              REPORT_PATH = os.environ.get("REPORT_PATH", "report.md")
+
+              def main():
+                print(f"Harvesting links from {INPUT_DIR}...")
+                count = scraper.harvest_directory(INPUT_DIR, DB_PATH)
+                print(f"Inserted {count} links.")
+                report.generate_report(DB_PATH, REPORT_PATH)
+                print(f"Report written to {REPORT_PATH}")
+
+              if __name__ == "__main__":
+                main()
+
+              Entry point for Docker CMD.
+            resource_tags: ["report.py", "main.py"]
+            dependencies: ["parser-and-database"]
+            acceptance_criteria:
+              - "docker compose build succeeds"
+              - "generate_report writes a markdown file"
+              - "Report contains Total links and Top Domains sections"
+              - "main.py runs without error on the pre-provided input/ fixtures"
+
+      - title: "Test suite"
+        description: "pytest tests for parsing, storage, and report generation"
+        validation-commands:
+          - "docker compose run --rm test"
+        works:
+          - key: "test-suite"
+            title: "Create test_scraper.py with pytest tests"
+            description: |
+              Create test_scraper.py using pytest and the pre-provided fixtures in input/.
+
+              Use tmp_path for database isolation in all tests.
+
+              from scraper import extract_links, harvest_directory
+              from database import init_db, insert_links, count_links, list_links, domain_counts
+              from report import generate_report
+
+              Tests:
+
+              test_extract_links_finds_hrefs:
+                html = '<a href="https://example.com">Example</a>'
+                links = extract_links(html, "test.html")
+                assert len(links) == 1
+                assert links[0]["href"] == "https://example.com"
+                assert links[0]["text"] == "Example"
+                assert links[0]["source_file"] == "test.html"
+
+              test_extract_links_skips_empty_href:
+                html = '<a href="">empty</a><a href="https://a.com">a</a>'
+                links = extract_links(html, "t.html")
+                assert len(links) == 1
+
+              test_extract_links_captures_text:
+                html = '<a href="https://b.com">  Hello World  </a>'
+                links = extract_links(html, "t.html")
+                assert links[0]["text"] == "Hello World"
+
+              test_insert_and_count(tmp_path):
+                db = str(tmp_path / "t.db")
+                init_db(db)
+                links = [{"source_file": "f.html", "href": "https://x.com", "text": "X"}]
+                insert_links(db, links)
+                assert count_links(db) == 1
+
+              test_domain_counts(tmp_path):
+                db = str(tmp_path / "t.db")
+                init_db(db)
+                links = [
+                  {"source_file": "f.html", "href": "https://a.com/p1", "text": "a"},
+                  {"source_file": "f.html", "href": "https://a.com/p2", "text": "a2"},
+                  {"source_file": "f.html", "href": "https://b.com/p1", "text": "b"},
+                  {"source_file": "f.html", "href": "#anchor", "text": "skip"},
+                ]
+                insert_links(db, links)
+                counts = domain_counts(db)
+                assert counts[0] == ("a.com", 2)
+                assert ("b.com", 1) in counts
+                domains = [d for d, _ in counts]
+                assert "" not in domains
+
+              test_harvest_directory(tmp_path):
+                Use the pre-provided "input/" directory.
+                db = str(tmp_path / "t.db")
+                count = harvest_directory("input", db)
+                assert count > 0
+
+              test_generate_report(tmp_path):
+                db = str(tmp_path / "t.db")
+                harvest_directory("input", db)
+                out = str(tmp_path / "report.md")
+                md = generate_report(db, out)
+                assert "Total links" in md
+                assert "Top Domains" in md
+                assert os.path.exists(out)
+            resource_tags: ["test_scraper.py"]
+            dependencies: ["report-and-entry"]
+            acceptance_criteria:
+              - "All 7 tests pass"
+              - "docker compose run --rm test exits 0"
+              - "Tests use tmp_path for database isolation"
