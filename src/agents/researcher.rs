@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use eyre::{Result, eyre};
 
+const SEARCH_SUBPROCESS_TIMEOUT_SECS: u64 = 30;
+
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
@@ -70,10 +72,13 @@ pub async fn execute_search_code(
     };
 
     // Limit output to prevent overwhelming the context
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
-        .await
-        .map_err(|_| eyre!("search_code timed out after 30s"))?
-        .map_err(|e| eyre!("search_code failed: {}", e))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(SEARCH_SUBPROCESS_TIMEOUT_SECS),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| eyre!("search_code timed out after {}s", SEARCH_SUBPROCESS_TIMEOUT_SECS))?
+    .map_err(|e| eyre!("search_code failed: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 

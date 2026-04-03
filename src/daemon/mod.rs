@@ -18,6 +18,9 @@ use crate::ipc::server::{self, IpcServer};
 
 use self::context::{DaemonContext, Stores};
 
+const DAEMON_START_POLL_MS: u64 = 100;
+const GRACEFUL_SHUTDOWN_SECS: u64 = 10;
+
 /// Check if the daemon is running; if not, double-fork to spawn it in the
 /// background and wait for the socket to appear. Uses proper Unix
 /// daemonization (fork → setsid → fork) so the daemon is fully detached
@@ -50,7 +53,7 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
             }
             // Wait for it to die
             for _ in 0..30 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(DAEMON_START_POLL_MS));
                 if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
                     break;
                 }
@@ -64,7 +67,7 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
             // PID alive but socket missing — daemon may still be starting up
             eprintln!("Daemon process alive (pid={pid}) but socket not ready, waiting...");
             for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(DAEMON_START_POLL_MS));
                 if socket_path.exists() {
                     return Ok(());
                 }
@@ -92,7 +95,7 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
             libc::waitpid(pid, &mut status, 0);
 
             for _ in 0..30 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(DAEMON_START_POLL_MS));
                 if socket_path.exists() {
                     return Ok(());
                 }
@@ -418,7 +421,7 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
 /// Graceful shutdown: cancel all agent sessions, wait for tasks to exit,
 /// then abort any remaining tasks after a grace period.
 async fn graceful_shutdown(stores: &Arc<Stores>, event_tx: &tokio::sync::broadcast::Sender<DaemonEvent>) {
-    let grace_period = Duration::from_secs(10);
+    let grace_period = Duration::from_secs(GRACEFUL_SHUTDOWN_SECS);
     info!("Starting graceful shutdown, grace period: {:?}", grace_period);
 
     // 1. Broadcast shutting_down event

@@ -1,6 +1,8 @@
 use std::path::Path;
 
 use eyre::{Context, Result, bail};
+
+const GOAL_POLL_INTERVAL_SECS: u64 = 5;
 use log::warn;
 use serde_json::json;
 
@@ -237,7 +239,7 @@ async fn run_headless(
             std::process::exit(1);
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(GOAL_POLL_INTERVAL_SECS)).await;
 
         let poll_result = client.request("coordinator.get_state", json!({})).await;
 

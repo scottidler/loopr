@@ -4,25 +4,29 @@ use log::debug;
 
 use crate::config::ToolEntry;
 
+const TOOL_TEST_TIMEOUT_SECS: u64 = 300;
+const TOOL_LINT_TIMEOUT_SECS: u64 = 120;
+const TOOL_FORMAT_TIMEOUT_SECS: u64 = 30;
+
 /// Built-in tool presets for JavaScript projects.
 fn js_preset() -> Vec<ToolEntry> {
     vec![
         ToolEntry {
             name: "test".into(),
             command: "npm test".into(),
-            timeout_secs: 300,
+            timeout_secs: TOOL_TEST_TIMEOUT_SECS,
             worktree: true,
         },
         ToolEntry {
             name: "lint".into(),
             command: "npm run lint".into(),
-            timeout_secs: 120,
+            timeout_secs: TOOL_LINT_TIMEOUT_SECS,
             worktree: true,
         },
         ToolEntry {
             name: "build".into(),
             command: "npm run build".into(),
-            timeout_secs: 300,
+            timeout_secs: TOOL_TEST_TIMEOUT_SECS,
             worktree: true,
         },
     ]
@@ -34,19 +38,19 @@ fn python_preset() -> Vec<ToolEntry> {
         ToolEntry {
             name: "test".into(),
             command: "pytest".into(),
-            timeout_secs: 300,
+            timeout_secs: TOOL_TEST_TIMEOUT_SECS,
             worktree: true,
         },
         ToolEntry {
             name: "lint".into(),
             command: "ruff check .".into(),
-            timeout_secs: 120,
+            timeout_secs: TOOL_LINT_TIMEOUT_SECS,
             worktree: true,
         },
         ToolEntry {
             name: "fmt-check".into(),
             command: "ruff format --check .".into(),
-            timeout_secs: 30,
+            timeout_secs: TOOL_FORMAT_TIMEOUT_SECS,
             worktree: true,
         },
     ]

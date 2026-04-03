@@ -5,6 +5,8 @@ use serde::Deserialize;
 
 use crate::config::ClarityGateConfig;
 
+const HTTP_TIMEOUT_SECS: u64 = 10;
+
 const EVALUATION_PROMPT: &str = r#"You are a goal clarity evaluator for an autonomous software engineering system.
 The system will decompose this goal into a multi-level plan and execute it
 without human intervention. Vague goals waste significant resources.
@@ -113,7 +115,7 @@ impl ClarityGate {
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
             .json(&body)
             .send()
             .await
