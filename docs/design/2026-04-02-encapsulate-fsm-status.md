@@ -187,14 +187,12 @@ match result {
 // status and updated_at already set by transition()
 ```
 
-**Ordering change:** Precondition checks must happen before `transition()` now, since `transition()` mutates the status. This is semantically correct - validate preconditions first, then attempt the FSM transition. The old code validated the FSM first, then checked preconditions, then mutated. The new order is actually better.
-
-**Capturing `from`:** Handlers need the from-state for error messages and event broadcasts. Capture it before calling `transition()`:
+**Capturing `from`:** Capture the pre-transition state before calling `transition()` - needed for event broadcasts and error messages:
 ```rust
 let from = wi.status();
 // precondition checks...
 let result = wi.transition(target_status, role);
-// from is still available for DaemonEvent::transition_completed()
+// from is still valid here for DaemonEvent::transition_completed()
 ```
 
 **`matches!()` patterns:** ~20 sites use `matches!(record.status, Pattern)` in addition to the `==` comparisons. These become `matches!(record.status(), Pattern)` - same mechanical change.
@@ -278,7 +276,6 @@ grep -rn 'force_status' src/ --include='*.rs' | grep -v tests | grep -v '#\[cfg(
 | Agent-side mutations that should be IPC get `force_status()` instead | Medium | Medium | Each site reviewed individually. Comment every `force_status()` with why it bypasses. |
 | `force_status()` becomes the new `pub status` - used everywhere | Medium | Medium | Code review norm: `force_status()` in non-test, non-recovery code requires justification. Grep audit in CI. |
 | Large mechanical diff obscures logic changes | Low | Low | Separate commits per struct. Read changes are purely mechanical. |
-| ~~Precondition check ordering bug in handlers~~ | ~~Medium~~ | ~~Medium~~ | **Resolved:** All 6 handlers audited (2026-04-02). Every precondition checks either `target_status` (from request params) or `from` (captured before mutation). None depend on the FSM validation having run first. The bundle verification gate uses `from` but only as data inspection. The `check_validation_gate` in Plan/Spec/Phase uses `from` and `target` as values, not validation results. Reorder is safe for all handlers. |
 
 ## Open Questions
 
