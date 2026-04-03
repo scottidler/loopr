@@ -1,30 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# e2e.sh - Parameterized E2E test runner for loopr
+# bin/e2e - Parameterized E2E test runner for loopr
 #
 # Usage:
-#   bin/e2e.sh                        # default: rust-version
-#   bin/e2e.sh --target python-todo   # Python todo app
-#   bin/e2e.sh --target rust-version  # explicit Rust target
+#   bin/e2e                           # default target: rust-version
+#   bin/e2e ls                        # list available targets
+#   bin/e2e python-api                # run target by positional name
+#   bin/e2e --target python-api       # run target by flag
+#   bin/e2e python-api --timeout 600  # override timeout
+#   bin/e2e --no-build python-api     # skip cargo build (use existing binary)
 
 LOOPR_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DAEMON_PID=""
 
-# Parse args
-E2E_TARGET="rust-version"
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --target) E2E_TARGET="$2"; shift 2 ;;
-        *) err "Unknown argument: $1"; exit 1 ;;
-    esac
-done
-
-# Each run gets a timestamped subdirectory under the target name
-RUN_TS="$(date +%Y%m%d-%H%M%S)"
-TARGET_BASE="/tmp/loopr-e2e/${E2E_TARGET}"
-TARGET="${TARGET_BASE}/${RUN_TS}"
-LATEST_LINK="${TARGET_BASE}/latest"
+###############################################################################
+# Colors and logging (defined first so they're available during arg parsing)
+###############################################################################
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +29,92 @@ log()  { echo -e "${CYAN}[e2e]${NC} $*"; }
 ok()   { echo -e "${GREEN}[e2e]${NC} $*"; }
 warn() { echo -e "${YELLOW}[e2e]${NC} $*"; }
 err()  { echo -e "${RED}[e2e]${NC} $*" >&2; }
+
+###############################################################################
+# Usage
+###############################################################################
+
+usage() {
+    echo -e "${BOLD}Usage:${NC} bin/e2e [options] [target]"
+    echo ""
+    echo -e "${BOLD}Options:${NC}"
+    echo "  ls, --list          List available targets and their goals"
+    echo "  --target <name>     Target to run (default: rust-version)"
+    echo "  --timeout <secs>    Override the target's default timeout"
+    echo "  --no-build          Skip 'cargo build --release' (use existing binary)"
+    echo "  -h, --help          Show this help"
+    echo ""
+    echo -e "${BOLD}Examples:${NC}"
+    echo "  bin/e2e ls"
+    echo "  bin/e2e rust-version"
+    echo "  bin/e2e python-api --timeout 1800"
+    echo "  bin/e2e --target node-api"
+}
+
+###############################################################################
+# List targets
+###############################################################################
+
+list_targets() {
+    echo -e "${BOLD}${CYAN}Available E2E targets:${NC}"
+    echo ""
+    local default="rust-version"
+    for f in "${LOOPR_ROOT}"/bin/e2e-targets/*.sh; do
+        local name timeout goal marker
+        name="$(basename "${f}" .sh)"
+        timeout="$(bash -c "source '${f}' 2>/dev/null; echo \${TARGET_TIMEOUT:-600}" 2>/dev/null || echo "600")"
+        goal="$(bash -c "source '${f}' 2>/dev/null; target_goal" 2>/dev/null || echo "(no goal)")"
+        if [[ ${#goal} -gt 72 ]]; then
+            goal="${goal:0:69}..."
+        fi
+        marker=""
+        if [[ "${name}" == "${default}" ]]; then
+            marker=" ${YELLOW}(default)${NC}"
+        fi
+        printf "  ${CYAN}%-22s${NC} ${YELLOW}%4ss${NC}  %s%b\n" "${name}" "${timeout}" "${goal}" "${marker}"
+    done
+    echo ""
+    echo -e "Run with: ${BOLD}bin/e2e <target>${NC}"
+}
+
+###############################################################################
+# Arg parsing
+###############################################################################
+
+E2E_TARGET=""
+E2E_TIMEOUT=""
+NO_BUILD=false
+SUBCOMMAND=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        ls|--list)   SUBCOMMAND="ls"; shift ;;
+        -h|--help)   usage; exit 0 ;;
+        --target)    E2E_TARGET="$2"; shift 2 ;;
+        --timeout)   E2E_TIMEOUT="$2"; shift 2 ;;
+        --no-build)  NO_BUILD=true; shift ;;
+        -*)          err "Unknown flag: $1"; echo ""; usage; exit 1 ;;
+        *)           E2E_TARGET="$1"; shift ;;
+    esac
+done
+
+# Handle ls early - no further setup needed
+if [[ "${SUBCOMMAND}" == "ls" ]]; then
+    list_targets
+    exit 0
+fi
+
+E2E_TARGET="${E2E_TARGET:-rust-version}"
+
+###############################################################################
+# Run setup
+###############################################################################
+
+# Each run gets a timestamped subdirectory under the target name
+RUN_TS="$(date +%Y%m%d-%H%M%S)"
+TARGET_BASE="/tmp/loopr-e2e/${E2E_TARGET}"
+TARGET="${TARGET_BASE}/${RUN_TS}"
+LATEST_LINK="${TARGET_BASE}/latest"
 
 cleanup() {
     if [[ -n "${DAEMON_PID}" ]] && kill -0 "${DAEMON_PID}" 2>/dev/null; then
@@ -54,10 +132,8 @@ trap cleanup EXIT
 TARGET_FILE="${LOOPR_ROOT}/bin/e2e-targets/${E2E_TARGET}.sh"
 if [[ ! -f "${TARGET_FILE}" ]]; then
     err "Unknown target: ${E2E_TARGET}"
-    err "Available targets:"
-    for f in "${LOOPR_ROOT}"/bin/e2e-targets/*.sh; do
-        err "  $(basename "${f}" .sh)"
-    done
+    err ""
+    err "Run 'bin/e2e ls' to see available targets."
     exit 1
 fi
 
@@ -65,7 +141,7 @@ fi
 source "${TARGET_FILE}"
 log "Target: ${E2E_TARGET}"
 
-TIMEOUT="${TIMEOUT:-${TARGET_TIMEOUT:-600}}"
+TIMEOUT="${E2E_TIMEOUT:-${TIMEOUT:-${TARGET_TIMEOUT:-600}}}"
 
 ###############################################################################
 # Pre-flight
@@ -80,13 +156,21 @@ fi
 # Step 1: Build loopr
 ###############################################################################
 
-log "Building loopr (release)..."
-(cd "${LOOPR_ROOT}" && cargo build --release 2>&1 | /usr/bin/tail -3)
 LOOPR="${LOOPR_ROOT}/target/release/loopr"
 
-if [[ ! -x "${LOOPR}" ]]; then
-    err "Build failed - binary not found at ${LOOPR}"
-    exit 1
+if [[ "${NO_BUILD}" == "true" ]]; then
+    if [[ ! -x "${LOOPR}" ]]; then
+        err "--no-build specified but binary not found at ${LOOPR}"
+        exit 1
+    fi
+    log "Skipping build (--no-build), using existing binary"
+else
+    log "Building loopr (release)..."
+    (cd "${LOOPR_ROOT}" && cargo build --release 2>&1 | /usr/bin/tail -3)
+    if [[ ! -x "${LOOPR}" ]]; then
+        err "Build failed - binary not found at ${LOOPR}"
+        exit 1
+    fi
 fi
 ok "Binary: ${LOOPR}"
 
@@ -163,7 +247,6 @@ if [[ -f "${PID_FILE}" ]]; then
             sleep 1
         fi
     fi
-    # Clean up stale pid/socket files
     rm -f "${PID_FILE}"
     rm -f "${HOME}/.local/share/loopr/daemon.sock"
 fi
@@ -177,7 +260,6 @@ log "Starting daemon from ${TARGET} (log: ${DAEMON_LOG})..."
 (cd "${TARGET}" && "${LOOPR}" --config "${CONFIG}" daemon) > "${DAEMON_LOG}" 2>&1 &
 DAEMON_PID=$!
 
-# Wait for socket
 SOCKET="${HOME}/.local/share/loopr/daemon.sock"
 for i in $(seq 1 30); do
     if [[ -S "${SOCKET}" ]]; then
@@ -244,7 +326,6 @@ echo ""
 log "Git log (target repo):"
 (cd "${TARGET}" && git log --oneline --all 2>/dev/null) || warn "git log failed"
 
-# Target-specific result collection
 echo ""
 collect_results
 
@@ -252,7 +333,6 @@ echo ""
 echo -e "${BOLD}${CYAN}=== Verification ===${NC}"
 verify
 
-# Dump daemon log tail on failure
 if [[ ${EXIT_CODE} -ne 0 && -f "${DAEMON_LOG}" ]]; then
     echo ""
     log "Daemon log (last 50 lines):"
@@ -263,6 +343,7 @@ echo ""
 echo -e "${BOLD}${CYAN}=== Summary ===${NC}"
 echo -e "  Target:     ${E2E_TARGET}"
 echo -e "  Directory:  ${TARGET}"
+echo -e "  Timeout:    ${TIMEOUT}s"
 echo -e "  Exit code:  ${EXIT_CODE}"
 echo -e "  Daemon log: ${DAEMON_LOG}"
 echo -e "  Session:    ~/.local/share/loopr/sessions/latest/"
