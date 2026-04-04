@@ -97,22 +97,6 @@ pub async fn execute_action(
         AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
 
         // --- Coordinator document-creation actions ---
-        AgentAction::CreatePlan {
-            title,
-            description,
-            acceptance_criteria,
-        } => record::handle_create_plan(ctx, title, description, acceptance_criteria),
-        AgentAction::CreateSpec {
-            parent_id,
-            title,
-            description,
-        } => record::handle_create_spec(ctx, parent_id, title, description),
-        AgentAction::CreatePhase {
-            parent_id,
-            title,
-            description,
-            order,
-        } => record::handle_create_phase(ctx, parent_id, title, description, *order),
         AgentAction::CreateWork {
             parent_id,
             title,

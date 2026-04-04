@@ -304,11 +304,8 @@ mod tests {
         let p = &store().coordinator;
         // Opening identity line
         assert!(p.starts_with("You are the Coordinator agent in the Loopr development orchestrator."));
-        // All 15 action types
+        // Live action types
         for action in [
-            "create_plan",
-            "create_spec",
-            "create_phase",
             "create_work",
             "assign_agent",
             "spawn_researcher",
@@ -324,6 +321,19 @@ mod tests {
         ] {
             assert!(p.contains(action), "coordinator.pmt missing action: {}", action);
         }
+        // Dead actions must not appear (hallucination risk guard)
+        assert!(
+            !p.contains("create_plan"),
+            "coordinator.pmt must not contain create_plan"
+        );
+        assert!(
+            !p.contains("create_spec"),
+            "coordinator.pmt must not contain create_spec"
+        );
+        assert!(
+            !p.contains("create_phase"),
+            "coordinator.pmt must not contain create_phase"
+        );
         // Key rules
         assert!(p.contains("Create ALL Works for a Phase in a single batch"));
         assert!(p.contains("ALWAYS respond with ONLY a JSON array"));

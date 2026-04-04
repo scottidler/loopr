@@ -30,9 +30,6 @@ use crate::ipc::protocol::DaemonEvent;
 /// Infer the hierarchy level of a coordinator action for one-level-per-iteration guard (Gap #28).
 fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
     match action {
-        AgentAction::CreatePlan { .. } => Some("plan"),
-        AgentAction::CreateSpec { .. } => Some("spec"),
-        AgentAction::CreatePhase { .. } => Some("phase"),
         AgentAction::CreateWork { .. } | AgentAction::AssignAgent { .. } => Some("work"),
         _ => None,
     }

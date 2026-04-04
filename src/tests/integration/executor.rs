@@ -6,112 +6,26 @@ use crate::agents::AgentAction;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::test_util::TestDir;
-use crate::worktree::manager::WorktreeManager;
 
 use super::fixtures::*;
 
 #[test]
-fn test_coordinator_action_creates_plan_via_executor() {
-    // Verify that CreatePlan action through execute_action actually creates a plan in stores
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let dir = TestDir::new("loopr-e2e-createplan");
-
-    let stores = test_stores();
-    let tx = test_event_tx();
-    let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
-
-    let action = AgentAction::CreatePlan {
-        title: "E2E Test Plan".to_string(),
-        description: "Test description".to_string(),
-        acceptance_criteria: "All tests pass".to_string(),
-    };
-
-    let agent_log = test_agent_logger(&dir);
-    let ctx = test_agent_context(&stores, bridge, tx, agent_log);
-    let result = rt.block_on(execute_action(&action, &ctx, &dir, None)).unwrap();
-
-    match result {
-        ActionResult::RecordCreated { collection, id } => {
-            assert_eq!(collection, "plans");
-            // Verify plan exists in stores
-            let plans = stores.plans.read().unwrap();
-            let plan = plans.get(&id).expect("plan should exist in stores");
-            assert_eq!(plan.title, "E2E Test Plan");
-        }
-        other => panic!("expected RecordCreated, got: {:?}", other),
-    }
-}
-
-#[test]
-fn test_coordinator_creates_full_hierarchy_via_executor() {
-    // CreatePlan -> CreateSpec -> CreatePhase -> CreateWork through executor
+fn test_coordinator_creates_work_via_executor() {
+    // Use create_test_hierarchy fixture to build Plan/Spec/Phase, then verify CreateWork via executor
     let rt = tokio::runtime::Runtime::new().unwrap();
     let dir = TestDir::new("loopr-e2e-hierarchy");
 
     let stores = test_stores();
     let tx = test_event_tx();
-    let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm, stores.config.clone());
+    let wm = test_worktree_mgr();
+    let ic = test_integrator_config();
+    let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
     let agent_log = test_agent_logger(&dir);
-    let ctx = test_agent_context(&stores, bridge, tx, agent_log);
+    let ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
 
-    // Create Plan
-    let plan_result = rt
-        .block_on(execute_action(
-            &AgentAction::CreatePlan {
-                title: "Auth Plan".into(),
-                description: "Auth system".into(),
-                acceptance_criteria: "Tests pass".into(),
-            },
-            &ctx,
-            &dir,
-            None,
-        ))
-        .unwrap();
-    let plan_id = match plan_result {
-        ActionResult::RecordCreated { id, .. } => id,
-        other => panic!("expected RecordCreated for plan, got: {:?}", other),
-    };
+    let (plan_id, spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
 
-    // Create Spec
-    let spec_result = rt
-        .block_on(execute_action(
-            &AgentAction::CreateSpec {
-                parent_id: plan_id.clone(),
-                title: "JWT Spec".into(),
-                description: "JWT tokens".into(),
-            },
-            &ctx,
-            &dir,
-            None,
-        ))
-        .unwrap();
-    let spec_id = match spec_result {
-        ActionResult::RecordCreated { id, .. } => id,
-        other => panic!("expected RecordCreated for spec, got: {:?}", other),
-    };
-
-    // Create Phase
-    let phase_result = rt
-        .block_on(execute_action(
-            &AgentAction::CreatePhase {
-                parent_id: spec_id.clone(),
-                title: "Phase 1".into(),
-                description: "Foundation".into(),
-                order: 1,
-            },
-            &ctx,
-            &dir,
-            None,
-        ))
-        .unwrap();
-    let phase_id = match phase_result {
-        ActionResult::RecordCreated { id, .. } => id,
-        other => panic!("expected RecordCreated for phase, got: {:?}", other),
-    };
-
-    // Create Work
+    // Create Work via executor (the live path)
     let wi_result = rt
         .block_on(execute_action(
             &AgentAction::CreateWork {

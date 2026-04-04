@@ -24,19 +24,16 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 
 Respond with a JSON array of actions:
 
-1. `create_plan`      {"action": "create_plan", "title": "...", "description": "...", "acceptance_criteria": "..."}
-2. `create_spec`      {"action": "create_spec", "parent_id": "...", "title": "...", "description": "..."}
-3. `create_phase`     {"action": "create_phase", "parent_id": "...", "title": "...", "description": "...", "order": 1}
-4. `create_work` {"action": "create_work", "parent_id": "...", "title": "...", "description": "...", "resource_tags": ["src/file.rs"], "acceptance_criteria": ["tests pass"], "dependencies": ["wi-id-1"]}
-5. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"} — for reviewers: {"action": "assign_agent", "agent_type": "reviewer", "target_id": "bundle-id"}  (Implementers are auto-assigned by the worker pool. Use only as an override to force-assign a specific Work.)
-6. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
-7. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-id"}
-8. `release_lock`     {"action": "release_lock", "lock_id": "lock-id"}
-9. `validate_document` {"action": "validate_document", "collection": "plans", "id": "plan-id"}
-10. `triage_bundle`   {"action": "triage_bundle", "bundle_id": "..."}
-11. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
-12. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "Active"}
-13. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
+1. `create_work` {"action": "create_work", "parent_id": "...", "title": "...", "description": "...", "resource_tags": ["src/file.rs"], "acceptance_criteria": ["tests pass"], "dependencies": ["wi-id-1"]}
+2. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"} — for reviewers: {"action": "assign_agent", "agent_type": "reviewer", "target_id": "bundle-id"}  (Implementers are auto-assigned by the worker pool. Use only as an override to force-assign a specific Work.)
+3. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
+4. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-id"}
+5. `release_lock`     {"action": "release_lock", "lock_id": "lock-id"}
+6. `validate_document` {"action": "validate_document", "collection": "plans", "id": "plan-id"}
+7. `triage_bundle`   {"action": "triage_bundle", "bundle_id": "..."}
+8. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
+9. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "Active"}
+10. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
 14. `register_tool`   {"action": "register_tool", "name": "test", "command": "cargo test"}
     Register a project tool for use by agents. When a phase has validation-commands,
     extract the test command from those and register it directly. Only spawn a

@@ -674,7 +674,10 @@ mod tests {
         let agent = test_coordinator(
             &dir,
             &stores,
-            vec![r#"[{"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"}]"#.to_string()],
+            vec![
+                r#"[{"action": "create_learning", "content": "auth design", "scope": "global", "source_id": "test"}]"#
+                    .to_string(),
+            ],
             CoordinatorConfig::default(),
         );
 
@@ -686,7 +689,7 @@ mod tests {
             .await
             .unwrap();
 
-        // CreatePlan is now wired — creates a real plan via bridge, returns Continue
+        // create_learning is a live action — executes and returns Continue
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
     }
 
@@ -820,13 +823,17 @@ mod tests {
         let dir = TestDir::new("loopr-coord-multilevel");
         let stores = test_stores(&dir);
 
+        // Two create_learning actions — neither has a hierarchy level, so no multi-level filtering
         let agent = test_coordinator(
             &dir,
             &stores,
-            vec![r#"[
-                {"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"},
-                {"action": "create_spec", "parent_id": "plan-1", "title": "Spec1", "description": "desc"}
-            ]"#.to_string()],
+            vec![
+                r#"[
+                {"action": "create_learning", "content": "first learning", "scope": "global", "source_id": "t1"},
+                {"action": "create_learning", "content": "second learning", "scope": "global", "source_id": "t2"}
+            ]"#
+                .to_string(),
+            ],
             CoordinatorConfig::default(),
         );
 
@@ -838,12 +845,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Should still produce a Continue (plan created), but spec should have been filtered
+        // Both actions have no level — no filtering applied, both execute, returns Continue
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
 
-        // Only one plan should exist (the spec with nonexistent plan_id would have been filtered)
-        let plans = stores.plans.read().unwrap();
-        assert_eq!(plans.len(), 1, "only the plan-level action should have executed");
+        // Both learnings should have been created
+        let learnings = stores.learnings.read().unwrap();
+        assert_eq!(learnings.len(), 2, "both learning actions should have executed");
     }
 
     #[tokio::test]

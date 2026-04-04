@@ -383,7 +383,10 @@ fn test_system_prompt_contains_key_sections() {
     crate::prompts::init_defaults();
     let prompt = &crate::prompts::store().coordinator;
     assert!(prompt.contains("Coordinator agent"));
-    assert!(prompt.contains("create_plan"));
+    assert!(
+        !prompt.contains("create_plan"),
+        "coordinator prompt must not contain dead action create_plan"
+    );
     assert!(prompt.contains("assign_agent"));
     assert!(prompt.contains("need_help"));
     assert!(prompt.contains("JSON array"));

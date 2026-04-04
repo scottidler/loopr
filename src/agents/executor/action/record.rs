@@ -3,141 +3,6 @@ use eyre::Result;
 use crate::agents::AgentContext;
 use crate::agents::executor::result::ActionResult;
 
-/// Handle CreatePlan action.
-pub(super) fn handle_create_plan(
-    ctx: &AgentContext,
-    title: &str,
-    description: &str,
-    acceptance_criteria: &str,
-) -> Result<ActionResult> {
-    let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
-
-    // Gap #27: Draft-awareness guard
-    let list_resp = bridge.request("plan.list", serde_json::json!({}));
-    if let Some(plans) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
-        let has_draft = plans
-            .iter()
-            .any(|p| p.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase()) == Some("draft".to_string()));
-        if has_draft {
-            return Ok(ActionResult::ActionError(
-                "A Draft Plan already exists. Iterate on the existing Draft instead of creating a new one.".into(),
-            ));
-        }
-    }
-    let resp = bridge.request(
-        "plan.create",
-        serde_json::json!({
-            "title": title,
-            "description": description,
-            "acceptance_criteria": acceptance_criteria,
-        }),
-    );
-    if resp.is_error() {
-        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        return Ok(ActionResult::ActionError(format!("create_plan failed: {}", msg)));
-    }
-    let id = resp
-        .result
-        .as_ref()
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    agent_log.info(&format!("CreatePlan: {} (id: {})", title, id));
-    Ok(ActionResult::RecordCreated {
-        collection: "plans".to_string(),
-        id,
-    })
-}
-
-/// Handle CreateSpec action.
-pub(super) fn handle_create_spec(
-    ctx: &AgentContext,
-    plan_id: &str,
-    title: &str,
-    description: &str,
-) -> Result<ActionResult> {
-    let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
-
-    // Gap #27: Draft-awareness guard for specs under same plan
-    let list_resp = bridge.request("spec.list", serde_json::json!({}));
-    if let Some(specs) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
-        let has_draft = specs.iter().any(|s| {
-            s.get("parent_id").and_then(|v| v.as_str()) == Some(plan_id)
-                && s.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase()) == Some("draft".to_string())
-        });
-        if has_draft {
-            return Ok(ActionResult::ActionError(
-                "A Draft Spec already exists under this Plan. Iterate on the existing Draft.".into(),
-            ));
-        }
-    }
-    let resp = bridge.request(
-        "spec.create",
-        serde_json::json!({
-            "parent_id": plan_id,
-            "title": title,
-            "description": description,
-        }),
-    );
-    if resp.is_error() {
-        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        return Ok(ActionResult::ActionError(format!("create_spec failed: {}", msg)));
-    }
-    let id = resp
-        .result
-        .as_ref()
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    agent_log.info(&format!("CreateSpec: {} (id: {})", title, id));
-    Ok(ActionResult::RecordCreated {
-        collection: "specs".to_string(),
-        id,
-    })
-}
-
-/// Handle CreatePhase action.
-pub(super) fn handle_create_phase(
-    ctx: &AgentContext,
-    spec_id: &str,
-    title: &str,
-    description: &str,
-    order: u32,
-) -> Result<ActionResult> {
-    let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
-
-    let resp = bridge.request(
-        "phase.create",
-        serde_json::json!({
-            "parent_id": spec_id,
-            "title": title,
-            "description": description,
-            "order": order,
-        }),
-    );
-    if resp.is_error() {
-        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        return Ok(ActionResult::ActionError(format!("create_phase failed: {}", msg)));
-    }
-    let id = resp
-        .result
-        .as_ref()
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    agent_log.info(&format!("CreatePhase: {} (id: {})", title, id));
-    Ok(ActionResult::RecordCreated {
-        collection: "phases".to_string(),
-        id,
-    })
-}
-
 /// Handle ProposePlan action.
 pub(super) fn handle_propose_plan(
     ctx: &AgentContext,
@@ -322,152 +187,53 @@ pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-
     use crate::agents::executor::tests::{create_test_hierarchy, test_agent_context, test_stores};
     use crate::agents::executor::{ActionResult, execute_action};
     use crate::agents::{AgentAction, AgentKind};
-
     use crate::test_util::TestDir;
 
     #[tokio::test]
-    async fn test_execute_create_plan() {
-        let dir = TestDir::new("loopr-exec-createplan");
+    async fn test_execute_propose_plan() {
+        let dir = TestDir::new("loopr-exec-proposeplan");
         let stores = test_stores(&dir);
-
-        let action = AgentAction::CreatePlan {
-            title: "New Plan".to_string(),
-            description: "Plan desc".to_string(),
-            acceptance_criteria: "Tests pass".to_string(),
-        };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
+
+        let action = AgentAction::ProposePlan {
+            title: "Draft Plan".to_string(),
+            description: "A proposed plan".to_string(),
+            acceptance_criteria: "All tests pass".to_string(),
+        };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
             assert_eq!(collection, "plans");
             assert!(!id.is_empty());
-            assert_ne!(id, "unknown");
         } else {
             panic!("expected RecordCreated, got: {:?}", result);
         }
     }
 
     #[tokio::test]
-    async fn test_execute_create_spec() {
-        let dir = TestDir::new("loopr-exec-createspec");
+    async fn test_execute_create_work() {
+        let dir = TestDir::new("loopr-exec-creatework");
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
-        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
+        let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
-        let action = AgentAction::CreateSpec {
-            parent_id: plan_id,
-            title: "New Spec".to_string(),
-            description: "Spec desc".to_string(),
+        let action = AgentAction::CreateWork {
+            parent_id: phase_id,
+            title: "New Work".to_string(),
+            description: "Work desc".to_string(),
+            resource_tags: vec!["src/".to_string()],
+            acceptance_criteria: vec!["tests pass".to_string()],
+            dependencies: vec![],
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         if let ActionResult::RecordCreated { collection, id } = &result {
-            assert_eq!(collection, "specs");
+            assert_eq!(collection, "works");
             assert!(!id.is_empty());
         } else {
             panic!("expected RecordCreated, got: {:?}", result);
         }
-    }
-
-    #[tokio::test]
-    async fn test_execute_create_phase() {
-        let dir = TestDir::new("loopr-exec-createphase");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-
-        let (_, spec_id, _, _) = create_test_hierarchy(&ctx.bridge);
-
-        let action = AgentAction::CreatePhase {
-            parent_id: spec_id,
-            title: "New Phase".to_string(),
-            description: "Phase desc".to_string(),
-            order: 2,
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        if let ActionResult::RecordCreated { collection, id } = &result {
-            assert_eq!(collection, "phases");
-            assert!(!id.is_empty());
-        } else {
-            panic!("expected RecordCreated, got: {:?}", result);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_execute_create_plan_error_path() {
-        let dir = TestDir::new("loopr-exec-plnerr");
-        let stores = test_stores(&dir);
-
-        let action1 = AgentAction::CreatePlan {
-            title: "First Plan".to_string(),
-            description: "desc".to_string(),
-            acceptance_criteria: "pass".to_string(),
-        };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
-        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
-
-        let action2 = AgentAction::CreatePlan {
-            title: "Second Plan".to_string(),
-            description: "desc".to_string(),
-            acceptance_criteria: "pass".to_string(),
-        };
-        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Plan already exists")),
-            "expected draft-awareness error, got: {:?}",
-            result2
-        );
-    }
-
-    #[tokio::test]
-    async fn test_execute_create_spec_error_path() {
-        let dir = TestDir::new("loopr-exec-specerr");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-
-        let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
-
-        let action1 = AgentAction::CreateSpec {
-            parent_id: plan_id.clone(),
-            title: "New Spec".to_string(),
-            description: "desc".to_string(),
-        };
-        let result1 = execute_action(&action1, &ctx, &dir, None).await.unwrap();
-        assert!(matches!(result1, ActionResult::RecordCreated { .. }));
-
-        let action2 = AgentAction::CreateSpec {
-            parent_id: plan_id.clone(),
-            title: "Another Spec".to_string(),
-            description: "desc".to_string(),
-        };
-        let result2 = execute_action(&action2, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result2, ActionResult::ActionError(ref msg) if msg.contains("Draft Spec already exists")),
-            "expected draft-awareness error for spec, got: {:?}",
-            result2
-        );
-    }
-
-    #[tokio::test]
-    async fn test_execute_create_phase_error_path() {
-        let dir = TestDir::new("loopr-exec-phaseerr");
-        let stores = test_stores(&dir);
-
-        let action = AgentAction::CreatePhase {
-            parent_id: "nonexistent-spec".to_string(),
-            title: "New Phase".to_string(),
-            description: "desc".to_string(),
-            order: 1,
-        };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("create_phase failed")),
-            "expected error for nonexistent spec, got: {:?}",
-            result
-        );
     }
 }

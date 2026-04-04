@@ -124,22 +124,6 @@ pub enum AgentAction {
     },
 
     // === Coordinator-only actions ===
-    CreatePlan {
-        title: String,
-        description: String,
-        acceptance_criteria: String,
-    },
-    CreateSpec {
-        parent_id: String,
-        title: String,
-        description: String,
-    },
-    CreatePhase {
-        parent_id: String,
-        title: String,
-        description: String,
-        order: u32,
-    },
     CreateWork {
         parent_id: String,
         title: String,
@@ -396,43 +380,6 @@ mod tests {
         } else {
             panic!("expected Transition");
         }
-    }
-
-    #[test]
-    fn test_agent_action_create_plan_serde() {
-        let action = AgentAction::CreatePlan {
-            title: "Auth overhaul".to_string(),
-            description: "Rewrite auth".to_string(),
-            acceptance_criteria: "All tests pass".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::CreatePlan { .. }));
-    }
-
-    #[test]
-    fn test_agent_action_create_spec_serde() {
-        let action = AgentAction::CreateSpec {
-            parent_id: "p-1".to_string(),
-            title: "JWT tokens".to_string(),
-            description: "Implement JWT".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::CreateSpec { .. }));
-    }
-
-    #[test]
-    fn test_agent_action_create_phase_serde() {
-        let action = AgentAction::CreatePhase {
-            parent_id: "s-1".to_string(),
-            title: "Phase 1".to_string(),
-            description: "Foundation".to_string(),
-            order: 1,
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::CreatePhase { .. }));
     }
 
     #[test]
