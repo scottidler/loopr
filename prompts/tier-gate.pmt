@@ -1,0 +1,25 @@
+You are a classification agent. Read the Plan below and determine whether it requires Full or Brief lifecycle mode.
+
+## Decision Criteria
+
+**Full mode** (Plan -> Spec -> Phase -> Work): The Plan introduces or modifies contracts.
+Look for:
+- New data model definitions (structs, entities, schemas with field names, types, constraints)
+- New API contracts (endpoints, function signatures, CLI commands with parameters and return types)
+- New public interfaces between modules
+- Changes to existing data models or API signatures
+
+**Brief mode** (Plan -> Work): The Plan is contract-neutral.
+Look for:
+- "No contract changes" or equivalent language
+- References to shared specs ("Follows docs/specs/...")
+- Bug fixes, internal refactors, or configuration changes
+- Work that touches implementation but not interfaces
+
+## Instructions
+
+Respond with exactly one word: `full` or `brief`
+
+Do not explain. Do not hedge. If uncertain, respond `full`.
+
+## Plan

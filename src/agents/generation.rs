@@ -360,6 +360,18 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
     // If there's no active Plan (only Draft), don't advance — Coordinator should validate the Draft
     let active_plan = active_plan?;
 
+    // Brief mode: skip Spec and Phase generation, go directly to Work
+    if active_plan.tier == crate::domain::plan::Tier::Brief {
+        let works = stores.read_works().ok()?;
+        let has_works = works.values().any(|w| w.parent_id == active_plan.id);
+        if !has_works {
+            return Some(GenerationLevel::Work);
+        }
+        return None;
+    }
+
+    // Full mode: Plan -> Spec -> Phase -> Work
+
     // Check for Specs under the active Plan
     let specs = stores.read_specs().ok()?;
     let plan_specs: Vec<_> = specs.values().filter(|s| s.parent_id == active_plan.id).collect();
@@ -445,9 +457,16 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
 }
 
 /// Find existing Works for a given Phase.
-pub fn find_works_for_phase(stores: &Stores, phase_id: &str) -> Vec<Work> {
+/// Find all Works whose parent_id matches the given ID.
+///
+/// In Full mode, parent_id is a Phase ID. In Brief mode, parent_id is a Plan ID.
+/// This function is parent-type-agnostic - it just matches the ID.
+///
+/// NOTE: could be promoted to a typed helper on a RecordId wrapper if prefix
+/// logic grows, but a simple filter is sufficient for now.
+pub fn find_works_for_parent(stores: &Stores, parent_id: &str) -> Vec<Work> {
     let Ok(works) = stores.read_works() else { return vec![] };
-    works.values().filter(|w| w.parent_id == phase_id).cloned().collect()
+    works.values().filter(|w| w.parent_id == parent_id).cloned().collect()
 }
 
 /// Find the first active Phase that still needs Works.

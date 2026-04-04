@@ -518,7 +518,7 @@ fn build_generation_footer(
             }
             GenerationLevel::Work => {
                 let phase = generation::find_phase_needing_works(stores)?;
-                let existing = generation::find_works_for_phase(stores, &phase.id);
+                let existing = generation::find_works_for_parent(stores, &phase.id);
                 // Thread the original plan description through so the LLM can
                 // see the full plan context when generating work items.
                 let plan_description = generation::find_active_plan(stores).map(|p| p.description.clone());
@@ -995,10 +995,22 @@ fn sweep_integrated_to_done(
     if coord_state.fsm_state != CoordinatorFsmState::Executing {
         return;
     }
-    let phase_id = match &coord_state.current_phase_id {
-        Some(id) => id,
-        None => return,
+
+    // Determine the parent ID for filtering Works:
+    // Full mode: current_phase_id (the active Phase)
+    // Brief mode: active Plan ID (Works are parented directly to Plan)
+    let parent_id = if let Some(id) = &coord_state.current_phase_id {
+        id.clone()
+    } else if let Some(plan) = generation::find_active_plan(stores) {
+        if plan.tier == crate::domain::plan::Tier::Brief {
+            plan.id.clone()
+        } else {
+            return; // Full mode with no phase - nothing to sweep
+        }
+    } else {
+        return;
     };
+
     let integrated_ids: Vec<String> = {
         let Ok(works) = stores.read_works() else {
             log::error!("works lock poisoned");
@@ -1006,7 +1018,7 @@ fn sweep_integrated_to_done(
         };
         works
             .values()
-            .filter(|w| w.parent_id == *phase_id && w.status() == WorkStatus::Integrated)
+            .filter(|w| w.parent_id == parent_id && w.status() == WorkStatus::Integrated)
             .map(|w| w.id.clone())
             .collect()
     };
@@ -1129,7 +1141,7 @@ fn build_fsm_footer(
                         phases.get(&phase_id).cloned()
                     };
                     if let Some(phase) = phase {
-                        let existing = generation::find_works_for_phase(stores, &phase.id);
+                        let existing = generation::find_works_for_parent(stores, &phase.id);
                         if existing.is_empty() {
                             let prompt = build_work_prompt(&phase, &existing, &[], &[], None, None);
                             format!(
@@ -1220,17 +1232,29 @@ fn find_next_phase_to_activate(stores: &Stores, coord_state: &CoordinatorState) 
 
 /// Build a status summary for the current phase's works.
 fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String {
-    let phase_id = match &coord_state.current_phase_id {
-        Some(id) => id,
-        None => return "No active phase.".to_string(),
+    // Determine the parent ID and title for the status display.
+    // Full mode: current_phase_id -> Phase title
+    // Brief mode: active Plan ID -> Plan title
+    let (parent_id, parent_title) = if let Some(ref phase_id) = coord_state.current_phase_id {
+        let title = stores
+            .read_phases()
+            .ok()
+            .and_then(|phases| phases.get(phase_id).map(|p| p.title.clone()))
+            .unwrap_or_default();
+        (phase_id.clone(), title)
+    } else if let Some(plan) = generation::find_active_plan(stores) {
+        if plan.tier == crate::domain::plan::Tier::Brief {
+            let title = plan.title.clone();
+            (plan.id.clone(), title)
+        } else {
+            return "No active phase.".to_string();
+        }
+    } else {
+        return "No active phase.".to_string();
     };
+    let phase_id = &parent_id;
 
-    let phase_title = {
-        let Ok(phases) = stores.read_phases() else {
-            return "phases lock poisoned".to_string();
-        };
-        phases.get(phase_id).map(|p| p.title.clone()).unwrap_or_default()
-    };
+    let phase_title = parent_title;
 
     let Ok(works) = stores.read_works() else {
         return "works lock poisoned".to_string();
@@ -1360,8 +1384,15 @@ fn check_fsm_transition(
             }
         }
         CoordinatorFsmState::Planning => {
-            // Transition when: Active Plan AND Active Spec AND all Phases Active
             let plan = generation::find_active_plan(stores)?;
+
+            // Brief mode: skip Spec/Phase, go directly to Executing when Works exist
+            if plan.tier == crate::domain::plan::Tier::Brief {
+                let wis = generation::find_works_for_parent(stores, &plan.id);
+                return if !wis.is_empty() { Some(CoordinatorFsmState::Executing) } else { None };
+            }
+
+            // Full mode: transition when Active Plan AND Active Spec AND Active Phases
             let specs = generation::find_active_specs_for_plan(stores, &plan.id);
             if specs.is_empty() {
                 return None;
@@ -1374,7 +1405,7 @@ fn check_fsm_transition(
         CoordinatorFsmState::ActivatePhase => {
             // Transition when: Works for current phase exist and are Ready
             if let Some(ref phase_id) = coord_state.current_phase_id {
-                let wis = generation::find_works_for_phase(stores, phase_id);
+                let wis = generation::find_works_for_parent(stores, phase_id);
                 if !wis.is_empty() {
                     return Some(CoordinatorFsmState::Executing);
                 }
@@ -1383,7 +1414,31 @@ fn check_fsm_transition(
             None
         }
         CoordinatorFsmState::Executing => {
-            // Check phase timeout
+            // Brief mode: Works are parented directly to Plan, no phases
+            if let Some(plan) =
+                generation::find_active_plan(stores).filter(|p| p.tier == crate::domain::plan::Tier::Brief)
+            {
+                // Goal timeout
+                let goal_elapsed_ms = crate::id::now_millis() - coord_state.goal_started_at;
+                let goal_timeout_ms = config.goal_timeout_secs as i64 * 1000;
+                if goal_elapsed_ms > goal_timeout_ms {
+                    return Some(CoordinatorFsmState::GoalComplete);
+                }
+
+                let wis = generation::find_works_for_parent(stores, &plan.id);
+                if wis.is_empty() {
+                    return None; // Wait for Works to be generated
+                }
+                if wis
+                    .iter()
+                    .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
+                {
+                    return Some(CoordinatorFsmState::GoalComplete);
+                }
+                return None;
+            }
+
+            // Full mode: phase timeout fires first (local - advance this phase)
             if let Some(activated_at) = coord_state.phase_activated_at {
                 let elapsed_ms = crate::id::now_millis() - activated_at;
                 let timeout_ms = config.phase_timeout_secs as i64 * 1000;
@@ -1392,20 +1447,17 @@ fn check_fsm_transition(
                 }
             }
 
-            // Check goal timeout
+            // Full mode: goal timeout (global - kill the entire goal)
             let goal_elapsed_ms = crate::id::now_millis() - coord_state.goal_started_at;
             let goal_timeout_ms = config.goal_timeout_secs as i64 * 1000;
             if goal_elapsed_ms > goal_timeout_ms {
                 return Some(CoordinatorFsmState::GoalComplete);
             }
 
-            // Transition when: all WIs in current phase are terminal
+            // Full mode: all WIs in current phase are terminal
             if let Some(ref phase_id) = coord_state.current_phase_id {
-                let wis = generation::find_works_for_phase(stores, phase_id);
+                let wis = generation::find_works_for_parent(stores, phase_id);
                 if wis.is_empty() {
-                    // Phase with 0 Works — transition to PhaseGate so the gate
-                    // can decide whether to retry WI generation or advance.
-                    // Design doc: "require at least 1 Done WI to consider a Phase complete"
                     return Some(CoordinatorFsmState::PhaseGate);
                 }
                 if wis

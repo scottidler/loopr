@@ -56,12 +56,12 @@ pub(super) fn handle_work_create(
             }
         };
 
-        // Verify parent phase exists and is not in a terminal state
+        // Verify parent exists and is not in a terminal state.
+        // Parent can be a Phase (Full mode) or a Plan (Brief mode).
         {
             let phases = stores.read_phases()?;
-            match phases.get(&parent_id) {
-                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id))),
-                Some(phase) if matches!(phase.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+            if let Some(phase) = phases.get(&parent_id) {
+                if matches!(phase.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
@@ -71,7 +71,23 @@ pub(super) fn handle_work_create(
                         )),
                     ));
                 }
-                _ => {}
+            } else {
+                drop(phases);
+                let plans = stores.read_plans()?;
+                match plans.get(&parent_id) {
+                    None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("parent", &parent_id))),
+                    Some(plan) if matches!(plan.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
+                        return Ok(DaemonResponse::err(
+                            req.id,
+                            RpcError::precondition_failed(&format!(
+                                "Cannot create work under {} plan '{}'",
+                                plan.status(),
+                                parent_id
+                            )),
+                        ));
+                    }
+                    _ => {}
+                }
             }
         }
 

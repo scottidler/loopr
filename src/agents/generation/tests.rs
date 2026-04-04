@@ -420,7 +420,7 @@ fn test_find_active_phases_for_spec_sorted() {
 }
 
 #[test]
-fn test_find_works_for_phase() {
+fn test_find_works_for_parent() {
     let dir = TestDir::new("loopr-gen-fwip");
     let stores = test_stores(&dir);
 
@@ -431,7 +431,7 @@ fn test_find_works_for_phase() {
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
     stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
 
-    let wis = find_works_for_phase(&stores, "phase-1");
+    let wis = find_works_for_parent(&stores, "phase-1");
     assert_eq!(wis.len(), 2);
 }
 
@@ -1028,8 +1028,8 @@ fn test_find_failed_validations_wrong_collection_excluded() {
 }
 
 #[test]
-fn test_find_works_for_phase_ordering() {
-    // find_works_for_phase returns all WIs for the phase regardless of status.
+fn test_find_works_for_parent_ordering() {
+    // find_works_for_parent returns all WIs for the phase regardless of status.
     let dir = TestDir::new("loopr-gen-fwip-ord");
     let stores = test_stores(&dir);
 
@@ -1046,7 +1046,7 @@ fn test_find_works_for_phase_ordering() {
     stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
     stores.works.write().unwrap().insert(wi_other.id.clone(), wi_other);
 
-    let wis = find_works_for_phase(&stores, "phase-x");
+    let wis = find_works_for_parent(&stores, "phase-x");
     assert_eq!(wis.len(), 3);
     // All should belong to phase-x
     assert!(wis.iter().all(|w| w.parent_id == "phase-x"));

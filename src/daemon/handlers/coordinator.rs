@@ -308,11 +308,25 @@ pub(super) fn handle_coordinator_accept_plan(
             ));
         };
 
+        // Set tier from explicit param (user override) or default to Full.
+        // LLM classification can be added later - it would run here before activation.
+        let tier = req
+            .params
+            .get("tier")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "brief" => Some(crate::domain::plan::Tier::Brief),
+                "full" => Some(crate::domain::plan::Tier::Full),
+                _ => None,
+            })
+            .unwrap_or_default();
+
         // Activate the Plan (Draft -> Active)
         {
             let mut plans = stores.write_plans()?;
             match plans.get_mut(&plan_id) {
                 Some(plan) => {
+                    plan.tier = tier;
                     plan.force_status(HierarchyStatus::Active);
                     plan.updated_at = crate::id::now_millis();
                     if let Some(store_arc) = &stores.store

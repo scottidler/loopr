@@ -38,6 +38,31 @@ impl fmt::Display for HierarchyStatus {
 /// Type aliases so each record can name its own status type.
 pub type PlanStatus = HierarchyStatus;
 
+/// Lifecycle tier: Full (Plan -> Spec -> Phase -> Work) or Brief (Plan -> Work).
+///
+/// Determined once when a Plan is activated. Precedence:
+///   1. Explicit user override during interview
+///   2. LLM classification (Haiku reads Plan, checks for contract definitions)
+///   3. Default: Full
+///
+/// Stored on Plan (persistent). A Plan that defines no contracts is always Brief.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    #[default]
+    Full,
+    Brief,
+}
+
+impl fmt::Display for Tier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Tier::Full => write!(f, "full"),
+            Tier::Brief => write!(f, "brief"),
+        }
+    }
+}
+
 /// Top-level objective. Contains markdown description and acceptance criteria.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
@@ -46,6 +71,8 @@ pub struct Plan {
     pub description: String,
     pub acceptance_criteria: String,
     status: PlanStatus,
+    #[serde(default)]
+    pub tier: Tier,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -85,6 +112,7 @@ impl Plan {
             description,
             acceptance_criteria,
             status: HierarchyStatus::Draft,
+            tier: Tier::default(),
             created_at: now,
             updated_at: now,
         }
@@ -107,6 +135,7 @@ impl Record for Plan {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
+        m.insert("tier".into(), IndexValue::String(self.tier.to_string()));
         m
     }
 }
@@ -330,10 +359,14 @@ mod tests {
     fn test_plan_record_indexed_fields() {
         let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
         let fields = plan.indexed_fields();
-        assert_eq!(fields.len(), 1);
+        assert_eq!(fields.len(), 2);
         assert_eq!(
             fields.get("status"),
             Some(&taskstore::record::IndexValue::String("draft".to_string()))
+        );
+        assert_eq!(
+            fields.get("tier"),
+            Some(&taskstore::record::IndexValue::String("full".to_string()))
         );
     }
 
