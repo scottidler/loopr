@@ -63,6 +63,40 @@ impl fmt::Display for Tier {
     }
 }
 
+/// Classify a Plan as Full or Brief using the tier-gate prompt and an LLM call.
+///
+/// Reads the tier-gate.pmt prompt, appends the Plan's description, calls the LLM,
+/// and parses "full" or "brief" from the response. Falls back to Full on any error.
+///
+/// Uses Haiku (or whatever model the ValidatorConfig specifies) - this is a binary
+/// classification task, not a reasoning task.
+pub fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) -> Tier {
+    let prompt_template = crate::prompts::store().tier_gate.clone();
+    if prompt_template.is_empty() {
+        log::warn!("tier-gate prompt is empty, defaulting to Full");
+        return Tier::Full;
+    }
+
+    let prompt = format!("{}\n{}", prompt_template, plan.description);
+
+    match client.call(&prompt) {
+        Ok(response) => {
+            let trimmed = response.trim().to_lowercase();
+            if trimmed.contains("brief") {
+                log::info!("Tier classification: Brief (plan={})", plan.id);
+                Tier::Brief
+            } else {
+                log::info!("Tier classification: Full (plan={})", plan.id);
+                Tier::Full
+            }
+        }
+        Err(e) => {
+            log::warn!("Tier classification failed, defaulting to Full: {}", e);
+            Tier::Full
+        }
+    }
+}
+
 /// Top-level objective. Contains markdown description and acceptance criteria.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {

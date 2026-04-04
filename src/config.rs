@@ -479,7 +479,36 @@ impl Default for ValidatorConfig {
     }
 }
 
-/// Coverage Evaluator configuration — LLM-powered coverage evaluation at decomposition boundaries.
+/// Tier gate configuration - LLM-powered classification of Plan as Full or Brief.
+///
+/// Uses a lightweight model (Haiku by default) to read the Plan and determine
+/// whether it introduces contracts (Full) or is contract-neutral (Brief).
+/// The prompt is loaded from tier-gate.pmt and can be tuned without code changes.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TierGateConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub model: String,
+    pub api_key_env: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+impl Default for TierGateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: "anthropic".to_string(),
+            model: "claude-haiku-4-5-20251001".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 16,
+            temperature: 0.0,
+        }
+    }
+}
+
+/// Coverage Evaluator configuration - LLM-powered coverage evaluation at decomposition boundaries.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EvaluatorConfig {
@@ -538,6 +567,7 @@ pub struct Config {
     pub chat: ChatConfig,
     pub integrator: IntegratorConfig,
     pub validator: ValidatorConfig,
+    pub tier_gate: TierGateConfig,
     pub evaluator: EvaluatorConfig,
     pub agents: AgentConfig,
     pub strategy: StrategyConfig,
@@ -554,6 +584,7 @@ impl Default for Config {
             chat: ChatConfig::default(),
             integrator: IntegratorConfig::default(),
             validator: ValidatorConfig::default(),
+            tier_gate: TierGateConfig::default(),
             evaluator: EvaluatorConfig::default(),
             agents: AgentConfig::default(),
             strategy: StrategyConfig::default(),

@@ -308,18 +308,44 @@ pub(super) fn handle_coordinator_accept_plan(
             ));
         };
 
-        // Set tier from explicit param (user override) or default to Full.
-        // LLM classification can be added later - it would run here before activation.
-        let tier = req
-            .params
-            .get("tier")
-            .and_then(|v| v.as_str())
-            .and_then(|s| match s.to_lowercase().as_str() {
-                "brief" => Some(crate::domain::plan::Tier::Brief),
-                "full" => Some(crate::domain::plan::Tier::Full),
-                _ => None,
-            })
-            .unwrap_or_default();
+        // Set tier: explicit user override > LLM classification > default Full.
+        let explicit_tier =
+            req.params
+                .get("tier")
+                .and_then(|v| v.as_str())
+                .and_then(|s| match s.to_lowercase().as_str() {
+                    "brief" => Some(crate::domain::plan::Tier::Brief),
+                    "full" => Some(crate::domain::plan::Tier::Full),
+                    _ => None,
+                });
+
+        let tier = if let Some(t) = explicit_tier {
+            log::info!("Tier set by explicit user override: {}", t);
+            t
+        } else {
+            // LLM classification via tier-gate prompt, using config from XDG yml
+            let tg = &stores.config.tier_gate;
+            if !tg.enabled {
+                log::info!("Tier gate disabled, defaulting to Full");
+                crate::domain::plan::Tier::default()
+            } else {
+                let plan_for_classify = stores.read_plans()?.get(&plan_id).cloned();
+                if let Some(ref plan) = plan_for_classify {
+                    let validator_config = crate::config::ValidatorConfig {
+                        enabled: true,
+                        provider: tg.provider.clone(),
+                        model: tg.model.clone(),
+                        api_key_env: tg.api_key_env.clone(),
+                        max_tokens: tg.max_tokens,
+                        temperature: tg.temperature,
+                    };
+                    let client = crate::validator::client::LlmClient::with_ureq(validator_config);
+                    crate::domain::plan::classify_tier(plan, &client)
+                } else {
+                    crate::domain::plan::Tier::default()
+                }
+            }
+        };
 
         // Activate the Plan (Draft -> Active)
         {

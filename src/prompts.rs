@@ -30,6 +30,7 @@ const DEFAULT_CHAT_INTERVIEW: &str = include_str!("../prompts/chat-interview.pmt
 const DEFAULT_CHAT_DRAFT: &str = include_str!("../prompts/chat-draft.pmt");
 const DEFAULT_CHAT_REFINE: &str = include_str!("../prompts/chat-refine.pmt");
 const DEFAULT_CHAT_EXECUTING: &str = include_str!("../prompts/chat-executing.pmt");
+const DEFAULT_TIER_GATE: &str = include_str!("../prompts/tier-gate.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -54,6 +55,7 @@ pub struct PromptStore {
     pub chat_draft: String,
     pub chat_refine: String,
     pub chat_executing: String,
+    pub tier_gate: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -115,6 +117,7 @@ pub fn init() {
         chat_draft: load("chat-draft.pmt", DEFAULT_CHAT_DRAFT),
         chat_refine: load("chat-refine.pmt", DEFAULT_CHAT_REFINE),
         chat_executing: load("chat-executing.pmt", DEFAULT_CHAT_EXECUTING),
+        tier_gate: load("tier-gate.pmt", DEFAULT_TIER_GATE),
     });
 }
 
@@ -143,6 +146,7 @@ pub fn init_defaults() {
         chat_draft: DEFAULT_CHAT_DRAFT.to_string(),
         chat_refine: DEFAULT_CHAT_REFINE.to_string(),
         chat_executing: DEFAULT_CHAT_EXECUTING.to_string(),
+        tier_gate: DEFAULT_TIER_GATE.to_string(),
     });
 }
 
