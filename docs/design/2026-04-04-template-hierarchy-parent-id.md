@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-04
-**Status:** Draft
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -382,8 +382,8 @@ metadata on each document type.
 
 ### Phase 1: parent_id Refactor (Foundation)
 
-Rename typed parent fields to `parent_id` with serde aliases. All
-existing behavior preserved - no Brief mode yet.
+Rename typed parent fields to `parent_id`. Clean break - no serde
+aliases. All existing behavior preserved - no Brief mode yet.
 
 **Files:**
 - `src/domain/spec.rs` - field rename, constructor, indexed_fields

@@ -456,7 +456,6 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
     result
 }
 
-/// Find existing Works for a given Phase.
 /// Find all Works whose parent_id matches the given ID.
 ///
 /// In Full mode, parent_id is a Phase ID. In Brief mode, parent_id is a Plan ID.
@@ -467,6 +466,85 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
 pub fn find_works_for_parent(stores: &Stores, parent_id: &str) -> Vec<Work> {
     let Ok(works) = stores.read_works() else { return vec![] };
     works.values().filter(|w| w.parent_id == parent_id).cloned().collect()
+}
+
+/// Walk the parent_id chain from a Work item upward, gathering context at each level.
+///
+/// Returns a formatted string with relevant context from each ancestor:
+/// - Phase: validation scope, deliverables
+/// - Spec: architectural decisions, failure modes, interfaces
+/// - Plan: contracts, requirements, acceptance criteria
+///
+/// Used during retry escalation: when a Work item fails repeatedly, the supervisor
+/// gathers context from the parent chain to revise the Work's Implementation Notes
+/// and Constraints before handing it to a fresh implementer.
+///
+/// In Brief mode (Work -> Plan), the chain is shorter: just the Plan.
+/// In Full mode (Work -> Phase -> Spec -> Plan), the full chain is walked.
+///
+/// NOTE: could be promoted to a typed ID helper (`parent_collection_for(id)`) if
+/// prefix disambiguation logic grows. Currently uses ID prefix convention:
+/// "pl-" = Plan, "sp-" = Spec, "ph-" = Phase, "wk-" = Work.
+pub fn gather_parent_context(stores: &Stores, work_parent_id: &str) -> String {
+    let mut context = String::with_capacity(2048);
+
+    if work_parent_id.starts_with("ph-") {
+        // Full mode: Work -> Phase -> Spec -> Plan
+        let phase_data = stores
+            .read_phases()
+            .ok()
+            .and_then(|phases| phases.get(work_parent_id).cloned());
+
+        if let Some(phase) = phase_data {
+            context.push_str("### Phase Context\n");
+            context.push_str(&format!("- **Title:** {}\n", phase.title));
+            context.push_str(&format!("- **Description:** {}\n", phase.description));
+            if !phase.validation_commands.is_empty() {
+                context.push_str(&format!("- **Validation:** {}\n", phase.validation_commands.join(", ")));
+            }
+            context.push('\n');
+
+            let spec_data = stores
+                .read_specs()
+                .ok()
+                .and_then(|specs| specs.get(&phase.parent_id).cloned());
+
+            if let Some(spec) = spec_data {
+                context.push_str("### Spec Context\n");
+                context.push_str(&format!("- **Title:** {}\n", spec.title));
+                context.push_str(&format!("- **Description:** {}\n", spec.description));
+                context.push('\n');
+
+                let plan_data = stores
+                    .read_plans()
+                    .ok()
+                    .and_then(|plans| plans.get(&spec.parent_id).cloned());
+
+                if let Some(plan) = plan_data {
+                    context.push_str("### Plan Context\n");
+                    context.push_str(&format!("- **Title:** {}\n", plan.title));
+                    context.push_str(&format!("- **Acceptance Criteria:** {}\n", plan.acceptance_criteria));
+                    context.push('\n');
+                }
+            }
+        }
+    } else if work_parent_id.starts_with("pl-") {
+        // Brief mode: Work -> Plan
+        let plan_data = stores
+            .read_plans()
+            .ok()
+            .and_then(|plans| plans.get(work_parent_id).cloned());
+
+        if let Some(plan) = plan_data {
+            context.push_str("### Plan Context\n");
+            context.push_str(&format!("- **Title:** {}\n", plan.title));
+            context.push_str(&format!("- **Description:** {}\n", plan.description));
+            context.push_str(&format!("- **Acceptance Criteria:** {}\n", plan.acceptance_criteria));
+            context.push('\n');
+        }
+    }
+
+    context
 }
 
 /// Find the first active Phase that still needs Works.

@@ -1052,6 +1052,65 @@ fn test_find_works_for_parent_ordering() {
     assert!(wis.iter().all(|w| w.parent_id == "phase-x"));
 }
 
+// --- Context escalation tests ---
+
+#[test]
+fn test_gather_parent_context_full_mode() {
+    let dir = TestDir::new("loopr-gen-ctx-full");
+    let stores = test_stores(&dir);
+
+    let mut plan = Plan::new("Auth Plan".into(), "JWT auth system".into(), "Must pass tests".into());
+    plan.force_status(HierarchyStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec = Spec::new(plan_id, "Auth Spec".into(), "JWT implementation details".into());
+    spec.force_status(HierarchyStatus::Active);
+    let spec_id = spec.id.clone();
+    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+    let mut phase = Phase::new(spec_id, "Phase 1".into(), "Build JWT module".into(), 1);
+    phase.force_status(HierarchyStatus::Active);
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+    let ctx = gather_parent_context(&stores, &phase_id);
+    assert!(ctx.contains("Phase Context"));
+    assert!(ctx.contains("Phase 1"));
+    assert!(ctx.contains("Spec Context"));
+    assert!(ctx.contains("Auth Spec"));
+    assert!(ctx.contains("Plan Context"));
+    assert!(ctx.contains("Auth Plan"));
+    assert!(ctx.contains("Must pass tests"));
+}
+
+#[test]
+fn test_gather_parent_context_brief_mode() {
+    let dir = TestDir::new("loopr-gen-ctx-brief");
+    let stores = test_stores(&dir);
+
+    let mut plan = Plan::new("Quick Fix".into(), "Fix the bug".into(), "Bug is fixed".into());
+    plan.force_status(HierarchyStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    let ctx = gather_parent_context(&stores, &plan_id);
+    assert!(ctx.contains("Plan Context"));
+    assert!(ctx.contains("Quick Fix"));
+    assert!(ctx.contains("Fix the bug"));
+    assert!(ctx.contains("Bug is fixed"));
+    assert!(!ctx.contains("Phase Context"));
+    assert!(!ctx.contains("Spec Context"));
+}
+
+#[test]
+fn test_gather_parent_context_unknown_parent() {
+    let dir = TestDir::new("loopr-gen-ctx-unknown");
+    let stores = test_stores(&dir);
+    let ctx = gather_parent_context(&stores, "xx-nonexistent");
+    assert!(ctx.is_empty());
+}
+
 // --- Prompt building with learnings/findings (covering branches at lines 119-180, 237-254) ---
 
 #[test]
