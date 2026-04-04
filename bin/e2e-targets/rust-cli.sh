@@ -65,7 +65,7 @@ target_goal() {
 }
 
 target_plan() {
-    echo "${LOOPR_ROOT}/bin/e2e-targets/rust-cli.yml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/rust-cli.md"
 }
 
 collect_results() {

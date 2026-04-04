@@ -24,19 +24,7 @@ target_goal() {
 }
 
 target_plan() {
-    cat <<'PLAN'
-Phase 1: Add --version flag
-
-Work 1: Add --version argument handling
-- In src/main.rs, add argument parsing that checks for --version
-- When --version is passed, print the version from env!("CARGO_PKG_VERSION") and exit
-- When no --version flag, keep the existing Hello World behavior
-- Use std::env::args() for parsing (no external dependencies needed)
-
-Work 2: Add test for --version
-- Add a test that verifies the binary outputs the version when run with --version
-- The version should match the version in Cargo.toml (currently 0.1.0)
-PLAN
+    echo "${LOOPR_ROOT}/bin/e2e-targets/rust-version.md"
 }
 
 collect_results() {

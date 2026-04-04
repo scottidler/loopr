@@ -140,7 +140,7 @@ target_goal() {
 }
 
 target_plan() {
-    echo "${LOOPR_ROOT}/bin/e2e-targets/node-api.yml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/node-api.md"
 }
 
 collect_results() {

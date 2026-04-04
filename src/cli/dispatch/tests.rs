@@ -482,28 +482,6 @@ fn test_agent_start_researcher_no_target() {
 }
 
 #[test]
-fn test_coordinator_set_goal_mapping() {
-    let cmd = Command::Coordinator {
-        cmd: CoordinatorCmd::Set {
-            goal: "Build auth".to_string(),
-        },
-    };
-    let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(method, "coordinator.set_goal");
-    assert_eq!(params["goal"], "Build auth");
-}
-
-#[test]
-fn test_coordinator_clear_goal_mapping() {
-    let cmd = Command::Coordinator {
-        cmd: CoordinatorCmd::Clear,
-    };
-    let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(method, "coordinator.clear_goal");
-    assert_eq!(params, json!({}));
-}
-
-#[test]
 fn test_coordinator_get_goal_mapping() {
     let cmd = Command::Coordinator {
         cmd: CoordinatorCmd::Status,
@@ -632,18 +610,6 @@ fn test_agent_start_with_all_optional_params() {
     let (method2, params2) = command_to_ipc(&cmd2, Role::Integrator);
     assert_eq!(method2, "agent.start");
     assert_eq!(params2["agent_type"], "integrator");
-}
-
-#[test]
-fn test_coordinator_goal_clear_mapping() {
-    let cmd = Command::Coordinator {
-        cmd: CoordinatorCmd::Clear,
-    };
-    let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(method, "coordinator.clear_goal");
-    assert_eq!(params, json!({}));
-    // Verify no extra fields are present
-    assert!(params.as_object().unwrap().is_empty());
 }
 
 // --- Coverage gap tests for uncovered branches ---
@@ -967,18 +933,6 @@ fn test_agent_output_default_since() {
     assert_eq!(method, "agent.output");
     assert_eq!(params["session_id"], "sess-1");
     assert_eq!(params["since"], 0);
-}
-
-#[test]
-fn test_coordinator_accept_plan_mapping() {
-    let cmd = Command::Coordinator {
-        cmd: CoordinatorCmd::AcceptPlan {
-            plan: "Build auth module".to_string(),
-        },
-    };
-    let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
-    assert_eq!(method, "coordinator.accept_plan");
-    assert_eq!(params["plan"], "Build auth module");
 }
 
 // --- Clarity gate bypass tests ---

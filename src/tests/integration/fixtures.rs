@@ -173,6 +173,16 @@ pub(super) fn create_test_hierarchy(
     (plan_id, spec_id, phase_id)
 }
 
+/// Seed a coordinator goal directly into the store without IPC.
+/// Returns the goal id.
+pub(super) fn seed_goal(stores: &Arc<Stores>, goal_text: &str) -> String {
+    use crate::domain::coordinator_goal::CoordinatorGoal;
+    let goal = CoordinatorGoal::new(goal_text.to_string());
+    let id = goal.id.clone();
+    stores.coordinator_goals.write().unwrap().insert(id.clone(), goal);
+    id
+}
+
 pub(super) fn test_stores_with_persistence(dir: &std::path::Path) -> Arc<Stores> {
     let config = Config {
         project: crate::config::ProjectConfig {

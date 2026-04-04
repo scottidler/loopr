@@ -117,7 +117,7 @@ target_goal() {
 }
 
 target_plan() {
-    echo "${LOOPR_ROOT}/bin/e2e-targets/python-api.yml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/python-api.md"
 }
 
 collect_results() {

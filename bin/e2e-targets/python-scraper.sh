@@ -146,7 +146,7 @@ target_goal() {
 }
 
 target_plan() {
-    echo "${LOOPR_ROOT}/bin/e2e-targets/python-scraper.yml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/python-scraper.md"
 }
 
 collect_results() {

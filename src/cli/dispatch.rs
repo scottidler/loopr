@@ -163,63 +163,33 @@ async fn run_headless(
         .context("failed to connect to daemon - is it running?")?;
     client.handshake(crate::version()).await.context("handshake failed")?;
 
-    // Step 1+2: Set goal and optionally inject plan
-    let is_manifest = plan_text
-        .map(|p| p.ends_with(".yaml") || p.ends_with(".yml"))
-        .unwrap_or(false);
-
-    let goal_id = if is_manifest {
-        // YAML manifest: read file and seed full Plan/Spec/Phase/Work hierarchy
-        let manifest_path = plan_text.expect("manifest path checked above");
-        let yaml = std::fs::read_to_string(manifest_path)
-            .context(format!("failed to read manifest file: {}", manifest_path))?;
-        let (resp, _) = client
-            .request("coordinator.seed_manifest", json!({ "manifest": yaml }))
-            .await
-            .context("failed to seed manifest")?;
-        if let Some(err) = resp.error {
-            bail!("seed_manifest error: {}", err.message);
-        }
-        let gid = resp
-            .result
-            .as_ref()
-            .and_then(|r| r.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        eprintln!("Goal set: {} ({})", goal, gid);
-        eprintln!("Manifest seeded, orchestration starting.");
-        gid
-    } else {
-        // Text plan or no plan: use existing set_goal + accept_plan flow
-        let (resp, _) = client
-            .request("coordinator.set_goal", json!({ "goal": goal }))
-            .await
-            .context("failed to set goal")?;
-        if let Some(err) = resp.error {
-            bail!("set_goal error: {}", err.message);
-        }
-        let gid = resp
-            .result
-            .as_ref()
-            .and_then(|r| r.get("id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        eprintln!("Goal set: {} ({})", goal, gid);
-
-        if let Some(plan) = plan_text {
-            let (resp, _) = client
-                .request("coordinator.accept_plan", json!({ "plan": plan }))
-                .await
-                .context("failed to accept plan")?;
-            if let Some(err) = resp.error {
-                bail!("accept_plan error: {}", err.message);
-            }
-            eprintln!("Plan accepted, orchestration starting.");
-        }
-        gid
+    // Inject plan via doc.inject path. A .md plan file is required.
+    let plan_path = match plan_text {
+        Some(p) if p.ends_with(".md") => p,
+        Some(p) => bail!("--plan must point to a .md plan file, got: {}", p),
+        None => bail!("--plan <path.md> is required for headless mode"),
     };
+
+    log::debug!(
+        "run_headless: goal hint='{}' (ignored, title comes from plan .md)",
+        goal
+    );
+
+    let (resp, _) = client
+        .request("doc.inject", json!({ "path": plan_path }))
+        .await
+        .context("failed to inject plan")?;
+    if let Some(err) = resp.error {
+        bail!("doc.inject error: {}", err.message);
+    }
+    let goal_id = resp
+        .result
+        .as_ref()
+        .and_then(|r| r.get("goal_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    eprintln!("Plan injected: {} (goal_id: {})", plan_path, goal_id);
 
     // Step 3: If no-monitor, exit now
     if no_monitor {
@@ -519,10 +489,7 @@ fn agent_to_ipc(cmd: &AgentCmd) -> (String, serde_json::Value) {
 
 fn coordinator_to_ipc(cmd: &CoordinatorCmd) -> (String, serde_json::Value) {
     match cmd {
-        CoordinatorCmd::Set { goal } => ("coordinator.set_goal".to_string(), json!({ "goal": goal })),
-        CoordinatorCmd::Clear => ("coordinator.clear_goal".to_string(), json!({})),
         CoordinatorCmd::Status => ("coordinator.get_goal".to_string(), json!({})),
-        CoordinatorCmd::AcceptPlan { plan } => ("coordinator.accept_plan".to_string(), json!({ "plan": plan })),
     }
 }
 

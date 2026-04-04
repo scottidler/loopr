@@ -48,8 +48,6 @@ fn test_dispatch_routes_mvp4_methods() {
 
     // All these methods should NOT return "method not found"
     let methods = vec![
-        "coordinator.set_goal",
-        "coordinator.clear_goal",
         "lock.create",
         "lock.list",
         "lock.release",

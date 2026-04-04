@@ -41,55 +41,6 @@ fn test_tick_crash_recovery_state() {
 }
 
 #[test]
-fn test_goal_lifecycle() {
-    let stores = test_stores();
-    let tx = test_event_tx();
-    let wm = test_worktree_mgr();
-    let ic = test_integrator_config();
-
-    // Set first goal
-    let g1 = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Build auth system"}),
-    );
-    let g1_id = g1["id"].as_str().unwrap().to_string();
-    assert_eq!(g1["active"], true);
-
-    // Set second goal - first should be deactivated
-    let g2 = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Add dark mode"}),
-    );
-    assert_eq!(g2["active"], true);
-
-    // Verify first is deactivated
-    let goals = stores.coordinator_goals.read().unwrap();
-    assert!(!goals[&g1_id].active, "first goal should be deactivated");
-    assert_eq!(
-        goals.values().filter(|g| g.active).count(),
-        1,
-        "exactly one active goal"
-    );
-    drop(goals);
-
-    // Clear all goals
-    let cleared = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.clear_goal", json!({}));
-    assert_eq!(cleared["cleared"], 1);
-
-    // All goals should be inactive
-    let goals = stores.coordinator_goals.read().unwrap();
-    assert!(goals.values().all(|g| !g.active));
-}
-
-#[test]
 fn test_worktree_base_uses_published_tick() {
     let stores = test_stores();
     let tx = test_event_tx();

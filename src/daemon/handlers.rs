@@ -178,18 +178,10 @@ pub fn dispatch(
         "coverage.evaluate" => handle_coverage_evaluate(stores, req),
         "tool.list" => handle_tool_list(stores, req),
         "tools.register" => handle_tools_register(stores, event_tx, req),
-        "coordinator.set_goal" => handle_coordinator_set_goal(stores, event_tx, req),
-        "coordinator.clear_goal" => handle_coordinator_clear_goal(stores, event_tx, req),
         "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
         "coordinator.get_state" => handle_coordinator_get_state(stores, req),
         "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
         "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
-        "coordinator.accept_plan" => {
-            handle_coordinator_accept_plan(stores, event_tx, worktree_mgr, integrator_config, req)
-        }
-        "coordinator.seed_manifest" => {
-            handle_coordinator_seed_manifest(stores, event_tx, worktree_mgr, integrator_config, req)
-        }
         "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, req),
         "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, req),
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),

@@ -277,24 +277,9 @@ pub enum AgentCmd {
 /// Coordinator subcommands.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum CoordinatorCmd {
-    /// Set the coordinator goal
-    #[command(name = "set-goal")]
-    Set {
-        /// Goal text
-        goal: String,
-    },
-    /// Clear the coordinator goal
-    #[command(name = "clear-goal")]
-    Clear,
     /// Get the current coordinator goal
     #[command(name = "goal")]
     Status,
-    /// Accept a plan from text (creates Plan record and activates it)
-    #[command(name = "accept-plan")]
-    AcceptPlan {
-        /// Plan text
-        plan: String,
-    },
 }
 
 /// Lock subcommands.
@@ -1016,30 +1001,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parses_coordinator_set_goal() {
-        let cli = Cli::parse_from(["loopr", "coordinator", "set-goal", "Build auth module"]);
-        match cli.command {
-            Some(Command::Coordinator {
-                cmd: CoordinatorCmd::Set { goal },
-            }) => {
-                assert_eq!(goal, "Build auth module");
-            }
-            _ => panic!("expected Coordinator SetGoal"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_coordinator_clear_goal() {
-        let cli = Cli::parse_from(["loopr", "coordinator", "clear-goal"]);
-        assert!(matches!(
-            cli.command,
-            Some(Command::Coordinator {
-                cmd: CoordinatorCmd::Clear
-            })
-        ));
-    }
-
-    #[test]
     fn test_cli_parses_coordinator_goal() {
         let cli = Cli::parse_from(["loopr", "coordinator", "goal"]);
         assert!(matches!(
@@ -1060,19 +1021,6 @@ mod tests {
     fn test_cli_log_level_default_none() {
         let cli = Cli::parse_from(["loopr", "status"]);
         assert!(cli.log_level.is_none());
-    }
-
-    #[test]
-    fn test_cli_parses_coordinator_accept_plan() {
-        let cli = Cli::parse_from(["loopr", "coordinator", "accept-plan", "Build a todo app"]);
-        match cli.command {
-            Some(Command::Coordinator {
-                cmd: CoordinatorCmd::AcceptPlan { plan },
-            }) => {
-                assert_eq!(plan, "Build a todo app");
-            }
-            _ => panic!("expected Coordinator AcceptPlan"),
-        }
     }
 
     #[test]

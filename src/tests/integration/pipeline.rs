@@ -16,15 +16,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
-    // 1. Set a goal
-    dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Implement user auth"}),
-    );
+    seed_goal(&stores, "Implement user auth");
 
     // 2. Create full hierarchy
     let plan = dispatch_ok(
@@ -222,16 +214,7 @@ fn test_full_mvp4_pipeline() {
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
-    // 1. Set coordinator goal
-    let goal = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Build example website"}),
-    );
-    assert_eq!(goal["active"], true);
+    seed_goal(&stores, "Build example website");
 
     // 2. Create Plan
     let plan = dispatch_ok(
@@ -410,16 +393,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         ..Default::default()
     };
 
-    // --- 1. Set coordinator goal ---
-    let goal = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Build portfolio site"}),
-    );
-    assert_eq!(goal["active"], true);
+    seed_goal(&stores, "Build portfolio site");
 
     // --- 2. Create full hierarchy ---
     let plan = dispatch_ok(

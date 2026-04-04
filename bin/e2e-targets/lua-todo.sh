@@ -206,7 +206,6 @@ TESTLUA
 }
 
 target_validation_commands() {
-    # Phase-scoped validation-commands in lua-todo.yml handle this.
     true
 }
 
@@ -215,7 +214,7 @@ target_goal() {
 }
 
 target_plan() {
-    echo "${LOOPR_ROOT}/bin/e2e-targets/lua-todo.yml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/lua-todo.md"
 }
 
 collect_results() {

@@ -102,12 +102,17 @@ pub enum InputMode {
 /// An IPC action queued by a keybinding for the event loop to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IpcAction {
-    SetGoal(String),
     PauseAgent(String),
     ResumeAgent(String),
     StopAgent(String),
-    NewRecord { collection: String },
-    TransitionRecord { collection: String, id: String },
+    NewRecord {
+        collection: String,
+    },
+    TransitionRecord {
+        collection: String,
+        id: String,
+    },
+    /// Accept a plan via the doc.accept path (TUI chat /accept).
     AcceptPlan(String),
 }
 

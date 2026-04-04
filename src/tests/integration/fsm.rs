@@ -49,18 +49,7 @@ fn test_full_fsm_cycle() {
     use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 
     let stores = test_stores();
-    let tx = test_event_tx();
-
-    // Create a goal
-    let goal = dispatch_ok(
-        &stores,
-        &tx,
-        &test_worktree_mgr(),
-        &test_integrator_config(),
-        "coordinator.set_goal",
-        json!({"goal": "Build a CLI todo app"}),
-    );
-    let goal_id = goal["id"].as_str().unwrap().to_string();
+    let goal_id = "goal-test-fsm".to_string();
 
     // Insert CoordinatorState directly (the Coordinator agent would normally do this)
     let mut state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);

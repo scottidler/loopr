@@ -204,9 +204,6 @@ pub fn apply_action(app: &mut App, action: Action) {
             app.goal_input.push(c);
         }
         Action::GoalSubmit => {
-            if !app.goal_input.is_empty() {
-                app.pending_ipc = Some(IpcAction::SetGoal(app.goal_input.clone()));
-            }
             app.goal_input.clear();
             app.input_mode = InputMode::Normal;
         }
@@ -771,7 +768,7 @@ mod tests {
         apply_action(&mut app, Action::GoalSubmit);
         assert_eq!(app.input_mode, InputMode::Normal);
         assert!(app.goal_input.is_empty());
-        assert_eq!(app.pending_ipc, Some(IpcAction::SetGoal("hi".to_string())));
+        assert!(app.pending_ipc.is_none());
     }
 
     #[test]

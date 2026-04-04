@@ -194,8 +194,6 @@ README
 }
 
 target_validation_commands() {
-    # Phase-scoped validation-commands in react-todo.yml handle this.
-    # Return empty so no global validation_commands are written to loopr.yml.
     true
 }
 
@@ -204,7 +202,7 @@ target_goal() {
 }
 
 target_plan() {
-    echo "${LOOPR_ROOT}/bin/e2e-targets/react-todo.yml"
+    echo "${LOOPR_ROOT}/bin/e2e-targets/react-todo.md"
 }
 
 collect_results() {

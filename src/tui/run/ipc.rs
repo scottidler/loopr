@@ -47,7 +47,6 @@ pub async fn try_connect(socket_path: &Path) -> Option<(IpcClient, String)> {
 /// Send an IPC action to the daemon.
 pub async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
     let (method, params) = match action {
-        IpcAction::SetGoal(goal) => ("coordinator.set_goal".to_string(), serde_json::json!({ "goal": goal })),
         IpcAction::PauseAgent(session_id) => (
             "agent.pause".to_string(),
             serde_json::json!({ "session_id": session_id }),
@@ -68,10 +67,7 @@ pub async fn dispatch_ipc_action(client: &mut IpcClient, action: IpcAction) {
             format!("{collection}.transition"),
             serde_json::json!({ "id": id, "target_status": "Active" }),
         ),
-        IpcAction::AcceptPlan(plan_text) => (
-            "coordinator.accept_plan".to_string(),
-            serde_json::json!({ "plan": plan_text }),
-        ),
+        IpcAction::AcceptPlan(markdown) => ("doc.accept".to_string(), serde_json::json!({ "markdown": markdown })),
     };
     if let Err(e) = client.request(&method, params).await {
         warn!("Failed to dispatch IPC action {method}: {e}");
@@ -994,27 +990,6 @@ mod tests {
         }
         assert!(state.plans.is_empty());
         assert!(state.agent_sessions.is_empty());
-
-        drop(client);
-        let _ = server_handle.await;
-    }
-
-    #[tokio::test]
-    async fn test_dispatch_ipc_action_set_goal() {
-        let (path, server_handle, captured) = mock_ipc_server().await;
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        let mut client = IpcClient::connect(&path).await.unwrap();
-        client.handshake("0.1.0").await.unwrap();
-
-        dispatch_ipc_action(&mut client, IpcAction::SetGoal("Build auth system".to_string())).await;
-
-        {
-            let reqs = captured.lock().unwrap();
-            assert_eq!(reqs.len(), 1);
-            assert_eq!(reqs[0].0, "coordinator.set_goal");
-            assert_eq!(reqs[0].1["goal"], "Build auth system");
-        }
 
         drop(client);
         let _ = server_handle.await;

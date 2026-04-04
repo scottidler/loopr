@@ -54,58 +54,11 @@ fn test_coordinator_state_summary_multi_record() {
 }
 
 #[test]
-fn test_coordinator_get_goal_full_lifecycle() {
-    let stores = test_stores();
-    let tx = test_event_tx();
-    let wm = test_worktree_mgr();
-    let ic = test_integrator_config();
-
-    // No goal yet
-    let r1 = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
-    assert_eq!(r1["active"], false);
-
-    // Set goal
-    dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Build a website"}),
-    );
-
-    // Get goal - should return the active one
-    let r2 = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
-    assert_eq!(r2["goal"], "Build a website");
-    assert_eq!(r2["active"], true);
-
-    // Clear goal
-    dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.clear_goal", json!({}));
-
-    // Get goal - should be inactive now
-    let r3 = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
-    assert_eq!(r3["active"], false);
-}
-
-#[test]
 fn test_coordinator_state_persistence_across_iterations() {
     use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 
     let stores = test_stores();
-    let tx = test_event_tx();
-    let wm = test_worktree_mgr();
-    let ic = test_integrator_config();
-
-    // Set a goal
-    let goal = dispatch_ok(
-        &stores,
-        &tx,
-        &wm,
-        &ic,
-        "coordinator.set_goal",
-        json!({"goal": "Build a REST API"}),
-    );
-    let goal_id = goal["id"].as_str().unwrap().to_string();
+    let goal_id = "goal-test-persistence".to_string();
 
     // Create state, advance to Executing
     let mut state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
