@@ -38,6 +38,64 @@ cargo check      # Quick compile check
 - No underscore-prefixed unused variables in final code
 - Commit messages: `feat(scope): description` with phase context
 
+## Codebase Map
+
+```
+ 1  src
+ 2  ├── agents
+ 3  │   ├── context
+ 4  │   ├── coordinator
+ 5  │   ├── executor
+ 6  │   ├── generation
+ 7  │   ├── implementer
+ 8  │   └── integrator
+ 9  ├── cli
+10  │   └── dispatch
+11  ├── daemon
+12  │   └── handlers
+13  ├── decomposer
+14  ├── domain
+15  ├── evaluator
+16  ├── ipc
+17  ├── tests
+18  │   ├── fsm
+19  │   └── integration
+20  ├── tools
+21  │   └── builtin
+22  ├── tui
+23  │   ├── run
+24  │   └── views
+25  ├── validator
+26  └── worktree
+```
+
+1. **src** - crate root
+2. **agents** - all agent roles and shared infra (LLM client, session, worker pool, sandbox, events)
+3. **context** - assembles parent_id chain + sibling context for LLM prompts
+4. **coordinator** - Coordinator FSM: plan decomposition loop, tier-gate, Brief/Full paths
+5. **executor** - drives one Work item through the agentic loop; owns lifecycle and LLM call
+6. **generation** - LLM calls that produce Plan/Spec/Phase/Work documents
+7. **implementer** - writes code inside a worktree
+8. **integrator** - merges worktrees back to main branch
+9. **cli** - clap command structure; subcommand dispatch via IPC; diagnose subcommand
+10. **dispatch** - IPC dispatch logic and tests
+11. **daemon** - background process: startup/shutdown, DaemonContext, agent supervisor, work queue
+12. **handlers** - one file per IPC message type
+13. **decomposer** - breaks high-level goals into Plan/Spec/Phase/Work hierarchy
+14. **domain** - all persisted types (Plan/Spec/Phase/Work, Bundle, Chat, Lock, Tick, etc.); one file per type
+15. **evaluator** - coverage evaluator: judges whether a Plan/Spec/Phase has adequate coverage
+16. **ipc** - Unix socket IPC: protocol enums, param structs, client, server, framing codec
+17. **tests** - test suites outside module-level unit tests
+18. **fsm** - FSM transition correctness tests, one file per domain type
+19. **integration** - full integration tests: spin up daemon, exercise pipeline end-to-end
+20. **tools** - unified Tool trait, registry/router, agentic loop driver, sandbox, lane scheduling
+21. **builtin** - one file per built-in tool (read, write, edit, glob, grep, shell, fetch, etc.)
+22. **tui** - ratatui terminal UI: app state, keyboard input, event/render/IPC poll loop
+23. **run** - event loop split into events, IPC polling, and render sub-modules
+24. **views** - one file per TUI screen (dashboard, chat, agents, bundles, works, ticks, etc.)
+25. **validator** - doc validator (sync/ureq): validates documents against templates in docs/templates/
+26. **worktree** - git worktree lifecycle: create, clean, merge back to main
+
 ## Key External Dependencies
 
 - **TaskStore** (`scottidler/taskstore`) - JSONL-as-truth, SQLite-as-cache persistence. Generic over types implementing `Record` trait. Git dependency.
