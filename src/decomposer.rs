@@ -76,10 +76,10 @@ fn build_decompose_prompt(target_kind: DocKind, parent_content: &str) -> Result<
 fn build_validate_prompt(child_kind: DocKind, child_content: &str) -> String {
     let prompts = crate::prompts::store();
     let template_text = match child_kind {
-        DocKind::Spec => include_str!("../../docs/templates/spec.md"),
-        DocKind::Phase => include_str!("../../docs/templates/phase.md"),
-        DocKind::Work => include_str!("../../docs/templates/work.md"),
-        DocKind::Plan => include_str!("../../docs/templates/plan.md"),
+        DocKind::Spec => include_str!("../docs/templates/spec.md"),
+        DocKind::Phase => include_str!("../docs/templates/phase.md"),
+        DocKind::Work => include_str!("../docs/templates/work.md"),
+        DocKind::Plan => include_str!("../docs/templates/plan.md"),
     };
     format!(
         "{}\n\n## Template\n\n{}\n\n## Document to Validate\n\n{}",
