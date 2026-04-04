@@ -495,6 +495,24 @@ pub(super) fn handle_coordinator_seed_manifest(
 
         // Activate Plan
         let mut plan = resolved.plan;
+        // Classify tier via LLM before activating (same logic as activate_plan handler).
+        let tg = &stores.config.tier_gate;
+        let tier = if tg.enabled {
+            let validator_config = crate::config::ValidatorConfig {
+                enabled: true,
+                provider: tg.provider.clone(),
+                model: tg.model.clone(),
+                api_key_env: tg.api_key_env.clone(),
+                max_tokens: tg.max_tokens,
+                temperature: tg.temperature,
+            };
+            let client = crate::validator::client::LlmClient::with_ureq(validator_config);
+            crate::domain::plan::classify_tier(&plan, &client)
+        } else {
+            log::info!("Tier gate disabled, defaulting to Full");
+            crate::domain::plan::Tier::default()
+        };
+        plan.tier = tier;
         plan.force_status(HierarchyStatus::Active);
         plan.updated_at = crate::id::now_millis();
         let plan_id = plan.id.clone();

@@ -80,18 +80,71 @@ pub fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) 
     let prompt = format!("{}\n{}", prompt_template, plan.description);
 
     match client.call(&prompt) {
-        Ok(response) => {
-            let trimmed = response.trim().to_lowercase();
-            if trimmed.contains("brief") {
-                log::info!("Tier classification: Brief (plan={})", plan.id);
-                Tier::Brief
-            } else {
-                log::info!("Tier classification: Full (plan={})", plan.id);
-                Tier::Full
+        Ok(response) => match parse_tier(&response) {
+            Some(tier) => {
+                log::info!("Tier classification: {:?} (plan={})", tier, plan.id);
+                tier
             }
-        }
+            None => {
+                log::warn!(
+                    "Tier classification returned {:?}, retrying (plan={})",
+                    response.trim(),
+                    plan.id
+                );
+                retry_tier(client, &response, &plan.id)
+            }
+        },
         Err(e) => {
             log::warn!("Tier classification failed, defaulting to Full: {}", e);
+            Tier::Full
+        }
+    }
+}
+
+fn parse_tier(response: &str) -> Option<Tier> {
+    match response.trim().to_lowercase().as_str() {
+        "brief" => Some(Tier::Brief),
+        "full" => Some(Tier::Full),
+        _ => None,
+    }
+}
+
+fn retry_tier(
+    client: &crate::validator::client::LlmClient,
+    bad_response: &str,
+    plan_id: &str,
+) -> Tier {
+    let correction = format!(
+        "You responded with {:?} but the only valid responses are \
+         exactly \"Brief\" or \"Full\". Reply with one of those two \
+         words only, nothing else.",
+        bad_response.trim()
+    );
+    match client.call(&correction) {
+        Ok(response) => match parse_tier(&response) {
+            Some(tier) => {
+                log::info!(
+                    "Tier classification on retry: {:?} (plan={})",
+                    tier,
+                    plan_id
+                );
+                tier
+            }
+            None => {
+                log::error!(
+                    "Tier classification retry also returned {:?}, \
+                     defaulting to Full (plan={})",
+                    response.trim(),
+                    plan_id
+                );
+                Tier::Full
+            }
+        },
+        Err(e) => {
+            log::error!(
+                "Tier classification retry failed, defaulting to Full: {}",
+                e
+            );
             Tier::Full
         }
     }
