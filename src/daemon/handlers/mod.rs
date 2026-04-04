@@ -75,6 +75,7 @@ mod bundle;
 mod chat;
 mod common;
 mod coordinator;
+mod doc;
 mod integrator;
 mod learning;
 mod lock;
@@ -91,6 +92,7 @@ use agent::*;
 use bundle::*;
 use chat::*;
 use coordinator::*;
+use doc::*;
 use integrator::*;
 use learning::*;
 use lock::*;
@@ -188,6 +190,8 @@ pub fn dispatch(
         "coordinator.seed_manifest" => {
             handle_coordinator_seed_manifest(stores, event_tx, worktree_mgr, integrator_config, req)
         }
+        "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, req),
+        "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, req),
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "chat.submit" => handle_chat_submit(stores, event_tx, req),
         "chat.attach" => handle_chat_attach(stores, req),
@@ -506,11 +510,12 @@ pub(crate) mod tests {
         assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let collections = result["collections"].as_array().unwrap();
-        assert_eq!(collections.len(), 10);
+        assert_eq!(collections.len(), 11);
         assert!(collections.contains(&json!("plans")));
         assert!(collections.contains(&json!("specs")));
         assert!(collections.contains(&json!("phases")));
         assert!(collections.contains(&json!("works")));
+        assert!(collections.contains(&json!("docs")));
         assert!(collections.contains(&json!("bundles")));
         assert!(collections.contains(&json!("ticks")));
         assert!(collections.contains(&json!("learnings")));

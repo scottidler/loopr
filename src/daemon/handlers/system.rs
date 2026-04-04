@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use crate::agents::AgentSession;
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_goal::CoordinatorGoal;
+use crate::domain::doc::Doc;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
@@ -84,6 +85,7 @@ pub(super) fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> Da
             Spec::collection_name(),
             Phase::collection_name(),
             Work::collection_name(),
+            Doc::collection_name(),
             Bundle::collection_name(),
             Tick::collection_name(),
             Learning::collection_name(),

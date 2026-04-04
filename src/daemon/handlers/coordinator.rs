@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 use crate::config::{IntegratorConfig, InterviewMode};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::CoordinatorState;
+use crate::domain::doc::{Doc, DocKind, create_run_dir, write_doc_file};
 use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
@@ -482,6 +483,20 @@ pub(super) fn handle_coordinator_seed_manifest(
             }
         };
 
+        // Collect doc data before consuming resolved (for Doc creation below)
+        let plan_doc_info = (resolved.plan.title.clone(), resolved.plan.description.clone());
+        let spec_doc_info = (resolved.spec.title.clone(), resolved.spec.description.clone());
+        let phase_doc_infos: Vec<(String, String, String)> = resolved
+            .phases
+            .iter()
+            .map(|p| (p.id.clone(), p.title.clone(), p.description.clone()))
+            .collect();
+        let work_doc_infos: Vec<(String, String, String)> = resolved
+            .works
+            .iter()
+            .map(|w| (w.parent_id.clone(), w.title.clone(), w.description.clone()))
+            .collect();
+
         // Create goal
         let goal = CoordinatorGoal::new(resolved.goal.clone());
         let goal_id = goal.id.clone();
@@ -567,6 +582,20 @@ pub(super) fn handle_coordinator_seed_manifest(
             let _ = event_tx.send(DaemonEvent::record_created("works", &work_id));
         }
 
+        // Create Doc records alongside the old Plan/Spec/Phase/Work records.
+        // Writes .md files to a run directory so the hierarchy is visible as on-disk artifacts.
+        // Non-fatal: if doc creation fails, old records are intact and Coordinator can proceed.
+        if let Err(e) = create_manifest_docs(
+            stores,
+            event_tx,
+            &plan_doc_info,
+            &spec_doc_info,
+            &phase_doc_infos,
+            &work_doc_infos,
+        ) {
+            log::warn!("Failed to create Doc records for manifest (non-fatal): {}", e);
+        }
+
         // Create CoordinatorState with plan_approved=true, skipping interview and generation
         let coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Skip);
         let cs_id = coord_state.id.clone();
@@ -623,6 +652,87 @@ pub(super) fn handle_coordinator_interview_question(
             json!({ "status": "questions_sent", "count": questions.len() }),
         ))
     })
+}
+
+/// Create Doc records for a manifest-seeded hierarchy (manifest path).
+///
+/// Writes .md files to a run directory and creates Doc records for each
+/// hierarchy level. Non-fatal: caller logs and continues on any error.
+///
+/// Arguments:
+/// - `plan_doc_info`: (title, description) for the Plan
+/// - `spec_doc_info`: (title, description) for the Spec
+/// - `phase_doc_infos`: Vec of (old_phase_id, title, description)
+/// - `work_doc_infos`: Vec of (old_phase_id, work_title, work_description)
+fn create_manifest_docs(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    plan_doc_info: &(String, String),
+    spec_doc_info: &(String, String),
+    phase_doc_infos: &[(String, String, String)],
+    work_doc_infos: &[(String, String, String)],
+) -> eyre::Result<()> {
+    use std::collections::HashMap;
+
+    let project_root = stores.config.project.repo_path.clone();
+    let run_dir = create_run_dir(&project_root)?;
+    let mut taken: Vec<String> = Vec::new();
+
+    // Plan Doc
+    let plan_md = format!("# {}\n\n{}", plan_doc_info.0, plan_doc_info.1);
+    let plan_filename = write_doc_file(&run_dir, DocKind::Plan, &plan_doc_info.0, &plan_md, &taken)?;
+    taken.push(plan_filename.clone());
+    let plan_doc = Doc::new(DocKind::Plan, None, plan_filename);
+    let plan_doc_id = plan_doc.id.clone();
+    store_doc(stores, event_tx, plan_doc)?;
+
+    // Spec Doc (parent = plan_doc)
+    let spec_md = format!("# {}\n\n{}", spec_doc_info.0, spec_doc_info.1);
+    let spec_filename = write_doc_file(&run_dir, DocKind::Spec, &spec_doc_info.0, &spec_md, &taken)?;
+    taken.push(spec_filename.clone());
+    let spec_doc = Doc::new(DocKind::Spec, Some(plan_doc_id), spec_filename);
+    let spec_doc_id = spec_doc.id.clone();
+    store_doc(stores, event_tx, spec_doc)?;
+
+    // Phase Docs (parent = spec_doc) + map old_phase_id -> new_phase_doc_id
+    let mut old_phase_to_doc_id: HashMap<String, String> = HashMap::new();
+    for (old_phase_id, phase_title, phase_desc) in phase_doc_infos {
+        let phase_md = format!("# {}\n\n{}", phase_title, phase_desc);
+        let phase_filename = write_doc_file(&run_dir, DocKind::Phase, phase_title, &phase_md, &taken)?;
+        taken.push(phase_filename.clone());
+        let phase_doc = Doc::new(DocKind::Phase, Some(spec_doc_id.clone()), phase_filename);
+        let phase_doc_id = phase_doc.id.clone();
+        old_phase_to_doc_id.insert(old_phase_id.clone(), phase_doc_id.clone());
+        store_doc(stores, event_tx, phase_doc)?;
+    }
+
+    // Work Docs (parent = corresponding phase_doc)
+    for (old_phase_id, work_title, work_desc) in work_doc_infos {
+        if let Some(phase_doc_id) = old_phase_to_doc_id.get(old_phase_id) {
+            let work_md = format!("# {}\n\n{}", work_title, work_desc);
+            let work_filename = write_doc_file(&run_dir, DocKind::Work, work_title, &work_md, &taken)?;
+            taken.push(work_filename.clone());
+            let work_doc = Doc::new(DocKind::Work, Some(phase_doc_id.clone()), work_filename);
+            store_doc(stores, event_tx, work_doc)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Persist a Doc to the in-memory store and TaskStore.
+fn store_doc(stores: &Arc<Stores>, event_tx: &broadcast::Sender<DaemonEvent>, doc: Doc) -> eyre::Result<()> {
+    let id = doc.id.clone();
+    if let Some(store_arc) = &stores.store {
+        store_arc
+            .lock()
+            .map_err(|_| eyre!("taskstore lock poisoned"))?
+            .create(doc.clone())
+            .map_err(|e| eyre!("Failed to persist Doc {}: {}", id, e))?;
+    }
+    stores.write_docs()?.insert(id.clone(), doc);
+    let _ = event_tx.send(DaemonEvent::record_created("docs", &id));
+    Ok(())
 }
 
 #[allow(clippy::unwrap_used)]
