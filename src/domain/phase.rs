@@ -12,7 +12,7 @@ pub type PhaseStatus = HierarchyStatus;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Phase {
     pub id: String,
-    pub spec_id: String,
+    pub parent_id: String,
     pub title: String,
     pub description: String,
     pub order: u32,
@@ -49,12 +49,12 @@ impl Phase {
         self.updated_at = crate::id::now_millis();
     }
 
-    pub fn new(spec_id: String, title: String, description: String, order: u32) -> Self {
-        log::debug!("Phase::new(spec_id={}, title={}, order={})", spec_id, title, order);
+    pub fn new(parent_id: String, title: String, description: String, order: u32) -> Self {
+        log::debug!("Phase::new(parent_id={}, title={}, order={})", parent_id, title, order);
         let now = id::now_millis();
         Self {
             id: id::generate_id("ph"),
-            spec_id,
+            parent_id,
             title,
             description,
             order,
@@ -82,7 +82,7 @@ impl Record for Phase {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
-        m.insert("spec_id".into(), IndexValue::String(self.spec_id.clone()));
+        m.insert("parent_id".into(), IndexValue::String(self.parent_id.clone()));
         m
     }
 }
@@ -103,7 +103,7 @@ mod tests {
             "Implement JWT token generation".to_string(),
             1,
         );
-        assert_eq!(phase.spec_id, "spec-123");
+        assert_eq!(phase.parent_id, "spec-123");
         assert_eq!(phase.title, "Token generation");
         assert_eq!(phase.description, "Implement JWT token generation");
         assert_eq!(phase.order, 1);
@@ -124,7 +124,7 @@ mod tests {
         let json = serde_json::to_string(&phase).unwrap();
         let deserialized: Phase = serde_json::from_str(&json).unwrap();
         assert_eq!(phase.id, deserialized.id);
-        assert_eq!(phase.spec_id, deserialized.spec_id);
+        assert_eq!(phase.parent_id, deserialized.parent_id);
         assert_eq!(phase.title, deserialized.title);
         assert_eq!(phase.description, deserialized.description);
         assert_eq!(phase.order, deserialized.order);
@@ -141,10 +141,10 @@ mod tests {
     }
 
     #[test]
-    fn test_phase_preserves_spec_id() {
-        let spec_id = "spec-789".to_string();
-        let phase = Phase::new(spec_id.clone(), "Title".to_string(), "Desc".to_string(), 0);
-        assert_eq!(phase.spec_id, spec_id);
+    fn test_phase_preserves_parent_id() {
+        let parent_id = "spec-789".to_string();
+        let phase = Phase::new(parent_id.clone(), "Title".to_string(), "Desc".to_string(), 0);
+        assert_eq!(phase.parent_id, parent_id);
     }
 
     #[test]
@@ -229,7 +229,10 @@ mod tests {
         let phase = Phase::new("spec-42".into(), "T".into(), "D".into(), 1);
         let fields = phase.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
-        assert_eq!(fields.get("spec_id"), Some(&IndexValue::String("spec-42".to_string())));
+        assert_eq!(
+            fields.get("parent_id"),
+            Some(&IndexValue::String("spec-42".to_string()))
+        );
         assert_eq!(fields.len(), 2);
     }
 

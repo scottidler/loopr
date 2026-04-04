@@ -130,18 +130,18 @@ pub enum AgentAction {
         acceptance_criteria: String,
     },
     CreateSpec {
-        plan_id: String,
+        parent_id: String,
         title: String,
         description: String,
     },
     CreatePhase {
-        spec_id: String,
+        parent_id: String,
         title: String,
         description: String,
         order: u32,
     },
     CreateWork {
-        phase_id: String,
+        parent_id: String,
         title: String,
         description: String,
         #[serde(default, deserialize_with = "string_or_vec")]
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn test_agent_action_create_spec_serde() {
         let action = AgentAction::CreateSpec {
-            plan_id: "p-1".to_string(),
+            parent_id: "p-1".to_string(),
             title: "JWT tokens".to_string(),
             description: "Implement JWT".to_string(),
         };
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn test_agent_action_create_phase_serde() {
         let action = AgentAction::CreatePhase {
-            spec_id: "s-1".to_string(),
+            parent_id: "s-1".to_string(),
             title: "Phase 1".to_string(),
             description: "Foundation".to_string(),
             order: 1,
@@ -438,7 +438,7 @@ mod tests {
     #[test]
     fn test_agent_action_create_work_serde() {
         let action = AgentAction::CreateWork {
-            phase_id: "ph-1".to_string(),
+            parent_id: "ph-1".to_string(),
             title: "Add login".to_string(),
             description: "Add login endpoint".to_string(),
             resource_tags: vec!["src/".to_string()],
@@ -677,7 +677,7 @@ mod tests {
     fn test_string_or_vec_on_create_work() {
         let json = r#"{
             "action": "create_work",
-            "phase_id": "p1",
+            "parent_id": "p1",
             "title": "Test",
             "description": "desc",
             "resource_tags": "src/lib.rs",

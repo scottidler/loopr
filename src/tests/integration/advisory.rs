@@ -36,7 +36,7 @@ fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "Spec", "description": "spec"}),
+        json!({"parent_id": plan_id, "title": "Spec", "description": "spec"}),
     );
     let spec_id = spec_resp["id"].as_str().unwrap();
     let phase_resp = dispatch_ok(
@@ -45,7 +45,7 @@ fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
+        json!({"parent_id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
     );
     let phase_id = phase_resp["id"].as_str().unwrap();
     let work_resp = dispatch_ok(
@@ -54,7 +54,7 @@ fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "Work", "description": "work", "resource_tags": ["src/main.rs"]}),
+        json!({"parent_id": phase_id, "title": "Work", "description": "work", "resource_tags": ["src/main.rs"]}),
     );
     let work_id = work_resp["id"].as_str().unwrap();
 
@@ -149,7 +149,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "S", "description": "d"}),
+        json!({"parent_id": plan_id, "title": "S", "description": "d"}),
     );
     let spec_id = spec_resp["id"].as_str().unwrap();
     let phase_resp = dispatch_ok(
@@ -158,7 +158,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "P", "description": "d", "order": 1}),
+        json!({"parent_id": spec_id, "title": "P", "description": "d", "order": 1}),
     );
     let phase_id = phase_resp["id"].as_str().unwrap();
     let work_resp = dispatch_ok(
@@ -167,7 +167,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "W", "description": "d", "resource_tags": ["src/x.rs"]}),
+        json!({"parent_id": phase_id, "title": "W", "description": "d", "resource_tags": ["src/x.rs"]}),
     );
     let work_id = work_resp["id"].as_str().unwrap();
 

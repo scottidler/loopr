@@ -97,7 +97,7 @@ pub fn build_state_summary_with_sla(
                     w.id,
                     w.title,
                     w.status(),
-                    w.phase_id,
+                    w.parent_id,
                     sla_annotation
                 ));
             }
@@ -297,7 +297,7 @@ pub fn build_state_summary_with_sla(
                     p.id,
                     p.title,
                     p.status(),
-                    p.spec_id,
+                    p.parent_id,
                     p.order
                 ));
             }
@@ -323,7 +323,7 @@ pub fn build_state_summary_with_sla(
                     s.id,
                     s.title,
                     s.status(),
-                    s.plan_id
+                    s.parent_id
                 ));
             }
             summary.push('\n');
@@ -656,7 +656,7 @@ fn resolve_batch_dependencies(
     agent_log: &AgentLogger,
 ) -> Option<AgentAction> {
     if let AgentAction::CreateWork {
-        phase_id,
+        parent_id,
         title,
         description,
         resource_tags,
@@ -689,7 +689,7 @@ fn resolve_batch_dependencies(
             .collect();
 
         Some(AgentAction::CreateWork {
-            phase_id: phase_id.clone(),
+            parent_id: parent_id.clone(),
             title: title.clone(),
             description: description.clone(),
             resource_tags: resource_tags.clone(),
@@ -807,7 +807,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
         let specs = stores.read_specs().ok()?;
         specs
             .values()
-            .find(|s| s.status() == HierarchyStatus::Active && Some(&s.plan_id) == active_plan_id.as_ref())
+            .find(|s| s.status() == HierarchyStatus::Active && Some(&s.parent_id) == active_plan_id.as_ref())
             .map(|s| s.id.clone())
     };
 
@@ -816,7 +816,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
         let specs = stores.read_specs().ok()?;
         if let Some(draft) = specs
             .values()
-            .find(|s| s.status() == HierarchyStatus::Draft && Some(&s.plan_id) == active_plan_id.as_ref())
+            .find(|s| s.status() == HierarchyStatus::Draft && Some(&s.parent_id) == active_plan_id.as_ref())
         {
             return Some(("Spec", draft.id.clone(), draft.title.clone()));
         }
@@ -827,7 +827,7 @@ fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, S
     let phases = stores.read_phases().ok()?;
     if let Some(draft) = phases
         .values()
-        .find(|p| p.status() == HierarchyStatus::Draft && Some(&p.spec_id) == active_spec_id.as_ref())
+        .find(|p| p.status() == HierarchyStatus::Draft && Some(&p.parent_id) == active_spec_id.as_ref())
     {
         return Some(("Phase", draft.id.clone(), draft.title.clone()));
     }
@@ -1006,7 +1006,7 @@ fn sweep_integrated_to_done(
         };
         works
             .values()
-            .filter(|w| w.phase_id == *phase_id && w.status() == WorkStatus::Integrated)
+            .filter(|w| w.parent_id == *phase_id && w.status() == WorkStatus::Integrated)
             .map(|w| w.id.clone())
             .collect()
     };
@@ -1235,7 +1235,7 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
     let Ok(works) = stores.read_works() else {
         return "works lock poisoned".to_string();
     };
-    let phase_wis: Vec<_> = works.values().filter(|w| &w.phase_id == phase_id).collect();
+    let phase_wis: Vec<_> = works.values().filter(|w| &w.parent_id == phase_id).collect();
 
     // Split into actionable vs terminal so the LLM can clearly distinguish
     // which works need attention and which are finished.

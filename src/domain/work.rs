@@ -44,7 +44,7 @@ pub struct ChecklistItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Work {
     pub id: String,
-    pub phase_id: String,
+    pub parent_id: String,
     pub title: String,
     pub description: String,
     pub assignee: Option<String>,
@@ -99,12 +99,12 @@ impl Work {
         self.updated_at = id::now_millis();
     }
 
-    pub fn new(phase_id: String, title: String, description: String) -> Self {
-        log::debug!("Work::new(phase_id={}, title={})", phase_id, title);
+    pub fn new(parent_id: String, title: String, description: String) -> Self {
+        log::debug!("Work::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("wk"),
-            phase_id,
+            parent_id,
             title,
             description,
             assignee: None,
@@ -135,7 +135,7 @@ impl Record for Work {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
-        m.insert("phase_id".into(), IndexValue::String(self.phase_id.clone()));
+        m.insert("parent_id".into(), IndexValue::String(self.parent_id.clone()));
         m
     }
 }
@@ -189,7 +189,7 @@ mod tests {
             "Implement JWT".to_string(),
             "Add JWT signing".to_string(),
         );
-        assert_eq!(wi.phase_id, "phase-123");
+        assert_eq!(wi.parent_id, "phase-123");
         assert_eq!(wi.title, "Implement JWT");
         assert_eq!(wi.description, "Add JWT signing");
         assert_eq!(wi.status(), WorkStatus::Draft);
@@ -215,7 +215,7 @@ mod tests {
         let json = serde_json::to_string(&wi).unwrap();
         let deserialized: Work = serde_json::from_str(&json).unwrap();
         assert_eq!(wi.id, deserialized.id);
-        assert_eq!(wi.phase_id, deserialized.phase_id);
+        assert_eq!(wi.parent_id, deserialized.parent_id);
         assert_eq!(wi.assignee, deserialized.assignee);
         assert_eq!(wi.resource_tags, deserialized.resource_tags);
         assert_eq!(wi.dependencies, deserialized.dependencies);
@@ -430,11 +430,11 @@ mod tests {
     }
 
     #[test]
-    fn test_record_indexed_fields_phase_id() {
+    fn test_record_indexed_fields_parent_id() {
         let wi = Work::new("phase-abc".into(), "Title".into(), "Desc".into());
         let fields = wi.indexed_fields();
         assert_eq!(
-            fields.get("phase_id"),
+            fields.get("parent_id"),
             Some(&IndexValue::String("phase-abc".to_string()))
         );
     }

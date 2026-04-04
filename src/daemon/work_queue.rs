@@ -32,7 +32,7 @@ pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>
     let mut candidates: Vec<WorkPriority> = works
         .values()
         .filter(|w| w.status() == WorkStatus::Ready)
-        .filter(|w| current_phase_id.map(|pid| w.phase_id == pid).unwrap_or(true))
+        .filter(|w| current_phase_id.map(|pid| w.parent_id == pid).unwrap_or(true))
         // Exclude Works whose dependencies aren't Done
         .filter(|w| {
             w.dependencies.iter().all(|dep_id| {

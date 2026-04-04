@@ -29,4 +29,4 @@ Create Works for this Phase. Each Work should be:
 
 List items with no dependencies first, then items with dependencies.
 
-Respond with a JSON array of `create_work` actions with `phase_id` set to the Phase's ID.
+Respond with a JSON array of `create_work` actions with `parent_id` set to the Phase's ID.

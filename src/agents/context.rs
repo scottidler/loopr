@@ -327,7 +327,7 @@ impl<'a> ContextBuilder<'a> {
             (
                 wi.title.clone(),
                 wi.description.clone(),
-                wi.phase_id.clone(),
+                wi.parent_id.clone(),
                 wi.acceptance_criteria.clone(),
                 wi.resource_tags.clone(),
                 deps,
@@ -342,7 +342,7 @@ impl<'a> ContextBuilder<'a> {
             (
                 phase.title.clone(),
                 phase.description.clone(),
-                phase.spec_id.clone(),
+                phase.parent_id.clone(),
                 phase.id.clone(),
             )
         };
@@ -355,7 +355,7 @@ impl<'a> ContextBuilder<'a> {
             (
                 spec.title.clone(),
                 spec.description.clone(),
-                spec.plan_id.clone(),
+                spec.parent_id.clone(),
                 spec.id.clone(),
             )
         };
@@ -592,7 +592,7 @@ impl<'a> ContextBuilder<'a> {
         {
             let siblings: Vec<String> = works
                 .values()
-                .filter(|wi| wi.phase_id == *phase_id && wi.id != *current_wi_id)
+                .filter(|wi| wi.parent_id == *phase_id && wi.id != *current_wi_id)
                 .map(|wi| format!("- [{}] {}", wi.status(), wi.title))
                 .collect();
             if !siblings.is_empty() {

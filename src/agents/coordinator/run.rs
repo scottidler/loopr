@@ -825,7 +825,7 @@ mod tests {
             &stores,
             vec![r#"[
                 {"action": "create_plan", "title": "Auth", "description": "Add auth", "acceptance_criteria": "Tests pass"},
-                {"action": "create_spec", "plan_id": "plan-1", "title": "Spec1", "description": "desc"}
+                {"action": "create_spec", "parent_id": "plan-1", "title": "Spec1", "description": "desc"}
             ]"#.to_string()],
             CoordinatorConfig::default(),
         );

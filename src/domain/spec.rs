@@ -12,7 +12,7 @@ pub type SpecStatus = HierarchyStatus;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Spec {
     pub id: String,
-    pub plan_id: String,
+    pub parent_id: String,
     pub title: String,
     pub description: String,
     status: SpecStatus,
@@ -46,12 +46,12 @@ impl Spec {
         self.updated_at = crate::id::now_millis();
     }
 
-    pub fn new(plan_id: String, title: String, description: String) -> Self {
-        log::debug!("Spec::new(plan_id={}, title={})", plan_id, title);
+    pub fn new(parent_id: String, title: String, description: String) -> Self {
+        log::debug!("Spec::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("sp"),
-            plan_id,
+            parent_id,
             title,
             description,
             status: HierarchyStatus::Draft,
@@ -77,7 +77,7 @@ impl Record for Spec {
     fn indexed_fields(&self) -> HashMap<String, IndexValue> {
         let mut m = HashMap::new();
         m.insert("status".into(), IndexValue::String(self.status.to_string()));
-        m.insert("plan_id".into(), IndexValue::String(self.plan_id.clone()));
+        m.insert("parent_id".into(), IndexValue::String(self.parent_id.clone()));
         m
     }
 }
@@ -97,7 +97,7 @@ mod tests {
             "Test Spec".to_string(),
             "A detailed specification".to_string(),
         );
-        assert_eq!(spec.plan_id, "plan-123");
+        assert_eq!(spec.parent_id, "plan-123");
         assert_eq!(spec.title, "Test Spec");
         assert_eq!(spec.description, "A detailed specification");
         assert_eq!(spec.status(), HierarchyStatus::Draft);
@@ -116,7 +116,7 @@ mod tests {
         let json = serde_json::to_string(&spec).unwrap();
         let deserialized: Spec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec.id, deserialized.id);
-        assert_eq!(spec.plan_id, deserialized.plan_id);
+        assert_eq!(spec.parent_id, deserialized.parent_id);
         assert_eq!(spec.title, deserialized.title);
         assert_eq!(spec.description, deserialized.description);
         assert_eq!(spec.status(), deserialized.status());
@@ -132,10 +132,10 @@ mod tests {
     }
 
     #[test]
-    fn test_spec_preserves_plan_id() {
-        let plan_id = "plan-789".to_string();
-        let spec = Spec::new(plan_id.clone(), "Title".to_string(), "Desc".to_string());
-        assert_eq!(spec.plan_id, plan_id);
+    fn test_spec_preserves_parent_id() {
+        let parent_id = "plan-789".to_string();
+        let spec = Spec::new(parent_id.clone(), "Title".to_string(), "Desc".to_string());
+        assert_eq!(spec.parent_id, parent_id);
     }
 
     // Spec uses the same HierarchyStatus FSM as Plan - verify transitions work for Spec context
@@ -223,7 +223,10 @@ mod tests {
         let spec = Spec::new("plan-42".to_string(), "T".to_string(), "D".to_string());
         let fields = spec.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
-        assert_eq!(fields.get("plan_id"), Some(&IndexValue::String("plan-42".to_string())));
+        assert_eq!(
+            fields.get("parent_id"),
+            Some(&IndexValue::String("plan-42".to_string()))
+        );
         assert_eq!(fields.len(), 2);
     }
 
@@ -239,8 +242,8 @@ mod tests {
             deserialized.indexed_fields().get("status")
         );
         assert_eq!(
-            spec.indexed_fields().get("plan_id"),
-            deserialized.indexed_fields().get("plan_id")
+            spec.indexed_fields().get("parent_id"),
+            deserialized.indexed_fields().get("parent_id")
         );
     }
 }

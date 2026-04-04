@@ -51,7 +51,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance_criteria": "OK"}),
+        json!({"parent_id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance_criteria": "OK"}),
     );
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -69,7 +69,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Token", "description": "Token gen", "acceptance_criteria": "OK"}),
+        json!({"parent_id": spec_id, "title": "Token", "description": "Token gen", "acceptance_criteria": "OK"}),
     );
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -87,7 +87,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "sign()", "description": "Sign JWT", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "sign()", "description": "Sign JWT", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -259,7 +259,7 @@ fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
+        json!({"parent_id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
     );
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -278,7 +278,7 @@ fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
+        json!({"parent_id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
     );
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -297,7 +297,7 @@ fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -446,7 +446,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "Pages", "description": "HTML pages"}),
+        json!({"parent_id": plan_id, "title": "Pages", "description": "HTML pages"}),
     );
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -464,7 +464,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
+        json!({"parent_id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
     );
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -483,7 +483,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "Create index.html", "description": "Homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
@@ -493,7 +493,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "Create about.html", "description": "About page", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Create about.html", "description": "About page", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi2_id = wi2["id"].as_str().unwrap().to_string();
 

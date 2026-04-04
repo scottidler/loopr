@@ -205,7 +205,7 @@ pub fn build_phase_prompt(
 
     msg.push_str("### Active Spec\n");
     msg.push_str(&format!("- **ID:** {}\n", spec.id));
-    msg.push_str(&format!("- **Plan ID:** {}\n", spec.plan_id));
+    msg.push_str(&format!("- **Plan ID:** {}\n", spec.parent_id));
     msg.push_str(&format!("- **Title:** {}\n", spec.title));
     msg.push_str(&format!("- **Description:** {}\n\n", spec.description));
 
@@ -276,7 +276,7 @@ pub fn build_work_prompt(
 
     msg.push_str("### Active Phase\n");
     msg.push_str(&format!("- **ID:** {}\n", phase.id));
-    msg.push_str(&format!("- **Spec ID:** {}\n", phase.spec_id));
+    msg.push_str(&format!("- **Spec ID:** {}\n", phase.parent_id));
     msg.push_str(&format!("- **Title:** {}\n", phase.title));
     msg.push_str(&format!("- **Order:** {}\n", phase.order));
     msg.push_str(&format!("- **Description:** {}\n\n", phase.description));
@@ -362,7 +362,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
 
     // Check for Specs under the active Plan
     let specs = stores.read_specs().ok()?;
-    let plan_specs: Vec<_> = specs.values().filter(|s| s.plan_id == active_plan.id).collect();
+    let plan_specs: Vec<_> = specs.values().filter(|s| s.parent_id == active_plan.id).collect();
     let has_active_spec = plan_specs.iter().any(|s| s.status() == HierarchyStatus::Active);
     let has_draft_spec = plan_specs.iter().any(|s| s.status() == HierarchyStatus::Draft);
 
@@ -384,7 +384,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
 
     let spec_phases: Vec<_> = phases
         .values()
-        .filter(|p| active_spec_ids.contains(&p.spec_id.as_str()))
+        .filter(|p| active_spec_ids.contains(&p.parent_id.as_str()))
         .collect();
     let has_active_phase = spec_phases.iter().any(|p| p.status() == HierarchyStatus::Active);
     let has_draft_phase = spec_phases.iter().any(|p| p.status() == HierarchyStatus::Draft);
@@ -405,7 +405,7 @@ pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
         .map(|p| p.id.as_str())
         .collect();
 
-    let has_works = works.values().any(|w| active_phase_ids.contains(&w.phase_id.as_str()));
+    let has_works = works.values().any(|w| active_phase_ids.contains(&w.parent_id.as_str()));
 
     if !has_works {
         return Some(GenerationLevel::Work);
@@ -425,7 +425,7 @@ pub fn find_active_specs_for_plan(stores: &Stores, plan_id: &str) -> Vec<Spec> {
     let Ok(specs) = stores.read_specs() else { return vec![] };
     specs
         .values()
-        .filter(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Active)
+        .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
         .cloned()
         .collect()
 }
@@ -437,7 +437,7 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
     };
     let mut result: Vec<_> = phases
         .values()
-        .filter(|p| p.spec_id == spec_id && p.status() == HierarchyStatus::Active)
+        .filter(|p| p.parent_id == spec_id && p.status() == HierarchyStatus::Active)
         .cloned()
         .collect();
     result.sort_by_key(|p| p.order);
@@ -447,7 +447,7 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
 /// Find existing Works for a given Phase.
 pub fn find_works_for_phase(stores: &Stores, phase_id: &str) -> Vec<Work> {
     let Ok(works) = stores.read_works() else { return vec![] };
-    works.values().filter(|w| w.phase_id == phase_id).cloned().collect()
+    works.values().filter(|w| w.parent_id == phase_id).cloned().collect()
 }
 
 /// Find the first active Phase that still needs Works.
@@ -460,7 +460,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
     let specs = stores.read_specs().ok()?;
     let active_spec_ids: Vec<String> = specs
         .values()
-        .filter(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Active)
+        .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
         .map(|s| s.id.clone())
         .collect();
     drop(specs);
@@ -468,7 +468,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
     let phases = stores.read_phases().ok()?;
     let mut active_phases: Vec<_> = phases
         .values()
-        .filter(|p| active_spec_ids.contains(&p.spec_id) && p.status() == HierarchyStatus::Active)
+        .filter(|p| active_spec_ids.contains(&p.parent_id) && p.status() == HierarchyStatus::Active)
         .cloned()
         .collect();
     active_phases.sort_by_key(|p| p.order);
@@ -476,7 +476,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
 
     let works = stores.read_works().ok()?;
     for phase in active_phases {
-        let has_wi = works.values().any(|w| w.phase_id == phase.id);
+        let has_wi = works.values().any(|w| w.parent_id == phase.id);
         if !has_wi {
             return Some(phase);
         }
@@ -489,7 +489,7 @@ pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
 /// This matches the FSM's check_fsm_transition() predicate exactly.
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
     let Ok(works) = stores.read_works() else { return false };
-    let phase_wis: Vec<_> = works.values().filter(|w| w.phase_id == phase_id).collect();
+    let phase_wis: Vec<_> = works.values().filter(|w| w.parent_id == phase_id).collect();
     !phase_wis.is_empty()
         && phase_wis
             .iter()
@@ -607,7 +607,7 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
             let specs = stores.read_specs().ok()?;
             if let Some(draft_spec) = specs
                 .values()
-                .find(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Draft)
+                .find(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Draft)
             {
                 let target_id = draft_spec.id.clone();
                 drop(specs);
@@ -638,7 +638,7 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
             let specs = stores.read_specs().ok()?;
             let active_spec_ids: Vec<String> = specs
                 .values()
-                .filter(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Active)
+                .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
                 .map(|s| s.id.clone())
                 .collect();
             drop(specs);
@@ -646,7 +646,7 @@ pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts:
             let phases = stores.read_phases().ok()?;
             if let Some(draft_phase) = phases
                 .values()
-                .find(|p| active_spec_ids.contains(&p.spec_id) && p.status() == HierarchyStatus::Draft)
+                .find(|p| active_spec_ids.contains(&p.parent_id) && p.status() == HierarchyStatus::Draft)
             {
                 let target_id = draft_phase.id.clone();
                 drop(phases);
@@ -695,7 +695,7 @@ pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) 
             let Ok(specs) = stores.read_specs() else { return false };
             if let Some(spec) = specs
                 .values()
-                .find(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Draft)
+                .find(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Draft)
             {
                 let target_id = spec.id.clone();
                 drop(specs);
@@ -716,14 +716,14 @@ pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) 
             let Ok(specs) = stores.read_specs() else { return false };
             let active_spec_ids: Vec<String> = specs
                 .values()
-                .filter(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Active)
+                .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
                 .map(|s| s.id.clone())
                 .collect();
             drop(specs);
             let Ok(phases) = stores.read_phases() else { return false };
             if let Some(phase) = phases
                 .values()
-                .find(|p| active_spec_ids.contains(&p.spec_id) && p.status() == HierarchyStatus::Draft)
+                .find(|p| active_spec_ids.contains(&p.parent_id) && p.status() == HierarchyStatus::Draft)
             {
                 let target_id = phase.id.clone();
                 drop(phases);

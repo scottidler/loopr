@@ -41,7 +41,7 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance_criteria": "JWT tokens work"}),
+        json!({"parent_id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance_criteria": "JWT tokens work"}),
     );
     let spec_id = spec["id"].as_str().unwrap().to_string();
     assert_eq!(spec["status"], "draft");
@@ -63,7 +63,7 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance_criteria": "Tokens are signed"}),
+        json!({"parent_id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance_criteria": "Tokens are signed"}),
     );
     let phase_id = phase["id"].as_str().unwrap().to_string();
 
@@ -84,7 +84,7 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi["id"].as_str().unwrap().to_string();
     assert_eq!(wi["status"], "Ready");
@@ -120,11 +120,11 @@ fn test_full_hierarchy_creation_via_dispatch() {
 
     // Verify correct parent-child relationships
     let specs = stores.specs.read().unwrap();
-    assert_eq!(specs[&spec_id].plan_id, plan_id);
+    assert_eq!(specs[&spec_id].parent_id, plan_id);
     let phases = stores.phases.read().unwrap();
-    assert_eq!(phases[&phase_id].spec_id, spec_id);
+    assert_eq!(phases[&phase_id].parent_id, spec_id);
     let works = stores.works.read().unwrap();
-    assert_eq!(works[&wi_id].phase_id, phase_id);
+    assert_eq!(works[&wi_id].parent_id, phase_id);
     let bundles = stores.bundles.read().unwrap();
     assert_eq!(bundles[&bundle_id].work_id, wi_id);
 }
@@ -146,7 +146,7 @@ fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi["id"].as_str().unwrap().to_string();
 

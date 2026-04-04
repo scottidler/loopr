@@ -316,7 +316,7 @@ pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest
                 // Get parent plan title for context
                 let plan_title = stores
                     .read_plans()?
-                    .get(&spec.plan_id)
+                    .get(&spec.parent_id)
                     .map(|p| p.title.clone())
                     .unwrap_or_default();
                 validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
@@ -333,7 +333,7 @@ pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest
                 // Get parent spec title for context
                 let spec_title = stores
                     .read_specs()?
-                    .get(&phase.spec_id)
+                    .get(&phase.parent_id)
                     .map(|s| s.title.clone())
                     .unwrap_or_default();
                 validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
@@ -411,7 +411,7 @@ pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest)
                 drop(plans);
                 // Gather all Spec children of this Plan
                 let specs = stores.read_specs()?;
-                let child_specs: Vec<_> = specs.values().filter(|s| s.plan_id == parent_id).collect();
+                let child_specs: Vec<_> = specs.values().filter(|s| s.parent_id == parent_id).collect();
                 let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
                 let specs_list = child_specs
                     .iter()
@@ -439,10 +439,10 @@ pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest)
                 drop(specs);
                 let plan_title = {
                     let plans = stores.read_plans()?;
-                    plans.get(&spec.plan_id).map(|p| p.title.clone()).unwrap_or_default()
+                    plans.get(&spec.parent_id).map(|p| p.title.clone()).unwrap_or_default()
                 };
                 let phases = stores.read_phases()?;
-                let child_phases: Vec<_> = phases.values().filter(|p| p.spec_id == parent_id).collect();
+                let child_phases: Vec<_> = phases.values().filter(|p| p.parent_id == parent_id).collect();
                 let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
                 let phases_list = child_phases
                     .iter()
@@ -470,10 +470,10 @@ pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest)
                 drop(phases);
                 let spec_title = {
                     let specs = stores.read_specs()?;
-                    specs.get(&phase.spec_id).map(|s| s.title.clone()).unwrap_or_default()
+                    specs.get(&phase.parent_id).map(|s| s.title.clone()).unwrap_or_default()
                 };
                 let works = stores.read_works()?;
-                let child_works: Vec<_> = works.values().filter(|w| w.phase_id == parent_id).collect();
+                let child_works: Vec<_> = works.values().filter(|w| w.parent_id == parent_id).collect();
                 let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
                 let works_list = child_works
                     .iter()

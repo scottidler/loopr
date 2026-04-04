@@ -33,7 +33,7 @@ fn create_test_phase(
         tx,
         wm,
         &test_integrator_config(),
-        DaemonRequest::new(10, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+        DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
     );
     let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
     let phase_resp = dispatch(
@@ -44,7 +44,7 @@ fn create_test_phase(
         DaemonRequest::new(
             20,
             "phase.create",
-            json!({"spec_id": spec_id, "title": "Parent Phase", "order": 1}),
+            json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
         ),
     );
     let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -66,7 +66,7 @@ fn create_test_work(
         DaemonRequest::new(
             30,
             "work.create",
-            json!({"phase_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
     );
     let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -404,7 +404,7 @@ fn test_bundle_list_filtered_by_work_id() {
         DaemonRequest::new(
             31,
             "work.create",
-            json!({"phase_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
     );
     let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -473,7 +473,7 @@ fn test_bundle_list_reads_from_taskstore() {
         DaemonRequest::new(
             31,
             "work.create",
-            json!({"phase_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
     );
     let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();

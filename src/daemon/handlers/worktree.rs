@@ -214,7 +214,7 @@ mod tests {
             tx,
             wm,
             &test_integrator_config(),
-            DaemonRequest::new(10, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
         );
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id)
@@ -234,7 +234,7 @@ mod tests {
             DaemonRequest::new(
                 20,
                 "phase.create",
-                json!({"spec_id": spec_id, "title": "Parent Phase", "order": 1}),
+                json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
             ),
         );
         let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -255,7 +255,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"phase_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         );
         let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();

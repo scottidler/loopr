@@ -1166,7 +1166,7 @@ pub fn effective_validation_commands(
     for bid in bundle_ids {
         if let Some(bundle) = bundles.get(bid)
             && let Some(work) = works.get(&bundle.work_id)
-            && let Some(phase) = phases.get(&work.phase_id)
+            && let Some(phase) = phases.get(&work.parent_id)
         {
             for cmd in &phase.validation_commands {
                 if seen.insert(cmd.clone()) {

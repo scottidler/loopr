@@ -1594,7 +1594,7 @@ fn test_resolve_batch_deps_resolves_batch_0() {
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
     let action = AgentAction::CreateWork {
-        phase_id: "phase-1".into(),
+        parent_id: "phase-1".into(),
         title: "WI".into(),
         description: "d".into(),
         resource_tags: vec![],
@@ -1614,7 +1614,7 @@ fn test_resolve_batch_deps_out_of_range() {
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
     let action = AgentAction::CreateWork {
-        phase_id: "phase-1".into(),
+        parent_id: "phase-1".into(),
         title: "WI".into(),
         description: "d".into(),
         resource_tags: vec![],
@@ -1635,7 +1635,7 @@ fn test_resolve_batch_deps_no_batch_refs() {
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
     let action = AgentAction::CreateWork {
-        phase_id: "phase-1".into(),
+        parent_id: "phase-1".into(),
         title: "WI".into(),
         description: "d".into(),
         resource_tags: vec![],

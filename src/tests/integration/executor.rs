@@ -78,7 +78,7 @@ fn test_coordinator_creates_full_hierarchy_via_executor() {
     let spec_result = rt
         .block_on(execute_action(
             &AgentAction::CreateSpec {
-                plan_id: plan_id.clone(),
+                parent_id: plan_id.clone(),
                 title: "JWT Spec".into(),
                 description: "JWT tokens".into(),
             },
@@ -96,7 +96,7 @@ fn test_coordinator_creates_full_hierarchy_via_executor() {
     let phase_result = rt
         .block_on(execute_action(
             &AgentAction::CreatePhase {
-                spec_id: spec_id.clone(),
+                parent_id: spec_id.clone(),
                 title: "Phase 1".into(),
                 description: "Foundation".into(),
                 order: 1,
@@ -115,7 +115,7 @@ fn test_coordinator_creates_full_hierarchy_via_executor() {
     let wi_result = rt
         .block_on(execute_action(
             &AgentAction::CreateWork {
-                phase_id: phase_id.clone(),
+                parent_id: phase_id.clone(),
                 title: "Add login".into(),
                 description: "Add login endpoint".into(),
                 resource_tags: vec!["src/".into()],
@@ -141,15 +141,15 @@ fn test_coordinator_creates_full_hierarchy_via_executor() {
 
     let specs = stores.specs.read().unwrap();
     let spec = specs.get(&spec_id).unwrap();
-    assert_eq!(spec.plan_id, plan_id);
+    assert_eq!(spec.parent_id, plan_id);
 
     let phases = stores.phases.read().unwrap();
     let phase = phases.get(&phase_id).unwrap();
-    assert_eq!(phase.spec_id, spec_id);
+    assert_eq!(phase.parent_id, spec_id);
 
     let wis = stores.works.read().unwrap();
     let wi = wis.get(&wi_id).unwrap();
-    assert_eq!(wi.phase_id, phase_id);
+    assert_eq!(wi.parent_id, phase_id);
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "WI", "description": "d", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "d", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi["id"].as_str().unwrap().to_string();
 

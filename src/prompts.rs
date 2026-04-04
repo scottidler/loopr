@@ -510,7 +510,7 @@ mod tests {
         assert!(p.contains("Create a Spec for this Plan with:"));
         assert!(p.contains("technical approach"));
         assert!(p.contains("create_spec"));
-        assert!(p.contains("plan_id"));
+        assert!(p.contains("parent_id"));
     }
 
     #[test]
@@ -520,7 +520,7 @@ mod tests {
         assert!(p.contains("Create ordered implementation Phases"));
         assert!(p.contains("deliverables"));
         assert!(p.contains("create_phase"));
-        assert!(p.contains("spec_id"));
+        assert!(p.contains("parent_id"));
     }
 
     #[test]
@@ -530,7 +530,7 @@ mod tests {
         assert!(p.contains("Create Works for this Phase"));
         assert!(p.contains("resource_tags"));
         assert!(p.contains("create_work"));
-        assert!(p.contains("phase_id"));
+        assert!(p.contains("parent_id"));
     }
 
     // =========================================================================

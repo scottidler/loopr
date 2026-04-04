@@ -1,0 +1,188 @@
+plan.md:
+  title: "Plan"
+  description: "The PRD - single source of truth for the entire implementation"
+  children: spec
+  required:
+    - problem-statement:
+        title: "Problem Statement"
+        description: "What problem and why, grounded in evidence"
+        brief: true
+    - goals:
+        title: "Goals"
+        description: "Concrete, measurable outcomes that define success"
+        brief: true
+    - requirements:
+        title: "Requirements"
+        description: "User stories (As a / I want to / So that) and use cases"
+        brief: true
+    - scope:
+        title: "Scope"
+        description: "Bounded capabilities tied to requirements"
+        brief: true
+    - constraints:
+        title: "Constraints"
+        description: "Hard limits - technology, budget, timeline, compatibility"
+        brief: false
+    - contracts:
+        title: "Contracts"
+        description: "Data model and API contract - IMMUTABLE downstream through Spec, Phase, Work"
+        brief: true
+    - acceptance-criteria:
+        title: "Acceptance Criteria"
+        description: "Given/When/Then scenarios plus per-phase and final validation commands"
+        brief: true
+    - specs:
+        title: "Specs"
+        description: "Architectural domains this plan decomposes into - Full mode children"
+        brief: false
+    - work-items:
+        title: "Work Items"
+        description: "Direct work items when Spec/Phase are skipped - Brief mode children"
+        brief: only
+    - dependencies:
+        title: "Dependencies"
+        description: "Upstream systems, data, APIs, libraries, infrastructure"
+        brief: false
+  conditional:
+    - non-goals:
+        title: "Non-Goals"
+        description: "What we are explicitly NOT doing, each with rationale"
+        brief: false
+    - assumptions:
+        title: "Assumptions"
+        description: "What is believed true but not verified"
+        brief: false
+    - open-questions:
+        title: "Open Questions"
+        description: "Unresolved decisions with owner and status"
+        brief: false
+    - risks:
+        title: "Risks"
+        description: "Failure modes with impact and mitigation"
+        brief: false
+    - success-metrics:
+        title: "Success Metrics"
+        description: "Measurable targets with thresholds"
+        brief: false
+
+spec.md:
+  title: "Spec"
+  description: "Technical specification - translates the Plan's what into how"
+  brief: skip
+  parent: plan
+  children: phase
+  required:
+    - overview:
+        title: "Overview"
+        description: "What this spec delivers and which Plan it implements"
+    - data-flow:
+        title: "Data Flow"
+        description: "How data moves end to end - happy path AND error path with actual shapes"
+    - module-structure:
+        title: "Module Structure"
+        description: "Every file, its responsibility, dependencies, and exports"
+    - dependencies:
+        title: "Dependencies"
+        description: "External packages with versions, runtime/test, and purpose"
+    - interfaces:
+        title: "Interfaces"
+        description: "Public interfaces between modules - signatures, endpoints, message formats"
+    - failure-modes:
+        title: "Failure Modes"
+        description: "What can go wrong at each layer, edge cases, and how each is handled"
+    - testing:
+        title: "Testing"
+        description: "Isolation method, test runner, named test inventory, what is NOT tested"
+    - phases:
+        title: "Phases"
+        description: "Execution decomposition - Phase template owns the detail"
+  conditional:
+    - performance:
+        title: "Performance"
+        description: "Expected load, latency budget, resource constraints"
+    - security:
+        title: "Security"
+        description: "Authentication, authorization, input validation, data sensitivity"
+    - open-questions:
+        title: "Open Questions"
+        description: "Unresolved technical decisions with status"
+    - alternatives:
+        title: "Alternatives"
+        description: "Viable approaches with Pros/Cons/Verdict and Rejected because language"
+    - key-decisions:
+        title: "Key Decisions"
+        description: "Non-obvious architectural choices with rationale to prevent re-litigation"
+    - glossary:
+        title: "Glossary"
+        description: "Domain terms an implementer might not know"
+
+phase.md:
+  title: "Phase"
+  description: "Validation gate card - scopes what gets built and how it is validated"
+  brief: skip
+  parent: spec
+  children: work
+  required:
+    - parent:
+        title: "Parent"
+        description: "Which Spec produced this phase"
+    - deliverables:
+        title: "Deliverables"
+        description: "Files created or modified, and explicitly what is NOT touched"
+    - validation:
+        title: "Validation"
+        description: "Command that proves this phase is done, and commands that must NOT be run"
+    - dependencies:
+        title: "Dependencies"
+        description: "What must be complete before this phase starts"
+    - work-items:
+        title: "Work Items"
+        description: "Assignments with title, scope, resource tags, and inter-item dependencies"
+  conditional: []
+
+work.md:
+  title: "Work"
+  description: "Implementer's complete brief - everything needed to write code without asking a question"
+  parent: phase
+  required:
+    - parent:
+        title: "Parent"
+        description: "Which Phase (or Plan in Brief mode) produced this work item"
+        brief: true
+    - description:
+        title: "Description"
+        description: "Title, what this work delivers, which Phase, what capability"
+        brief: true
+    - inputs:
+        title: "Inputs"
+        description: "Interface contracts, data models, existing code - IMMUTABLE on retry"
+        brief: true
+    - outputs:
+        title: "Outputs"
+        description: "Files created or modified, functions implemented, artifacts generated"
+        brief: true
+    - constraints:
+        title: "Constraints"
+        description: "Non-negotiable rules the implementer must follow"
+        brief: true
+    - implementation-notes:
+        title: "Implementation Notes"
+        description: "Ordered steps, technical guidance, gotchas"
+        brief: true
+    - acceptance-criteria:
+        title: "Acceptance Criteria"
+        description: "Assert statements plus phase validation scope - the definition of done"
+        brief: true
+    - dependencies:
+        title: "Dependencies"
+        description: "Other work items, phases, or external systems that must complete first"
+        brief: false
+  conditional:
+    - design-decisions:
+        title: "Design Decisions"
+        description: "Settled decisions from the Spec - DO NOT RE-LITIGATE"
+        brief: false
+    - open-questions:
+        title: "Open Questions"
+        description: "Clarifications the upstream documents do not resolve"
+        brief: false

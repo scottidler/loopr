@@ -18,7 +18,7 @@ pub(super) fn handle_create_work(
     let resp = bridge.request(
         "work.create",
         serde_json::json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": title,
             "description": description,
             "resource_tags": resource_tags,
@@ -478,7 +478,7 @@ mod tests {
         );
 
         let action = AgentAction::CreateWork {
-            phase_id,
+            parent_id: phase_id,
             title: "New WI".to_string(),
             description: "WI desc".to_string(),
             resource_tags: vec!["src/".to_string()],
@@ -601,7 +601,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         let action = AgentAction::CreateWork {
-            phase_id: "nonexistent-phase".to_string(),
+            parent_id: "nonexistent-phase".to_string(),
             title: "New WI".to_string(),
             description: "desc".to_string(),
             resource_tags: vec![],
@@ -647,7 +647,7 @@ mod tests {
         let dep_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
-                "phase_id": phase_id,
+                "parent_id": phase_id,
                 "title": "Dep WI",
                 "description": "dep desc",
                 "resource_tags": ["src/"],
@@ -659,7 +659,7 @@ mod tests {
         let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
-                "phase_id": phase_id,
+                "parent_id": phase_id,
                 "title": "Work WI",
                 "description": "work desc",
                 "resource_tags": ["src/"],
@@ -693,7 +693,7 @@ mod tests {
         let dep_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
-                "phase_id": phase_id,
+                "parent_id": phase_id,
                 "title": "Dep WI Done",
                 "description": "dep desc",
                 "resource_tags": ["src/"],
@@ -715,7 +715,7 @@ mod tests {
         let wi_resp = ctx.bridge.request(
             "work.create",
             serde_json::json!({
-                "phase_id": phase_id,
+                "parent_id": phase_id,
                 "title": "Work WI With Met Dep",
                 "description": "work desc",
                 "resource_tags": ["src/"],
@@ -747,7 +747,7 @@ mod tests {
         let (_, _, phase_id, wi_id) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::CreateWork {
-            phase_id: phase_id.clone(),
+            parent_id: phase_id.clone(),
             title: "Dependent WI".to_string(),
             description: "depends on first".to_string(),
             resource_tags: vec!["src/".to_string()],
@@ -773,7 +773,7 @@ mod tests {
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         let action1 = AgentAction::CreateWork {
-            phase_id: phase_id.clone(),
+            parent_id: phase_id.clone(),
             title: "Unique WI".to_string(),
             description: "desc".to_string(),
             resource_tags: vec!["src/".to_string()],
@@ -784,7 +784,7 @@ mod tests {
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         let action2 = AgentAction::CreateWork {
-            phase_id: phase_id.clone(),
+            parent_id: phase_id.clone(),
             title: "Unique WI".to_string(),
             description: "different desc".to_string(),
             resource_tags: vec!["src/".to_string()],
@@ -808,7 +808,7 @@ mod tests {
         let (_, _, phase_id, _) = create_test_hierarchy(&ctx.bridge);
 
         let action1 = AgentAction::CreateWork {
-            phase_id: phase_id.clone(),
+            parent_id: phase_id.clone(),
             title: "Add Login".to_string(),
             description: "desc".to_string(),
             resource_tags: vec!["src/".to_string()],
@@ -818,7 +818,7 @@ mod tests {
         let _ = execute_action(&action1, &ctx, &dir, None).await;
 
         let action2 = AgentAction::CreateWork {
-            phase_id: phase_id.clone(),
+            parent_id: phase_id.clone(),
             title: "add login".to_string(),
             description: "desc".to_string(),
             resource_tags: vec!["src/".to_string()],

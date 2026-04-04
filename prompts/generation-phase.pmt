@@ -11,4 +11,4 @@ Create ordered implementation Phases for this Spec. Each Phase should have:
 
 Order Phases so each builds on the previous: foundational types/traits first, then logic, then integration, then tests/polish.
 
-Respond with a JSON array of `create_phase` actions with `spec_id` set to the Spec's ID, ordered by implementation sequence (order: 1, 2, 3, ...).
+Respond with a JSON array of `create_phase` actions with `parent_id` set to the Spec's ID, ordered by implementation sequence (order: 1, 2, 3, ...).

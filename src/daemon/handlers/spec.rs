@@ -24,12 +24,12 @@ pub(super) fn handle_spec_create(
 ) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_spec_create()");
-        let plan_id = match req.params.get("plan_id").and_then(|v| v.as_str()) {
+        let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
                 return Ok(DaemonResponse::err(
                     req.id,
-                    RpcError::invalid_params("plan_id is required"),
+                    RpcError::invalid_params("parent_id is required"),
                 ));
             }
         };
@@ -37,15 +37,15 @@ pub(super) fn handle_spec_create(
         // Verify parent plan exists and is not in a terminal state
         {
             let plans = stores.read_plans()?;
-            match plans.get(&plan_id) {
-                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &plan_id))),
+            match plans.get(&parent_id) {
+                None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id))),
                 Some(plan) if matches!(plan.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned) => {
                     return Ok(DaemonResponse::err(
                         req.id,
                         RpcError::precondition_failed(&format!(
                             "Cannot create spec under {} plan '{}'",
                             plan.status(),
-                            plan_id
+                            parent_id
                         )),
                     ));
                 }
@@ -78,7 +78,7 @@ pub(super) fn handle_spec_create(
             let specs = stores.read_specs()?;
             if specs
                 .values()
-                .any(|s| s.plan_id == plan_id && s.status() == HierarchyStatus::Draft)
+                .any(|s| s.parent_id == parent_id && s.status() == HierarchyStatus::Draft)
             {
                 return Ok(DaemonResponse::err(
                     req.id,
@@ -89,7 +89,7 @@ pub(super) fn handle_spec_create(
             }
         }
 
-        let spec = Spec::new(plan_id, title, description);
+        let spec = Spec::new(parent_id, title, description);
         let spec_json = match serde_json::to_value(&spec) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -156,13 +156,13 @@ pub(super) fn handle_spec_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
 pub(super) fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_spec_list()");
-        let plan_id_filter = req.params.get("plan_id").and_then(|v| v.as_str());
+        let parent_id_filter = req.params.get("parent_id").and_then(|v| v.as_str());
 
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
-            let filters: Vec<Filter> = if let Some(pid) = plan_id_filter {
+            let filters: Vec<Filter> = if let Some(pid) = parent_id_filter {
                 vec![Filter {
-                    field: "plan_id".to_string(),
+                    field: "parent_id".to_string(),
                     op: FilterOp::Eq,
                     value: IndexValue::String(pid.to_string()),
                 }]
@@ -189,7 +189,7 @@ pub(super) fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
         let specs = stores.read_specs()?;
         let spec_list: Vec<&Spec> = specs
             .values()
-            .filter(|s| plan_id_filter.is_none() || Some(s.plan_id.as_str()) == plan_id_filter)
+            .filter(|s| parent_id_filter.is_none() || Some(s.parent_id.as_str()) == parent_id_filter)
             .collect();
 
         match serde_json::to_value(&spec_list) {
@@ -390,7 +390,7 @@ mod tests {
             tx,
             wm,
             &test_integrator_config(),
-            DaemonRequest::new(10, "spec.create", json!({"plan_id": plan_id, "title": "Parent Spec"})),
+            DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
         );
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id)
@@ -409,7 +409,7 @@ mod tests {
             2,
             "spec.create",
             json!({
-                "plan_id": plan_id,
+                "parent_id": plan_id,
                 "title": "Test Spec",
                 "description": "A spec"
             }),
@@ -418,7 +418,7 @@ mod tests {
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Test Spec");
-        assert_eq!(result["plan_id"], plan_id);
+        assert_eq!(result["parent_id"], plan_id);
         assert_eq!(result["status"], "draft");
         assert_eq!(stores.specs.read().unwrap().len(), 1);
     }
@@ -431,7 +431,7 @@ mod tests {
         let req = DaemonRequest::new(1, "spec.create", json!({"title": "Spec"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
-        assert!(resp.error.unwrap().message.contains("plan_id"));
+        assert!(resp.error.unwrap().message.contains("parent_id"));
     }
 
     #[test]
@@ -439,7 +439,7 @@ mod tests {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "spec.create", json!({"plan_id": "nonexistent", "title": "Spec"}));
+        let req = DaemonRequest::new(1, "spec.create", json!({"parent_id": "nonexistent", "title": "Spec"}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
@@ -451,7 +451,11 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm);
-        let req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "description": "no title"}));
+        let req = DaemonRequest::new(
+            2,
+            "spec.create",
+            json!({"parent_id": plan_id, "description": "no title"}),
+        );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -466,7 +470,7 @@ mod tests {
         let plan_id = create_test_plan(&stores, &tx, &wm);
         let _ = rx.try_recv(); // consume plan create event
 
-        let req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec"}));
+        let req = DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"}));
         dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
@@ -482,7 +486,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "spec.create",
-            json!({"plan_id": plan_id, "title": "Persisted Spec", "description": "desc"}),
+            json!({"parent_id": plan_id, "title": "Persisted Spec", "description": "desc"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(!resp.is_error());
@@ -531,7 +535,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "spec.create",
-            json!({"plan_id": plan_id, "title": "Spec Under Complete"}),
+            json!({"parent_id": plan_id, "title": "Spec Under Complete"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
@@ -561,7 +565,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "spec.create",
-            json!({"plan_id": plan_id, "title": "Spec Under Abandoned"}),
+            json!({"parent_id": plan_id, "title": "Spec Under Abandoned"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
         assert!(resp.is_error());
@@ -575,12 +579,12 @@ mod tests {
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm);
         // Create first Draft Spec - succeeds
-        let req1 = DaemonRequest::new(1, "spec.create", json!({"plan_id": plan_id, "title": "Spec A"}));
+        let req1 = DaemonRequest::new(1, "spec.create", json!({"parent_id": plan_id, "title": "Spec A"}));
         let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
         assert!(!resp1.is_error());
 
         // Create second Draft Spec under same Plan - rejected
-        let req2 = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec B"}));
+        let req2 = DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec B"}));
         let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
         assert!(resp2.is_error());
         assert_eq!(resp2.error.unwrap().code, -32005);
@@ -600,7 +604,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "My Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "My Spec"})),
         );
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -634,7 +638,11 @@ mod tests {
         let plan_id = create_test_plan(&stores, &tx, &wm);
 
         // Create a spec (writes to both TaskStore and HashMap)
-        let create_req = DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "TaskStore Spec"}));
+        let create_req = DaemonRequest::new(
+            2,
+            "spec.create",
+            json!({"parent_id": plan_id, "title": "TaskStore Spec"}),
+        );
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
         assert!(!create_resp.is_error());
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -698,14 +706,14 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id_1, "title": "Spec A"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id_1, "title": "Spec A"})),
         );
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(3, "spec.create", json!({"plan_id": plan_id_2, "title": "Spec B"})),
+            DaemonRequest::new(3, "spec.create", json!({"parent_id": plan_id_2, "title": "Spec B"})),
         );
 
         // List all - should have 2
@@ -724,7 +732,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(5, "spec.list", json!({"plan_id": plan_id_1})),
+            DaemonRequest::new(5, "spec.list", json!({"parent_id": plan_id_1})),
         );
         let specs = filtered_resp.result.unwrap();
         let arr = specs.as_array().unwrap();
@@ -754,7 +762,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec A"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec A"})),
         );
         let spec_a_id = spec_a_resp.result.unwrap()["id"].as_str().unwrap().to_string();
         dispatch(
@@ -773,7 +781,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(3, "spec.create", json!({"plan_id": plan_id, "title": "Spec B"})),
+            DaemonRequest::new(3, "spec.create", json!({"parent_id": plan_id, "title": "Spec B"})),
         );
 
         // Clear HashMap to prove list reads from TaskStore
@@ -787,7 +795,7 @@ mod tests {
         assert_eq!(specs.as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
-        let filtered_req = DaemonRequest::new(5, "spec.list", json!({"plan_id": plan_id}));
+        let filtered_req = DaemonRequest::new(5, "spec.list", json!({"parent_id": plan_id}));
         let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
         assert!(!filtered_resp.is_error());
         let filtered_specs = filtered_resp.result.unwrap();
@@ -810,7 +818,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"})),
         );
         let _ = rx.try_recv(); // consume spec create event
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -847,7 +855,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"})),
         );
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -877,7 +885,7 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Spec"})),
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"})),
         );
         let spec_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -929,7 +937,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "spec.create",
-                json!({"plan_id": plan_id, "title": "Transition Spec"}),
+                json!({"parent_id": plan_id, "title": "Transition Spec"}),
             ),
         );
         assert!(!create_resp.is_error());
@@ -981,7 +989,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Gate Test Spec"})),
+            DaemonRequest::new(
+                2,
+                "spec.create",
+                json!({"parent_id": plan_id, "title": "Gate Test Spec"}),
+            ),
         );
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -1025,7 +1037,11 @@ mod tests {
             &tx,
             &wm,
             &test_integrator_config(),
-            DaemonRequest::new(2, "spec.create", json!({"plan_id": plan_id, "title": "Gate Test Spec"})),
+            DaemonRequest::new(
+                2,
+                "spec.create",
+                json!({"parent_id": plan_id, "title": "Gate Test Spec"}),
+            ),
         );
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 

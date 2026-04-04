@@ -13,4 +13,4 @@ Create a Spec for this Plan with:
   - Risks: what could go wrong and mitigations
   - Dependencies: external crates, APIs, or other Phases this depends on
 
-Respond with a JSON array containing a single `create_spec` action with `plan_id` set to the Plan's ID.
+Respond with a JSON array containing a single `create_spec` action with `parent_id` set to the Plan's ID.

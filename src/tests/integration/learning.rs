@@ -130,7 +130,7 @@ fn test_failure_learning_creation() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "Add error handling",
             "description": "Implement error types",
             "resource_tags": ["src/error.rs"],

@@ -111,6 +111,8 @@ pub(super) fn dispatch_err(
 }
 
 /// Helper: create Plan->Spec->Phase hierarchy and return (plan_id, spec_id, phase_id).
+/// NOTE: variable names plan_id, spec_id, phase_id are kept here because they
+/// represent the *identity* of these records, not a parent reference.
 pub(super) fn create_test_hierarchy(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
@@ -140,7 +142,7 @@ pub(super) fn create_test_hierarchy(
         wm,
         ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "Test Spec", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"parent_id": plan_id, "title": "Test Spec", "description": "desc", "acceptance_criteria": "pass"}),
     );
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -157,7 +159,7 @@ pub(super) fn create_test_hierarchy(
         wm,
         ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Test Phase", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"parent_id": spec_id, "title": "Test Phase", "description": "desc", "acceptance_criteria": "pass"}),
     );
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -228,7 +230,7 @@ pub(super) fn inject_preformed_plan(
             ic,
             "spec.create",
             json!({
-                "plan_id": plan_id,
+                "parent_id": plan_id,
                 "title": spec_title,
                 "description": spec_desc,
                 "acceptance_criteria": "all tests pass",
@@ -255,7 +257,7 @@ pub(super) fn inject_preformed_plan(
                 ic,
                 "phase.create",
                 json!({
-                    "spec_id": spec_id,
+                    "parent_id": spec_id,
                     "title": phase_title,
                     "description": phase_desc,
                     "order": order,
@@ -282,7 +284,7 @@ pub(super) fn inject_preformed_plan(
                     ic,
                     "work.create",
                     json!({
-                        "phase_id": phase_id,
+                        "parent_id": phase_id,
                         "title": work_title,
                         "description": work_desc,
                         "resource_tags": resource_tags,

@@ -177,7 +177,7 @@ fn work_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent_id": plan_id, "title": "S", "description": "D"}),
     );
     let spec_id = spec["id"].as_str().unwrap();
     dispatch_ok(
@@ -195,7 +195,7 @@ fn work_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
     );
     let phase_id = phase["id"].as_str().unwrap();
     dispatch_ok(
@@ -213,7 +213,7 @@ fn work_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -308,7 +308,7 @@ fn bundle_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent_id": plan_id, "title": "S", "description": "D"}),
     );
     let spec_id = spec["id"].as_str().unwrap();
     dispatch_ok(
@@ -325,7 +325,7 @@ fn bundle_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
     );
     let phase_id = phase["id"].as_str().unwrap();
     dispatch_ok(
@@ -342,7 +342,7 @@ fn bundle_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
     );
     let wi_id = wi["id"].as_str().unwrap();
 
@@ -442,7 +442,7 @@ fn bundle_rejection_at_every_stage() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "S", "description": "D"}),
+        json!({"parent_id": plan_id, "title": "S", "description": "D"}),
     );
     let spec_id = spec["id"].as_str().unwrap();
     dispatch_ok(
@@ -459,7 +459,7 @@ fn bundle_rejection_at_every_stage() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Ph", "description": "D"}),
+        json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
     );
     let phase_id = phase["id"].as_str().unwrap();
     dispatch_ok(
@@ -476,7 +476,7 @@ fn bundle_rejection_at_every_stage() {
         &wm,
         &ic,
         "work.create",
-        json!({"phase_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
     );
     let wi_id = wi["id"].as_str().unwrap();
 

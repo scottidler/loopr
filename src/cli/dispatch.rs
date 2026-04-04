@@ -324,14 +324,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
                 "description": description,
             });
             if let Some(parent_id) = parent {
-                // Use the correct parent key based on collection
-                let key = match collection {
-                    "spec" => "plan_id",
-                    "phase" => "spec_id",
-                    "work" => "phase_id",
-                    _ => "parent_id",
-                };
-                params[key] = json!(parent_id);
+                params["parent_id"] = json!(parent_id);
             }
             if let Some(order) = order {
                 params["order"] = json!(order);
@@ -354,13 +347,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
         CrudCmd::List { parent } => {
             let mut params = json!({});
             if let Some(parent_id) = parent {
-                let key = match collection {
-                    "spec" => "plan_id",
-                    "phase" => "spec_id",
-                    "work" => "phase_id",
-                    _ => "parent_id",
-                };
-                params[key] = json!(parent_id);
+                params["parent_id"] = json!(parent_id);
             }
             (format!("{collection}.list"), params)
         }

@@ -34,7 +34,7 @@ fn test_spec_create_mapping_with_parent() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "spec.create");
-    assert_eq!(params["plan_id"], "plan-1");
+    assert_eq!(params["parent_id"], "plan-1");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn test_phase_create_mapping_with_order() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "phase.create");
-    assert_eq!(params["spec_id"], "spec-1");
+    assert_eq!(params["parent_id"], "spec-1");
     assert_eq!(params["order"], 1);
 }
 
@@ -530,7 +530,7 @@ fn test_crud_spec_with_parent_and_order() {
     assert_eq!(method, "spec.create");
     assert_eq!(params["title"], "Auth Spec");
     assert_eq!(params["description"], "JWT tokens");
-    assert_eq!(params["plan_id"], "plan-42");
+    assert_eq!(params["parent_id"], "plan-42");
     assert_eq!(params["order"], 3);
 }
 
@@ -649,7 +649,7 @@ fn test_coordinator_goal_clear_mapping() {
 // --- Coverage gap tests for uncovered branches ---
 
 #[test]
-fn test_work_create_with_parent_uses_phase_id() {
+fn test_work_create_with_parent_uses_parent_id() {
     let cmd = Command::Work {
         cmd: CrudCmd::Create {
             title: "Implement auth".to_string(),
@@ -663,7 +663,7 @@ fn test_work_create_with_parent_uses_phase_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "work.create");
-    assert_eq!(params["phase_id"], "phase-1");
+    assert_eq!(params["parent_id"], "phase-1");
     assert_eq!(params["resource_tags"], json!(["src/"]));
     assert_eq!(params["acceptance_criteria"], json!(["tests pass"]));
 }
@@ -706,7 +706,7 @@ fn test_bundle_create_with_claims_and_touched_paths() {
 }
 
 #[test]
-fn test_spec_list_with_parent_uses_plan_id() {
+fn test_spec_list_with_parent_uses_parent_id() {
     let cmd = Command::Spec {
         cmd: CrudCmd::List {
             parent: Some("plan-1".to_string()),
@@ -714,11 +714,11 @@ fn test_spec_list_with_parent_uses_plan_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "spec.list");
-    assert_eq!(params["plan_id"], "plan-1");
+    assert_eq!(params["parent_id"], "plan-1");
 }
 
 #[test]
-fn test_phase_list_with_parent_uses_spec_id() {
+fn test_phase_list_with_parent_uses_parent_id() {
     let cmd = Command::Phase {
         cmd: CrudCmd::List {
             parent: Some("spec-1".to_string()),
@@ -726,11 +726,11 @@ fn test_phase_list_with_parent_uses_spec_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "phase.list");
-    assert_eq!(params["spec_id"], "spec-1");
+    assert_eq!(params["parent_id"], "spec-1");
 }
 
 #[test]
-fn test_work_list_with_parent_uses_phase_id() {
+fn test_work_list_with_parent_uses_parent_id() {
     let cmd = Command::Work {
         cmd: CrudCmd::List {
             parent: Some("phase-1".to_string()),
@@ -738,7 +738,7 @@ fn test_work_list_with_parent_uses_phase_id() {
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "work.list");
-    assert_eq!(params["phase_id"], "phase-1");
+    assert_eq!(params["parent_id"], "phase-1");
 }
 
 #[test]

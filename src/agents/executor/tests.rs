@@ -123,7 +123,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let spec_resp = bridge.request(
         "spec.create",
-        serde_json::json!({"plan_id": plan_id, "title": "Test Spec", "description": "desc"}),
+        serde_json::json!({"parent_id": plan_id, "title": "Test Spec", "description": "desc"}),
     );
     let spec_id = spec_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     bridge.request(
@@ -132,7 +132,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let phase_resp = bridge.request(
         "phase.create",
-        serde_json::json!({"spec_id": spec_id, "title": "Test Phase", "description": "desc", "order": 1}),
+        serde_json::json!({"parent_id": spec_id, "title": "Test Phase", "description": "desc", "order": 1}),
     );
     let phase_id = phase_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     bridge.request(
@@ -141,7 +141,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let wi_resp = bridge.request(
         "work.create",
-        serde_json::json!({"phase_id": phase_id, "title": "Test WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        serde_json::json!({"parent_id": phase_id, "title": "Test WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     (plan_id, spec_id, phase_id, wi_id)

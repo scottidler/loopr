@@ -77,7 +77,7 @@ pub(super) fn handle_create_spec(
     let list_resp = bridge.request("spec.list", serde_json::json!({}));
     if let Some(specs) = list_resp.result.as_ref().and_then(|v| v.as_array()) {
         let has_draft = specs.iter().any(|s| {
-            s.get("plan_id").and_then(|v| v.as_str()) == Some(plan_id)
+            s.get("parent_id").and_then(|v| v.as_str()) == Some(plan_id)
                 && s.get("status").and_then(|v| v.as_str()).map(|s| s.to_lowercase()) == Some("draft".to_string())
         });
         if has_draft {
@@ -89,7 +89,7 @@ pub(super) fn handle_create_spec(
     let resp = bridge.request(
         "spec.create",
         serde_json::json!({
-            "plan_id": plan_id,
+            "parent_id": plan_id,
             "title": title,
             "description": description,
         }),
@@ -126,7 +126,7 @@ pub(super) fn handle_create_phase(
     let resp = bridge.request(
         "phase.create",
         serde_json::json!({
-            "spec_id": spec_id,
+            "parent_id": spec_id,
             "title": title,
             "description": description,
             "order": order,
@@ -386,7 +386,7 @@ mod tests {
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::CreateSpec {
-            plan_id,
+            parent_id: plan_id,
             title: "New Spec".to_string(),
             description: "Spec desc".to_string(),
         };
@@ -408,7 +408,7 @@ mod tests {
         let (_, spec_id, _, _) = create_test_hierarchy(&ctx.bridge);
 
         let action = AgentAction::CreatePhase {
-            spec_id,
+            parent_id: spec_id,
             title: "New Phase".to_string(),
             description: "Phase desc".to_string(),
             order: 2,
@@ -458,7 +458,7 @@ mod tests {
         let (plan_id, _, _, _) = create_test_hierarchy(&ctx.bridge);
 
         let action1 = AgentAction::CreateSpec {
-            plan_id: plan_id.clone(),
+            parent_id: plan_id.clone(),
             title: "New Spec".to_string(),
             description: "desc".to_string(),
         };
@@ -466,7 +466,7 @@ mod tests {
         assert!(matches!(result1, ActionResult::RecordCreated { .. }));
 
         let action2 = AgentAction::CreateSpec {
-            plan_id: plan_id.clone(),
+            parent_id: plan_id.clone(),
             title: "Another Spec".to_string(),
             description: "desc".to_string(),
         };
@@ -484,7 +484,7 @@ mod tests {
         let stores = test_stores(&dir);
 
         let action = AgentAction::CreatePhase {
-            spec_id: "nonexistent-spec".to_string(),
+            parent_id: "nonexistent-spec".to_string(),
             title: "New Phase".to_string(),
             description: "desc".to_string(),
             order: 1,

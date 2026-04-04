@@ -95,13 +95,13 @@ fn test_preformed_todo_app_plan() {
     // Verify spec->plan relationship
     let (ref spec_id, ref phases) = spec_results[0];
     let specs = stores.specs.read().unwrap();
-    assert_eq!(&specs[spec_id].plan_id, &plan_id);
+    assert_eq!(&specs[spec_id].parent_id, &plan_id);
 
     // Verify phase->spec relationships and ordering
     let phase_store = stores.phases.read().unwrap();
     for (i, (phase_id, _)) in phases.iter().enumerate() {
         let phase = &phase_store[phase_id];
-        assert_eq!(&phase.spec_id, spec_id);
+        assert_eq!(&phase.parent_id, spec_id);
         assert_eq!(phase.order, (i + 1) as u32);
         assert_eq!(phase.status().to_string(), "active");
     }
@@ -111,13 +111,13 @@ fn test_preformed_todo_app_plan() {
     let (ref phase1_id, ref phase1_works) = phases[0];
     assert_eq!(phase1_works.len(), 2);
     for wid in phase1_works {
-        assert_eq!(work_store[wid].phase_id, *phase1_id);
+        assert_eq!(work_store[wid].parent_id, *phase1_id);
     }
 
     let (ref phase2_id, ref phase2_works) = phases[1];
     assert_eq!(phase2_works.len(), 4);
     for wid in phase2_works {
-        assert_eq!(work_store[wid].phase_id, *phase2_id);
+        assert_eq!(work_store[wid].parent_id, *phase2_id);
     }
 
     // All works should be Ready (auto-promoted from Draft since acceptance_criteria present)

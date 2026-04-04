@@ -55,7 +55,7 @@ fn test_create_spec_with_invalid_plan_id_returns_error() {
     let result = rt
         .block_on(execute_action(
             &AgentAction::CreateSpec {
-                plan_id: "nonexistent-plan".into(),
+                parent_id: "nonexistent-plan".into(),
                 title: "Bad Spec".into(),
                 description: "Should fail".into(),
             },

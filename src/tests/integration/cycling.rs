@@ -26,7 +26,7 @@ fn test_dependency_chain_execution() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "Create base types",
             "description": "Foundation types and traits",
             "resource_tags": ["src/types.rs"],
@@ -43,7 +43,7 @@ fn test_dependency_chain_execution() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "Implement logic",
             "description": "Business logic using base types",
             "resource_tags": ["src/logic.rs"],
@@ -61,7 +61,7 @@ fn test_dependency_chain_execution() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "Add integration tests",
             "description": "Integration tests for logic",
             "resource_tags": ["src/tests.rs"],
@@ -107,7 +107,7 @@ fn test_duplicate_work_rejection() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "Implement auth",
             "description": "Add JWT auth",
             "resource_tags": ["src/auth.rs"],
@@ -123,7 +123,7 @@ fn test_duplicate_work_rejection() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "implement auth",
             "description": "Different description",
             "resource_tags": ["src/auth.rs"],
@@ -142,7 +142,7 @@ fn test_duplicate_work_rejection() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase_id,
+            "parent_id": phase_id,
             "title": "Implement authorization",
             "description": "Add RBAC",
             "resource_tags": ["src/authz.rs"],
@@ -187,7 +187,7 @@ fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "spec.create",
-        json!({"plan_id": plan_id, "title": "Multi-phase Spec", "description": "desc", "acceptance_criteria": "pass"}),
+        json!({"parent_id": plan_id, "title": "Multi-phase Spec", "description": "desc", "acceptance_criteria": "pass"}),
     );
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -205,7 +205,7 @@ fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Phase 1: Foundation", "description": "base types", "acceptance_criteria": "types exist"}),
+        json!({"parent_id": spec_id, "title": "Phase 1: Foundation", "description": "base types", "acceptance_criteria": "types exist"}),
     );
     let phase1_id = phase1["id"].as_str().unwrap().to_string();
     dispatch_ok(
@@ -223,7 +223,7 @@ fn test_phase_gate_advances_to_next_phase() {
         &wm,
         &ic,
         "phase.create",
-        json!({"spec_id": spec_id, "title": "Phase 2: Logic", "description": "business logic", "acceptance_criteria": "logic works"}),
+        json!({"parent_id": spec_id, "title": "Phase 2: Logic", "description": "business logic", "acceptance_criteria": "logic works"}),
     );
     let phase2_id = phase2["id"].as_str().unwrap().to_string();
 
@@ -235,7 +235,7 @@ fn test_phase_gate_advances_to_next_phase() {
         &ic,
         "work.create",
         json!({
-            "phase_id": phase1_id,
+            "parent_id": phase1_id,
             "title": "Create base types",
             "description": "Foundation types",
             "resource_tags": ["src/types.rs"],

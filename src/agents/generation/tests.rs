@@ -116,12 +116,12 @@ fn test_spec_prompt_includes_accumulated_failures() {
 }
 
 #[test]
-fn test_spec_prompt_instructions_reference_plan_id() {
+fn test_spec_prompt_instructions_reference_parent_id() {
     init();
     let plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
     let prompt = build_spec_prompt(&plan, &[], &[], &[], None);
     assert!(prompt.user_message.contains("create_spec"));
-    assert!(prompt.user_message.contains("plan_id"));
+    assert!(prompt.user_message.contains("parent_id"));
 }
 
 // --- Phase prompt tests ---
@@ -158,7 +158,7 @@ fn test_phase_prompt_instructions() {
     let spec = Spec::new("plan-1".into(), "Spec".into(), "desc".into());
     let prompt = build_phase_prompt(&spec, &[], &[], None);
     assert!(prompt.user_message.contains("create_phase"));
-    assert!(prompt.user_message.contains("spec_id"));
+    assert!(prompt.user_message.contains("parent_id"));
     assert!(prompt.user_message.contains("order"));
 }
 
@@ -1049,7 +1049,7 @@ fn test_find_works_for_phase_ordering() {
     let wis = find_works_for_phase(&stores, "phase-x");
     assert_eq!(wis.len(), 3);
     // All should belong to phase-x
-    assert!(wis.iter().all(|w| w.phase_id == "phase-x"));
+    assert!(wis.iter().all(|w| w.parent_id == "phase-x"));
 }
 
 // --- Prompt building with learnings/findings (covering branches at lines 119-180, 237-254) ---

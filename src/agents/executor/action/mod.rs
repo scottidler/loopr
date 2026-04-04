@@ -103,18 +103,18 @@ pub async fn execute_action(
             acceptance_criteria,
         } => record::handle_create_plan(ctx, title, description, acceptance_criteria),
         AgentAction::CreateSpec {
-            plan_id,
+            parent_id,
             title,
             description,
-        } => record::handle_create_spec(ctx, plan_id, title, description),
+        } => record::handle_create_spec(ctx, parent_id, title, description),
         AgentAction::CreatePhase {
-            spec_id,
+            parent_id,
             title,
             description,
             order,
-        } => record::handle_create_phase(ctx, spec_id, title, description, *order),
+        } => record::handle_create_phase(ctx, parent_id, title, description, *order),
         AgentAction::CreateWork {
-            phase_id,
+            parent_id,
             title,
             description,
             resource_tags,
@@ -122,7 +122,7 @@ pub async fn execute_action(
             dependencies,
         } => work::handle_create_work(
             ctx,
-            phase_id,
+            parent_id,
             title,
             description,
             resource_tags,
