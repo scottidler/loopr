@@ -19,6 +19,7 @@ use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::CoordinatorState;
 use crate::domain::coverage::CoverageReport;
 use crate::domain::decision::Decision;
+use crate::domain::doc::Doc;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
@@ -45,6 +46,8 @@ pub struct Stores {
     pub specs: StdRwLock<HashMap<String, Spec>>,
     pub phases: StdRwLock<HashMap<String, Phase>>,
     pub works: StdRwLock<HashMap<String, Work>>,
+    /// Unified doc storage (new architecture). Coexists with plans/specs/phases/works during migration.
+    pub docs: StdRwLock<HashMap<String, Doc>>,
     pub bundles: StdRwLock<HashMap<String, Bundle>>,
     pub ticks: StdRwLock<HashMap<String, Tick>>,
     pub learnings: StdRwLock<HashMap<String, Learning>>,
@@ -119,6 +122,7 @@ impl Stores {
         specs: Spec,
         phases: Phase,
         works: Work,
+        docs: Doc,
         bundles: Bundle,
         ticks: Tick,
         learnings: Learning,
@@ -217,6 +221,7 @@ impl Stores {
             specs: StdRwLock::new(HashMap::new()),
             phases: StdRwLock::new(HashMap::new()),
             works: StdRwLock::new(HashMap::new()),
+            docs: StdRwLock::new(HashMap::new()),
             bundles: StdRwLock::new(HashMap::new()),
             ticks: StdRwLock::new(HashMap::new()),
             learnings: StdRwLock::new(HashMap::new()),
@@ -308,6 +313,7 @@ impl DaemonContext {
         store.rebuild_indexes::<Spec>()?;
         store.rebuild_indexes::<Phase>()?;
         store.rebuild_indexes::<Work>()?;
+        store.rebuild_indexes::<Doc>()?;
         store.rebuild_indexes::<Bundle>()?;
         store.rebuild_indexes::<Tick>()?;
         store.rebuild_indexes::<Learning>()?;
@@ -345,6 +351,9 @@ impl DaemonContext {
             for wi in store.list::<Work>(&[])? {
                 stores.write_works()?.insert(wi.id.clone(), wi);
             }
+            for doc in store.list::<Doc>(&[])? {
+                stores.write_docs()?.insert(doc.id.clone(), doc);
+            }
             for bundle in store.list::<Bundle>(&[])? {
                 stores.write_bundles()?.insert(bundle.id.clone(), bundle);
             }
@@ -379,6 +388,7 @@ impl DaemonContext {
                 + stores.read_specs()?.len()
                 + stores.read_phases()?.len()
                 + stores.read_works()?.len()
+                + stores.read_docs()?.len()
                 + stores.read_bundles()?.len()
                 + stores.read_ticks()?.len()
                 + stores.read_learnings()?.len()

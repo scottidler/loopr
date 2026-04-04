@@ -109,11 +109,7 @@ fn parse_tier(response: &str) -> Option<Tier> {
     }
 }
 
-fn retry_tier(
-    client: &crate::validator::client::LlmClient,
-    bad_response: &str,
-    plan_id: &str,
-) -> Tier {
+fn retry_tier(client: &crate::validator::client::LlmClient, bad_response: &str, plan_id: &str) -> Tier {
     let correction = format!(
         "You responded with {:?} but the only valid responses are \
          exactly \"Brief\" or \"Full\". Reply with one of those two \
@@ -123,11 +119,7 @@ fn retry_tier(
     match client.call(&correction) {
         Ok(response) => match parse_tier(&response) {
             Some(tier) => {
-                log::info!(
-                    "Tier classification on retry: {:?} (plan={})",
-                    tier,
-                    plan_id
-                );
+                log::info!("Tier classification on retry: {:?} (plan={})", tier, plan_id);
                 tier
             }
             None => {
@@ -141,10 +133,7 @@ fn retry_tier(
             }
         },
         Err(e) => {
-            log::error!(
-                "Tier classification retry failed, defaulting to Full: {}",
-                e
-            );
+            log::error!("Tier classification retry failed, defaulting to Full: {}", e);
             Tier::Full
         }
     }

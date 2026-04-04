@@ -5,6 +5,7 @@ pub mod coordinator_state;
 pub mod coverage;
 #[allow(dead_code)]
 pub mod decision;
+pub mod doc;
 pub mod learning;
 pub mod lock;
 pub mod mailbox;
