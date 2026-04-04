@@ -366,13 +366,7 @@ pub struct CoordinatorAgent {
 }
 
 /// Query learnings from stores filtered by scopes relevant to the given generation level.
-/// Returns content strings suitable for passing to prompt builders.
-///
-/// Scope hierarchy per level:
-/// - Plan: Plan + Global
-/// - Spec: Spec + Plan + Global
-/// - Phase: Phase + Spec + Plan + Global
-/// - Work: Work + Phase + Spec + Plan + Global
+#[allow(dead_code)]
 fn query_learnings_for_level(stores: &Stores, level: GenerationLevel) -> Vec<String> {
     let Ok(learnings) = stores.read_learnings() else {
         return Vec::new();
@@ -403,13 +397,14 @@ fn query_learnings_for_level(stores: &Stores, level: GenerationLevel) -> Vec<Str
 
 /// Build a generation-specific footer for the Coordinator's context message.
 ///
-/// Handles three cases:
-/// 1. **New generation** — no document at this level → generate from scratch.
-/// 2. **Re-generation** — Draft exists with failed validation → regenerate with accumulated failures.
-/// 3. **Validation cap reached** — Draft has exceeded max_validation_attempts → NeedHelp signal.
+/// DEPRECATED: Decomposition is now handled by the Decomposer before the
+/// Coordinator starts. This function is retained temporarily for the
+/// `ActivatePhase` work-generation path and will be removed when that path
+/// is migrated to the Decomposer.
 ///
 /// Returns None when no generation/re-generation is needed (normal iteration).
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn build_generation_footer(
     stores: &Stores,
     goal: &str,
@@ -783,6 +778,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
 
 /// L2: Find a pending Draft document scoped to the current active hierarchy chain.
 /// Returns (level_name, id, title) if found.
+#[allow(dead_code)]
 fn find_pending_draft_for_validation(stores: &Stores) -> Option<(&'static str, String, String)> {
     // Find active Plan (if any)
     let active_plan_id = {
@@ -1089,7 +1085,11 @@ fn phase_missing_test_tool(stores: &Stores, coord_state: &CoordinatorState) -> S
     )
 }
 
-/// Determine the FSM state footer — state-specific instructions for the LLM.
+/// Determine the FSM state footer -- state-specific instructions for the LLM.
+///
+/// `goal`, `config`, and `agent_log` are retained in the signature for future use
+/// (e.g., re-decomposition prompts during ActivatePhase). The Planning branch no
+/// longer uses them because decomposition happens before the Coordinator starts.
 fn build_fsm_footer(
     stores: &Stores,
     coord_state: &CoordinatorState,
@@ -1097,6 +1097,8 @@ fn build_fsm_footer(
     config: &CoordinatorConfig,
     agent_log: &AgentLogger,
 ) -> String {
+    // Retained for ActivatePhase re-decomposition (future wiring)
+    let _ = (goal, config, agent_log);
     match coord_state.fsm_state {
         CoordinatorFsmState::Interviewing => {
             // In Interviewing state, the Coordinator generates interview questions
@@ -1110,24 +1112,11 @@ fn build_fsm_footer(
                 .to_string()
         }
         CoordinatorFsmState::Planning => {
-            // Use existing generation footer logic for Plan→Spec→Phase hierarchy
-            if let Some(gen_footer) = build_generation_footer(
-                stores,
-                goal,
-                config.max_validation_attempts,
-                None,
-                agent_log,
-                Some(coord_state),
-                Some(stores.config.strategy.max_decomposition_attempts),
-                Some(stores.config.strategy.max_bubble_up_depth),
-            ) {
-                gen_footer
-            } else {
-                // All hierarchy levels exist — ready to transition to ActivatePhase
-                "All planning artifacts (Plan, Spec, Phases) are created and active. \
-                 Respond with: [{\"action\": \"done\", \"summary\": \"Planning complete, ready to activate first phase\"}]"
-                    .to_string()
-            }
+            // Decomposition is handled by the Decomposer before the Coordinator starts.
+            // The Planning state is a transient pass-through: the hierarchy already exists.
+            "All planning artifacts have been decomposed by the Decomposer. \
+             Respond with: [{\"action\": \"done\", \"summary\": \"Planning complete, ready to activate first phase\"}]"
+                .to_string()
         }
         CoordinatorFsmState::ActivatePhase => {
             // Find the next phase to activate and generate Works for it
@@ -1384,15 +1373,17 @@ fn check_fsm_transition(
             }
         }
         CoordinatorFsmState::Planning => {
+            // Decomposition is complete before the Coordinator starts.
+            // Transition immediately based on what the Decomposer produced.
             let plan = generation::find_active_plan(stores)?;
 
-            // Brief mode: skip Spec/Phase, go directly to Executing when Works exist
+            // Brief mode: Works are parented to Plan directly
             if plan.tier == crate::domain::plan::Tier::Brief {
                 let wis = generation::find_works_for_parent(stores, &plan.id);
                 return if !wis.is_empty() { Some(CoordinatorFsmState::Executing) } else { None };
             }
 
-            // Full mode: transition when Active Plan AND Active Spec AND Active Phases
+            // Full mode: Decomposer already created Specs and Phases - go to ActivatePhase
             let specs = generation::find_active_specs_for_plan(stores, &plan.id);
             if specs.is_empty() {
                 return None;
