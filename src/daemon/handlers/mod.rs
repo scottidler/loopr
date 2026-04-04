@@ -272,6 +272,7 @@ pub(crate) mod tests {
     use crate::agents::AgentKind;
     use crate::config::IntegratorConfig;
     use crate::domain::bundle::Bundle;
+    use crate::domain::doc::Doc;
     use crate::domain::learning::Learning;
     use crate::domain::lock::Lock;
     use crate::domain::phase::Phase;
@@ -304,6 +305,7 @@ pub(crate) mod tests {
         store.rebuild_indexes::<Learning>().unwrap();
         store.rebuild_indexes::<Lock>().unwrap();
         store.rebuild_indexes::<ValidationReport>().unwrap();
+        store.rebuild_indexes::<Doc>().unwrap();
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
         (dir, Arc::new(stores))
@@ -323,6 +325,7 @@ pub(crate) mod tests {
         let mut store = taskstore::Store::open(&dir).unwrap();
         store.rebuild_indexes::<Plan>().unwrap();
         store.rebuild_indexes::<ValidationReport>().unwrap();
+        store.rebuild_indexes::<Doc>().unwrap();
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
         let validator_config = crate::config::ValidatorConfig {
@@ -352,6 +355,7 @@ pub(crate) mod tests {
         store.rebuild_indexes::<Learning>().unwrap();
         store.rebuild_indexes::<Lock>().unwrap();
         store.rebuild_indexes::<ValidationReport>().unwrap();
+        store.rebuild_indexes::<Doc>().unwrap();
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
         // Create a DocValidator to enable the validation gate.

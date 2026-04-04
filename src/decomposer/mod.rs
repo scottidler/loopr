@@ -60,13 +60,14 @@ fn child_kind(parent_kind: DocKind) -> Option<DocKind> {
 }
 
 /// Build the decomposition prompt: template instructions + parent content.
-fn build_decompose_prompt(parent_kind: DocKind, parent_content: &str) -> Result<String> {
+/// `target_kind` is the kind of document to produce (not the parent kind).
+fn build_decompose_prompt(target_kind: DocKind, parent_content: &str) -> Result<String> {
     let prompts = crate::prompts::store();
-    let template = match parent_kind {
-        DocKind::Plan => &prompts.decompose_spec,
-        DocKind::Spec => &prompts.decompose_phase,
-        DocKind::Phase => &prompts.decompose_work,
-        DocKind::Work => bail!("cannot decompose a Work document"),
+    let template = match target_kind {
+        DocKind::Spec => &prompts.decompose_spec,
+        DocKind::Phase => &prompts.decompose_phase,
+        DocKind::Work => &prompts.decompose_work,
+        DocKind::Plan => bail!("cannot decompose into Plan"),
     };
     Ok(format!("{}\n\n## Parent Document\n\n{}", template, parent_content))
 }
@@ -333,7 +334,7 @@ fn call_llm_for_children_raw(http_client: &dyn HttpClient, config: &DecomposerCo
     Ok(json_text.to_string())
 }
 
-/// Decompose a single parent Doc into child Docs.
+/// Internal decomposition core: produce `target_kind` children from `parent`.
 ///
 /// Reads the parent's .md content, calls the LLM, validates each child,
 /// detects dependency cycles, writes child .md files to the run directory,
@@ -341,15 +342,14 @@ fn call_llm_for_children_raw(http_client: &dyn HttpClient, config: &DecomposerCo
 ///
 /// Uses staging: child files are written to a temp directory first, then
 /// moved to the run directory only if all validation passes.
-pub fn decompose(
+fn decompose_into(
     parent: &Doc,
+    target_kind: DocKind,
     run_dir: &Path,
     config: &DecomposerConfig,
     http_client: &dyn HttpClient,
 ) -> Result<Vec<Doc>> {
-    let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
-
-    info!("decompose: {} {} -> {}s", parent.kind, parent.id, ck);
+    info!("decompose: {} {} -> {}s", parent.kind, parent.id, target_kind);
 
     // Read parent content
     let parent_path = run_dir.join(&parent.markdown);
@@ -357,7 +357,7 @@ pub fn decompose(
         .context(format!("Failed to read parent doc: {}", parent_path.display()))?;
 
     // Build prompt and call LLM
-    let prompt = build_decompose_prompt(parent.kind, &parent_content)?;
+    let prompt = build_decompose_prompt(target_kind, &parent_content)?;
     let children = match call_llm_for_children(http_client, config, &prompt) {
         Ok(c) => c,
         Err(e) => {
@@ -372,7 +372,7 @@ pub fn decompose(
 
     // Validate each child
     for child in &children {
-        let validate_prompt = build_validate_prompt(ck, &child.content);
+        let validate_prompt = build_validate_prompt(target_kind, &child.content);
         match call_llm_for_validation(http_client, config, &validate_prompt) {
             Ok(result) if !result.valid => {
                 warn!("Validation failed for '{}': {:?}", child.title, result.issues);
@@ -400,14 +400,12 @@ pub fn decompose(
     let mut taken: Vec<String> = Vec::new();
 
     for child in &children {
-        let filename = write_doc_file(&staging_dir, ck, &child.title, &child.content, &taken)?;
+        let filename = write_doc_file(&staging_dir, target_kind, &child.title, &child.content, &taken)?;
         taken.push(filename.clone());
 
-        let mut doc = Doc::new(ck, Some(parent.id.clone()), filename);
+        let mut doc = Doc::new(target_kind, Some(parent.id.clone()), filename);
 
-        // Resolve title-based dependencies to Doc IDs
-        // (will be resolved after all docs are created)
-        doc.acceptance_criteria = if child.acceptance_criteria.is_empty() && ck == DocKind::Work {
+        doc.acceptance_criteria = if child.acceptance_criteria.is_empty() && target_kind == DocKind::Work {
             extract_acceptance_criteria(&child.content)
         } else {
             child.acceptance_criteria.clone()
@@ -447,12 +445,25 @@ pub fn decompose(
     info!(
         "decompose: produced {} {} docs from {} {}",
         final_docs.len(),
-        ck,
+        target_kind,
         parent.kind,
         parent.id
     );
 
     Ok(final_docs)
+}
+
+/// Decompose a single parent Doc into child Docs using the natural child kind.
+///
+/// Thin wrapper around `decompose_into` that computes the child kind from the parent.
+pub fn decompose(
+    parent: &Doc,
+    run_dir: &Path,
+    config: &DecomposerConfig,
+    http_client: &dyn HttpClient,
+) -> Result<Vec<Doc>> {
+    let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
+    decompose_into(parent, ck, run_dir, config, http_client)
 }
 
 /// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
@@ -472,8 +483,8 @@ pub fn decompose_hierarchy(
     let mut all_docs = Vec::new();
 
     if brief {
-        // Brief mode: Plan -> Works directly
-        let works = decompose(plan, run_dir, config, http_client)?;
+        // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
+        let works = decompose_into(plan, DocKind::Work, run_dir, config, http_client)?;
         all_docs.extend(works);
     } else {
         // Full mode: Plan -> Specs -> Phases -> Works
@@ -880,6 +891,51 @@ mod tests {
             result[0].acceptance_criteria,
             vec!["assert schema_exists()", "assert table_count() == 3"]
         );
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[test]
+    fn test_decompose_into_plan_to_works_brief() {
+        // Brief mode: decompose_into with DocKind::Work from a Plan parent
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-decompose-brief");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(
+            dir.join("plan-brief.md"),
+            "# Brief Plan\n\n## Problem Statement\n\nSmall task.\n\n## Goals\n\nDo it quickly.",
+        )
+        .unwrap();
+
+        let parent = Doc::new(DocKind::Plan, None, "plan-brief.md".to_string());
+
+        let children_json = serde_json::json!([
+            {
+                "title": "Implement Feature",
+                "content": "# Work\n\n## Description\n\nDo the thing.\n\n## Acceptance Criteria\n\nassert done()\n\n## Dependencies\n\nNone",
+                "dependencies": []
+            }
+        ])
+        .to_string();
+
+        let validation_json = r#"{"valid": true, "issues": []}"#;
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]}).to_string(),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, DocKind::Work);
+        assert!(result[0].id.starts_with("wk-"));
+        assert_eq!(result[0].parent_id.as_deref(), Some(parent.id.as_str()));
 
         unsafe { std::env::remove_var(&env_key) };
     }

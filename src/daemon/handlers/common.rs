@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
+use eyre::eyre;
 use serde_json::json;
 use tokio::sync::broadcast;
 
+use crate::daemon::context::Stores;
+use crate::domain::doc::Doc;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::validation::{ValidationReport, ValidationVerdict};
 use crate::ipc::protocol::{DaemonEvent, RpcError};
-
 use taskstore::{Filter, FilterOp, IndexValue};
-
-use crate::daemon::context::Stores;
 
 /// Check the validation gate for Draft -> Active transitions.
 /// Returns `Some(RpcError)` if the gate blocks the transition, `None` if allowed.
@@ -88,6 +88,25 @@ pub(super) fn check_validation_gate(
         // No TaskStore -> no gate (shouldn't happen when validator is enabled, but be safe)
         None
     }
+}
+
+/// Persist a Doc record to the in-memory HashMap and TaskStore.
+pub(super) fn persist_doc(
+    stores: &Arc<Stores>,
+    doc: Doc,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+) -> eyre::Result<()> {
+    let id = doc.id.clone();
+    if let Some(store_arc) = &stores.store {
+        store_arc
+            .lock()
+            .map_err(|_| eyre!("taskstore lock poisoned"))?
+            .create(doc.clone())
+            .map_err(|e| eyre!("Failed to persist Doc {}: {}", id, e))?;
+    }
+    stores.write_docs()?.insert(id.clone(), doc);
+    let _ = event_tx.send(DaemonEvent::record_created("docs", &id));
+    Ok(())
 }
 
 #[allow(clippy::unwrap_used)]
