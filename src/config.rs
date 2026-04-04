@@ -533,6 +533,36 @@ impl Default for EvaluatorConfig {
     }
 }
 
+/// Decomposer configuration - LLM-powered plan decomposition.
+///
+/// The Decomposer is a system call (not an agent) that takes a document at
+/// any hierarchy level and produces child documents. It uses one model for
+/// generation and a lighter model for validation (template adherence checks).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DecomposerConfig {
+    pub provider: String,
+    pub model: String,
+    pub api_key_env: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    /// Lightweight model for template validation checks.
+    pub validation_model: String,
+}
+
+impl Default for DecomposerConfig {
+    fn default() -> Self {
+        Self {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 4096,
+            temperature: 0.3,
+            validation_model: "claude-haiku-4-5-20251001".to_string(),
+        }
+    }
+}
+
 impl Default for IntegratorConfig {
     fn default() -> Self {
         Self {
@@ -572,6 +602,7 @@ pub struct Config {
     pub agents: AgentConfig,
     pub strategy: StrategyConfig,
     pub reconciler: ReconcilerConfig,
+    pub decomposer: DecomposerConfig,
 }
 
 impl Default for Config {
@@ -589,6 +620,7 @@ impl Default for Config {
             agents: AgentConfig::default(),
             strategy: StrategyConfig::default(),
             reconciler: ReconcilerConfig::default(),
+            decomposer: DecomposerConfig::default(),
         }
     }
 }

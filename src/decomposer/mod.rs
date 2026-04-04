@@ -1,0 +1,886 @@
+//! Standalone plan decomposer: takes a Doc, calls an LLM, validates output,
+//! writes child .md files, creates child Doc records, and returns.
+//!
+//! This is a system call (function), NOT an agent. It has no session, FSM, or
+//! iteration loop. The Coordinator invokes it before execution begins, and can
+//! re-invoke it for targeted re-decomposition during execution.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use eyre::{Context, Result, bail};
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
+
+use crate::config::DecomposerConfig;
+use crate::domain::doc::{Doc, DocKind, write_doc_file};
+use crate::validator::client::HttpClient;
+
+/// A single child document parsed from the LLM's JSON response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildEntry {
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+}
+
+/// Result of a template validation call.
+#[derive(Debug, Deserialize)]
+pub struct ValidationResult {
+    pub valid: bool,
+    #[serde(default)]
+    pub issues: Vec<String>,
+}
+
+/// Result of a ratification call.
+#[derive(Debug, Deserialize)]
+pub struct RatifyResult {
+    pub passed: bool,
+    #[serde(default)]
+    pub issues: Vec<RatifyIssue>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RatifyIssue {
+    pub child: String,
+    pub issue: String,
+}
+
+/// The child DocKind produced when decomposing a given kind.
+fn child_kind(parent_kind: DocKind) -> Option<DocKind> {
+    match parent_kind {
+        DocKind::Plan => Some(DocKind::Spec),
+        DocKind::Spec => Some(DocKind::Phase),
+        DocKind::Phase => Some(DocKind::Work),
+        DocKind::Work => None,
+    }
+}
+
+/// Build the decomposition prompt: template instructions + parent content.
+fn build_decompose_prompt(parent_kind: DocKind, parent_content: &str) -> Result<String> {
+    let prompts = crate::prompts::store();
+    let template = match parent_kind {
+        DocKind::Plan => &prompts.decompose_spec,
+        DocKind::Spec => &prompts.decompose_phase,
+        DocKind::Phase => &prompts.decompose_work,
+        DocKind::Work => bail!("cannot decompose a Work document"),
+    };
+    Ok(format!("{}\n\n## Parent Document\n\n{}", template, parent_content))
+}
+
+/// Build a validation prompt for a child document.
+fn build_validate_prompt(child_kind: DocKind, child_content: &str) -> String {
+    let prompts = crate::prompts::store();
+    let template_text = match child_kind {
+        DocKind::Spec => include_str!("../../docs/templates/spec.md"),
+        DocKind::Phase => include_str!("../../docs/templates/phase.md"),
+        DocKind::Work => include_str!("../../docs/templates/work.md"),
+        DocKind::Plan => include_str!("../../docs/templates/plan.md"),
+    };
+    format!(
+        "{}\n\n## Template\n\n{}\n\n## Document to Validate\n\n{}",
+        prompts.decompose_validate, template_text, child_content
+    )
+}
+
+/// Build a ratification prompt: parent + all children.
+fn build_ratify_prompt(parent_content: &str, children: &[(String, String)]) -> String {
+    let prompts = crate::prompts::store();
+    let mut prompt = format!(
+        "{}\n\n## Parent Document\n\n{}",
+        prompts.decompose_ratify, parent_content
+    );
+    for (title, content) in children {
+        prompt.push_str(&format!("\n\n## Child: {}\n\n{}", title, content));
+    }
+    prompt
+}
+
+/// Detect cycles in a dependency graph via topological sort.
+///
+/// `nodes` maps title -> list of dependency titles.
+/// Returns `Ok(())` if acyclic, or `Err` with the cycle description.
+pub fn detect_cycles(nodes: &HashMap<String, Vec<String>>) -> Result<()> {
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    for title in nodes.keys() {
+        in_degree.entry(title.as_str()).or_insert(0);
+    }
+    for deps in nodes.values() {
+        for dep in deps {
+            if let Some(deg) = in_degree.get_mut(dep.as_str()) {
+                *deg += 1;
+            }
+        }
+    }
+
+    let mut queue: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(title, _)| *title)
+        .collect();
+    let mut visited = 0usize;
+
+    while let Some(node) = queue.pop() {
+        visited += 1;
+        if let Some(deps) = nodes.get(node) {
+            for dep in deps {
+                if let Some(deg) = in_degree.get_mut(dep.as_str()) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push(dep.as_str());
+                    }
+                }
+            }
+        }
+    }
+
+    if visited < nodes.len() {
+        let cycled: Vec<_> = in_degree.iter().filter(|(_, deg)| **deg > 0).map(|(t, _)| *t).collect();
+        bail!("dependency cycle detected among: {}", cycled.join(", "));
+    }
+    Ok(())
+}
+
+/// Extract acceptance criteria lines from a markdown document's
+/// `## Acceptance Criteria` section.
+pub fn extract_acceptance_criteria(content: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut criteria = Vec::new();
+
+    for line in content.lines() {
+        if line.starts_with("## Acceptance Criteria") {
+            in_section = true;
+            continue;
+        }
+        if in_section && line.starts_with("## ") {
+            break;
+        }
+        if in_section {
+            let trimmed = line.trim();
+            if trimmed.starts_with("assert") || trimmed.starts_with("- ") {
+                let clean = trimmed.trim_start_matches("- ").to_string();
+                if !clean.is_empty() {
+                    criteria.push(clean);
+                }
+            }
+        }
+    }
+    criteria
+}
+
+/// Call the LLM and parse the response as a JSON array of ChildEntry.
+fn call_llm_for_children(
+    http_client: &dyn HttpClient,
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> Result<Vec<ChildEntry>> {
+    let api_key =
+        std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
+
+    let api_url = match config.provider.as_str() {
+        "anthropic" => "https://api.anthropic.com/v1/messages",
+        other => bail!("Unsupported LLM provider: {}", other),
+    };
+
+    let request = serde_json::json!({
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let body = serde_json::to_string(&request)?;
+    let headers = [
+        ("content-type", "application/json"),
+        ("x-api-key", api_key.as_str()),
+        ("anthropic-version", "2023-06-01"),
+    ];
+
+    let response_text = http_client.post(api_url, &headers, &body)?;
+
+    let response: serde_json::Value =
+        serde_json::from_str(&response_text).context("Failed to parse LLM API response")?;
+
+    let text = response["content"]
+        .as_array()
+        .and_then(|blocks| blocks.first())
+        .and_then(|b| b["text"].as_str())
+        .ok_or_else(|| eyre::eyre!("LLM returned no text content"))?;
+
+    // Strip markdown code fences if present
+    let json_text = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let children: Vec<ChildEntry> =
+        serde_json::from_str(json_text).context("Failed to parse LLM output as JSON array of child documents")?;
+
+    if children.is_empty() {
+        bail!("LLM produced zero child documents");
+    }
+
+    Ok(children)
+}
+
+/// Call the LLM for validation and parse result.
+fn call_llm_for_validation(
+    http_client: &dyn HttpClient,
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> Result<ValidationResult> {
+    // Use the validation model (Haiku) for structural checks
+    let mut validation_config = config.clone();
+    validation_config.model = config.validation_model.clone();
+
+    let api_key = std::env::var(&validation_config.api_key_env)
+        .context(format!("Missing API key env var: {}", validation_config.api_key_env))?;
+
+    let api_url = match validation_config.provider.as_str() {
+        "anthropic" => "https://api.anthropic.com/v1/messages",
+        other => bail!("Unsupported LLM provider: {}", other),
+    };
+
+    let request = serde_json::json!({
+        "model": validation_config.model,
+        "max_tokens": validation_config.max_tokens,
+        "temperature": 0.0,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let body = serde_json::to_string(&request)?;
+    let headers = [
+        ("content-type", "application/json"),
+        ("x-api-key", api_key.as_str()),
+        ("anthropic-version", "2023-06-01"),
+    ];
+
+    let response_text = http_client.post(api_url, &headers, &body)?;
+    let response: serde_json::Value = serde_json::from_str(&response_text)?;
+
+    let text = response["content"]
+        .as_array()
+        .and_then(|blocks| blocks.first())
+        .and_then(|b| b["text"].as_str())
+        .ok_or_else(|| eyre::eyre!("Validation LLM returned no text"))?;
+
+    let json_text = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    serde_json::from_str(json_text).context("Failed to parse validation response")
+}
+
+/// Call the LLM for ratification and parse result.
+fn call_llm_for_ratification(
+    http_client: &dyn HttpClient,
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> Result<RatifyResult> {
+    // Uses the main model for ratification (reasoning task, not structural check)
+    call_llm_for_children_raw(http_client, config, prompt)
+        .and_then(|text| serde_json::from_str(&text).context("Failed to parse ratification response"))
+}
+
+/// Raw LLM call that returns text (shared helper).
+fn call_llm_for_children_raw(http_client: &dyn HttpClient, config: &DecomposerConfig, prompt: &str) -> Result<String> {
+    let api_key =
+        std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
+
+    let api_url = match config.provider.as_str() {
+        "anthropic" => "https://api.anthropic.com/v1/messages",
+        other => bail!("Unsupported LLM provider: {}", other),
+    };
+
+    let request = serde_json::json!({
+        "model": config.model,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let body = serde_json::to_string(&request)?;
+    let headers = [
+        ("content-type", "application/json"),
+        ("x-api-key", api_key.as_str()),
+        ("anthropic-version", "2023-06-01"),
+    ];
+
+    let response_text = http_client.post(api_url, &headers, &body)?;
+    let response: serde_json::Value = serde_json::from_str(&response_text)?;
+
+    let text = response["content"]
+        .as_array()
+        .and_then(|blocks| blocks.first())
+        .and_then(|b| b["text"].as_str())
+        .ok_or_else(|| eyre::eyre!("LLM returned no text"))?;
+
+    let json_text = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    Ok(json_text.to_string())
+}
+
+/// Decompose a single parent Doc into child Docs.
+///
+/// Reads the parent's .md content, calls the LLM, validates each child,
+/// detects dependency cycles, writes child .md files to the run directory,
+/// and returns the child Doc records.
+///
+/// Uses staging: child files are written to a temp directory first, then
+/// moved to the run directory only if all validation passes.
+pub fn decompose(
+    parent: &Doc,
+    run_dir: &Path,
+    config: &DecomposerConfig,
+    http_client: &dyn HttpClient,
+) -> Result<Vec<Doc>> {
+    let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
+
+    info!("decompose: {} {} -> {}s", parent.kind, parent.id, ck);
+
+    // Read parent content
+    let parent_path = run_dir.join(&parent.markdown);
+    let parent_content = std::fs::read_to_string(&parent_path)
+        .context(format!("Failed to read parent doc: {}", parent_path.display()))?;
+
+    // Build prompt and call LLM
+    let prompt = build_decompose_prompt(parent.kind, &parent_content)?;
+    let children = match call_llm_for_children(http_client, config, &prompt) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Decomposition failed, retrying once: {}", e);
+            let retry_prompt = format!(
+                "{}\n\n## Previous Attempt Failed\n\n{}\n\nPlease fix the issues and try again.",
+                prompt, e
+            );
+            call_llm_for_children(http_client, config, &retry_prompt)?
+        }
+    };
+
+    // Validate each child
+    for child in &children {
+        let validate_prompt = build_validate_prompt(ck, &child.content);
+        match call_llm_for_validation(http_client, config, &validate_prompt) {
+            Ok(result) if !result.valid => {
+                warn!("Validation failed for '{}': {:?}", child.title, result.issues);
+                // Could retry here, but design says one retry at decompose level
+            }
+            Err(e) => {
+                warn!("Validation call failed for '{}': {}", child.title, e);
+            }
+            Ok(_) => {}
+        }
+    }
+
+    // Cycle detection
+    let dep_graph: HashMap<String, Vec<String>> = children
+        .iter()
+        .map(|c| (c.title.clone(), c.dependencies.clone()))
+        .collect();
+    detect_cycles(&dep_graph)?;
+
+    // Stage: write .md files and create Doc records
+    let staging_dir = run_dir.join(".staging");
+    std::fs::create_dir_all(&staging_dir)?;
+
+    let mut docs = Vec::new();
+    let mut taken: Vec<String> = Vec::new();
+
+    for child in &children {
+        let filename = write_doc_file(&staging_dir, ck, &child.title, &child.content, &taken)?;
+        taken.push(filename.clone());
+
+        let mut doc = Doc::new(ck, Some(parent.id.clone()), filename);
+
+        // Resolve title-based dependencies to Doc IDs
+        // (will be resolved after all docs are created)
+        doc.acceptance_criteria = if child.acceptance_criteria.is_empty() && ck == DocKind::Work {
+            extract_acceptance_criteria(&child.content)
+        } else {
+            child.acceptance_criteria.clone()
+        };
+
+        docs.push((doc, child.title.clone(), child.dependencies.clone()));
+    }
+
+    // Resolve title-based dependencies to Doc IDs
+    let title_to_id: HashMap<String, String> = docs
+        .iter()
+        .map(|(doc, title, _)| (title.clone(), doc.id.clone()))
+        .collect();
+
+    let mut final_docs: Vec<Doc> = Vec::new();
+    for (mut doc, _, dep_titles) in docs {
+        doc.dependencies = dep_titles
+            .iter()
+            .filter_map(|title| {
+                title_to_id.get(title).cloned().or_else(|| {
+                    warn!("dependency '{}' not found among siblings", title);
+                    None
+                })
+            })
+            .collect();
+        final_docs.push(doc);
+    }
+
+    // Flush staging to run directory
+    for entry in std::fs::read_dir(&staging_dir)? {
+        let entry = entry?;
+        let dest = run_dir.join(entry.file_name());
+        std::fs::rename(entry.path(), dest)?;
+    }
+    std::fs::remove_dir(&staging_dir)?;
+
+    info!(
+        "decompose: produced {} {} docs from {} {}",
+        final_docs.len(),
+        ck,
+        parent.kind,
+        parent.id
+    );
+
+    Ok(final_docs)
+}
+
+/// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
+///
+/// This is the entry point for plan activation. It calls `decompose()` at each
+/// level, validates, ratifies bottom-up, and returns all created Docs.
+///
+/// In Brief mode (plan has no contracts), skips Spec and Phase levels
+/// and decomposes Plan directly into Works.
+pub fn decompose_hierarchy(
+    plan: &Doc,
+    run_dir: &Path,
+    config: &DecomposerConfig,
+    http_client: &dyn HttpClient,
+    brief: bool,
+) -> Result<Vec<Doc>> {
+    let mut all_docs = Vec::new();
+
+    if brief {
+        // Brief mode: Plan -> Works directly
+        let works = decompose(plan, run_dir, config, http_client)?;
+        all_docs.extend(works);
+    } else {
+        // Full mode: Plan -> Specs -> Phases -> Works
+        let specs = decompose(plan, run_dir, config, http_client)?;
+        for spec in &specs {
+            let phases = decompose(spec, run_dir, config, http_client)?;
+            for phase in &phases {
+                let works = decompose(phase, run_dir, config, http_client)?;
+                all_docs.extend(works);
+            }
+            all_docs.extend(phases);
+        }
+        all_docs.extend(specs);
+    }
+
+    // Hierarchical ratification (bottom-up)
+    // Each ratification is one LLM call: parent + its direct children
+    ratify_hierarchy(plan, &all_docs, run_dir, config, http_client)?;
+
+    Ok(all_docs)
+}
+
+/// Bottom-up ratification of the decomposition hierarchy.
+fn ratify_hierarchy(
+    plan: &Doc,
+    all_docs: &[Doc],
+    run_dir: &Path,
+    config: &DecomposerConfig,
+    http_client: &dyn HttpClient,
+) -> Result<()> {
+    // Group docs by parent_id
+    let mut children_of: HashMap<&str, Vec<&Doc>> = HashMap::new();
+    for doc in all_docs {
+        if let Some(ref pid) = doc.parent_id {
+            children_of.entry(pid.as_str()).or_default().push(doc);
+        }
+    }
+
+    // Ratify each parent-children group
+    for (parent_id, children) in &children_of {
+        // Find the parent doc
+        let parent_doc = if *parent_id == plan.id {
+            plan
+        } else {
+            match all_docs.iter().find(|d| d.id == *parent_id) {
+                Some(d) => d,
+                None => continue,
+            }
+        };
+
+        let parent_content = std::fs::read_to_string(run_dir.join(&parent_doc.markdown)).unwrap_or_default();
+
+        let child_pairs: Vec<(String, String)> = children
+            .iter()
+            .filter_map(|c| {
+                let content = std::fs::read_to_string(run_dir.join(&c.markdown)).ok()?;
+                Some((c.markdown.clone(), content))
+            })
+            .collect();
+
+        if child_pairs.is_empty() {
+            continue;
+        }
+
+        let prompt = build_ratify_prompt(&parent_content, &child_pairs);
+        match call_llm_for_ratification(http_client, config, &prompt) {
+            Ok(result) if !result.passed => {
+                warn!(
+                    "Ratification failed for parent {}: {:?}",
+                    parent_id,
+                    result.issues.iter().map(|i| &i.issue).collect::<Vec<_>>()
+                );
+            }
+            Err(e) => {
+                warn!("Ratification call failed for parent {}: {}", parent_id, e);
+            }
+            Ok(_) => {
+                info!("Ratification passed for parent {}", parent_id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::TestDir;
+
+    // --- detect_cycles ---
+
+    #[test]
+    fn test_detect_cycles_no_cycle() {
+        let mut graph = HashMap::new();
+        graph.insert("A".to_string(), vec!["B".to_string()]);
+        graph.insert("B".to_string(), vec!["C".to_string()]);
+        graph.insert("C".to_string(), vec![]);
+        assert!(detect_cycles(&graph).is_ok());
+    }
+
+    #[test]
+    fn test_detect_cycles_simple_cycle() {
+        let mut graph = HashMap::new();
+        graph.insert("A".to_string(), vec!["B".to_string()]);
+        graph.insert("B".to_string(), vec!["A".to_string()]);
+        let err = detect_cycles(&graph).unwrap_err();
+        assert!(err.to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn test_detect_cycles_self_cycle() {
+        let mut graph = HashMap::new();
+        graph.insert("A".to_string(), vec!["A".to_string()]);
+        assert!(detect_cycles(&graph).is_err());
+    }
+
+    #[test]
+    fn test_detect_cycles_diamond_no_cycle() {
+        let mut graph = HashMap::new();
+        graph.insert("A".to_string(), vec![]);
+        graph.insert("B".to_string(), vec![]);
+        graph.insert("C".to_string(), vec!["A".to_string(), "B".to_string()]);
+        assert!(detect_cycles(&graph).is_ok());
+    }
+
+    #[test]
+    fn test_detect_cycles_three_node_cycle() {
+        let mut graph = HashMap::new();
+        graph.insert("A".to_string(), vec!["B".to_string()]);
+        graph.insert("B".to_string(), vec!["C".to_string()]);
+        graph.insert("C".to_string(), vec!["A".to_string()]);
+        assert!(detect_cycles(&graph).is_err());
+    }
+
+    #[test]
+    fn test_detect_cycles_empty_graph() {
+        let graph: HashMap<String, Vec<String>> = HashMap::new();
+        assert!(detect_cycles(&graph).is_ok());
+    }
+
+    #[test]
+    fn test_detect_cycles_linear_chain() {
+        let mut graph = HashMap::new();
+        graph.insert("A".to_string(), vec!["B".to_string()]);
+        graph.insert("B".to_string(), vec!["C".to_string()]);
+        graph.insert("C".to_string(), vec!["D".to_string()]);
+        graph.insert("D".to_string(), vec![]);
+        assert!(detect_cycles(&graph).is_ok());
+    }
+
+    // --- extract_acceptance_criteria ---
+
+    #[test]
+    fn test_extract_acceptance_criteria_assert_lines() {
+        let content = "# Work\n\n## Acceptance Criteria\n\nassert x == 1\nassert y > 0\n\n## Dependencies\n";
+        let criteria = extract_acceptance_criteria(content);
+        assert_eq!(criteria, vec!["assert x == 1", "assert y > 0"]);
+    }
+
+    #[test]
+    fn test_extract_acceptance_criteria_bullet_lines() {
+        let content = "# Work\n\n## Acceptance Criteria\n\n- Must handle errors\n- Must log\n\n## Next\n";
+        let criteria = extract_acceptance_criteria(content);
+        assert_eq!(criteria, vec!["Must handle errors", "Must log"]);
+    }
+
+    #[test]
+    fn test_extract_acceptance_criteria_missing_section() {
+        let content = "# Work\n\n## Description\n\nSome description\n";
+        let criteria = extract_acceptance_criteria(content);
+        assert!(criteria.is_empty());
+    }
+
+    #[test]
+    fn test_extract_acceptance_criteria_empty_section() {
+        let content = "# Work\n\n## Acceptance Criteria\n\n## Dependencies\n";
+        let criteria = extract_acceptance_criteria(content);
+        assert!(criteria.is_empty());
+    }
+
+    // --- child_kind ---
+
+    #[test]
+    fn test_child_kind_plan() {
+        assert_eq!(child_kind(DocKind::Plan), Some(DocKind::Spec));
+    }
+
+    #[test]
+    fn test_child_kind_spec() {
+        assert_eq!(child_kind(DocKind::Spec), Some(DocKind::Phase));
+    }
+
+    #[test]
+    fn test_child_kind_phase() {
+        assert_eq!(child_kind(DocKind::Phase), Some(DocKind::Work));
+    }
+
+    #[test]
+    fn test_child_kind_work() {
+        assert_eq!(child_kind(DocKind::Work), None);
+    }
+
+    // --- ChildEntry serde ---
+
+    #[test]
+    fn test_child_entry_serde_roundtrip() {
+        let entry = ChildEntry {
+            title: "Core Implementation".to_string(),
+            content: "# Spec\n\n## Overview\n\nThe core.".to_string(),
+            dependencies: vec!["Setup".to_string()],
+            acceptance_criteria: vec!["it works".to_string()],
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let restored: ChildEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.title, "Core Implementation");
+        assert_eq!(restored.dependencies, vec!["Setup"]);
+    }
+
+    #[test]
+    fn test_child_entry_defaults() {
+        let json = r#"{"title":"T","content":"C"}"#;
+        let entry: ChildEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.dependencies.is_empty());
+        assert!(entry.acceptance_criteria.is_empty());
+    }
+
+    // --- decompose with mock LLM ---
+
+    struct SequenceMockHttp {
+        responses: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl HttpClient for SequenceMockHttp {
+        fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                bail!("no more mock responses");
+            }
+            Ok(responses.pop().unwrap())
+        }
+    }
+
+    fn test_config() -> DecomposerConfig {
+        DecomposerConfig {
+            provider: "anthropic".to_string(),
+            model: "test-model".to_string(),
+            api_key_env: "TEST_DECOMPOSER_KEY".to_string(),
+            max_tokens: 4096,
+            temperature: 0.3,
+            validation_model: "test-haiku".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_decompose_plan_to_specs() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-decompose-test");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        // Write parent .md
+        std::fs::write(
+            dir.join("plan-test.md"),
+            "# Plan\n\n## Problem Statement\n\nTest problem.\n\n## Goals\n\nTest goal.",
+        )
+        .unwrap();
+
+        let parent = Doc::new(DocKind::Plan, None, "plan-test.md".to_string());
+
+        let children_json = serde_json::json!([
+            {
+                "title": "Core Implementation",
+                "content": "# Spec\n\n## Overview\n\nThe core implementation.",
+                "dependencies": []
+            },
+            {
+                "title": "API Integration",
+                "content": "# Spec\n\n## Overview\n\nAPI layer.",
+                "dependencies": ["Core Implementation"]
+            }
+        ])
+        .to_string();
+
+        let validation_json = r#"{"valid": true, "issues": []}"#;
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                // Responses are popped from the back, so reverse order
+                // validation for child 2
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                // validation for child 1
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                // decompose call
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]}).to_string(),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result = decompose(&parent, &dir, &config, &mock).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].kind, DocKind::Spec);
+        assert_eq!(result[1].kind, DocKind::Spec);
+        assert!(result[0].id.starts_with("sp-"));
+        assert_eq!(result[0].parent_id.as_deref(), Some(parent.id.as_str()));
+
+        // Second spec should depend on first
+        assert_eq!(result[1].dependencies, vec![result[0].id.clone()]);
+
+        // Files should exist in run dir
+        assert!(dir.join(&result[0].markdown).exists());
+        assert!(dir.join(&result[1].markdown).exists());
+
+        // Staging dir should be cleaned up
+        assert!(!dir.join(".staging").exists());
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[test]
+    fn test_decompose_cycle_detection_fails() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-decompose-cycle");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(dir.join("plan-test.md"), "# Plan\n\nTest").unwrap();
+        let parent = Doc::new(DocKind::Plan, None, "plan-test.md".to_string());
+
+        // Circular dependencies
+        let children_json = serde_json::json!([
+            {
+                "title": "A",
+                "content": "# Spec A",
+                "dependencies": ["B"]
+            },
+            {
+                "title": "B",
+                "content": "# Spec B",
+                "dependencies": ["A"]
+            }
+        ])
+        .to_string();
+
+        let validation_json = r#"{"valid": true, "issues": []}"#;
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]}).to_string(),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result = decompose(&parent, &dir, &config, &mock);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cycle"));
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[test]
+    fn test_decompose_work_extraction() {
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-decompose-work");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(dir.join("phase-test.md"), "# Phase\n\nTest phase").unwrap();
+        let parent = Doc::new(
+            DocKind::Phase,
+            Some("sp-abc12".to_string()),
+            "phase-test.md".to_string(),
+        );
+
+        let children_json = serde_json::json!([
+            {
+                "title": "Create Schema",
+                "content": "# Work\n\n## Description\n\nCreate schema.\n\n## Acceptance Criteria\n\nassert schema_exists()\nassert table_count() == 3\n\n## Dependencies\n\nNone",
+                "dependencies": []
+            }
+        ])
+        .to_string();
+
+        let validation_json = r#"{"valid": true, "issues": []}"#;
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]}).to_string(),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result = decompose(&parent, &dir, &config, &mock).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].kind, DocKind::Work);
+        assert_eq!(
+            result[0].acceptance_criteria,
+            vec!["assert schema_exists()", "assert table_count() == 3"]
+        );
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+}

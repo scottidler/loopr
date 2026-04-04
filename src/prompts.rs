@@ -31,6 +31,11 @@ const DEFAULT_CHAT_DRAFT: &str = include_str!("../prompts/chat-draft.pmt");
 const DEFAULT_CHAT_REFINE: &str = include_str!("../prompts/chat-refine.pmt");
 const DEFAULT_CHAT_EXECUTING: &str = include_str!("../prompts/chat-executing.pmt");
 const DEFAULT_TIER_GATE: &str = include_str!("../prompts/tier-gate.pmt");
+const DEFAULT_DECOMPOSE_SPEC: &str = include_str!("../prompts/decompose/spec.pmt");
+const DEFAULT_DECOMPOSE_PHASE: &str = include_str!("../prompts/decompose/phase.pmt");
+const DEFAULT_DECOMPOSE_WORK: &str = include_str!("../prompts/decompose/work.pmt");
+const DEFAULT_DECOMPOSE_VALIDATE: &str = include_str!("../prompts/decompose/validate.pmt");
+const DEFAULT_DECOMPOSE_RATIFY: &str = include_str!("../prompts/decompose/ratify.pmt");
 
 pub struct PromptStore {
     pub coordinator: String,
@@ -56,6 +61,11 @@ pub struct PromptStore {
     pub chat_refine: String,
     pub chat_executing: String,
     pub tier_gate: String,
+    pub decompose_spec: String,
+    pub decompose_phase: String,
+    pub decompose_work: String,
+    pub decompose_validate: String,
+    pub decompose_ratify: String,
 }
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
@@ -118,6 +128,11 @@ pub fn init() {
         chat_refine: load("chat-refine.pmt", DEFAULT_CHAT_REFINE),
         chat_executing: load("chat-executing.pmt", DEFAULT_CHAT_EXECUTING),
         tier_gate: load("tier-gate.pmt", DEFAULT_TIER_GATE),
+        decompose_spec: load("decompose/spec.pmt", DEFAULT_DECOMPOSE_SPEC),
+        decompose_phase: load("decompose/phase.pmt", DEFAULT_DECOMPOSE_PHASE),
+        decompose_work: load("decompose/work.pmt", DEFAULT_DECOMPOSE_WORK),
+        decompose_validate: load("decompose/validate.pmt", DEFAULT_DECOMPOSE_VALIDATE),
+        decompose_ratify: load("decompose/ratify.pmt", DEFAULT_DECOMPOSE_RATIFY),
     });
 }
 
@@ -147,6 +162,11 @@ pub fn init_defaults() {
         chat_refine: DEFAULT_CHAT_REFINE.to_string(),
         chat_executing: DEFAULT_CHAT_EXECUTING.to_string(),
         tier_gate: DEFAULT_TIER_GATE.to_string(),
+        decompose_spec: DEFAULT_DECOMPOSE_SPEC.to_string(),
+        decompose_phase: DEFAULT_DECOMPOSE_PHASE.to_string(),
+        decompose_work: DEFAULT_DECOMPOSE_WORK.to_string(),
+        decompose_validate: DEFAULT_DECOMPOSE_VALIDATE.to_string(),
+        decompose_ratify: DEFAULT_DECOMPOSE_RATIFY.to_string(),
     });
 }
 
