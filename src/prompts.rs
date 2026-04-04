@@ -16,9 +16,6 @@ const DEFAULT_VALIDATOR_SCHEMA: &str = include_str!("../prompts/validator-schema
 const DEFAULT_VALIDATOR_PLAN: &str = include_str!("../prompts/validator-plan.pmt");
 const DEFAULT_VALIDATOR_SPEC: &str = include_str!("../prompts/validator-spec.pmt");
 const DEFAULT_VALIDATOR_PHASE: &str = include_str!("../prompts/validator-phase.pmt");
-const DEFAULT_GENERATION_PLAN: &str = include_str!("../prompts/generation-plan.pmt");
-const DEFAULT_GENERATION_SPEC: &str = include_str!("../prompts/generation-spec.pmt");
-const DEFAULT_GENERATION_PHASE: &str = include_str!("../prompts/generation-phase.pmt");
 const DEFAULT_GENERATION_WORK: &str = include_str!("../prompts/generation-work.pmt");
 const DEFAULT_COVERAGE_SCHEMA: &str = include_str!("../prompts/coverage-schema.pmt");
 const DEFAULT_COVERAGE_PLAN_SPECS: &str = include_str!("../prompts/coverage-plan-specs.pmt");
@@ -46,9 +43,6 @@ pub struct PromptStore {
     pub validator_plan: String,
     pub validator_spec: String,
     pub validator_phase: String,
-    pub generation_plan: String,
-    pub generation_spec: String,
-    pub generation_phase: String,
     pub generation_work: String,
     pub coverage_schema: String,
     pub coverage_plan_specs: String,
@@ -113,9 +107,6 @@ pub fn init() {
         validator_plan: load("validator-plan.pmt", DEFAULT_VALIDATOR_PLAN),
         validator_spec: load("validator-spec.pmt", DEFAULT_VALIDATOR_SPEC),
         validator_phase: load("validator-phase.pmt", DEFAULT_VALIDATOR_PHASE),
-        generation_plan: load("generation-plan.pmt", DEFAULT_GENERATION_PLAN),
-        generation_spec: load("generation-spec.pmt", DEFAULT_GENERATION_SPEC),
-        generation_phase: load("generation-phase.pmt", DEFAULT_GENERATION_PHASE),
         generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORK),
         coverage_schema: load("coverage-schema.pmt", DEFAULT_COVERAGE_SCHEMA),
         coverage_plan_specs: load("coverage-plan-specs.pmt", DEFAULT_COVERAGE_PLAN_SPECS),
@@ -147,9 +138,6 @@ pub fn init_defaults() {
         validator_plan: DEFAULT_VALIDATOR_PLAN.to_string(),
         validator_spec: DEFAULT_VALIDATOR_SPEC.to_string(),
         validator_phase: DEFAULT_VALIDATOR_PHASE.to_string(),
-        generation_plan: DEFAULT_GENERATION_PLAN.to_string(),
-        generation_spec: DEFAULT_GENERATION_SPEC.to_string(),
-        generation_phase: DEFAULT_GENERATION_PHASE.to_string(),
         generation_work: DEFAULT_GENERATION_WORK.to_string(),
         coverage_schema: DEFAULT_COVERAGE_SCHEMA.to_string(),
         coverage_plan_specs: DEFAULT_COVERAGE_PLAN_SPECS.to_string(),
@@ -196,9 +184,6 @@ mod tests {
         assert!(!s.validator_plan.is_empty());
         assert!(!s.validator_spec.is_empty());
         assert!(!s.validator_phase.is_empty());
-        assert!(!s.generation_plan.is_empty());
-        assert!(!s.generation_spec.is_empty());
-        assert!(!s.generation_phase.is_empty());
         assert!(!s.generation_work.is_empty());
     }
 
@@ -218,9 +203,6 @@ mod tests {
         assert_eq!(s.validator_plan, DEFAULT_VALIDATOR_PLAN);
         assert_eq!(s.validator_spec, DEFAULT_VALIDATOR_SPEC);
         assert_eq!(s.validator_phase, DEFAULT_VALIDATOR_PHASE);
-        assert_eq!(s.generation_plan, DEFAULT_GENERATION_PLAN);
-        assert_eq!(s.generation_spec, DEFAULT_GENERATION_SPEC);
-        assert_eq!(s.generation_phase, DEFAULT_GENERATION_PHASE);
         assert_eq!(s.generation_work, DEFAULT_GENERATION_WORK);
     }
 
@@ -523,39 +505,7 @@ mod tests {
 
     // =========================================================================
     // Generation prompt content tests
-    //
-    // Verify the .pmt instruction text appears correctly in assembled prompts.
     // =========================================================================
-
-    #[test]
-    fn test_generation_plan_pmt_content() {
-        init_defaults();
-        let p = &store().generation_plan;
-        assert!(p.contains("Create a Plan with:"));
-        assert!(p.contains("bounded title"));
-        assert!(p.contains("acceptance criteria"));
-        assert!(p.contains("create_plan"));
-    }
-
-    #[test]
-    fn test_generation_spec_pmt_content() {
-        init_defaults();
-        let p = &store().generation_spec;
-        assert!(p.contains("Create a Spec for this Plan with:"));
-        assert!(p.contains("technical approach"));
-        assert!(p.contains("create_spec"));
-        assert!(p.contains("parent_id"));
-    }
-
-    #[test]
-    fn test_generation_phase_pmt_content() {
-        init_defaults();
-        let p = &store().generation_phase;
-        assert!(p.contains("Create ordered implementation Phases"));
-        assert!(p.contains("deliverables"));
-        assert!(p.contains("create_phase"));
-        assert!(p.contains("parent_id"));
-    }
 
     #[test]
     fn test_generation_work_pmt_content() {
@@ -570,42 +520,6 @@ mod tests {
     // =========================================================================
     // Generation prompt integration — verify .pmt content lands in assembled msg
     // =========================================================================
-
-    #[test]
-    fn test_generation_plan_prompt_contains_pmt_instructions() {
-        init_defaults();
-        let prompt = crate::agents::generation::build_plan_prompt("Test goal", &[], &[], None);
-        let pmt = &store().generation_plan;
-        // The .pmt content should appear in the assembled user_message
-        assert!(
-            prompt.user_message.contains(pmt.trim()),
-            "Plan generation prompt missing .pmt instruction content"
-        );
-    }
-
-    #[test]
-    fn test_generation_spec_prompt_contains_pmt_instructions() {
-        init_defaults();
-        let plan = crate::domain::plan::Plan::new("P".into(), "d".into(), "c".into());
-        let prompt = crate::agents::generation::build_spec_prompt(&plan, &[], &[], &[], None);
-        let pmt = &store().generation_spec;
-        assert!(
-            prompt.user_message.contains(pmt.trim()),
-            "Spec generation prompt missing .pmt instruction content"
-        );
-    }
-
-    #[test]
-    fn test_generation_phase_prompt_contains_pmt_instructions() {
-        init_defaults();
-        let spec = crate::domain::spec::Spec::new("p1".into(), "S".into(), "d".into());
-        let prompt = crate::agents::generation::build_phase_prompt(&spec, &[], &[], None);
-        let pmt = &store().generation_phase;
-        assert!(
-            prompt.user_message.contains(pmt.trim()),
-            "Phase generation prompt missing .pmt instruction content"
-        );
-    }
 
     #[test]
     fn test_generation_work_prompt_contains_pmt_instructions() {
@@ -627,7 +541,7 @@ mod tests {
     fn test_all_pmt_files_have_substantial_content() {
         init_defaults();
         let s = store();
-        let fields: [(&str, &str); 17] = [
+        let fields: [(&str, &str); 14] = [
             ("coordinator", &s.coordinator),
             ("implementer", &s.implementer),
             ("reviewer", &s.reviewer),
@@ -636,9 +550,6 @@ mod tests {
             ("validator_plan", &s.validator_plan),
             ("validator_spec", &s.validator_spec),
             ("validator_phase", &s.validator_phase),
-            ("generation_plan", &s.generation_plan),
-            ("generation_spec", &s.generation_spec),
-            ("generation_phase", &s.generation_phase),
             ("generation_work", &s.generation_work),
             ("coverage_schema", &s.coverage_schema),
             ("coverage_plan_specs", &s.coverage_plan_specs),
@@ -661,14 +572,11 @@ mod tests {
         init_defaults();
         let s = store();
         // All agent and generation prompts should instruct JSON output
-        let json_prompts: [(&str, &str); 10] = [
+        let json_prompts: [(&str, &str); 7] = [
             ("coordinator", &s.coordinator),
             ("implementer", &s.implementer),
             ("reviewer", &s.reviewer),
             ("researcher", &s.researcher),
-            ("generation_plan", &s.generation_plan),
-            ("generation_spec", &s.generation_spec),
-            ("generation_phase", &s.generation_phase),
             ("generation_work", &s.generation_work),
             ("validator_plan", &s.validator_plan),
             ("validator_spec", &s.validator_spec),

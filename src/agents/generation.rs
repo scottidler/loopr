@@ -1,24 +1,13 @@
 //! Document generation prompts for the Coordinator's Plan → Spec → Phase → Work pipeline.
 //!
-//! Each generation level has a prompt builder that assembles context-aware messages including:
-//! - Current state (active parent records)
-//! - User intent / goal
-//! - Relevant learnings
-//! - ALL accumulated validation failures (prevents oscillation between failure modes)
-//!
-//! The Coordinator uses these prompts in a generate → validate → iterate loop,
-//! capped by `max_validation_attempts`.
+//! The generation engine was purged in the purge-generation-engine refactor (2026-04-04).
+//! Only build_work_prompt and the live query helpers remain.
 
 use crate::daemon::context::Stores;
-use crate::domain::coverage::{CoverageReport, CoverageVerdict};
 use crate::domain::phase::Phase;
 use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::domain::spec::Spec;
-use crate::domain::validation::ValidationReport;
 use crate::domain::work::{Work, WorkStatus};
-use taskstore::Filter;
-use taskstore::FilterOp;
-use taskstore::record::IndexValue;
 
 /// Which level of the hierarchy to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,197 +36,6 @@ pub struct GenerationPrompt {
     pub level: GenerationLevel,
     /// The assembled user message to send to the LLM.
     pub user_message: String,
-}
-
-/// Build a Plan generation prompt.
-///
-/// Input context:
-/// - User-provided goal/objective
-/// - Relevant learnings (global scope)
-/// - Accumulated validation failures from previous attempts
-pub fn build_plan_prompt(
-    goal: &str,
-    learnings: &[String],
-    validation_failures: &[String],
-    guidance_section: Option<&str>,
-) -> GenerationPrompt {
-    log::debug!(
-        "build_plan_prompt(goal_len={}, learnings={}, failures={})",
-        goal.len(),
-        learnings.len(),
-        validation_failures.len()
-    );
-    let mut msg = String::with_capacity(2048);
-
-    msg.push_str("## Task: Generate a Plan\n\n");
-
-    msg.push_str("### Current State\n");
-    msg.push_str("No active Plan exists. Create one to address the user's goal.\n\n");
-
-    msg.push_str("### User Intent\n");
-    msg.push_str(goal);
-    msg.push_str("\n\n");
-
-    if let Some(guidance) = guidance_section {
-        msg.push_str(guidance);
-    }
-
-    if !learnings.is_empty() {
-        msg.push_str("### Relevant Learnings\n");
-        for l in learnings {
-            msg.push_str("- ");
-            msg.push_str(l);
-            msg.push('\n');
-        }
-        msg.push('\n');
-    }
-
-    if !validation_failures.is_empty() {
-        msg.push_str("### Previous Validation Failures (ALL accumulated — fix ALL of these)\n");
-        for (i, failure) in validation_failures.iter().enumerate() {
-            msg.push_str(&format!("{}. {}\n", i + 1, failure));
-        }
-        msg.push('\n');
-    }
-
-    msg.push_str("### Instructions\n");
-    msg.push_str(&crate::prompts::store().generation_plan);
-
-    GenerationPrompt {
-        level: GenerationLevel::Plan,
-        user_message: msg,
-    }
-}
-
-/// Build a Spec generation prompt.
-///
-/// Input context:
-/// - Active Plan (title, ID, description, acceptance criteria)
-/// - Relevant learnings (scoped to Plan + Global)
-/// - Codebase findings (researcher results, if available)
-/// - Accumulated validation failures
-pub fn build_spec_prompt(
-    plan: &Plan,
-    learnings: &[String],
-    findings: &[String],
-    validation_failures: &[String],
-    guidance_section: Option<&str>,
-) -> GenerationPrompt {
-    log::debug!(
-        "build_spec_prompt(plan_id={}, learnings={}, findings={}, failures={})",
-        plan.id,
-        learnings.len(),
-        findings.len(),
-        validation_failures.len()
-    );
-    let mut msg = String::with_capacity(4096);
-
-    msg.push_str("## Task: Generate a Spec\n\n");
-
-    msg.push_str("### Active Plan\n");
-    msg.push_str(&format!("- **ID:** {}\n", plan.id));
-    msg.push_str(&format!("- **Title:** {}\n", plan.title));
-    msg.push_str(&format!("- **Description:** {}\n", plan.description));
-    msg.push_str(&format!("- **Acceptance Criteria:** {}\n\n", plan.acceptance_criteria));
-
-    if let Some(guidance) = guidance_section {
-        msg.push_str(guidance);
-    }
-
-    if !learnings.is_empty() {
-        msg.push_str("### Relevant Learnings\n");
-        for l in learnings {
-            msg.push_str("- ");
-            msg.push_str(l);
-            msg.push('\n');
-        }
-        msg.push('\n');
-    }
-
-    if !findings.is_empty() {
-        msg.push_str("### Codebase Findings\n");
-        for f in findings {
-            msg.push_str("- ");
-            msg.push_str(f);
-            msg.push('\n');
-        }
-        msg.push('\n');
-    }
-
-    if !validation_failures.is_empty() {
-        msg.push_str("### Previous Validation Failures (ALL accumulated — fix ALL of these)\n");
-        for (i, failure) in validation_failures.iter().enumerate() {
-            msg.push_str(&format!("{}. {}\n", i + 1, failure));
-        }
-        msg.push('\n');
-    }
-
-    msg.push_str("### Instructions\n");
-    msg.push_str(&crate::prompts::store().generation_spec);
-
-    GenerationPrompt {
-        level: GenerationLevel::Spec,
-        user_message: msg,
-    }
-}
-
-/// Build a Phase generation prompt.
-///
-/// Input context:
-/// - Active Spec (title, ID, plan reference, description)
-/// - Relevant learnings (scoped to Spec + Plan + Global)
-/// - Accumulated validation failures
-pub fn build_phase_prompt(
-    spec: &Spec,
-    learnings: &[String],
-    validation_failures: &[String],
-    guidance_section: Option<&str>,
-) -> GenerationPrompt {
-    log::debug!(
-        "build_phase_prompt(spec_id={}, learnings={}, failures={})",
-        spec.id,
-        learnings.len(),
-        validation_failures.len()
-    );
-    let mut msg = String::with_capacity(4096);
-
-    msg.push_str("## Task: Generate Implementation Phases\n\n");
-
-    msg.push_str("### Active Spec\n");
-    msg.push_str(&format!("- **ID:** {}\n", spec.id));
-    msg.push_str(&format!("- **Plan ID:** {}\n", spec.parent_id));
-    msg.push_str(&format!("- **Title:** {}\n", spec.title));
-    msg.push_str(&format!("- **Description:** {}\n\n", spec.description));
-
-    if let Some(guidance) = guidance_section {
-        msg.push_str(guidance);
-    }
-
-    if !learnings.is_empty() {
-        msg.push_str("### Relevant Learnings\n");
-        for l in learnings {
-            msg.push_str("- ");
-            msg.push_str(l);
-            msg.push('\n');
-        }
-        msg.push('\n');
-    }
-
-    if !validation_failures.is_empty() {
-        msg.push_str("### Previous Validation Failures (ALL accumulated — fix ALL of these)\n");
-        for (i, failure) in validation_failures.iter().enumerate() {
-            msg.push_str(&format!("{}. {}\n", i + 1, failure));
-        }
-        msg.push('\n');
-    }
-
-    msg.push_str("### Instructions\n");
-    msg.push_str(&crate::prompts::store().generation_phase);
-
-    GenerationPrompt {
-        level: GenerationLevel::Phase,
-        user_message: msg,
-    }
 }
 
 /// Build a Work generation prompt.
@@ -336,96 +134,6 @@ pub fn build_work_prompt(
     }
 }
 
-/// Determine which generation level the Coordinator should focus on, based on current state.
-///
-/// Returns `None` if no generation is needed (all levels have Active records or Works exist).
-///
-/// Decision tree:
-/// 1. No active Plan AND no Draft Plan? → Plan
-/// 2. Active Plan, no active Specs AND no Draft Specs? → Spec
-/// 3. Active Specs, no active Phases AND no Draft Phases? → Phase
-/// 4. Active Phases, no Works for them? → Work
-/// 5. Otherwise → None (generation not needed)
-pub fn determine_generation_level(stores: &Stores) -> Option<GenerationLevel> {
-    let plans = stores.read_plans().ok()?;
-
-    // Check for active Plan
-    let active_plan = plans.values().find(|p| p.status() == HierarchyStatus::Active);
-    let draft_plan = plans.values().find(|p| p.status() == HierarchyStatus::Draft);
-
-    if active_plan.is_none() && draft_plan.is_none() {
-        return Some(GenerationLevel::Plan);
-    }
-
-    // If there's no active Plan (only Draft), don't advance — Coordinator should validate the Draft
-    let active_plan = active_plan?;
-
-    // Brief mode: skip Spec and Phase generation, go directly to Work
-    if active_plan.tier == crate::domain::plan::Tier::Brief {
-        let works = stores.read_works().ok()?;
-        let has_works = works.values().any(|w| w.parent_id == active_plan.id);
-        if !has_works {
-            return Some(GenerationLevel::Work);
-        }
-        return None;
-    }
-
-    // Full mode: Plan -> Spec -> Phase -> Work
-
-    // Check for Specs under the active Plan
-    let specs = stores.read_specs().ok()?;
-    let plan_specs: Vec<_> = specs.values().filter(|s| s.parent_id == active_plan.id).collect();
-    let has_active_spec = plan_specs.iter().any(|s| s.status() == HierarchyStatus::Active);
-    let has_draft_spec = plan_specs.iter().any(|s| s.status() == HierarchyStatus::Draft);
-
-    if !has_active_spec && !has_draft_spec {
-        return Some(GenerationLevel::Spec);
-    }
-
-    if !has_active_spec {
-        return None; // Draft Spec exists, wait for validation
-    }
-
-    // Check for Phases under active Specs
-    let phases = stores.read_phases().ok()?;
-    let active_spec_ids: Vec<_> = plan_specs
-        .iter()
-        .filter(|s| s.status() == HierarchyStatus::Active)
-        .map(|s| s.id.as_str())
-        .collect();
-
-    let spec_phases: Vec<_> = phases
-        .values()
-        .filter(|p| active_spec_ids.contains(&p.parent_id.as_str()))
-        .collect();
-    let has_active_phase = spec_phases.iter().any(|p| p.status() == HierarchyStatus::Active);
-    let has_draft_phase = spec_phases.iter().any(|p| p.status() == HierarchyStatus::Draft);
-
-    if !has_active_phase && !has_draft_phase {
-        return Some(GenerationLevel::Phase);
-    }
-
-    if !has_active_phase {
-        return None; // Draft Phase exists, wait for validation
-    }
-
-    // Check for Works under active Phases
-    let works = stores.read_works().ok()?;
-    let active_phase_ids: Vec<_> = spec_phases
-        .iter()
-        .filter(|p| p.status() == HierarchyStatus::Active)
-        .map(|p| p.id.as_str())
-        .collect();
-
-    let has_works = works.values().any(|w| active_phase_ids.contains(&w.parent_id.as_str()));
-
-    if !has_works {
-        return Some(GenerationLevel::Work);
-    }
-
-    None
-}
-
 /// Find the active Plan from stores. Returns None if no active Plan.
 pub fn find_active_plan(stores: &Stores) -> Option<Plan> {
     let plans = stores.read_plans().ok()?;
@@ -468,120 +176,6 @@ pub fn find_works_for_parent(stores: &Stores, parent_id: &str) -> Vec<Work> {
     works.values().filter(|w| w.parent_id == parent_id).cloned().collect()
 }
 
-/// Walk the parent_id chain from a Work item upward, gathering context at each level.
-///
-/// Returns a formatted string with relevant context from each ancestor:
-/// - Phase: validation scope, deliverables
-/// - Spec: architectural decisions, failure modes, interfaces
-/// - Plan: contracts, requirements, acceptance criteria
-///
-/// Used during retry escalation: when a Work item fails repeatedly, the supervisor
-/// gathers context from the parent chain to revise the Work's Implementation Notes
-/// and Constraints before handing it to a fresh implementer.
-///
-/// In Brief mode (Work -> Plan), the chain is shorter: just the Plan.
-/// In Full mode (Work -> Phase -> Spec -> Plan), the full chain is walked.
-///
-/// NOTE: could be promoted to a typed ID helper (`parent_collection_for(id)`) if
-/// prefix disambiguation logic grows. Currently uses ID prefix convention:
-/// "pl-" = Plan, "sp-" = Spec, "ph-" = Phase, "wk-" = Work.
-pub fn gather_parent_context(stores: &Stores, work_parent_id: &str) -> String {
-    let mut context = String::with_capacity(2048);
-
-    if work_parent_id.starts_with("ph-") {
-        // Full mode: Work -> Phase -> Spec -> Plan
-        let phase_data = stores
-            .read_phases()
-            .ok()
-            .and_then(|phases| phases.get(work_parent_id).cloned());
-
-        if let Some(phase) = phase_data {
-            context.push_str("### Phase Context\n");
-            context.push_str(&format!("- **Title:** {}\n", phase.title));
-            context.push_str(&format!("- **Description:** {}\n", phase.description));
-            if !phase.validation_commands.is_empty() {
-                context.push_str(&format!("- **Validation:** {}\n", phase.validation_commands.join(", ")));
-            }
-            context.push('\n');
-
-            let spec_data = stores
-                .read_specs()
-                .ok()
-                .and_then(|specs| specs.get(&phase.parent_id).cloned());
-
-            if let Some(spec) = spec_data {
-                context.push_str("### Spec Context\n");
-                context.push_str(&format!("- **Title:** {}\n", spec.title));
-                context.push_str(&format!("- **Description:** {}\n", spec.description));
-                context.push('\n');
-
-                let plan_data = stores
-                    .read_plans()
-                    .ok()
-                    .and_then(|plans| plans.get(&spec.parent_id).cloned());
-
-                if let Some(plan) = plan_data {
-                    context.push_str("### Plan Context\n");
-                    context.push_str(&format!("- **Title:** {}\n", plan.title));
-                    context.push_str(&format!("- **Acceptance Criteria:** {}\n", plan.acceptance_criteria));
-                    context.push('\n');
-                }
-            }
-        }
-    } else if work_parent_id.starts_with("pl-") {
-        // Brief mode: Work -> Plan
-        let plan_data = stores
-            .read_plans()
-            .ok()
-            .and_then(|plans| plans.get(work_parent_id).cloned());
-
-        if let Some(plan) = plan_data {
-            context.push_str("### Plan Context\n");
-            context.push_str(&format!("- **Title:** {}\n", plan.title));
-            context.push_str(&format!("- **Description:** {}\n", plan.description));
-            context.push_str(&format!("- **Acceptance Criteria:** {}\n", plan.acceptance_criteria));
-            context.push('\n');
-        }
-    }
-
-    context
-}
-
-/// Find the first active Phase that still needs Works.
-pub fn find_phase_needing_works(stores: &Stores) -> Option<Phase> {
-    let plans = stores.read_plans().ok()?;
-    let active_plan = plans.values().find(|p| p.status() == HierarchyStatus::Active)?;
-    let plan_id = active_plan.id.clone();
-    drop(plans);
-
-    let specs = stores.read_specs().ok()?;
-    let active_spec_ids: Vec<String> = specs
-        .values()
-        .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
-        .map(|s| s.id.clone())
-        .collect();
-    drop(specs);
-
-    let phases = stores.read_phases().ok()?;
-    let mut active_phases: Vec<_> = phases
-        .values()
-        .filter(|p| active_spec_ids.contains(&p.parent_id) && p.status() == HierarchyStatus::Active)
-        .cloned()
-        .collect();
-    active_phases.sort_by_key(|p| p.order);
-    drop(phases);
-
-    let works = stores.read_works().ok()?;
-    for phase in active_phases {
-        let has_wi = works.values().any(|w| w.parent_id == phase.id);
-        if !has_wi {
-            return Some(phase);
-        }
-    }
-
-    None
-}
-
 /// Check if all Works in a Phase are in a terminal state (Done or Abandoned).
 /// This matches the FSM's check_fsm_transition() predicate exactly.
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
@@ -593,445 +187,199 @@ pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
             .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
 }
 
-/// Query failed validation reports for a specific document from TaskStore.
-///
-/// Returns all Fail-verdict reports for the given target, sorted by creation time.
-/// These are used as accumulated failures in the re-generation prompt.
-pub fn find_failed_validations(stores: &Stores, collection: &str, target_id: &str) -> Vec<ValidationReport> {
-    let store = match &stores.store {
-        Some(s) => s,
-        None => return vec![],
-    };
-    let filters = vec![
-        Filter {
-            field: "target_id".to_string(),
-            op: FilterOp::Eq,
-            value: IndexValue::String(target_id.to_string()),
-        },
-        Filter {
-            field: "target_collection".to_string(),
-            op: FilterOp::Eq,
-            value: IndexValue::String(collection.to_string()),
-        },
-        Filter {
-            field: "verdict".to_string(),
-            op: FilterOp::Eq,
-            value: IndexValue::String("fail".to_string()),
-        },
-    ];
-    let Ok(store_guard) = store.lock().map_err(|_| eyre::eyre!("taskstore lock poisoned")) else {
-        return vec![];
-    };
-    let mut reports: Vec<ValidationReport> = store_guard.list(&filters).unwrap_or_default();
-    reports.sort_by_key(|r| r.created_at);
-    reports
-}
-
-/// Extract accumulated failure messages from validation reports.
-///
-/// Collects all issue messages from Fail reports, deduplicating identical messages.
-pub fn collect_failure_messages(reports: &[ValidationReport]) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut messages = Vec::new();
-    for report in reports {
-        // Include the summary as a top-level failure message
-        if !report.summary.is_empty() && seen.insert(report.summary.clone()) {
-            messages.push(report.summary.clone());
-        }
-        // Include individual issue messages
-        for issue in &report.issues {
-            if seen.insert(issue.message.clone()) {
-                messages.push(issue.message.clone());
-            }
-        }
-    }
-    messages
-}
-
-/// Information about a Draft document that needs re-generation after failed validation.
-#[derive(Debug)]
-pub struct RegenerationInfo {
-    /// The generation level (Plan, Spec, Phase).
-    pub level: GenerationLevel,
-    /// The collection name ("plans", "specs", "phases").
-    pub collection: String,
-    /// The target document ID.
-    pub target_id: String,
-    /// Accumulated failure messages from all validation attempts.
-    pub accumulated_failures: Vec<String>,
-    /// Number of validation attempts so far.
-    pub attempt_count: usize,
-}
-
-/// Check if there's a Draft document that has failed validation and needs re-generation.
-///
-/// Returns `Some(RegenerationInfo)` if:
-/// 1. A Draft document exists at some level
-/// 2. It has at least one Fail validation report
-/// 3. The number of attempts is less than `max_validation_attempts`
-///
-/// Returns `None` if no Draft needs re-generation, or if max attempts reached.
-pub fn find_draft_needing_regeneration(stores: &Stores, max_validation_attempts: u32) -> Option<RegenerationInfo> {
-    // Check for Draft Plan
-    {
-        let plans = stores.read_plans().ok()?;
-        if let Some(draft_plan) = plans.values().find(|p| p.status() == HierarchyStatus::Draft) {
-            let target_id = draft_plan.id.clone();
-            drop(plans);
-            let failed = find_failed_validations(stores, "plans", &target_id);
-            if !failed.is_empty() && (failed.len() as u32) < max_validation_attempts {
-                let accumulated_failures = collect_failure_messages(&failed);
-                return Some(RegenerationInfo {
-                    level: GenerationLevel::Plan,
-                    collection: "plans".to_string(),
-                    target_id,
-                    accumulated_failures,
-                    attempt_count: failed.len(),
-                });
-            }
-            // If attempts >= max_validation_attempts, return None (Coordinator should NeedHelp)
-            return None;
-        }
-    }
-
-    // Check for Draft Specs under an active Plan
-    {
-        let plans = stores.read_plans().ok()?;
-        let active_plan = plans.values().find(|p| p.status() == HierarchyStatus::Active);
-        if let Some(plan) = active_plan {
-            let plan_id = plan.id.clone();
-            drop(plans);
-            let specs = stores.read_specs().ok()?;
-            if let Some(draft_spec) = specs
-                .values()
-                .find(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Draft)
-            {
-                let target_id = draft_spec.id.clone();
-                drop(specs);
-                let failed = find_failed_validations(stores, "specs", &target_id);
-                if !failed.is_empty() && (failed.len() as u32) < max_validation_attempts {
-                    let accumulated_failures = collect_failure_messages(&failed);
-                    return Some(RegenerationInfo {
-                        level: GenerationLevel::Spec,
-                        collection: "specs".to_string(),
-                        target_id,
-                        accumulated_failures,
-                        attempt_count: failed.len(),
-                    });
-                }
-                return None;
-            }
-        }
-    }
-
-    // Check for Draft Phases under active Specs
-    {
-        let plans = stores.read_plans().ok()?;
-        let active_plan = plans.values().find(|p| p.status() == HierarchyStatus::Active);
-        if let Some(plan) = active_plan {
-            let plan_id = plan.id.clone();
-            drop(plans);
-
-            let specs = stores.read_specs().ok()?;
-            let active_spec_ids: Vec<String> = specs
-                .values()
-                .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
-                .map(|s| s.id.clone())
-                .collect();
-            drop(specs);
-
-            let phases = stores.read_phases().ok()?;
-            if let Some(draft_phase) = phases
-                .values()
-                .find(|p| active_spec_ids.contains(&p.parent_id) && p.status() == HierarchyStatus::Draft)
-            {
-                let target_id = draft_phase.id.clone();
-                drop(phases);
-                let failed = find_failed_validations(stores, "phases", &target_id);
-                if !failed.is_empty() && (failed.len() as u32) < max_validation_attempts {
-                    let accumulated_failures = collect_failure_messages(&failed);
-                    return Some(RegenerationInfo {
-                        level: GenerationLevel::Phase,
-                        collection: "phases".to_string(),
-                        target_id,
-                        accumulated_failures,
-                        attempt_count: failed.len(),
-                    });
-                }
-                return None;
-            }
-        }
-    }
-
-    None
-}
-
-/// Check if a Draft document has exceeded max_validation_attempts.
-///
-/// Returns true if a Draft exists at any level AND has Fail reports >= max_validation_attempts.
-pub fn is_validation_cap_reached(stores: &Stores, max_validation_attempts: u32) -> bool {
-    // Check Draft Plan
-    {
-        let Ok(plans) = stores.read_plans() else { return false };
-        if let Some(draft_plan) = plans.values().find(|p| p.status() == HierarchyStatus::Draft) {
-            let target_id = draft_plan.id.clone();
-            drop(plans);
-            let failed = find_failed_validations(stores, "plans", &target_id);
-            if !failed.is_empty() && (failed.len() as u32) >= max_validation_attempts {
-                return true;
-            }
-        }
-    }
-
-    // Check Draft Specs
-    {
-        let Ok(plans) = stores.read_plans() else { return false };
-        if let Some(plan) = plans.values().find(|p| p.status() == HierarchyStatus::Active) {
-            let plan_id = plan.id.clone();
-            drop(plans);
-            let Ok(specs) = stores.read_specs() else { return false };
-            if let Some(spec) = specs
-                .values()
-                .find(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Draft)
-            {
-                let target_id = spec.id.clone();
-                drop(specs);
-                let failed = find_failed_validations(stores, "specs", &target_id);
-                if !failed.is_empty() && (failed.len() as u32) >= max_validation_attempts {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // Check Draft Phases
-    {
-        let Ok(plans) = stores.read_plans() else { return false };
-        if let Some(plan) = plans.values().find(|p| p.status() == HierarchyStatus::Active) {
-            let plan_id = plan.id.clone();
-            drop(plans);
-            let Ok(specs) = stores.read_specs() else { return false };
-            let active_spec_ids: Vec<String> = specs
-                .values()
-                .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
-                .map(|s| s.id.clone())
-                .collect();
-            drop(specs);
-            let Ok(phases) = stores.read_phases() else { return false };
-            if let Some(phase) = phases
-                .values()
-                .find(|p| active_spec_ids.contains(&p.parent_id) && p.status() == HierarchyStatus::Draft)
-            {
-                let target_id = phase.id.clone();
-                drop(phases);
-                let failed = find_failed_validations(stores, "phases", &target_id);
-                if !failed.is_empty() && (failed.len() as u32) >= max_validation_attempts {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-/// Information about a parent that needs coverage evaluation.
-pub struct CoverageCheckNeeded {
-    /// The collection type of the parent ("plan", "spec", "phase")
-    pub parent_collection: String,
-    /// The parent record ID
-    pub parent_id: String,
-    /// Human-readable description for the LLM prompt
-    pub description: String,
-}
-
-/// Information about an incomplete coverage result that needs re-decomposition.
-pub struct IncompleteDecomposition {
-    /// The collection type of the parent
-    pub parent_collection: String,
-    /// The parent record ID
-    pub parent_id: String,
-    /// Current attempt count for this parent
-    pub attempt_count: u32,
-    /// Gap descriptions from the coverage report
-    pub gap_descriptions: Vec<String>,
-}
-
-/// Find the latest CoverageReport for a given parent, if any.
-pub fn find_latest_coverage_report(
-    stores: &Stores,
-    parent_collection: &str,
-    parent_id: &str,
-) -> Option<CoverageReport> {
-    let Ok(reports) = stores.read_coverage_reports() else {
-        return None;
-    };
-    reports
-        .values()
-        .filter(|r| r.parent_collection == parent_collection && r.parent_id == parent_id)
-        .max_by_key(|r| r.created_at)
-        .cloned()
-}
-
-/// Check if any hierarchy level needs coverage evaluation.
-///
-/// Returns Some if all children at a level exist (active) but no Complete coverage report
-/// exists for that parent. This tells the Coordinator to evaluate coverage before proceeding.
-pub fn find_pending_coverage_check(stores: &Stores) -> Option<CoverageCheckNeeded> {
-    // Check Plan -> Specs coverage
-    let plan = find_active_plan(stores)?;
-    let specs = find_active_specs_for_plan(stores, &plan.id);
-    if !specs.is_empty() {
-        match find_latest_coverage_report(stores, "plan", &plan.id) {
-            None => {
-                return Some(CoverageCheckNeeded {
-                    parent_collection: "plan".to_string(),
-                    parent_id: plan.id.clone(),
-                    description: format!(
-                        "Plan '{}' has {} Specs but no coverage evaluation",
-                        plan.title,
-                        specs.len()
-                    ),
-                });
-            }
-            Some(report) if report.verdict == CoverageVerdict::Incomplete => {
-                // Coverage was checked and found incomplete - handled by find_incomplete_decomposition
-            }
-            Some(_) => {
-                // Coverage is Complete at Plan->Specs level, check Spec->Phases
-            }
-        }
-    } else {
-        return None; // No specs yet, generation still needed
-    }
-
-    // Check Spec -> Phases coverage (for each active spec)
-    for spec in &specs {
-        let phases = find_active_phases_for_spec(stores, &spec.id);
-        if phases.is_empty() {
-            continue; // Phases not yet generated for this spec
-        }
-        match find_latest_coverage_report(stores, "spec", &spec.id) {
-            None => {
-                return Some(CoverageCheckNeeded {
-                    parent_collection: "spec".to_string(),
-                    parent_id: spec.id.clone(),
-                    description: format!(
-                        "Spec '{}' has {} Phases but no coverage evaluation",
-                        spec.title,
-                        phases.len()
-                    ),
-                });
-            }
-            Some(report) if report.verdict == CoverageVerdict::Incomplete => {}
-            Some(_) => {} // Complete, continue
-        }
-    }
-
-    None
-}
-
-/// Find a parent with Incomplete coverage that needs re-decomposition.
-///
-/// Returns Some if a coverage report with Incomplete verdict exists and the attempt count
-/// is below max_decomposition_attempts. The caller should re-decompose the children.
-pub fn find_incomplete_decomposition(
-    stores: &Stores,
-    coord_state: &crate::domain::coordinator_state::CoordinatorState,
-    max_attempts: u32,
-) -> Option<IncompleteDecomposition> {
-    // Check Plan -> Specs
-    if let Some(plan) = find_active_plan(stores)
-        && let Some(report) = find_latest_coverage_report(stores, "plan", &plan.id)
-        && report.verdict == CoverageVerdict::Incomplete
-    {
-        let attempts = coord_state.decomposition_attempts(&plan.id);
-        if attempts < max_attempts {
-            let gaps: Vec<String> = report
-                .gaps
-                .iter()
-                .map(|g| format!("[{}] {}: {}", g.severity, g.parent_criterion, g.description))
-                .collect();
-            return Some(IncompleteDecomposition {
-                parent_collection: "plan".to_string(),
-                parent_id: plan.id.clone(),
-                attempt_count: attempts,
-                gap_descriptions: gaps,
-            });
-        }
-    }
-
-    // Check Spec -> Phases
-    if let Some(plan) = find_active_plan(stores) {
-        for spec in find_active_specs_for_plan(stores, &plan.id) {
-            if let Some(report) = find_latest_coverage_report(stores, "spec", &spec.id)
-                && report.verdict == CoverageVerdict::Incomplete
-            {
-                let attempts = coord_state.decomposition_attempts(&spec.id);
-                if attempts < max_attempts {
-                    let gaps: Vec<String> = report
-                        .gaps
-                        .iter()
-                        .map(|g| format!("[{}] {}: {}", g.severity, g.parent_criterion, g.description))
-                        .collect();
-                    return Some(IncompleteDecomposition {
-                        parent_collection: "spec".to_string(),
-                        parent_id: spec.id.clone(),
-                        attempt_count: attempts,
-                        gap_descriptions: gaps,
-                    });
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Check if decomposition attempts are exhausted for any parent (needs bubble-up).
-pub fn is_decomposition_cap_reached(
-    stores: &Stores,
-    coord_state: &crate::domain::coordinator_state::CoordinatorState,
-    max_attempts: u32,
-) -> Option<(String, String)> {
-    // Check Plan -> Specs
-    if let Some(plan) = find_active_plan(stores)
-        && let Some(report) = find_latest_coverage_report(stores, "plan", &plan.id)
-        && report.verdict == CoverageVerdict::Incomplete
-        && coord_state.decomposition_attempts(&plan.id) >= max_attempts
-    {
-        return Some(("plan".to_string(), plan.id.clone()));
-    }
-
-    // Check Spec -> Phases
-    if let Some(plan) = find_active_plan(stores) {
-        for spec in find_active_specs_for_plan(stores, &plan.id) {
-            if let Some(report) = find_latest_coverage_report(stores, "spec", &spec.id)
-                && report.verdict == CoverageVerdict::Incomplete
-                && coord_state.decomposition_attempts(&spec.id) >= max_attempts
-            {
-                return Some(("spec".to_string(), spec.id.clone()));
-            }
-        }
-    }
-
-    None
-}
-
-/// Extract coverage gap descriptions for a parent from the latest coverage report.
-/// Returns formatted gap strings suitable for inclusion in LLM prompts.
-pub fn get_coverage_gaps(stores: &Stores, collection: &str, parent_id: &str) -> Vec<String> {
-    find_latest_coverage_report(stores, collection, parent_id)
-        .map(|report| {
-            report
-                .gaps
-                .iter()
-                .map(|g| format!("[{}] {}: {}", g.severity, g.parent_criterion, g.description))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::config::{Config, ProjectConfig};
+    use crate::daemon::context::Stores;
+    use crate::test_util::TestDir;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use taskstore::Store;
+
+    fn test_stores(dir: &std::path::Path) -> Arc<Stores> {
+        let config = Config {
+            project: ProjectConfig {
+                repo_path: dir.to_path_buf(),
+                ..ProjectConfig::default()
+            },
+            ..Config::default()
+        };
+        let store = Store::open(dir).unwrap();
+        let mut stores = Stores::new();
+        stores.store = Some(Arc::new(StdMutex::new(store)));
+        stores.config = config;
+        Arc::new(stores)
+    }
+
+    #[test]
+    fn test_find_active_plan_none() {
+        let dir = TestDir::new("loopr-gen-fap-none");
+        let stores = test_stores(&dir);
+        assert!(find_active_plan(&stores).is_none());
+    }
+
+    #[test]
+    fn test_find_active_plan_some() {
+        let dir = TestDir::new("loopr-gen-fap-some");
+        let stores = test_stores(&dir);
+
+        let mut plan = Plan::new("Active".into(), "desc".into(), "crit".into());
+        plan.force_status(HierarchyStatus::Active);
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan.clone());
+
+        let found = find_active_plan(&stores).unwrap();
+        assert_eq!(found.id, plan.id);
+    }
+
+    #[test]
+    fn test_find_active_plan_skips_draft() {
+        let dir = TestDir::new("loopr-gen-fap-skip");
+        let stores = test_stores(&dir);
+
+        let plan = Plan::new("Draft".into(), "desc".into(), "crit".into());
+        stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+        assert!(find_active_plan(&stores).is_none());
+    }
+
+    #[test]
+    fn test_find_active_specs_for_plan() {
+        let dir = TestDir::new("loopr-gen-fasp");
+        let stores = test_stores(&dir);
+
+        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into(), "desc".into());
+        spec1.force_status(HierarchyStatus::Active);
+        stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
+
+        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into(), "desc".into());
+        stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
+
+        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into(), "desc".into());
+        spec3.force_status(HierarchyStatus::Active);
+        stores.specs.write().unwrap().insert(spec3.id.clone(), spec3);
+
+        let active = find_active_specs_for_plan(&stores, "plan-1");
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].title, "Active Spec");
+    }
+
+    #[test]
+    fn test_find_active_phases_for_spec_sorted() {
+        let dir = TestDir::new("loopr-gen-faps");
+        let stores = test_stores(&dir);
+
+        let mut p2 = Phase::new("spec-1".into(), "Phase 2".into(), "desc".into(), 2);
+        p2.force_status(HierarchyStatus::Active);
+        stores.phases.write().unwrap().insert(p2.id.clone(), p2);
+
+        let mut p1 = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        p1.force_status(HierarchyStatus::Active);
+        stores.phases.write().unwrap().insert(p1.id.clone(), p1);
+
+        let phases = find_active_phases_for_spec(&stores, "spec-1");
+        assert_eq!(phases.len(), 2);
+        assert_eq!(phases[0].order, 1);
+        assert_eq!(phases[1].order, 2);
+    }
+
+    #[test]
+    fn test_find_works_for_parent() {
+        let dir = TestDir::new("loopr-gen-fwip");
+        let stores = test_stores(&dir);
+
+        let wi1 = Work::new("phase-1".into(), "WI 1".into(), "desc".into());
+        let wi2 = Work::new("phase-1".into(), "WI 2".into(), "desc".into());
+        let wi3 = Work::new("phase-2".into(), "WI 3".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
+
+        let wis = find_works_for_parent(&stores, "phase-1");
+        assert_eq!(wis.len(), 2);
+    }
+
+    #[test]
+    fn test_find_works_for_parent_ordering() {
+        let dir = TestDir::new("loopr-gen-fwip-ord");
+        let stores = test_stores(&dir);
+
+        let mut wi1 = Work::new("phase-x".into(), "WI A".into(), "desc a".into());
+        wi1.force_status(WorkStatus::Done);
+        let mut wi2 = Work::new("phase-x".into(), "WI B".into(), "desc b".into());
+        wi2.force_status(WorkStatus::InProgress);
+        let wi3 = Work::new("phase-x".into(), "WI C".into(), "desc c".into());
+        let wi_other = Work::new("phase-y".into(), "WI Other".into(), "not this phase".into());
+
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+        stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
+        stores.works.write().unwrap().insert(wi_other.id.clone(), wi_other);
+
+        let wis = find_works_for_parent(&stores, "phase-x");
+        assert_eq!(wis.len(), 3);
+        assert!(wis.iter().all(|w| w.parent_id == "phase-x"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_true() {
+        let dir = TestDir::new("loopr-gen-ipc-true");
+        let stores = test_stores(&dir);
+
+        let mut wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
+        wi.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        assert!(is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_false_not_done() {
+        let dir = TestDir::new("loopr-gen-ipc-false");
+        let stores = test_stores(&dir);
+
+        let wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+        assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_false_no_wis() {
+        let dir = TestDir::new("loopr-gen-ipc-empty");
+        let stores = test_stores(&dir);
+
+        assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_true_with_abandoned() {
+        let dir = TestDir::new("loopr-gen-ipc-aband");
+        let stores = test_stores(&dir);
+
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
+        wi1.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let mut wi2 = Work::new("phase-1".into(), "WI Abandoned".into(), "desc".into());
+        wi2.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        assert!(is_phase_complete(&stores, "phase-1"));
+    }
+
+    #[test]
+    fn test_is_phase_complete_false_mixed_nonterminal() {
+        let dir = TestDir::new("loopr-gen-ipc-mixed");
+        let stores = test_stores(&dir);
+
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
+        wi1.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
+
+        let wi2 = Work::new("phase-1".into(), "WI InProgress".into(), "desc".into());
+        stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
+
+        assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+}
