@@ -18,13 +18,11 @@ use crate::domain::chat::ChatHistory;
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::CoordinatorState;
 use crate::domain::coverage::CoverageReport;
-use crate::domain::decision::Decision;
 use crate::domain::doc::Doc;
 use crate::domain::learning::Learning;
 use crate::domain::lock::Lock;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
-use crate::domain::proposal::Proposal;
 use crate::domain::spec::Spec;
 use crate::domain::tick::{Tick, TickStatus};
 use crate::domain::validation::ValidationReport;
@@ -54,8 +52,6 @@ pub struct Stores {
     pub locks: StdRwLock<HashMap<String, Lock>>,
     pub coordinator_goals: StdRwLock<HashMap<String, CoordinatorGoal>>,
     pub coordinator_states: StdRwLock<HashMap<String, CoordinatorState>>,
-    pub proposals: StdRwLock<HashMap<String, Proposal>>,
-    pub decisions: StdRwLock<HashMap<String, Decision>>,
     pub agent_sessions: StdRwLock<HashMap<String, AgentSession>>,
     pub coverage_reports: StdRwLock<HashMap<String, CoverageReport>>,
     /// TaskStore for persistent JSONL+SQLite storage. None in legacy/test contexts.
@@ -129,8 +125,6 @@ impl Stores {
         locks: Lock,
         coordinator_goals: CoordinatorGoal,
         coordinator_states: CoordinatorState,
-        proposals: Proposal,
-        decisions: Decision,
         agent_sessions: AgentSession,
         coverage_reports: CoverageReport,
         agent_events: VecDeque<AgentEvent>,
@@ -228,8 +222,6 @@ impl Stores {
             locks: StdRwLock::new(HashMap::new()),
             coordinator_goals: StdRwLock::new(HashMap::new()),
             coordinator_states: StdRwLock::new(HashMap::new()),
-            proposals: StdRwLock::new(HashMap::new()),
-            decisions: StdRwLock::new(HashMap::new()),
             agent_sessions: StdRwLock::new(HashMap::new()),
             coverage_reports: StdRwLock::new(HashMap::new()),
             runtime_tools: StdRwLock::new(HashMap::new()),
@@ -320,8 +312,6 @@ impl DaemonContext {
         store.rebuild_indexes::<Lock>()?;
         store.rebuild_indexes::<CoordinatorGoal>()?;
         store.rebuild_indexes::<CoordinatorState>()?;
-        store.rebuild_indexes::<Proposal>()?;
-        store.rebuild_indexes::<Decision>()?;
         store.rebuild_indexes::<ValidationReport>()?;
         store.rebuild_indexes::<CoverageReport>()?;
         store.rebuild_indexes::<AgentSession>()?;
@@ -372,12 +362,6 @@ impl DaemonContext {
             for cs in store.list::<CoordinatorState>(&[])? {
                 stores.write_coordinator_states()?.insert(cs.id.clone(), cs);
             }
-            for proposal in store.list::<Proposal>(&[])? {
-                stores.write_proposals()?.insert(proposal.id.clone(), proposal);
-            }
-            for decision in store.list::<Decision>(&[])? {
-                stores.write_decisions()?.insert(decision.id.clone(), decision);
-            }
             for cr in store.list::<CoverageReport>(&[])? {
                 stores.write_coverage_reports()?.insert(cr.id.clone(), cr);
             }
@@ -395,8 +379,6 @@ impl DaemonContext {
                 + stores.read_locks()?.len()
                 + stores.read_coordinator_goals()?.len()
                 + stores.read_coordinator_states()?.len()
-                + stores.read_proposals()?.len()
-                + stores.read_decisions()?.len()
                 + stores.read_coverage_reports()?.len()
                 + stores.read_agent_sessions()?.len();
             if hydrated > 0 {
@@ -1125,12 +1107,6 @@ mod tests {
                 .create(CoordinatorState::new("goal1".into(), InterviewMode::Interactive))
                 .unwrap();
             store
-                .create(Proposal::new("title".into(), "desc".into(), "author".into()))
-                .unwrap();
-            store
-                .create(Decision::new("title".into(), "rationale".into(), "decider".into()))
-                .unwrap();
-            store
                 .create(AgentSession::new(AgentKind::Implementer, "model".into()))
                 .unwrap();
         }
@@ -1153,8 +1129,6 @@ mod tests {
         assert_eq!(ctx.stores.locks.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.coordinator_goals.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.coordinator_states.read().unwrap().len(), 1);
-        assert_eq!(ctx.stores.proposals.read().unwrap().len(), 1);
-        assert_eq!(ctx.stores.decisions.read().unwrap().len(), 1);
         assert_eq!(ctx.stores.agent_sessions.read().unwrap().len(), 1);
     }
 

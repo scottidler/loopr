@@ -73,8 +73,7 @@ impl<L: AgenticLlm + Send + Sync + 'static> Tool for DelegateTool<L> {
                     };
                 }
             };
-            let max_iter =
-                input.get("max_iterations").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+            let max_iter = input.get("max_iterations").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
 
             let child_id = format!("{}:sub", ctx.exec_id);
             let child_ctx = ToolContext::new(ctx.working_dir.clone(), child_id);
