@@ -1,4 +1,16 @@
+use tokio::sync::broadcast;
+
 use super::*;
+
+/// Events that indicate meaningful state change the coordinator must respond to.
+/// Work and Bundle status transitions, new Work records, and published ticks all
+/// require coordinator attention. Agent status events are excluded - too noisy.
+fn is_coordinator_wakeup(ev: &DaemonEvent) -> bool {
+    matches!(
+        ev.event.as_str(),
+        "transition.completed" | "record.created" | "tick.published"
+    )
+}
 
 impl<L: LlmClient> CoordinatorAgent<L> {
     pub fn new(ctx: AgentContext, llm: L, config: CoordinatorConfig) -> Self {
@@ -14,6 +26,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
     /// Run the main FSM-driven coordinator loop.
     pub(super) async fn run_fsm_loop(&mut self, mut coord_state: CoordinatorState) -> Result<()> {
         let mut guard = Lifeguard::new();
+        let mut event_rx = self.ctx.event_tx.subscribe();
         loop {
             // Check cancellation
             if self.ctx.is_cancelled() {
@@ -82,7 +95,32 @@ impl<L: LlmClient> CoordinatorAgent<L> {
                 }
             };
 
-            tokio::time::sleep(Duration::from_secs(interval)).await;
+            // In idle-waiting FSM states, wake early on relevant state changes
+            // rather than burning the full polling interval on a no-op LLM call.
+            let is_idle_waiting = matches!(&outcome, Ok(IterationOutcome::Done(_)))
+                && matches!(
+                    coord_state.fsm_state,
+                    CoordinatorFsmState::Planning | CoordinatorFsmState::ActivatePhase | CoordinatorFsmState::PhaseGate
+                );
+
+            if is_idle_waiting {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(interval)) => {}
+                    event = event_rx.recv() => {
+                        match event {
+                            Ok(ev) if is_coordinator_wakeup(&ev) => {
+                                self.ctx.info(&format!("early wake on: {}", ev.event));
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                self.ctx.warn(&format!("event_rx lagged {} events, continuing", n));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            } else {
+                tokio::time::sleep(Duration::from_secs(interval)).await;
+            }
         }
     }
 
@@ -944,5 +982,37 @@ mod tests {
             result.unwrap_err().to_string().contains("failed to parse"),
             "error should be a parse error"
         );
+    }
+
+    // --- is_coordinator_wakeup tests ---
+
+    #[test]
+    fn test_wakeup_on_transition_completed() {
+        let ev = crate::ipc::protocol::DaemonEvent::new("transition.completed", serde_json::json!({}));
+        assert!(super::is_coordinator_wakeup(&ev));
+    }
+
+    #[test]
+    fn test_wakeup_on_record_created() {
+        let ev = crate::ipc::protocol::DaemonEvent::new("record.created", serde_json::json!({}));
+        assert!(super::is_coordinator_wakeup(&ev));
+    }
+
+    #[test]
+    fn test_wakeup_on_tick_published() {
+        let ev = crate::ipc::protocol::DaemonEvent::new("tick.published", serde_json::json!({}));
+        assert!(super::is_coordinator_wakeup(&ev));
+    }
+
+    #[test]
+    fn test_no_wakeup_on_agent_status_changed() {
+        let ev = crate::ipc::protocol::DaemonEvent::new("agent.status_changed", serde_json::json!({}));
+        assert!(!super::is_coordinator_wakeup(&ev));
+    }
+
+    #[test]
+    fn test_no_wakeup_on_agent_timing_info() {
+        let ev = crate::ipc::protocol::DaemonEvent::new("agent.timing_info", serde_json::json!({}));
+        assert!(!super::is_coordinator_wakeup(&ev));
     }
 }
