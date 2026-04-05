@@ -294,48 +294,51 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
 
         let report = match collection.as_str() {
             "plan" | "plans" => {
-                let plans = stores.read_plans()?;
-                let plan = match plans.get(&target_id) {
-                    Some(p) => p.clone(),
-                    None => {
-                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &target_id)));
+                let plan = {
+                    let plans = stores.read_plans()?;
+                    match plans.get(&target_id) {
+                        Some(p) => p.clone(),
+                        None => {
+                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &target_id)));
+                        }
                     }
                 };
-                drop(plans);
                 validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria).await
             }
             "spec" | "specs" => {
-                let specs = stores.read_specs()?;
-                let spec = match specs.get(&target_id) {
-                    Some(s) => s.clone(),
-                    None => {
-                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &target_id)));
-                    }
+                let (spec, plan_title) = {
+                    let specs = stores.read_specs()?;
+                    let spec = match specs.get(&target_id) {
+                        Some(s) => s.clone(),
+                        None => {
+                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &target_id)));
+                        }
+                    };
+                    let plan_title = stores
+                        .read_plans()?
+                        .get(&spec.parent_id)
+                        .map(|p| p.title.clone())
+                        .unwrap_or_default();
+                    (spec, plan_title)
                 };
-                drop(specs);
-                // Get parent plan title for context
-                let plan_title = stores
-                    .read_plans()?
-                    .get(&spec.parent_id)
-                    .map(|p| p.title.clone())
-                    .unwrap_or_default();
                 validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title).await
             }
             "phase" | "phases" => {
-                let phases = stores.read_phases()?;
-                let phase = match phases.get(&target_id) {
-                    Some(p) => p.clone(),
-                    None => {
-                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &target_id)));
-                    }
+                let (phase, spec_title) = {
+                    let phases = stores.read_phases()?;
+                    let phase = match phases.get(&target_id) {
+                        Some(p) => p.clone(),
+                        None => {
+                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &target_id)));
+                        }
+                    };
+                    let spec_title = stores
+                        .read_specs()?
+                        .get(&phase.parent_id)
+                        .map(|s| s.title.clone())
+                        .unwrap_or_default();
+                    (phase, spec_title)
                 };
-                drop(phases);
-                // Get parent spec title for context
-                let spec_title = stores
-                    .read_specs()?
-                    .get(&phase.parent_id)
-                    .map(|s| s.title.clone())
-                    .unwrap_or_default();
                 validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title).await
             }
             _ => {
@@ -401,24 +404,25 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
 
         let report = match parent_collection.as_str() {
             "plan" | "plans" => {
-                let plans = stores.read_plans()?;
-                let plan = match plans.get(&parent_id) {
-                    Some(p) => p.clone(),
-                    None => {
-                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id)));
-                    }
+                let (plan, specs_list, children_ids) = {
+                    let plans = stores.read_plans()?;
+                    let plan = match plans.get(&parent_id) {
+                        Some(p) => p.clone(),
+                        None => {
+                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id)));
+                        }
+                    };
+                    drop(plans);
+                    let specs = stores.read_specs()?;
+                    let child_specs: Vec<_> = specs.values().filter(|s| s.parent_id == parent_id).collect();
+                    let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
+                    let specs_list = child_specs
+                        .iter()
+                        .map(|s| format!("- [{}] {}: {}", s.id, s.title, s.description))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    (plan, specs_list, children_ids)
                 };
-                drop(plans);
-                // Gather all Spec children of this Plan
-                let specs = stores.read_specs()?;
-                let child_specs: Vec<_> = specs.values().filter(|s| s.parent_id == parent_id).collect();
-                let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
-                let specs_list = child_specs
-                    .iter()
-                    .map(|s| format!("- [{}] {}: {}", s.id, s.title, s.description))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                drop(specs);
                 evaluator.evaluate_plan_specs(
                     &parent_id,
                     &plan.title,
@@ -429,27 +433,29 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                 ).await
             }
             "spec" | "specs" => {
-                let specs = stores.read_specs()?;
-                let spec = match specs.get(&parent_id) {
-                    Some(s) => s.clone(),
-                    None => {
-                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id)));
-                    }
+                let (spec, plan_title, phases_list, children_ids) = {
+                    let specs = stores.read_specs()?;
+                    let spec = match specs.get(&parent_id) {
+                        Some(s) => s.clone(),
+                        None => {
+                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id)));
+                        }
+                    };
+                    drop(specs);
+                    let plan_title = {
+                        let plans = stores.read_plans()?;
+                        plans.get(&spec.parent_id).map(|p| p.title.clone()).unwrap_or_default()
+                    };
+                    let phases = stores.read_phases()?;
+                    let child_phases: Vec<_> = phases.values().filter(|p| p.parent_id == parent_id).collect();
+                    let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
+                    let phases_list = child_phases
+                        .iter()
+                        .map(|p| format!("- [{}] {} (order: {}): {}", p.id, p.title, p.order, p.description))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    (spec, plan_title, phases_list, children_ids)
                 };
-                drop(specs);
-                let plan_title = {
-                    let plans = stores.read_plans()?;
-                    plans.get(&spec.parent_id).map(|p| p.title.clone()).unwrap_or_default()
-                };
-                let phases = stores.read_phases()?;
-                let child_phases: Vec<_> = phases.values().filter(|p| p.parent_id == parent_id).collect();
-                let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
-                let phases_list = child_phases
-                    .iter()
-                    .map(|p| format!("- [{}] {} (order: {}): {}", p.id, p.title, p.order, p.description))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                drop(phases);
                 evaluator.evaluate_spec_phases(
                     &parent_id,
                     &spec.title,
@@ -460,33 +466,35 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                 ).await
             }
             "phase" | "phases" => {
-                let phases = stores.read_phases()?;
-                let phase = match phases.get(&parent_id) {
-                    Some(p) => p.clone(),
-                    None => {
-                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id)));
-                    }
-                };
-                drop(phases);
-                let spec_title = {
-                    let specs = stores.read_specs()?;
-                    specs.get(&phase.parent_id).map(|s| s.title.clone()).unwrap_or_default()
-                };
-                let works = stores.read_works()?;
-                let child_works: Vec<_> = works.values().filter(|w| w.parent_id == parent_id).collect();
-                let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
-                let works_list = child_works
-                    .iter()
-                    .map(|w| format!("- [{}] {}: {}", w.id, w.title, w.description))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                drop(works);
-                let params = crate::evaluator::PhaseWorksParams {
-                    id: parent_id.clone(),
-                    title: phase.title,
-                    description: phase.description,
-                    order: phase.order,
-                    spec_title,
+                let (params, works_list, children_ids) = {
+                    let phases = stores.read_phases()?;
+                    let phase = match phases.get(&parent_id) {
+                        Some(p) => p.clone(),
+                        None => {
+                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id)));
+                        }
+                    };
+                    drop(phases);
+                    let spec_title = {
+                        let specs = stores.read_specs()?;
+                        specs.get(&phase.parent_id).map(|s| s.title.clone()).unwrap_or_default()
+                    };
+                    let works = stores.read_works()?;
+                    let child_works: Vec<_> = works.values().filter(|w| w.parent_id == parent_id).collect();
+                    let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
+                    let works_list = child_works
+                        .iter()
+                        .map(|w| format!("- [{}] {}: {}", w.id, w.title, w.description))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let params = crate::evaluator::PhaseWorksParams {
+                        id: parent_id.clone(),
+                        title: phase.title,
+                        description: phase.description,
+                        order: phase.order,
+                        spec_title,
+                    };
+                    (params, works_list, children_ids)
                 };
                 evaluator.evaluate_phase_works(&params, &works_list, children_ids).await
             }
@@ -640,14 +648,15 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
-    fn create_sealing_tick(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_sealing_tick(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
         let resp = dispatch(
             stores,
             tx,
             wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         let tr = dispatch(
             stores,
@@ -659,17 +668,18 @@ mod tests {
                 "tick.transition",
                 json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         assert!(!tr.is_error(), "transition failed: {:?}", tr.error);
         tick_id
     }
 
-    #[test]
-    fn test_integrator_validate_success() {
+    #[tokio::test]
+    async fn test_integrator_validate_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
 
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
@@ -681,7 +691,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "unexpected error: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["status"], "Published");
@@ -689,12 +700,12 @@ mod tests {
         assert!(result["integration_sha"].is_string());
     }
 
-    #[test]
-    fn test_integrator_validate_failure() {
+    #[tokio::test]
+    async fn test_integrator_validate_failure() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
 
         let ic = IntegratorConfig {
             validation_commands: vec!["false".to_string()],
@@ -706,7 +717,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["status"], "Failed");
@@ -714,8 +726,8 @@ mod tests {
         assert!(result["integration_sha"].is_null());
     }
 
-    #[test]
-    fn test_integrator_validate_wrong_state() {
+    #[tokio::test]
+    async fn test_integrator_validate_wrong_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -726,7 +738,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let resp = dispatch(
@@ -735,13 +748,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "integrator.validate", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("Sealing"));
     }
 
-    #[test]
-    fn test_integrator_validate_not_found() {
+    #[tokio::test]
+    async fn test_integrator_validate_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -751,13 +765,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "integrator.validate", json!({"tick_id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("not found"));
     }
 
-    #[test]
-    fn test_integrator_validate_missing_tick_id() {
+    #[tokio::test]
+    async fn test_integrator_validate_missing_tick_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -767,18 +782,19 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "integrator.validate", json!({})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("tick_id"));
     }
 
-    #[test]
-    fn test_integrator_validate_events() {
+    #[tokio::test]
+    async fn test_integrator_validate_events() {
         let stores = test_stores();
         let tx = test_event_tx();
         let mut rx = tx.subscribe();
         let wm = test_worktree_mgr();
-        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
         while rx.try_recv().is_ok() {}
 
         let ic = IntegratorConfig {
@@ -791,7 +807,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         let event1 = rx.try_recv().unwrap();
         assert_eq!(event1.event, "transition.completed");
         let event2 = rx.try_recv().unwrap();
@@ -803,8 +820,8 @@ mod tests {
         assert_eq!(event4.event, "tick.published");
     }
 
-    #[test]
-    fn test_integrator_publish_from_open() {
+    #[tokio::test]
+    async fn test_integrator_publish_from_open() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -815,7 +832,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let ic = IntegratorConfig {
@@ -828,18 +846,19 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(2, "integrator.publish", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["status"], "Published");
     }
 
-    #[test]
-    fn test_integrator_publish_from_sealing() {
+    #[tokio::test]
+    async fn test_integrator_publish_from_sealing() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
 
         let ic = IntegratorConfig {
             validation_commands: vec!["echo ok".to_string()],
@@ -851,17 +870,18 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(3, "integrator.publish", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Published");
     }
 
-    #[test]
-    fn test_integrator_publish_wrong_state() {
+    #[tokio::test]
+    async fn test_integrator_publish_wrong_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
 
         dispatch(
             &stores,
@@ -873,7 +893,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
 
         let resp = dispatch(
             &stores,
@@ -881,13 +902,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(4, "integrator.publish", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("Open or Sealing"));
     }
 
-    #[test]
-    fn test_integrator_publish_validation_failure() {
+    #[tokio::test]
+    async fn test_integrator_publish_validation_failure() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -898,7 +920,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let ic = IntegratorConfig {
@@ -911,13 +934,14 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(2, "integrator.publish", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Failed");
     }
 
-    #[test]
-    fn test_integrator_dispatch_routes() {
+    #[tokio::test]
+    async fn test_integrator_dispatch_routes() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -928,7 +952,8 @@ mod tests {
                 &wm,
                 &test_integrator_config(),
                 DaemonRequest::new(1, *method, json!({})),
-            );
+            )
+            .await;
             if resp.is_error() {
                 assert_ne!(
                     resp.error.as_ref().unwrap().code,
@@ -940,12 +965,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_integrator_validate_multi_command_stops_on_first_failure() {
+    #[tokio::test]
+    async fn test_integrator_validate_multi_command_stops_on_first_failure() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let tick_id = create_sealing_tick(&stores, &tx, &wm);
+        let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
 
         let ic = IntegratorConfig {
             validation_commands: vec![
@@ -961,7 +986,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(3, "integrator.validate", json!({"tick_id": tick_id})),
-        );
+        )
+        .await;
         let result = resp.result.unwrap();
         assert_eq!(result["status"], "Failed");
         let log = result["validation_log"].as_str().unwrap();
@@ -970,8 +996,8 @@ mod tests {
         assert!(!log.contains("should-not-run"));
     }
 
-    #[test]
-    fn test_handle_validator_validate() {
+    #[tokio::test]
+    async fn test_handle_validator_validate() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -982,7 +1008,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.validate", json!({"id": "plan-1"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
 
         let resp = dispatch(
@@ -991,7 +1018,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "validator.validate", json!({"collection": "plans"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
 
         let resp = dispatch(
@@ -1004,7 +1032,8 @@ mod tests {
                 "validator.validate",
                 json!({"collection": "plans", "id": "nonexistent"}),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
 
         let resp = dispatch(
@@ -1013,13 +1042,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(4, "validator.validate", json!({"collection": "widgets", "id": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("unsupported"));
     }
 
-    #[test]
-    fn test_handle_validator_validate_no_validator() {
+    #[tokio::test]
+    async fn test_handle_validator_validate_no_validator() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1030,13 +1060,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.validate", json!({"collection": "plans", "id": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("not enabled"));
     }
 
-    #[test]
-    fn test_handle_validator_validate_missing_params() {
+    #[tokio::test]
+    async fn test_handle_validator_validate_missing_params() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1047,7 +1078,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.validate", json!({"id": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
 
         let resp = dispatch(
@@ -1056,12 +1088,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "validator.validate", json!({"collection": "plans"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_validator_validate_unknown_collection() {
+    #[tokio::test]
+    async fn test_handle_validator_validate_unknown_collection() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1072,13 +1105,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.validate", json!({"collection": "unknown", "id": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("unsupported collection"));
     }
 
-    #[test]
-    fn test_handle_validator_validate_not_found() {
+    #[tokio::test]
+    async fn test_handle_validator_validate_not_found() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1093,7 +1127,8 @@ mod tests {
                 "validator.validate",
                 json!({"collection": "plans", "id": "nonexistent"}),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
 
         let resp = dispatch(
@@ -1106,7 +1141,8 @@ mod tests {
                 "validator.validate",
                 json!({"collection": "specs", "id": "nonexistent"}),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
 
         let resp = dispatch(
@@ -1119,12 +1155,13 @@ mod tests {
                 "validator.validate",
                 json!({"collection": "phases", "id": "nonexistent"}),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_validator_report() {
+    #[tokio::test]
+    async fn test_handle_validator_report() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1146,13 +1183,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.report", json!({"id": report_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "validator.report failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["verdict"], "pass");
     }
 
-    #[test]
-    fn test_handle_validator_report_not_found() {
+    #[tokio::test]
+    async fn test_handle_validator_report_not_found() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1163,12 +1201,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.report", json!({"id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_validator_report_no_taskstore() {
+    #[tokio::test]
+    async fn test_handle_validator_report_no_taskstore() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1179,13 +1218,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.report", json!({"id": "any"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("TaskStore"));
     }
 
-    #[test]
-    fn test_handle_validator_reports() {
+    #[tokio::test]
+    async fn test_handle_validator_reports() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1215,7 +1255,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.reports", json!({})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert!(resp.result.unwrap().as_array().unwrap().len() >= 2);
 
@@ -1225,7 +1266,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "validator.reports", json!({"target_id": "plan-1"})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
 
@@ -1235,13 +1277,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "validator.reports", json!({"target_collection": "plans"})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert!(resp.result.unwrap().as_array().unwrap().len() >= 2);
     }
 
-    #[test]
-    fn test_handle_validator_reports_no_taskstore() {
+    #[tokio::test]
+    async fn test_handle_validator_reports_no_taskstore() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1252,13 +1295,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "validator.reports", json!({})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
 
-    #[test]
-    fn test_handle_tool_list() {
+    #[tokio::test]
+    async fn test_handle_tool_list() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1269,7 +1313,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tool.list", json!({})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());

@@ -52,17 +52,22 @@ impl AgentIpcBridge {
     }
 
     /// Send a request through the handler pipeline, same as socket-based IPC.
+    /// Uses block_in_place to bridge the sync→async gap: dispatch is async but
+    /// all agent callers are sync. A future migration will make this method async
+    /// and propagate .await through the agent call chain.
     pub fn request(&self, method: &str, params: serde_json::Value) -> DaemonResponse {
         log::debug!("AgentIpcBridge::request(method={})", method);
         let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let req = DaemonRequest::new(id, method, params);
-        handlers::dispatch(
-            &self.stores,
-            &self.event_tx,
-            &self.worktree_mgr,
-            &self.config.integrator,
-            req,
-        )
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(handlers::dispatch(
+                &self.stores,
+                &self.event_tx,
+                &self.worktree_mgr,
+                &self.config.integrator,
+                req,
+            ))
+        })
     }
 }
 

@@ -259,7 +259,7 @@ pub(super) async fn accept_plan_markdown(
 
     // Start the Coordinator agent
     let start_req = DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
-    let start_resp = super::dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+    let start_resp = Box::pin(super::dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
     let coordinator_already_running = start_resp.is_error();
     let coordinator_session_id = start_resp
         .result

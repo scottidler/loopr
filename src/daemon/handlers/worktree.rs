@@ -192,40 +192,46 @@ mod tests {
     use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
     use crate::worktree::manager::WorktreeManager;
 
-    fn create_test_plan(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_test_plan(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,
             wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
-        );
+        )
+        .await;
         resp.result.unwrap()["id"].as_str().unwrap().to_string()
     }
 
-    fn create_test_spec(
+    async fn create_test_spec(
         stores: &Arc<Stores>,
         tx: &broadcast::Sender<DaemonEvent>,
         wm: &WorktreeManager,
     ) -> (String, String) {
-        let plan_id = create_test_plan(stores, tx, wm);
+        let plan_id = create_test_plan(stores, tx, wm).await;
         let resp = dispatch(
             stores,
             tx,
             wm,
             &test_integrator_config(),
             DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
-        );
+        )
+        .await;
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id)
     }
 
-    fn create_test_phase(
+    async fn create_test_phase(
         stores: &Arc<Stores>,
         tx: &broadcast::Sender<DaemonEvent>,
         wm: &WorktreeManager,
     ) -> (String, String, String) {
-        let (plan_id, spec_id) = create_test_spec(stores, tx, wm);
+        let (plan_id, spec_id) = create_test_spec(stores, tx, wm).await;
         let resp = dispatch(
             stores,
             tx,
@@ -236,17 +242,18 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
             ),
-        );
+        )
+        .await;
         let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id, phase_id)
     }
 
-    fn create_test_work(
+    async fn create_test_work(
         stores: &Arc<Stores>,
         tx: &broadcast::Sender<DaemonEvent>,
         wm: &WorktreeManager,
     ) -> (String, String) {
-        let (_, _, phase_id) = create_test_phase(stores, tx, wm);
+        let (_, _, phase_id) = create_test_phase(stores, tx, wm).await;
         let resp = dispatch(
             stores,
             tx,
@@ -257,13 +264,14 @@ mod tests {
                 "work.create",
                 json!({"parent_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
-        );
+        )
+        .await;
         let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (phase_id, wi_id)
     }
 
-    #[test]
-    fn test_worktree_create_missing_work_id() {
+    #[tokio::test]
+    async fn test_worktree_create_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -273,13 +281,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.create", json!({})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
     }
 
-    #[test]
-    fn test_worktree_create_work_not_found() {
+    #[tokio::test]
+    async fn test_worktree_create_work_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -289,18 +298,19 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.create", json!({"work_id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("not found"));
     }
 
-    #[test]
-    fn test_worktree_create_validates_work_exists() {
+    #[tokio::test]
+    async fn test_worktree_create_validates_work_exists() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Create a full hierarchy so work exists
-        let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
         // This will fail at the git level (nonexistent repo path) but should
         // pass the work validation
         let resp = dispatch(
@@ -309,7 +319,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "worktree.create", json!({"work_id": wi_id})),
-        );
+        )
+        .await;
         // The error should be from git, not from "not found"
         assert!(resp.is_error());
         let msg = &resp.error.as_ref().unwrap().message;
@@ -320,8 +331,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_worktree_list_returns_response() {
+    #[tokio::test]
+    async fn test_worktree_list_returns_response() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -332,13 +343,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.list", json!(null)),
-        );
+        )
+        .await;
         // Will be an error since the repo doesn't exist, but the method routes
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_worktree_cleanup_missing_work_id() {
+    #[tokio::test]
+    async fn test_worktree_cleanup_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -348,13 +360,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.cleanup", json!({})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
     }
 
-    #[test]
-    fn test_worktree_cleanup_work_not_found() {
+    #[tokio::test]
+    async fn test_worktree_cleanup_work_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -364,13 +377,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.cleanup", json!({"work_id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("not found"));
     }
 
-    #[test]
-    fn test_worktree_refresh_missing_work_id() {
+    #[tokio::test]
+    async fn test_worktree_refresh_missing_work_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -380,13 +394,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.refresh", json!({})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.as_ref().unwrap().message.contains("work_id"));
     }
 
-    #[test]
-    fn test_worktree_refresh_nonexistent_worktree() {
+    #[tokio::test]
+    async fn test_worktree_refresh_nonexistent_worktree() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -396,13 +411,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "worktree.refresh", json!({"work_id": "nonexistent"})),
-        );
+        )
+        .await;
         // Will error since worktree path doesn't exist
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_worktree_dispatch_routes_all_methods() {
+    #[tokio::test]
+    async fn test_worktree_dispatch_routes_all_methods() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -419,7 +435,8 @@ mod tests {
                 &wm,
                 &test_integrator_config(),
                 DaemonRequest::new(1, *method, json!({})),
-            );
+            )
+            .await;
             // Even if they error, they should NOT be method_not_found (-32601)
             if resp.is_error() {
                 assert_ne!(

@@ -177,8 +177,8 @@ mod tests {
 
     // --- Bare command: valid ---
 
-    #[test]
-    fn test_tools_register_valid_bare_command() {
+    #[tokio::test]
+    async fn test_tools_register_valid_bare_command() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -192,7 +192,7 @@ mod tests {
                 "worktree": true
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "tools.register failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["name"], "test");
@@ -206,8 +206,8 @@ mod tests {
 
     // --- Bare command: missing (the busted scenario) ---
 
-    #[test]
-    fn test_tools_register_missing_bare_command_rejected() {
+    #[tokio::test]
+    async fn test_tools_register_missing_bare_command_rejected() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -219,7 +219,7 @@ mod tests {
                 "command": "definitely_not_a_real_command_xyz --verbose",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error(), "should reject missing executable");
         let msg = resp.error.unwrap().message;
         assert!(
@@ -232,8 +232,8 @@ mod tests {
 
     // --- Error message is instructive ---
 
-    #[test]
-    fn test_tools_register_error_is_instructive() {
+    #[tokio::test]
+    async fn test_tools_register_error_is_instructive() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -245,7 +245,7 @@ mod tests {
                 "command": "busted --verbose",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         let msg = resp.error.unwrap().message;
         // All three instructive elements from the design doc:
@@ -256,8 +256,8 @@ mod tests {
 
     // --- Absolute path: valid ---
 
-    #[test]
-    fn test_tools_register_valid_absolute_path() {
+    #[tokio::test]
+    async fn test_tools_register_valid_absolute_path() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -269,14 +269,14 @@ mod tests {
                 "command": "/bin/sh test.sh",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "should accept valid absolute path: {:?}", resp.error);
     }
 
     // --- Absolute path: missing ---
 
-    #[test]
-    fn test_tools_register_missing_absolute_path_rejected() {
+    #[tokio::test]
+    async fn test_tools_register_missing_absolute_path_rejected() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -288,7 +288,7 @@ mod tests {
                 "command": "/nonexistent/path/tool --flag",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error(), "should reject missing absolute path");
         let msg = resp.error.unwrap().message;
         assert!(msg.contains("/nonexistent/path/tool"));
@@ -297,8 +297,8 @@ mod tests {
 
     // --- Relative path: with context_dir, file exists ---
 
-    #[test]
-    fn test_tools_register_relative_path_with_context_dir() {
+    #[tokio::test]
+    async fn test_tools_register_relative_path_with_context_dir() {
         let tmp = crate::test_util::TestDir::new("loopr-tool-relpath");
         let scripts_dir = tmp.join("scripts");
         std::fs::create_dir_all(&scripts_dir).unwrap();
@@ -316,7 +316,7 @@ mod tests {
                 "context_dir": tmp.display().to_string(),
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(
             !resp.is_error(),
             "should accept relative path in context_dir: {:?}",
@@ -326,8 +326,8 @@ mod tests {
 
     // --- Relative path: with context_dir, file missing ---
 
-    #[test]
-    fn test_tools_register_relative_path_missing_in_context_dir() {
+    #[tokio::test]
+    async fn test_tools_register_relative_path_missing_in_context_dir() {
         let tmp = crate::test_util::TestDir::new("loopr-tool-relpath-miss");
 
         let stores = test_stores();
@@ -342,7 +342,7 @@ mod tests {
                 "context_dir": tmp.display().to_string(),
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error(), "should reject missing relative path");
         let msg = resp.error.unwrap().message;
         assert!(msg.contains("./scripts/test.sh"));
@@ -351,8 +351,8 @@ mod tests {
 
     // --- Relative path: without context_dir (accepted with warning) ---
 
-    #[test]
-    fn test_tools_register_relative_path_no_context_dir_accepted() {
+    #[tokio::test]
+    async fn test_tools_register_relative_path_no_context_dir_accepted() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -364,7 +364,7 @@ mod tests {
                 "command": "./scripts/test.sh",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(
             !resp.is_error(),
             "should accept relative path without context_dir: {:?}",
@@ -374,8 +374,8 @@ mod tests {
 
     // --- First-token extraction ---
 
-    #[test]
-    fn test_tools_register_extracts_first_token() {
+    #[tokio::test]
+    async fn test_tools_register_extracts_first_token() {
         // "lua test_todo.lua --verbose" should check "lua", which exists
         let stores = test_stores();
         let tx = test_event_tx();
@@ -389,14 +389,14 @@ mod tests {
                 "command": "echo test_todo.lua --verbose",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "should validate first token only: {:?}", resp.error);
     }
 
     // --- Structural validation ---
 
-    #[test]
-    fn test_tools_register_empty_name() {
+    #[tokio::test]
+    async fn test_tools_register_empty_name() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -408,24 +408,24 @@ mod tests {
                 "command": "echo ok"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_tools_register_missing_command() {
+    #[tokio::test]
+    async fn test_tools_register_missing_command() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tools.register", json!({"name": "test"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
     }
 
     // --- Rebuilds tool_runner ---
 
-    #[test]
-    fn test_tools_register_rebuilds_tool_runner() {
+    #[tokio::test]
+    async fn test_tools_register_rebuilds_tool_runner() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -442,7 +442,7 @@ mod tests {
                 "command": "echo",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
 
         let runner = stores.read_tool_runner().unwrap();
@@ -453,8 +453,8 @@ mod tests {
 
     // --- Config wins over runtime ---
 
-    #[test]
-    fn test_tools_register_config_wins() {
+    #[tokio::test]
+    async fn test_tools_register_config_wins() {
         let mut config = crate::config::Config::default();
         config.agents.tools = vec![crate::config::ToolEntry {
             name: "test".into(),
@@ -482,7 +482,7 @@ mod tests {
                 "command": "echo test-runtime",
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
 
         // The config tool should still win in the rebuilt runner

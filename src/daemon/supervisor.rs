@@ -124,7 +124,7 @@ pub async fn run_supervisor(
         let start_req =
             crate::ipc::protocol::DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
         let response =
-            crate::daemon::handlers::dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, start_req);
+            crate::daemon::handlers::dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, start_req).await;
 
         if response.error.is_some() {
             warn!("Supervisor failed to restart coordinator: {:?}", response.error);

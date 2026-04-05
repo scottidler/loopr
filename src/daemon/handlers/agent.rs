@@ -561,8 +561,8 @@ mod tests {
     use crate::ipc::protocol::DaemonRequest;
     use serde_json::json;
 
-    #[test]
-    fn test_agent_start_max_pool_enforcement() {
+    #[tokio::test]
+    async fn test_agent_start_max_pool_enforcement() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -575,7 +575,7 @@ mod tests {
             .insert(session.id.clone(), session);
 
         let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error(), "expected max_pool rejection");
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32004);
@@ -597,12 +597,12 @@ mod tests {
             .insert(session.id.clone(), session);
 
         let req = DaemonRequest::new(1, "agent.start", json!({ "agent_type": "coordinator" }));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "expected success, got: {:?}", resp.error);
     }
 
-    #[test]
-    fn test_handle_agent_pause() {
+    #[tokio::test]
+    async fn test_handle_agent_pause() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -618,13 +618,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "agent.pause failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["status"], "paused");
     }
 
-    #[test]
-    fn test_handle_agent_pause_missing_session() {
+    #[tokio::test]
+    async fn test_handle_agent_pause_missing_session() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -635,12 +636,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.pause", json!({"session_id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_agent_pause_terminal_state() {
+    #[tokio::test]
+    async fn test_handle_agent_pause_terminal_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -657,12 +659,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.pause", json!({"session_id": sid})),
-        );
+        )
+        .await;
         assert!(resp.is_error(), "should reject pause on terminal agent");
     }
 
-    #[test]
-    fn test_handle_agent_resume() {
+    #[tokio::test]
+    async fn test_handle_agent_resume() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -679,13 +682,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.resume", json!({"session_id": sid})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "agent.resume failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["status"], "running");
     }
 
-    #[test]
-    fn test_handle_agent_resume_missing_session() {
+    #[tokio::test]
+    async fn test_handle_agent_resume_missing_session() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -696,12 +700,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.resume", json!({"session_id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_agent_output() {
+    #[tokio::test]
+    async fn test_handle_agent_output() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -712,7 +717,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.output", json!({"session_id": "sess-1"})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
 
@@ -732,13 +738,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "agent.output", json!({"session_id": "sess-1", "since": 0})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_handle_agent_output_missing_session_id() {
+    #[tokio::test]
+    async fn test_handle_agent_output_missing_session_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -749,7 +756,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.output", json!({})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
@@ -778,8 +786,8 @@ mod tests {
         assert_eq!(config.agents.coordinator.role.model, "claude-opus-4-6");
     }
 
-    #[test]
-    fn test_implementer_dedup_rejects_second_on_same_work() {
+    #[tokio::test]
+    async fn test_implementer_dedup_rejects_second_on_same_work() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -799,7 +807,7 @@ mod tests {
             "agent.start",
             json!({"agent_type": "implementer", "work_id": "wi-1"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+        let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
 
         assert!(resp.is_error(), "should reject duplicate implementer");
         let err_msg = resp.error.unwrap().message;
@@ -832,7 +840,7 @@ mod tests {
             "agent.start",
             json!({"agent_type": "implementer", "work_id": "wi-1"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+        let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
 
         if resp.is_error() {
             let err_msg = &resp.error.as_ref().unwrap().message;
@@ -865,7 +873,7 @@ mod tests {
             "agent.start",
             json!({"agent_type": "implementer", "work_id": "wi-2"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+        let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
 
         if resp.is_error() {
             let err_msg = &resp.error.as_ref().unwrap().message;
@@ -877,8 +885,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_agent_status_from_taskstore() {
+    #[tokio::test]
+    async fn test_agent_status_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         stores
             .store
@@ -901,13 +909,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "agent.status failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["id"], session_id);
     }
 
-    #[test]
-    fn test_agent_status_fallback_to_hashmap() {
+    #[tokio::test]
+    async fn test_agent_status_fallback_to_hashmap() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -926,7 +935,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "agent.status", json!({"session_id": session_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "agent.status fallback failed: {:?}", resp.error);
         assert_eq!(resp.result.unwrap()["id"], session_id);
     }

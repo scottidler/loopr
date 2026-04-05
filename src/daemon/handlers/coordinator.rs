@@ -188,8 +188,8 @@ mod tests {
     use crate::ipc::protocol::DaemonRequest;
     use serde_json::json;
 
-    #[test]
-    fn test_coordinator_get_goal_returns_active() {
+    #[tokio::test]
+    async fn test_coordinator_get_goal_returns_active() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -199,20 +199,20 @@ mod tests {
         stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
 
         let req = DaemonRequest::new(2, "coordinator.get_goal", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["goal"], "Build auth");
         assert_eq!(result["active"], true);
     }
 
-    #[test]
-    fn test_coordinator_get_goal_when_none() {
+    #[tokio::test]
+    async fn test_coordinator_get_goal_when_none() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "coordinator.get_goal", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["active"], false);
     }

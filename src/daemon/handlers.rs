@@ -118,7 +118,7 @@ use worktree::*;
 
 /// Dispatch an IPC request to the appropriate handler.
 /// This is the central routing function for all daemon request handling.
-pub fn dispatch(
+pub async fn dispatch(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
@@ -183,18 +183,18 @@ pub fn dispatch(
         "worktree.refresh" => handle_worktree_refresh(worktree_mgr, req),
         "integrator.validate" => handle_integrator_validate(stores, event_tx, integrator_config, req),
         "integrator.publish" => handle_integrator_publish(stores, event_tx, integrator_config, req),
-        "validator.validate" => handle_validator_validate(stores, req),
+        "validator.validate" => handle_validator_validate(stores, req).await,
         "validator.report" => handle_validator_report(stores, req),
         "validator.reports" => handle_validator_reports(stores, req),
-        "coverage.evaluate" => handle_coverage_evaluate(stores, req),
+        "coverage.evaluate" => handle_coverage_evaluate(stores, req).await,
         "tool.list" => handle_tool_list(stores, req),
         "tools.register" => handle_tools_register(stores, event_tx, req),
         "coordinator.get_goal" => handle_coordinator_get_goal(stores, req),
         "coordinator.get_state" => handle_coordinator_get_state(stores, req),
         "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
         "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
-        "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, req),
-        "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, req),
+        "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, req).await,
+        "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, req).await,
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "chat.submit" => handle_chat_submit(stores, event_tx, req),
         "chat.attach" => handle_chat_attach(stores, req),
@@ -211,14 +211,14 @@ pub fn dispatch(
 
     // Gap #29: Post-dispatch auto-start hook (only on successful transitions)
     if !resp.is_error() {
-        auto_start_agents(stores, event_tx, worktree_mgr, integrator_config, &method, &params);
+        auto_start_agents(stores, event_tx, worktree_mgr, integrator_config, &method, &params).await;
     }
 
     resp
 }
 
 /// Auto-start agents based on transition outcomes (Gap #29).
-fn auto_start_agents(
+async fn auto_start_agents(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
@@ -240,7 +240,7 @@ fn auto_start_agents(
                 "agent_type": "implementer", "work_id": wi_id,
             }),
         );
-        let _ = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+        let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
     }
     if method == "bundle.transition"
         && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
@@ -257,7 +257,7 @@ fn auto_start_agents(
                 "agent_type": "reviewer", "bundle_id": bid,
             }),
         );
-        let _ = dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+        let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
     }
 }
 
@@ -393,35 +393,35 @@ pub(crate) mod tests {
 
     // --- dispatch tests ---
 
-    #[test]
-    fn test_dispatch_unknown_method() {
+    #[tokio::test]
+    async fn test_dispatch_unknown_method() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "unknown.method", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("unknown.method"));
     }
 
-    #[test]
-    fn test_dispatch_handshake() {
+    #[tokio::test]
+    async fn test_dispatch_handshake() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.handshake", json!({"client_version": "0.1.0"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["protocol"], "ndjson/1");
     }
 
-    #[test]
-    fn test_dispatch_status_empty() {
+    #[tokio::test]
+    async fn test_dispatch_status_empty() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.status", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert!(result["version"].is_string());
@@ -432,8 +432,8 @@ pub(crate) mod tests {
         assert_eq!(result["taskstore"]["enabled"], false);
     }
 
-    #[test]
-    fn test_dispatch_status_with_records() {
+    #[tokio::test]
+    async fn test_dispatch_status_with_records() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -445,7 +445,7 @@ pub(crate) mod tests {
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let req = DaemonRequest::new(1, "system.status", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["counts"]["plans"], 1);
@@ -453,8 +453,8 @@ pub(crate) mod tests {
         assert_eq!(result["counts"]["specs"], 0);
     }
 
-    #[test]
-    fn test_dispatch_status_with_taskstore() {
+    #[tokio::test]
+    async fn test_dispatch_status_with_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -475,7 +475,7 @@ pub(crate) mod tests {
         stores.store.as_ref().unwrap().lock().unwrap().create(spec).unwrap();
 
         let req = DaemonRequest::new(1, "system.status", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
 
@@ -490,14 +490,14 @@ pub(crate) mod tests {
         assert_eq!(result["counts"]["plans"], 0);
     }
 
-    #[test]
-    fn test_dispatch_shutdown() {
+    #[tokio::test]
+    async fn test_dispatch_shutdown() {
         let stores = test_stores();
         let tx = test_event_tx();
         let mut rx = tx.subscribe();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.shutdown", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "shutting_down");
         // Verify event was broadcast
@@ -507,13 +507,13 @@ pub(crate) mod tests {
 
     // --- system.init tests ---
 
-    #[test]
-    fn test_dispatch_system_init() {
+    #[tokio::test]
+    async fn test_dispatch_system_init() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.init", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let collections = result["collections"].as_array().unwrap();
@@ -534,29 +534,29 @@ pub(crate) mod tests {
         assert!(result.get("git_hooks_installed").is_some());
     }
 
-    #[test]
-    fn test_dispatch_system_init_without_store() {
+    #[tokio::test]
+    async fn test_dispatch_system_init_without_store() {
         let stores = test_stores(); // No TaskStore
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.init", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         let err = resp.error.unwrap();
         assert!(err.message.contains("TaskStore not initialized"));
     }
 
-    #[test]
-    fn test_dispatch_system_init_idempotent() {
+    #[tokio::test]
+    async fn test_dispatch_system_init_idempotent() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Call init twice - should succeed both times
         let req1 = DaemonRequest::new(1, "system.init", json!({}));
-        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1).await;
         assert!(!resp1.is_error());
         let req2 = DaemonRequest::new(2, "system.init", json!({}));
-        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
         assert!(!resp2.is_error());
     }
 

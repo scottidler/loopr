@@ -123,8 +123,8 @@ mod tests {
     use crate::ipc::protocol::DaemonRequest;
     use serde_json::json;
 
-    #[test]
-    fn test_non_draft_to_active_transition_no_gate() {
+    #[tokio::test]
+    async fn test_non_draft_to_active_transition_no_gate() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -135,7 +135,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         dispatch(
@@ -153,7 +154,8 @@ mod tests {
                     "skip_validation": true
                 }),
             ),
-        );
+        )
+        .await;
 
         let resp = dispatch(
             &stores,
@@ -169,13 +171,14 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "complete");
     }
 
-    #[test]
-    fn test_latest_report_wins_for_validation_gate() {
+    #[tokio::test]
+    async fn test_latest_report_wins_for_validation_gate() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -186,7 +189,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let fail_report = ValidationReport::new(
@@ -239,13 +243,14 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
-    #[test]
-    fn test_validation_gate_hard_fail_on_warn() {
+    #[tokio::test]
+    async fn test_validation_gate_hard_fail_on_warn() {
         let (_dir, stores) = test_stores_with_validator_strictness(ValidatorStrictness::HardFailOnAnyAmbiguity);
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -274,15 +279,16 @@ mod tests {
                 "plan.transition",
                 json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
         assert!(
             resp.is_error(),
             "HardFailOnAnyAmbiguity should block Draft->Active on Warn report"
         );
     }
 
-    #[test]
-    fn test_validation_gate_suggest_only_on_fail() {
+    #[tokio::test]
+    async fn test_validation_gate_suggest_only_on_fail() {
         let (_dir, stores) = test_stores_with_validator_strictness(ValidatorStrictness::SuggestOnly);
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -311,7 +317,8 @@ mod tests {
                 "plan.transition",
                 json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
         assert!(
             !resp.is_error(),
             "SuggestOnly should NOT block Draft->Active even on Fail report: {:?}",
@@ -319,8 +326,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validation_gate_no_report_enabled() {
+    #[tokio::test]
+    async fn test_validation_gate_no_report_enabled() {
         let (_dir, stores) = test_stores_with_validator_strictness(ValidatorStrictness::HardFailOnAnyAmbiguity);
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -339,7 +346,8 @@ mod tests {
                 "plan.transition",
                 json!({"id": plan_id, "target_status": "active", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
         assert!(
             resp.is_error(),
             "should block Draft->Active when no validation report exists"

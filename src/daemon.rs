@@ -7,13 +7,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::eyre;
+use futures::future::BoxFuture;
 use log::{debug, error, info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
 
 use crate::agents::AgentStatus;
 use crate::config::Config;
-use crate::ipc::protocol::DaemonEvent;
+use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::{DaemonContext, Stores};
@@ -509,8 +510,14 @@ async fn accept_loop(
                         tokio::spawn(async move {
                             server::handle_client(
                                 stream,
-                                move |req| {
-                                    handlers::dispatch(&stores, &handler_event_tx, &worktree_mgr, &integrator_config, req)
+                                move |req: DaemonRequest| -> BoxFuture<'static, DaemonResponse> {
+                                    let stores = stores.clone();
+                                    let handler_event_tx = handler_event_tx.clone();
+                                    let worktree_mgr = worktree_mgr.clone();
+                                    let integrator_config = integrator_config.clone();
+                                    Box::pin(async move {
+                                        handlers::dispatch(&stores, &handler_event_tx, &worktree_mgr, &integrator_config, req).await
+                                    })
                                 },
                                 event_rx,
                             ).await;

@@ -338,7 +338,12 @@ mod tests {
     use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
     use crate::worktree::manager::WorktreeManager;
 
-    fn create_lock(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager, id: u64) -> String {
+    async fn create_lock(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+        id: u64,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,
@@ -349,13 +354,14 @@ mod tests {
                 "lock.create",
                 json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1"}),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         resp.result.unwrap()["id"].as_str().unwrap().to_string()
     }
 
-    #[test]
-    fn test_lock_create_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_lock_create_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -369,7 +375,7 @@ mod tests {
                 "granted_by": "coord-1"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let lock_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -383,8 +389,8 @@ mod tests {
         assert_eq!(lock.granted_by, "coord-1");
     }
 
-    #[test]
-    fn test_lock_create() {
+    #[tokio::test]
+    async fn test_lock_create() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -398,7 +404,8 @@ mod tests {
                 "lock.create",
                 json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1"}),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["resource"], "src/main.rs");
@@ -407,8 +414,8 @@ mod tests {
         assert_eq!(result["status"], "active");
     }
 
-    #[test]
-    fn test_lock_create_missing_resource() {
+    #[tokio::test]
+    async fn test_lock_create_missing_resource() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -418,12 +425,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "lock.create", json!({"holder_id": "wi-1", "granted_by": "coord-1"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_lock_create_missing_holder_id() {
+    #[tokio::test]
+    async fn test_lock_create_missing_holder_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -437,29 +445,31 @@ mod tests {
                 "lock.create",
                 json!({"resource": "file.rs", "granted_by": "coord-1"}),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_lock_get() {
+    #[tokio::test]
+    async fn test_lock_get() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
         let resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "lock.get", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["resource"], "src/main.rs");
     }
 
-    #[test]
-    fn test_lock_get_not_found() {
+    #[tokio::test]
+    async fn test_lock_get_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -469,54 +479,56 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "lock.get", json!({"id": "nonexistent"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_lock_get_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_lock_get_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
         // Create a lock (writes to both TaskStore and HashMap)
-        let lock_id = create_lock(&stores, &tx, &wm, 50);
+        let lock_id = create_lock(&stores, &tx, &wm, 50).await;
 
         // Remove from HashMap to prove get reads from TaskStore
         stores.locks.write().unwrap().remove(&lock_id);
 
         // Get should still succeed via TaskStore
         let get_req = DaemonRequest::new(51, "lock.get", json!({"id": lock_id}));
-        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req).await;
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["resource"], "src/main.rs");
     }
 
-    #[test]
-    fn test_lock_list() {
+    #[tokio::test]
+    async fn test_lock_list() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        create_lock(&stores, &tx, &wm, 1);
-        create_lock(&stores, &tx, &wm, 2);
+        create_lock(&stores, &tx, &wm, 1).await;
+        create_lock(&stores, &tx, &wm, 2).await;
         let resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "lock.list", json!({})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 2);
     }
 
-    #[test]
-    fn test_lock_list_filter_active_only() {
+    #[tokio::test]
+    async fn test_lock_list_filter_active_only() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
-        create_lock(&stores, &tx, &wm, 2);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
+        create_lock(&stores, &tx, &wm, 2).await;
 
         // Release the first lock
         dispatch(
@@ -525,7 +537,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "lock.release", json!({"id": lock_id})),
-        );
+        )
+        .await;
 
         // List active only
         let resp = dispatch(
@@ -534,19 +547,20 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(4, "lock.list", json!({"active_only": true})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_lock_list_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_lock_list_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
         // Create two locks (writes to both TaskStore and HashMap)
-        create_lock(&stores, &tx, &wm, 1);
+        create_lock(&stores, &tx, &wm, 1).await;
         // Create a second lock with different resource
         dispatch(
             &stores,
@@ -558,7 +572,8 @@ mod tests {
                 "lock.create",
                 json!({"resource": "src/lib.rs", "holder_id": "wi-2", "granted_by": "coord-1"}),
             ),
-        );
+        )
+        .await;
 
         // Clear HashMap to prove list reads from TaskStore
         stores.locks.write().unwrap().clear();
@@ -570,7 +585,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(10, "lock.list", json!(null)),
-        );
+        )
+        .await;
         assert!(!all_resp.is_error());
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
@@ -581,7 +597,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(11, "lock.list", json!({"active_only": true})),
-        );
+        )
+        .await;
         assert!(!active_resp.is_error());
         assert_eq!(active_resp.result.unwrap().as_array().unwrap().len(), 2);
 
@@ -592,43 +609,46 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(12, "lock.list", json!({"resource": "src/lib.rs"})),
-        );
+        )
+        .await;
         assert!(!resource_resp.is_error());
         let resource_items = resource_resp.result.unwrap();
         assert_eq!(resource_items.as_array().unwrap().len(), 1);
         assert_eq!(resource_items[0]["resource"], "src/lib.rs");
     }
 
-    #[test]
-    fn test_lock_release() {
+    #[tokio::test]
+    async fn test_lock_release() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
         let resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "lock.release", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "released");
     }
 
-    #[test]
-    fn test_lock_release_already_released() {
+    #[tokio::test]
+    async fn test_lock_release_already_released() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "lock.release", json!({"id": lock_id})),
-        );
+        )
+        .await;
         // Try releasing again
         let resp = dispatch(
             &stores,
@@ -636,52 +656,56 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "lock.release", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_lock_expire() {
+    #[tokio::test]
+    async fn test_lock_expire() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
         let resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "lock.expire", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "expired");
     }
 
-    #[test]
-    fn test_lock_expire_already_expired() {
+    #[tokio::test]
+    async fn test_lock_expire_already_expired() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "lock.expire", json!({"id": lock_id})),
-        );
+        )
+        .await;
         let resp = dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "lock.expire", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_lock_release_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_lock_release_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -695,7 +719,7 @@ mod tests {
                 "granted_by": "coord-1"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let lock_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -705,7 +729,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(51, "lock.release", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
 
         let store = stores.store.as_ref().unwrap().lock().unwrap();
@@ -714,8 +739,8 @@ mod tests {
         assert_eq!(lock.unwrap().status().to_string(), "Released");
     }
 
-    #[test]
-    fn test_lock_expire_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_lock_expire_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -729,7 +754,7 @@ mod tests {
                 "granted_by": "coord-1"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let lock_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -739,7 +764,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(51, "lock.expire", json!({"id": lock_id})),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
 
         let store = stores.store.as_ref().unwrap().lock().unwrap();
@@ -748,25 +774,25 @@ mod tests {
         assert_eq!(lock.unwrap().status().to_string(), "Expired");
     }
 
-    #[test]
-    fn test_lock_create_broadcasts_event() {
+    #[tokio::test]
+    async fn test_lock_create_broadcasts_event() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        create_lock(&stores, &tx, &wm, 1);
+        create_lock(&stores, &tx, &wm, 1).await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "lock");
     }
 
-    #[test]
-    fn test_lock_release_broadcasts_event() {
+    #[tokio::test]
+    async fn test_lock_release_broadcasts_event() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        let lock_id = create_lock(&stores, &tx, &wm, 1);
+        let lock_id = create_lock(&stores, &tx, &wm, 1).await;
         let _ = rx.try_recv(); // consume create event
 
         dispatch(
@@ -775,14 +801,15 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "lock.release", json!({"id": lock_id})),
-        );
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.updated");
         assert_eq!(event.data["collection"], "lock");
     }
 
-    #[test]
-    fn test_lock_create_with_ttl_param() {
+    #[tokio::test]
+    async fn test_lock_create_with_ttl_param() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -797,14 +824,15 @@ mod tests {
                 "lock.create",
                 json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord-1", "ttl_secs": 300}),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "lock.create with ttl failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert!(result["expires_at"].is_number(), "should have expires_at from ttl_secs");
     }
 
-    #[test]
-    fn test_lock_create_auto_expire() {
+    #[tokio::test]
+    async fn test_lock_create_auto_expire() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -820,15 +848,16 @@ mod tests {
                 "lock.create",
                 json!({"resource": "src/lib.rs", "holder_id": "wi-2", "granted_by": "coord-1"}),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         // Without explicit ttl_secs, auto-expire from max_lock_ttl_minutes should set expires_at
         assert!(result["expires_at"].is_number(), "should have auto-expire expires_at");
     }
 
-    #[test]
-    fn test_lock_create_renewable_flag() {
+    #[tokio::test]
+    async fn test_lock_create_renewable_flag() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -843,7 +872,8 @@ mod tests {
                 "lock.create",
                 json!({"resource": "src/mod.rs", "holder_id": "wi-3", "granted_by": "coord-1", "renewable": true}),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["renewable"], true);
