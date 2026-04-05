@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +103,6 @@ impl<L: LlmClient> ReviewerAgent<L> {
     }
 }
 
-#[async_trait]
 impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!(

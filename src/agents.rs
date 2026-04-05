@@ -26,11 +26,11 @@ pub use self::kind::AgentKind;
 pub use self::session::AgentSession;
 pub use self::status::AgentStatus;
 
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
-use async_trait::async_trait;
 use eyre::Result;
 use log::warn;
 use tokio::sync::broadcast;
@@ -45,10 +45,9 @@ use crate::tools::ToolRunner;
 use crate::worktree::manager::WorktreeManager;
 
 /// Common trait for all agent implementations.
-#[async_trait]
 pub trait Agent: Send {
     /// Run the agent's main loop to completion.
-    async fn run(&mut self) -> Result<()>;
+    fn run(&mut self) -> impl Future<Output = Result<()>> + Send;
 
     /// Agent type for dispatch and logging.
     fn agent_type(&self) -> AgentKind;

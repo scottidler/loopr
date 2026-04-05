@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use std::future::Future;
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 
 use tokio::sync::broadcast;
@@ -450,7 +449,6 @@ fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, agent_l
     latest_tick_id
 }
 
-#[async_trait]
 impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!(

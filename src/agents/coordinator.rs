@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 
 use crate::agents::AgentAction;
@@ -1137,7 +1136,6 @@ fn check_fsm_transition(
 
 mod run;
 
-#[async_trait]
 impl<L: LlmClient + 'static> Agent for CoordinatorAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!("run(session_id={})", self.ctx.session.id));

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 
 const SEARCH_SUBPROCESS_TIMEOUT_SECS: u64 = 30;
@@ -367,7 +366,6 @@ impl<L: LlmClient> ResearcherAgent<L> {
     }
 }
 
-#[async_trait]
 impl<L: LlmClient + 'static> Agent for ResearcherAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!("run(session_id={})", self.ctx.session.id));

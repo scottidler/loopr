@@ -8,7 +8,6 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::error;
 
@@ -33,7 +32,6 @@ impl IntegratorAgent {
     }
 }
 
-#[async_trait]
 impl Agent for IntegratorAgent {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!("run(session_id={})", self.ctx.session.id));
