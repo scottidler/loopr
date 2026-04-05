@@ -184,7 +184,6 @@ pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -193,7 +192,7 @@ mod tests {
     use crate::agents::{AgentAction, AgentKind};
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_propose_plan() {
         let dir = TestDir::new("loopr-exec-proposeplan");
         let stores = test_stores(&dir);
@@ -213,7 +212,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_create_work() {
         let dir = TestDir::new("loopr-exec-creatework");
         let stores = test_stores(&dir);
@@ -238,4 +237,3 @@ mod tests {
         }
     }
 }
-*/

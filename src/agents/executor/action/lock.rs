@@ -74,7 +74,6 @@ pub(super) fn handle_release_lock(ctx: &AgentContext, lock_id: &str) -> Result<A
     Ok(ActionResult::LockReleased(lock_id.to_string()))
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -86,7 +85,7 @@ mod tests {
 
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_acquire_lock() {
         let dir = TestDir::new("loopr-exec-acqlock");
 
@@ -106,7 +105,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_acquire_lock_conflict() {
         let dir = TestDir::new("loopr-exec-lockconf");
 
@@ -136,7 +135,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_release_lock() {
         let dir = TestDir::new("loopr-exec-rellock");
 
@@ -165,7 +164,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_acquire_after_release() {
         let dir = TestDir::new("loopr-exec-reacq");
 
@@ -196,7 +195,7 @@ mod tests {
         assert!(matches!(r2, ActionResult::LockAcquired(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_lock_conflict_policy_ignore() {
         let dir = TestDir::new("loopr-exec-lockign");
         let stores = test_stores(&dir);
@@ -219,7 +218,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_lock_conflict_policy_warn() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
@@ -251,4 +250,3 @@ mod tests {
         );
     }
 }
-*/

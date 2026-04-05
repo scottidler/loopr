@@ -381,7 +381,6 @@ pub(super) async fn run_agent_loop(
     result
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -416,7 +415,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_agent_task_lifecycle() {
         let dir = TestDir::new("loopr-agent-task");
 
@@ -457,7 +456,7 @@ mod tests {
 
     // --- Group A: Record creation actions ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_agent_task_coordinator_restart_loop() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-exec-coordrestart");
@@ -522,7 +521,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_agent_task_researcher_flow() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-exec-resflow");
@@ -565,7 +564,7 @@ mod tests {
         assert!(session.status().is_terminal(), "researcher should reach terminal state");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_agent_task_integrator_flow() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-exec-integflow");
@@ -624,7 +623,7 @@ mod tests {
         assert!(session.status().is_terminal(), "integrator should reach terminal state");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_agent_task_worktree_cleanup() {
         let dir = TestDir::new("loopr-exec-wtcleanup");
 
@@ -693,8 +692,8 @@ mod tests {
         assert!(session.status().is_terminal());
     }
 
-    #[test]
-    fn test_session_timeout_defaults_per_agent_type() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_session_timeout_defaults_per_agent_type() {
         let config = Config::default();
 
         assert_eq!(resolve_timeout(&config, AgentKind::Implementer), Some(1800));
@@ -705,7 +704,7 @@ mod tests {
         assert_eq!(resolve_timeout(&config, AgentKind::Chat), None);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_session_timeout_terminates_slow_future() {
         let slow_future = async {
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -722,7 +721,7 @@ mod tests {
         assert!(msg.contains("timed out"), "expected timeout error, got: {}", msg);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_session_timeout_none_allows_completion() {
         let fast_future = async {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -743,7 +742,7 @@ mod tests {
         assert!(result.is_ok(), "expected Ok, got: {:?}", result);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_session_timeout_fast_future_completes_before_deadline() {
         let fast_future = async {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -758,4 +757,3 @@ mod tests {
         assert!(result.is_ok(), "fast future should complete before timeout");
     }
 }
-*/

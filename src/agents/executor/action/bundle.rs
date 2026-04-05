@@ -310,7 +310,6 @@ pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
     Ok(ActionResult::Transitioned(format!("bundle/{} -> Accepted", bundle_id)))
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -322,7 +321,7 @@ mod tests {
     use crate::domain::tick::TickStatus;
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_propose_bundle() {
         let dir = TestDir::new("loopr-exec-propbundle");
 
@@ -381,7 +380,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_propose_bundle_no_work() {
         let dir = TestDir::new("loopr-exec-propnowi");
 
@@ -437,7 +436,7 @@ mod tests {
 
     // --- Group C: Agent management + domain actions ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_triage_bundle() {
         let dir = TestDir::new("loopr-exec-triage");
         let stores = test_stores(&dir);
@@ -466,7 +465,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_accept_bundle() {
         let dir = TestDir::new("loopr-exec-accept");
         let stores = test_stores(&dir);
@@ -505,7 +504,7 @@ mod tests {
 
     // --- Group D: Lifecycle paths ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_triage_bundle_full() {
         let dir = TestDir::new("loopr-exec-triagefull");
         let stores = test_stores(&dir);
@@ -522,7 +521,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_triage_bundle_rejects_work_id() {
         let dir = TestDir::new("loopr-exec-triage-wkid");
         let stores = test_stores(&dir);
@@ -539,7 +538,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_accept_bundle_rejects_work_id() {
         let dir = TestDir::new("loopr-exec-accept-wkid");
         let stores = test_stores(&dir);
@@ -556,7 +555,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_accept_bundle_full() {
         let dir = TestDir::new("loopr-exec-acceptfull");
         let stores = test_stores(&dir);
@@ -585,7 +584,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_triage_bundle_rejects_reviewed_bundle() {
         let dir = TestDir::new("loopr-exec-triage-rev");
         let stores = test_stores(&dir);
@@ -622,7 +621,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_accept_bundle_rejects_proposed_bundle() {
         let dir = TestDir::new("loopr-exec-accept-prop");
         let stores = test_stores(&dir);
@@ -651,7 +650,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_propose_bundle_includes_base_tick_id() {
         let dir = TestDir::new("loopr-exec-propbase");
 
@@ -715,7 +714,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_propose_bundle_uses_deterministic_branch_name() {
         let dir = TestDir::new("loopr-exec-f2branch");
         let stores = test_stores(&dir);
@@ -781,7 +780,7 @@ mod tests {
 
     // --- determine_work_handback tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_noop_propose_bundle_creates_empty_branch() {
         let dir = TestDir::new("loopr-exec-noop-branch");
         let stores = test_stores(&dir);
@@ -813,7 +812,7 @@ mod tests {
         assert_eq!(bundle.noop_reason.as_deref(), Some("Phase 1 already implemented this"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_noop_bundle_handler_rejects_empty_branch_without_noop() {
         let dir = TestDir::new("loopr-exec-noop-reject");
         let stores = test_stores(&dir);
@@ -838,7 +837,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_noop_guard_rejects_dirty_worktree() {
         let dir = TestDir::new("loopr-exec-noop-dirty");
 
@@ -899,7 +898,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_noop_guard_allows_clean_worktree() {
         let dir = TestDir::new("loopr-exec-noop-clean");
 
@@ -972,7 +971,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_noop_bundle_handler_allows_empty_branch_with_noop() {
         let dir = TestDir::new("loopr-exec-noop-allow");
         let stores = test_stores(&dir);
@@ -1001,4 +1000,3 @@ mod tests {
         assert_eq!(bundle.noop_reason.as_deref(), Some("already done by phase 1"));
     }
 }
-*/

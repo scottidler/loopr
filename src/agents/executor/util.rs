@@ -173,7 +173,6 @@ pub(super) fn persist_session(stores: &Stores, session: &AgentSession) {
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -190,16 +189,16 @@ mod tests {
     };
     use tokio::sync::broadcast;
 
-    #[test]
-    fn test_resolve_worktree_base_no_ticks() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_resolve_worktree_base_no_ticks() {
         let dir = TestDir::new("loopr-wt-base-none");
         let stores = test_stores(&dir);
         let base = resolve_worktree_base(&stores);
         assert_eq!(base, "HEAD");
     }
 
-    #[test]
-    fn test_resolve_worktree_base_no_published_ticks() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_resolve_worktree_base_no_published_ticks() {
         let dir = TestDir::new("loopr-wt-base-nopub");
         let stores = test_stores(&dir);
         {
@@ -212,8 +211,8 @@ mod tests {
         assert_eq!(base, "HEAD");
     }
 
-    #[test]
-    fn test_resolve_worktree_base_picks_latest_published() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_resolve_worktree_base_picks_latest_published() {
         let dir = TestDir::new("loopr-wt-base-latest");
         let stores = test_stores(&dir);
         {
@@ -238,8 +237,8 @@ mod tests {
         assert_eq!(base, "sha_tick_3");
     }
 
-    #[test]
-    fn test_resolve_worktree_base_published_without_sha_falls_back() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_resolve_worktree_base_published_without_sha_falls_back() {
         let dir = TestDir::new("loopr-wt-base-nosha");
         let stores = test_stores(&dir);
         {
@@ -253,16 +252,16 @@ mod tests {
         assert_eq!(base, "HEAD");
     }
 
-    #[test]
-    fn test_resolve_latest_published_tick_id_none_at_bootstrap() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_resolve_latest_published_tick_id_none_at_bootstrap() {
         let dir = TestDir::new("loopr-exec-tickid-none");
         let stores = test_stores(&dir);
         let result = resolve_latest_published_tick_id(&stores);
         assert!(result.is_none(), "expected None at bootstrap, got: {:?}", result);
     }
 
-    #[test]
-    fn test_resolve_latest_published_tick_id_returns_published() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_resolve_latest_published_tick_id_returns_published() {
         let dir = TestDir::new("loopr-exec-tickid-pub");
         let stores = test_stores(&dir);
 
@@ -276,24 +275,24 @@ mod tests {
         assert_eq!(result, Some(tick_id));
     }
 
-    #[test]
-    fn test_handback_succeeded_no_bundles_returns_blocked() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handback_succeeded_no_bundles_returns_blocked() {
         let dir = TestDir::new("loopr-handback-ok");
         let stores = test_stores(&dir);
         let result = determine_work_handback(&stores, "wi-1", "sess-1", true);
         assert_eq!(result, Some("Blocked"));
     }
 
-    #[test]
-    fn test_handback_failed_no_bundles_returns_blocked() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handback_failed_no_bundles_returns_blocked() {
         let dir = TestDir::new("loopr-handback-nobd");
         let stores = test_stores(&dir);
         let result = determine_work_handback(&stores, "wi-1", "sess-1", false);
         assert_eq!(result, Some("Blocked"));
     }
 
-    #[test]
-    fn test_handback_failed_with_active_bundle_returns_in_review() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handback_failed_with_active_bundle_returns_in_review() {
         let dir = TestDir::new("loopr-handback-actbd");
         let stores = test_stores(&dir);
 
@@ -310,8 +309,8 @@ mod tests {
         assert_eq!(result, Some("InReview"));
     }
 
-    #[test]
-    fn test_handback_failed_all_rejected_bundles_returns_blocked() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handback_failed_all_rejected_bundles_returns_blocked() {
         let dir = TestDir::new("loopr-handback-rejbd");
         let stores = test_stores(&dir);
 
@@ -328,8 +327,8 @@ mod tests {
         assert_eq!(result, Some("Blocked"));
     }
 
-    #[test]
-    fn test_handback_failed_sibling_active_returns_none() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handback_failed_sibling_active_returns_none() {
         let dir = TestDir::new("loopr-handback-sib");
         let stores = test_stores(&dir);
 
@@ -346,8 +345,8 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    #[test]
-    fn test_handback_failed_sibling_terminal_checks_bundles() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_handback_failed_sibling_terminal_checks_bundles() {
         let dir = TestDir::new("loopr-handback-sibterm");
         let stores = test_stores(&dir);
 
@@ -367,8 +366,8 @@ mod tests {
 
     // --- ReadFile dedup tests ---
 
-    #[test]
-    fn test_release_agent_locks_cleans_up() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_release_agent_locks_cleans_up() {
         let dir = TestDir::new("loopr-exec-rellock-cleanup");
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
@@ -405,4 +404,3 @@ mod tests {
         );
     }
 }
-*/

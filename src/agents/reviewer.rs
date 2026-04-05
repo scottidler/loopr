@@ -311,7 +311,6 @@ impl Agent for ReviewerAgent {
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -486,15 +485,15 @@ mod tests {
 
     // --- ReviewVerdict tests ---
 
-    #[test]
-    fn test_review_verdict_display() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_review_verdict_display() {
         assert_eq!(ReviewVerdict::Approve.to_string(), "approve");
         assert_eq!(ReviewVerdict::RequestChanges.to_string(), "request_changes");
         assert_eq!(ReviewVerdict::Reject.to_string(), "reject");
     }
 
-    #[test]
-    fn test_review_verdict_serde_roundtrip() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_review_verdict_serde_roundtrip() {
         for verdict in [
             ReviewVerdict::Approve,
             ReviewVerdict::RequestChanges,
@@ -508,8 +507,8 @@ mod tests {
 
     // --- ReviewResult tests ---
 
-    #[test]
-    fn test_review_result_serde_approve() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_review_result_serde_approve() {
         let json = r#"{
             "verdict": "approve",
             "issues": [],
@@ -521,8 +520,8 @@ mod tests {
         assert_eq!(result.summary, "Looks good");
     }
 
-    #[test]
-    fn test_review_result_serde_with_issues() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_review_result_serde_with_issues() {
         let json = r#"{
             "verdict": "request_changes",
             "issues": [
@@ -550,8 +549,8 @@ mod tests {
         assert!(result.issues[1].suggestion.is_none());
     }
 
-    #[test]
-    fn test_review_result_serde_reject() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_review_result_serde_reject() {
         let json = r#"{
             "verdict": "reject",
             "issues": [{"severity": "error", "file": "src/main.rs", "message": "Fundamentally wrong approach"}],
@@ -564,8 +563,8 @@ mod tests {
 
     // --- parse_review_result tests ---
 
-    #[test]
-    fn test_parse_review_result_direct_json() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_parse_review_result_direct_json() {
         let dir = TestDir::new("loopr-rev-parse1");
         let agent_log = test_agent_logger(&dir);
         let json = r#"{"verdict": "approve", "issues": [], "summary": "All good"}"#;
@@ -573,8 +572,8 @@ mod tests {
         assert_eq!(result.verdict, ReviewVerdict::Approve);
     }
 
-    #[test]
-    fn test_parse_review_result_wrapped_in_code_block() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_parse_review_result_wrapped_in_code_block() {
         let dir = TestDir::new("loopr-rev-parse2");
         let agent_log = test_agent_logger(&dir);
         let response =
@@ -584,16 +583,16 @@ mod tests {
         assert_eq!(result.summary, "LGTM");
     }
 
-    #[test]
-    fn test_parse_review_result_invalid() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_parse_review_result_invalid() {
         let dir = TestDir::new("loopr-rev-parse3");
         let agent_log = test_agent_logger(&dir);
         let bad = "This is not JSON at all";
         assert!(parse_review_result(bad, &agent_log).is_err());
     }
 
-    #[test]
-    fn test_parse_review_result_wrong_schema() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_parse_review_result_wrong_schema() {
         let dir = TestDir::new("loopr-rev-parse4");
         let agent_log = test_agent_logger(&dir);
         let json = r#"{"wrong": "schema"}"#;
@@ -602,8 +601,8 @@ mod tests {
 
     // --- context builder integration tests ---
 
-    #[test]
-    fn test_context_builder_for_reviewer() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_context_builder_for_reviewer() {
         let dir = TestDir::new("loopr-rev-ctx");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
@@ -622,8 +621,8 @@ mod tests {
         assert!(assembled.system_prompt.contains("Reviewer agent"));
     }
 
-    #[test]
-    fn test_context_builder_missing_bundle() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_context_builder_missing_bundle() {
         let dir = TestDir::new("loopr-rev-miss");
         let (stores, _) = setup_stores_with_bundle(&dir);
 
@@ -634,7 +633,7 @@ mod tests {
 
     // --- ReviewerAgent tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_reviewer_approve() {
         let dir = TestDir::new("loopr-rev-approve");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -652,7 +651,7 @@ mod tests {
         assert_eq!(bundle.status(), BundleStatus::Reviewed);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_reviewer_reject() {
         let dir = TestDir::new("loopr-rev-reject");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -674,7 +673,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_reviewer_request_changes() {
         let dir = TestDir::new("loopr-rev-changes");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -697,8 +696,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_reviewer_missing_bundle_id() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_reviewer_missing_bundle_id() {
         let dir = TestDir::new("loopr-rev-noid");
         let (stores, _) = setup_stores_with_bundle(&dir);
         let (event_tx, _) = broadcast::channel(16);
@@ -723,7 +722,7 @@ mod tests {
         assert!(err.to_string().contains("missing bundle_id"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_reviewer_llm_failure() {
         let dir = TestDir::new("loopr-rev-fail");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -734,7 +733,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_run_reviewer_bad_response() {
         let dir = TestDir::new("loopr-rev-bad");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -754,7 +753,7 @@ mod tests {
 
     // --- Parse retry tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_reviewer_parse_retry_succeeds_on_second_attempt() {
         let dir = TestDir::new("loopr-rev-retry-ok");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -772,7 +771,7 @@ mod tests {
         assert_eq!(bundle.status(), BundleStatus::Reviewed);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_reviewer_parse_retry_exhaustion() {
         let dir = TestDir::new("loopr-rev-retry-fail");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
@@ -792,7 +791,7 @@ mod tests {
 
     // --- Advisory review race condition tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_reviewer_handles_already_accepted_bundle() {
         // Simulate advisory review race: bundle is already Accepted when Reviewer runs.
         // The Reviewer should create its feedback Learning and complete normally (not error).
@@ -829,7 +828,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_reviewer_creates_feedback_learning_on_approve() {
         // Verify the reviewer creates a review:feedback Learning on all verdicts (not just reject).
         let dir = TestDir::new("loopr-rev-feedback");
@@ -853,8 +852,8 @@ mod tests {
 
     // --- system prompt tests ---
 
-    #[test]
-    fn test_system_prompt_contains_key_instructions() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_system_prompt_contains_key_instructions() {
         crate::prompts::init_defaults();
         let prompt = &crate::prompts::store().reviewer;
         assert!(prompt.contains("Reviewer agent"));
@@ -867,4 +866,3 @@ mod tests {
         assert!(prompt.contains("reject"));
     }
 }
-*/

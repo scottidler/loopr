@@ -280,7 +280,6 @@ pub(super) async fn handle_list_directory(
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -292,7 +291,7 @@ mod tests {
 
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_write_file() {
         let dir = TestDir::new("loopr-exec-write");
 
@@ -310,7 +309,7 @@ mod tests {
         assert_eq!(content, "hello world");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_write_file_lock_strict_blocks_other_agent() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
@@ -344,7 +343,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_lock_strict_allows_holder_rewrite() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
@@ -378,7 +377,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_write_file_lock_advisory_allows() {
         let dir = TestDir::new("loopr-exec-lockadvisory");
 
@@ -399,7 +398,7 @@ mod tests {
         assert!(matches!(result, ActionResult::FileWritten(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_read_file() {
         let dir = TestDir::new("loopr-exec-read");
         std::fs::write(dir.join("read-me.txt"), "file content").unwrap();
@@ -420,7 +419,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_commit_success() {
         let dir = TestDir::new("loopr-exec-commit");
 
@@ -465,7 +464,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_commit_specific_paths() {
         let dir = TestDir::new("loopr-exec-commitpaths");
 
@@ -507,7 +506,7 @@ mod tests {
         assert!(matches!(result, ActionResult::Committed(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_write_file_path_escape() {
         let dir = TestDir::new("loopr-exec-escape");
         let stores = test_stores(&dir);
@@ -522,7 +521,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("path traversal"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_file_not_found() {
         let dir = TestDir::new("loopr-exec-readnf");
         let stores = test_stores(&dir);
@@ -537,7 +536,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_write_file_creates_parent_dirs() {
         let dir = TestDir::new("loopr-exec-writedirs");
         let stores = test_stores(&dir);
@@ -553,7 +552,7 @@ mod tests {
         assert_eq!(content, "nested content");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_search_code_action() {
         let dir = TestDir::new("loopr-exec-searchcode");
         std::fs::write(dir.join("example.rs"), "fn main() { println!(\"hello\"); }").unwrap();
@@ -574,7 +573,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_list_directory_action() {
         let dir = TestDir::new("loopr-exec-listdir");
         std::fs::write(dir.join("file1.txt"), "a").unwrap();
@@ -593,7 +592,7 @@ mod tests {
 
     // --- Task #6: Additional coverage tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_file_dedup_returns_unchanged_on_second_read() {
         let dir = TestDir::new("loopr-exec-dedup");
         std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
@@ -627,7 +626,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_file_dedup_invalidated_by_write() {
         let dir = TestDir::new("loopr-exec-dedup-write");
         std::fs::write(dir.join("target.rs"), "original\n").unwrap();
@@ -662,7 +661,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_file_dedup_invalidated_by_edit() {
         let dir = TestDir::new("loopr-exec-dedup-edit");
         std::fs::write(dir.join("target.rs"), "hello world\n").unwrap();
@@ -698,7 +697,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_read_file_dedup_different_offset_no_dedup() {
         let dir = TestDir::new("loopr-exec-dedup-offset");
         std::fs::write(dir.join("target.rs"), "line1\nline2\nline3\n").unwrap();
@@ -734,7 +733,7 @@ mod tests {
 
     // --- Phase 1: Auto-Lock tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_write_file_auto_acquires_lock() {
         let dir = TestDir::new("loopr-exec-autolock-write");
         let stores = test_stores(&dir);
@@ -755,7 +754,7 @@ mod tests {
         assert_eq!(locks[0]["holder_id"].as_str().unwrap(), "wi-100");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_edit_file_auto_acquires_lock() {
         let dir = TestDir::new("loopr-exec-autolock-edit");
         std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -779,7 +778,7 @@ mod tests {
         assert_eq!(locks.len(), 1, "expected 1 auto-acquired lock");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_write_file_reuses_existing_lock() {
         let dir = TestDir::new("loopr-exec-autolock-reuse");
         let stores = test_stores(&dir);
@@ -804,7 +803,7 @@ mod tests {
         assert_eq!(locks.len(), 1, "expected 1 lock (reused), got {}", locks.len());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_no_auto_lock_without_work_id() {
         let dir = TestDir::new("loopr-exec-autolock-none");
         let stores = test_stores(&dir);
@@ -824,7 +823,7 @@ mod tests {
         assert!(locks.is_empty(), "expected no locks when work_id is None");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_edit_file_lock_strict_allows_holder() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
@@ -860,7 +859,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_edit_file_lock_strict_blocks_other_agent() {
         use crate::config::{ConflictPolicy, StrategyConfig};
 
@@ -896,4 +895,3 @@ mod tests {
         );
     }
 }
-*/

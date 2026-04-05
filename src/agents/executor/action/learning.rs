@@ -44,7 +44,6 @@ pub(super) fn handle_create_learning(
     Ok(ActionResult::LearningCreated(content.to_string()))
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -55,7 +54,7 @@ mod tests {
 
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_create_learning_with_all_fields() {
         let dir = TestDir::new("loopr-exec-learning");
         let stores = test_stores(&dir);
@@ -76,7 +75,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_create_learning_minimal() {
         let dir = TestDir::new("loopr-exec-learnmin");
         let stores = test_stores(&dir);
@@ -93,4 +92,3 @@ mod tests {
         assert!(matches!(result, ActionResult::LearningCreated(_)));
     }
 }
-*/

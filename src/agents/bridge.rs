@@ -71,7 +71,6 @@ impl AgentIpcBridge {
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -103,24 +102,24 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_bridge_handshake() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bridge_handshake() {
         let (_dir, bridge) = test_bridge();
         let resp = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
         assert!(!resp.is_error());
         assert!(resp.result.unwrap()["protocol"].is_string());
     }
 
-    #[test]
-    fn test_bridge_unknown_method() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bridge_unknown_method() {
         let (_dir, bridge) = test_bridge();
         let resp = bridge.request("nonexistent.method", serde_json::json!(null));
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("nonexistent.method"));
     }
 
-    #[test]
-    fn test_bridge_plan_create() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bridge_plan_create() {
         let (_dir, bridge) = test_bridge();
         let resp = bridge.request(
             "plan.create",
@@ -136,16 +135,16 @@ mod tests {
         assert!(result["id"].is_string());
     }
 
-    #[test]
-    fn test_bridge_increments_request_ids() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bridge_increments_request_ids() {
         let (_dir, bridge) = test_bridge();
         let resp1 = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
         let resp2 = bridge.request("system.handshake", serde_json::json!({"version": "0.1.0"}));
         assert_ne!(resp1.id, resp2.id);
     }
 
-    #[test]
-    fn test_bridge_event_tx() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bridge_event_tx() {
         let (_dir, bridge) = test_bridge();
         let mut rx = bridge.event_tx().subscribe();
         let event = DaemonEvent::record_created("test", "t1");
@@ -154,4 +153,3 @@ mod tests {
         assert_eq!(received.event, "record.created");
     }
 }
-*/

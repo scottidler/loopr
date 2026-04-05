@@ -556,7 +556,6 @@ impl CoordinatorAgent {
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -570,8 +569,8 @@ mod tests {
 
     // --- is_cancelled tests (via AgentContext) ---
 
-    #[test]
-    fn test_is_cancelled_false() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_is_cancelled_false() {
         let dir = TestDir::new("loopr-coord-canc1");
         let stores = test_stores(&dir);
         let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
@@ -588,8 +587,8 @@ mod tests {
         assert!(!agent.ctx.is_cancelled());
     }
 
-    #[test]
-    fn test_is_cancelled_true() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_is_cancelled_true() {
         let dir = TestDir::new("loopr-coord-canc2");
         let stores = test_stores(&dir);
         let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
@@ -607,8 +606,8 @@ mod tests {
         assert!(agent.ctx.is_cancelled());
     }
 
-    #[test]
-    fn test_is_cancelled_missing() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_is_cancelled_missing() {
         let dir = TestDir::new("loopr-coord-canc3");
         let stores = test_stores(&dir);
         // Agent session not inserted into stores — should treat as cancelled
@@ -619,7 +618,7 @@ mod tests {
 
     // --- run_iteration tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_done() {
         let dir = TestDir::new("loopr-coord-itdone");
         let stores = test_stores(&dir);
@@ -642,7 +641,7 @@ mod tests {
         assert!(matches!(outcome, IterationOutcome::Done(ref s) if s.contains("Nothing to do")));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_need_help() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-coord-ithelp");
@@ -666,7 +665,7 @@ mod tests {
         assert!(matches!(outcome, IterationOutcome::NeedHelp(ref s) if s.contains("Unclear")));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_continue_with_stub_actions() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-coord-itstub");
@@ -694,7 +693,7 @@ mod tests {
         assert!(matches!(outcome, IterationOutcome::Continue(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_empty_actions_is_done() {
         let dir = TestDir::new("loopr-coord-itempty");
         let stores = test_stores(&dir);
@@ -714,7 +713,7 @@ mod tests {
 
     // --- Agent::run tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_exits_on_need_help() {
         let dir = TestDir::new("loopr-coord-runhelp");
         let stores = test_stores(&dir);
@@ -741,7 +740,7 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("needs help"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_exits_on_cancellation() {
         let dir = TestDir::new("loopr-coord-runcanc");
         let stores = test_stores(&dir);
@@ -765,7 +764,7 @@ mod tests {
 
     // --- test_coordinator_iteration_persists ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_persists() {
         let dir = TestDir::new("loopr-coord-itpersist");
         let stores = test_stores(&dir);
@@ -818,7 +817,7 @@ mod tests {
 
     // --- multi-level action filter tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_filters_multi_level_actions() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-coord-multilevel");
@@ -854,7 +853,7 @@ mod tests {
         assert_eq!(learnings.len(), 2, "both learning actions should have executed");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_iteration_empty_after_filter() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-coord-emptyfilter");
@@ -883,7 +882,7 @@ mod tests {
 
     // --- Self-correction loop tests for Coordinator ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_self_correction_parse_failure_then_success() {
         // First LLM response is malformed, second is valid JSON.
         // Self-correction loop should re-prompt and succeed within the same iteration.
@@ -915,7 +914,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_self_correction_max_requeries_exceeded() {
         // All responses are malformed. After max_requeries retries, should return Err.
         let dir = TestDir::new("loopr-coord-selfcorr2");
@@ -947,4 +946,3 @@ mod tests {
         );
     }
 }
-*/

@@ -50,7 +50,6 @@ pub(super) fn handle_register_tool(
     Ok(ActionResult::ToolRegistered(name.to_string()))
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -62,7 +61,7 @@ mod tests {
 
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_action_run_tool() {
         let dir = TestDir::new("loopr-exec-test");
 
@@ -88,7 +87,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_register_tool() {
         let dir = TestDir::new("loopr-exec-regtool");
 
@@ -113,4 +112,3 @@ mod tests {
         assert_eq!(rt["my-echo"].command, "echo hello");
     }
 }
-*/

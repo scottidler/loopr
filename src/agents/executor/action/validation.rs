@@ -121,7 +121,6 @@ pub(super) fn handle_evaluate_coverage(
     Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -132,7 +131,7 @@ mod tests {
 
     use crate::test_util::TestDir;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_validate_document() {
         let dir = TestDir::new("loopr-exec-valdoc");
         let stores = test_stores(&dir);
@@ -155,4 +154,3 @@ mod tests {
         );
     }
 }
-*/

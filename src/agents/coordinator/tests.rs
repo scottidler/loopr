@@ -1,4 +1,3 @@
-/*
 use super::*;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentContext, AgentSession};
@@ -104,8 +103,8 @@ pub(crate) fn insert_test_goal(stores: &Arc<Stores>) {
 
 // --- build_state_summary tests ---
 
-#[test]
-fn test_build_state_summary_empty() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_empty() {
     let dir = TestDir::new("loopr-coord-empty");
     let stores = test_stores(&dir);
 
@@ -114,8 +113,8 @@ fn test_build_state_summary_empty() {
     assert!(summary.contains("No active records"));
 }
 
-#[test]
-fn test_build_state_summary_with_plan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_with_plan() {
     let dir = TestDir::new("loopr-coord-plan");
     let stores = test_stores(&dir);
 
@@ -130,8 +129,8 @@ fn test_build_state_summary_with_plan() {
     assert!(summary.contains("draft"));
 }
 
-#[test]
-fn test_build_state_summary_excludes_completed() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_excludes_completed() {
     let dir = TestDir::new("loopr-coord-excl");
     let stores = test_stores(&dir);
 
@@ -145,8 +144,8 @@ fn test_build_state_summary_excludes_completed() {
     assert!(summary.contains("No active records"));
 }
 
-#[test]
-fn test_build_state_summary_with_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_with_works() {
     let dir = TestDir::new("loopr-coord-wi");
     let stores = test_stores(&dir);
 
@@ -159,8 +158,8 @@ fn test_build_state_summary_with_works() {
     assert!(summary.contains("Add auth"));
 }
 
-#[test]
-fn test_build_state_summary_with_bundles() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_with_bundles() {
     let dir = TestDir::new("loopr-coord-bun");
     let stores = test_stores(&dir);
 
@@ -175,8 +174,8 @@ fn test_build_state_summary_with_bundles() {
     assert!(!summary.contains("### Reviewed Bundles"));
 }
 
-#[test]
-fn test_build_state_summary_with_reviewed_bundles() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_with_reviewed_bundles() {
     let dir = TestDir::new("loopr-coord-bun-rev");
     let stores = test_stores(&dir);
 
@@ -191,8 +190,8 @@ fn test_build_state_summary_with_reviewed_bundles() {
     assert!(!summary.contains("### Proposed Bundles"));
 }
 
-#[test]
-fn test_build_state_summary_with_active_sessions() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_with_active_sessions() {
     let dir = TestDir::new("loopr-coord-sess");
     let stores = test_stores(&dir);
 
@@ -209,8 +208,8 @@ fn test_build_state_summary_with_active_sessions() {
     assert!(summary.contains("implementer"));
 }
 
-#[test]
-fn test_build_state_summary_with_locks() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_with_locks() {
     let dir = TestDir::new("loopr-coord-lock");
     let stores = test_stores(&dir);
 
@@ -223,8 +222,8 @@ fn test_build_state_summary_with_locks() {
     assert!(summary.contains("src/main.rs"));
 }
 
-#[test]
-fn test_build_state_summary_excludes_terminal_sessions() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_excludes_terminal_sessions() {
     let dir = TestDir::new("loopr-coord-termsess");
     let stores = test_stores(&dir);
 
@@ -241,8 +240,8 @@ fn test_build_state_summary_excludes_terminal_sessions() {
     assert!(!summary.contains("### Active Agents"));
 }
 
-#[test]
-fn test_build_state_summary_works_before_plans() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_works_before_plans() {
     let dir = TestDir::new("loopr-coord-order");
     let stores = test_stores(&dir);
 
@@ -265,8 +264,8 @@ fn test_build_state_summary_works_before_plans() {
     );
 }
 
-#[test]
-fn test_build_state_summary_excludes_done_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_excludes_done_works() {
     let dir = TestDir::new("loopr-coord-donewi");
     let stores = test_stores(&dir);
 
@@ -279,8 +278,8 @@ fn test_build_state_summary_excludes_done_works() {
     assert!(!summary.contains("Done Work"));
 }
 
-#[test]
-fn test_build_state_summary_excludes_merged_bundles_from_active() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_excludes_merged_bundles_from_active() {
     let dir = TestDir::new("loopr-coord-mergedbun");
     let stores = test_stores(&dir);
 
@@ -296,14 +295,14 @@ fn test_build_state_summary_excludes_merged_bundles_from_active() {
 
 // --- format_action_summary tests ---
 
-#[test]
-fn test_format_action_summary_done() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_done() {
     let result = ActionResult::Done("Complete".into());
     assert_eq!(format_action_summary(&result), "done: Complete");
 }
 
-#[test]
-fn test_format_action_summary_record_created() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_record_created() {
     let result = ActionResult::RecordCreated {
         collection: "plans".into(),
         id: "plan-123".into(),
@@ -313,8 +312,8 @@ fn test_format_action_summary_record_created() {
     assert!(summary.contains("plan-123"));
 }
 
-#[test]
-fn test_format_action_summary_agent_spawned() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_agent_spawned() {
     let result = ActionResult::AgentSpawned {
         session_id: "sess-abc".into(),
         agent_type: "implementer".into(),
@@ -324,14 +323,14 @@ fn test_format_action_summary_agent_spawned() {
     assert!(summary.contains("sess-abc"));
 }
 
-#[test]
-fn test_format_action_summary_error() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_error() {
     let result = ActionResult::ActionError("something broke".into());
     assert_eq!(format_action_summary(&result), "ERROR: something broke");
 }
 
-#[test]
-fn test_format_action_summary_document_validated_pass() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_document_validated_pass() {
     let result = ActionResult::DocumentValidated {
         verdict: "pass".into(),
         summary: "All criteria met".into(),
@@ -343,8 +342,8 @@ fn test_format_action_summary_document_validated_pass() {
     assert!(!summary.contains("issues"));
 }
 
-#[test]
-fn test_format_action_summary_document_validated_fail_with_issues() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_document_validated_fail_with_issues() {
     let result = ActionResult::DocumentValidated {
         verdict: "fail".into(),
         summary: "Incomplete document".into(),
@@ -357,8 +356,8 @@ fn test_format_action_summary_document_validated_fail_with_issues() {
 
 // --- system prompt tests ---
 
-#[test]
-fn test_system_prompt_contains_key_sections() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_system_prompt_contains_key_sections() {
     crate::prompts::init_defaults();
     let prompt = &crate::prompts::store().coordinator;
     assert!(prompt.contains("Coordinator agent"));
@@ -381,8 +380,8 @@ fn test_system_prompt_contains_key_sections() {
 
 // --- comprehensive state summary ---
 
-#[test]
-fn test_build_state_summary_comprehensive() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_comprehensive() {
     let dir = TestDir::new("loopr-coord-comp");
     let stores = test_stores(&dir);
 
@@ -420,16 +419,16 @@ fn test_build_state_summary_comprehensive() {
 
 // --- infer_action_level tests ---
 
-#[test]
-fn test_infer_action_level_returns_none_for_done() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_infer_action_level_returns_none_for_done() {
     let action = AgentAction::Done {
         summary: "all done".into(),
     };
     assert!(infer_action_level(&action).is_none());
 }
 
-#[test]
-fn test_infer_action_level_returns_none_for_create_learning() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_infer_action_level_returns_none_for_create_learning() {
     let action = AgentAction::CreateLearning {
         content: "learned something".into(),
         scope: "global".into(),
@@ -442,8 +441,8 @@ fn test_infer_action_level_returns_none_for_create_learning() {
 
 // --- check_phase_completion tests ---
 
-#[test]
-fn test_check_phase_completion_no_active_plan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_phase_completion_no_active_plan() {
     let dir = TestDir::new("loopr-coord-noplan");
     let stores = test_stores(&dir);
 
@@ -452,8 +451,8 @@ fn test_check_phase_completion_no_active_plan() {
     assert!(completed.is_empty());
 }
 
-#[test]
-fn test_check_phase_completion_all_done() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_phase_completion_all_done() {
     let dir = TestDir::new("loopr-coord-phase-done");
     std::process::Command::new("git")
         .args(["init"])
@@ -494,8 +493,8 @@ fn test_check_phase_completion_all_done() {
     assert!(completed[0].contains("Phase 1"));
 }
 
-#[test]
-fn test_check_phase_completion_partial() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_phase_completion_partial() {
     let dir = TestDir::new("loopr-coord-phase-partial");
     std::process::Command::new("git")
         .args(["init"])
@@ -533,8 +532,8 @@ fn test_check_phase_completion_partial() {
     assert!(completed.is_empty());
 }
 
-#[test]
-fn test_check_phase_completion_no_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_phase_completion_no_works() {
     let dir = TestDir::new("loopr-coord-phase-noworks");
     std::process::Command::new("git")
         .args(["init"])
@@ -564,8 +563,8 @@ fn test_check_phase_completion_no_works() {
     assert!(completed.is_empty());
 }
 
-#[test]
-fn test_check_phase_completion_multiple_phases() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_phase_completion_multiple_phases() {
     let dir = TestDir::new("loopr-coord-phase-multi");
     std::process::Command::new("git")
         .args(["init"])
@@ -613,8 +612,8 @@ fn test_check_phase_completion_multiple_phases() {
 
 // --- format_action_summary additional coverage ---
 
-#[test]
-fn test_format_action_summary_document_validated_empty_issues() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_document_validated_empty_issues() {
     // Exercises the empty-issues branch with a different verdict
     let result = ActionResult::DocumentValidated {
         verdict: "fail".into(),
@@ -633,8 +632,8 @@ fn test_format_action_summary_document_validated_empty_issues() {
 
 // --- FSM state management tests ---
 
-#[test]
-fn test_load_or_create_coordinator_state_no_goal() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_load_or_create_coordinator_state_no_goal() {
     let dir = TestDir::new("loopr-coord-fsm-nogoal");
     let stores = test_stores(&dir);
 
@@ -642,8 +641,8 @@ fn test_load_or_create_coordinator_state_no_goal() {
     assert!(result.is_none());
 }
 
-#[test]
-fn test_load_or_create_coordinator_state_with_goal() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_load_or_create_coordinator_state_with_goal() {
     let dir = TestDir::new("loopr-coord-fsm-goal");
     let stores = test_stores(&dir);
 
@@ -656,8 +655,8 @@ fn test_load_or_create_coordinator_state_with_goal() {
     assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
 }
 
-#[test]
-fn test_load_or_create_coordinator_state_resumes_existing() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_load_or_create_coordinator_state_resumes_existing() {
     let dir = TestDir::new("loopr-coord-fsm-resume");
     let stores = test_stores(&dir);
 
@@ -682,8 +681,8 @@ fn test_load_or_create_coordinator_state_resumes_existing() {
     assert_eq!(state.current_phase_id.as_deref(), Some("phase-1"));
 }
 
-#[test]
-fn test_check_fsm_transition_planning_to_activate() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_fsm_transition_planning_to_activate() {
     let dir = TestDir::new("loopr-coord-fsm-plan2act");
     let stores = test_stores(&dir);
 
@@ -710,8 +709,8 @@ fn test_check_fsm_transition_planning_to_activate() {
     assert_eq!(transition, Some(CoordinatorFsmState::ActivatePhase));
 }
 
-#[test]
-fn test_check_fsm_transition_executing_to_phase_gate() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_fsm_transition_executing_to_phase_gate() {
     let dir = TestDir::new("loopr-coord-fsm-exec2gate");
     let stores = test_stores(&dir);
 
@@ -733,8 +732,8 @@ fn test_check_fsm_transition_executing_to_phase_gate() {
     assert_eq!(transition, Some(CoordinatorFsmState::PhaseGate));
 }
 
-#[test]
-fn test_check_fsm_transition_phase_gate_to_goal_complete() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_fsm_transition_phase_gate_to_goal_complete() {
     let dir = TestDir::new("loopr-coord-fsm-gate2done");
     let stores = test_stores(&dir);
 
@@ -747,8 +746,8 @@ fn test_check_fsm_transition_phase_gate_to_goal_complete() {
     assert_eq!(transition, Some(CoordinatorFsmState::GoalComplete));
 }
 
-#[test]
-fn test_persist_coordinator_state() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_persist_coordinator_state() {
     let dir = TestDir::new("loopr-coord-fsm-persist");
     let stores = test_stores(&dir);
 
@@ -763,8 +762,8 @@ fn test_persist_coordinator_state() {
     assert_eq!(retrieved.fsm_state, CoordinatorFsmState::Executing);
 }
 
-#[test]
-fn test_build_phase_status_no_phase() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_phase_status_no_phase() {
     let dir = TestDir::new("loopr-coord-fsm-nophase");
     let stores = test_stores(&dir);
 
@@ -773,8 +772,8 @@ fn test_build_phase_status_no_phase() {
     assert!(status.contains("No active phase"));
 }
 
-#[test]
-fn test_build_phase_status_with_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_phase_status_with_works() {
     let dir = TestDir::new("loopr-coord-fsm-phstatus");
     let stores = test_stores(&dir);
 
@@ -800,8 +799,8 @@ fn test_build_phase_status_with_works() {
     assert!(status.contains("1 actionable, 1 terminal"));
 }
 
-#[test]
-fn test_build_phase_status_all_terminal() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_phase_status_all_terminal() {
     let dir = TestDir::new("loopr-coord-fsm-allterm");
     let stores = test_stores(&dir);
 
@@ -830,8 +829,8 @@ fn test_build_phase_status_all_terminal() {
 
 // --- Planning state: stays Planning ---
 
-#[test]
-fn test_fsm_planning_stays_when_no_plan() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_planning_stays_when_no_plan() {
     let dir = TestDir::new("loopr-fsm-plannoplan");
     let stores = test_stores(&dir);
 
@@ -840,8 +839,8 @@ fn test_fsm_planning_stays_when_no_plan() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_fsm_planning_stays_when_plan_but_no_spec() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_planning_stays_when_plan_but_no_spec() {
     let dir = TestDir::new("loopr-fsm-plannospec");
     let stores = test_stores(&dir);
 
@@ -854,8 +853,8 @@ fn test_fsm_planning_stays_when_plan_but_no_spec() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
     let dir = TestDir::new("loopr-fsm-plannophase");
     let stores = test_stores(&dir);
 
@@ -873,8 +872,8 @@ fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_fsm_planning_stays_when_plan_is_draft() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_planning_stays_when_plan_is_draft() {
     let dir = TestDir::new("loopr-fsm-plandraft");
     let stores = test_stores(&dir);
 
@@ -889,8 +888,8 @@ fn test_fsm_planning_stays_when_plan_is_draft() {
 
 // --- ActivatePhase → Executing ---
 
-#[test]
-fn test_fsm_activate_phase_to_executing_when_wis_exist() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_activate_phase_to_executing_when_wis_exist() {
     let dir = TestDir::new("loopr-fsm-act2exec");
     let stores = test_stores(&dir);
 
@@ -912,8 +911,8 @@ fn test_fsm_activate_phase_to_executing_when_wis_exist() {
     );
 }
 
-#[test]
-fn test_fsm_activate_phase_stays_when_no_phase_id() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_activate_phase_stays_when_no_phase_id() {
     let dir = TestDir::new("loopr-fsm-actnopid");
     let stores = test_stores(&dir);
 
@@ -925,8 +924,8 @@ fn test_fsm_activate_phase_stays_when_no_phase_id() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_fsm_activate_phase_stays_when_no_wis() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_activate_phase_stays_when_no_wis() {
     let dir = TestDir::new("loopr-fsm-actnowi");
     let stores = test_stores(&dir);
 
@@ -945,8 +944,8 @@ fn test_fsm_activate_phase_stays_when_no_wis() {
 
 // --- Executing state: all branches ---
 
-#[test]
-fn test_fsm_executing_stays_when_wis_in_progress() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_stays_when_wis_in_progress() {
     let dir = TestDir::new("loopr-fsm-execwip");
     let stores = test_stores(&dir);
 
@@ -966,8 +965,8 @@ fn test_fsm_executing_stays_when_wis_in_progress() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
     let dir = TestDir::new("loopr-fsm-execmix");
     let stores = test_stores(&dir);
 
@@ -993,8 +992,8 @@ fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
     );
 }
 
-#[test]
-fn test_fsm_executing_stays_when_partial_done() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_stays_when_partial_done() {
     let dir = TestDir::new("loopr-fsm-execpartial");
     let stores = test_stores(&dir);
 
@@ -1017,8 +1016,8 @@ fn test_fsm_executing_stays_when_partial_done() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_fsm_executing_to_phase_gate_on_zero_wis() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_to_phase_gate_on_zero_wis() {
     let dir = TestDir::new("loopr-fsm-exec0wi");
     let stores = test_stores(&dir);
 
@@ -1039,8 +1038,8 @@ fn test_fsm_executing_to_phase_gate_on_zero_wis() {
     );
 }
 
-#[test]
-fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
     let dir = TestDir::new("loopr-fsm-exectimeout");
     let stores = test_stores(&dir);
 
@@ -1070,8 +1069,8 @@ fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
     );
 }
 
-#[test]
-fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
     let dir = TestDir::new("loopr-fsm-execgoalto");
     let stores = test_stores(&dir);
 
@@ -1100,8 +1099,8 @@ fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
     );
 }
 
-#[test]
-fn test_fsm_executing_no_current_phase_stays() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_executing_no_current_phase_stays() {
     let dir = TestDir::new("loopr-fsm-execnophase");
     let stores = test_stores(&dir);
 
@@ -1115,8 +1114,8 @@ fn test_fsm_executing_no_current_phase_stays() {
 
 // --- PhaseGate → ActivatePhase (more phases) ---
 
-#[test]
-fn test_fsm_phase_gate_to_activate_when_more_phases() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_phase_gate_to_activate_when_more_phases() {
     let dir = TestDir::new("loopr-fsm-gate2act");
     let stores = test_stores(&dir);
 
@@ -1153,8 +1152,8 @@ fn test_fsm_phase_gate_to_activate_when_more_phases() {
 
 // --- GoalComplete is terminal ---
 
-#[test]
-fn test_fsm_goal_complete_returns_none() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_goal_complete_returns_none() {
     let dir = TestDir::new("loopr-fsm-goalnone");
     let stores = test_stores(&dir);
 
@@ -1165,8 +1164,8 @@ fn test_fsm_goal_complete_returns_none() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[test]
-fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
     // Regression: when ActivatePhase finds no next phase (all phases complete),
     // the goal must be deactivated so `run` can detect completion via get_goal.
     let dir = TestDir::new("loopr-fsm-goaldeact");
@@ -1194,8 +1193,8 @@ fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
 
 // --- Phase timeout vs goal timeout priority ---
 
-#[test]
-fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
     let dir = TestDir::new("loopr-fsm-phtopri");
     let stores = test_stores(&dir);
 
@@ -1225,8 +1224,8 @@ fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
     );
 }
 
-#[test]
-fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
     let dir = TestDir::new("loopr-fsm-goaltopri");
     let stores = test_stores(&dir);
 
@@ -1259,8 +1258,8 @@ fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
 
 // --- find_next_phase_to_activate ---
 
-#[test]
-fn test_find_next_phase_skips_completed() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_find_next_phase_skips_completed() {
     let dir = TestDir::new("loopr-fsm-nextphskip");
     let stores = test_stores(&dir);
 
@@ -1294,8 +1293,8 @@ fn test_find_next_phase_skips_completed() {
     assert_eq!(title, "Phase 2");
 }
 
-#[test]
-fn test_find_next_phase_returns_none_all_completed() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_find_next_phase_returns_none_all_completed() {
     let dir = TestDir::new("loopr-fsm-nextphnone");
     let stores = test_stores(&dir);
 
@@ -1307,8 +1306,8 @@ fn test_find_next_phase_returns_none_all_completed() {
 
 // --- Transition handler integration ---
 
-#[test]
-fn test_fsm_transition_handler_complete_phase_on_activate() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_fsm_transition_handler_complete_phase_on_activate() {
     // When transitioning PhaseGate → ActivatePhase, the previous phase
     // should be completed (added to phases_completed).
     let dir = TestDir::new("loopr-fsm-thcomplete");
@@ -1355,8 +1354,8 @@ fn test_fsm_transition_handler_complete_phase_on_activate() {
 
 // --- Fix #12: mark_phase_record_complete tests ---
 
-#[test]
-fn test_mark_phase_record_complete() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_mark_phase_record_complete() {
     let dir = TestDir::new("loopr-coord-phasecomplete");
     let stores = test_stores(&dir);
 
@@ -1378,8 +1377,8 @@ fn test_mark_phase_record_complete() {
 
 // --- Fix #2: resolve_batch_dependencies tests ---
 
-#[test]
-fn test_resolve_batch_deps_resolves_batch_0() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_resolve_batch_deps_resolves_batch_0() {
     let dir = TestDir::new("loopr-coord-batch0");
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
@@ -1398,8 +1397,8 @@ fn test_resolve_batch_deps_resolves_batch_0() {
     }
 }
 
-#[test]
-fn test_resolve_batch_deps_out_of_range() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_resolve_batch_deps_out_of_range() {
     let dir = TestDir::new("loopr-coord-batchoor");
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
@@ -1419,8 +1418,8 @@ fn test_resolve_batch_deps_out_of_range() {
     }
 }
 
-#[test]
-fn test_resolve_batch_deps_no_batch_refs() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_resolve_batch_deps_no_batch_refs() {
     let dir = TestDir::new("loopr-coord-batchnone");
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
@@ -1436,8 +1435,8 @@ fn test_resolve_batch_deps_no_batch_refs() {
     assert!(resolved.is_none(), "no batch refs should return None");
 }
 
-#[test]
-fn test_resolve_batch_deps_non_create_action() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_resolve_batch_deps_non_create_action() {
     let dir = TestDir::new("loopr-coord-batchnoncreate");
     let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
@@ -1448,8 +1447,8 @@ fn test_resolve_batch_deps_non_create_action() {
 
 // --- Fix #6: prune_independent_deps tests ---
 
-#[test]
-fn test_prune_independent_deps_removes_disjoint() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_independent_deps_removes_disjoint() {
     let dir = TestDir::new("loopr-coord-prune1");
     let stores = test_stores(&dir);
     let agent_log = test_agent_logger(&dir);
@@ -1473,8 +1472,8 @@ fn test_prune_independent_deps_removes_disjoint() {
     assert!(works[&b_id].dependencies.is_empty(), "disjoint dep should be pruned");
 }
 
-#[test]
-fn test_prune_independent_deps_keeps_overlapping() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_independent_deps_keeps_overlapping() {
     let dir = TestDir::new("loopr-coord-prune2");
     let stores = test_stores(&dir);
     let agent_log = test_agent_logger(&dir);
@@ -1498,8 +1497,8 @@ fn test_prune_independent_deps_keeps_overlapping() {
     assert_eq!(works[&b_id].dependencies, vec![a_id], "overlapping dep should be kept");
 }
 
-#[test]
-fn test_prune_independent_deps_keeps_external() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_independent_deps_keeps_external() {
     let dir = TestDir::new("loopr-coord-prune3");
     let stores = test_stores(&dir);
     let agent_log = test_agent_logger(&dir);
@@ -1527,8 +1526,8 @@ fn test_prune_independent_deps_keeps_external() {
     );
 }
 
-#[test]
-fn test_prune_independent_deps_empty_batch() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_independent_deps_empty_batch() {
     let dir = TestDir::new("loopr-coord-prune4");
     let stores = test_stores(&dir);
     let agent_log = test_agent_logger(&dir);
@@ -1539,8 +1538,8 @@ fn test_prune_independent_deps_empty_batch() {
 
 // --- Fix #5: build_phase_status dependency info tests ---
 
-#[test]
-fn test_build_phase_status_shows_dependencies() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_phase_status_shows_dependencies() {
     let dir = TestDir::new("loopr-coord-depstatus");
     let stores = test_stores(&dir);
 
@@ -1566,8 +1565,8 @@ fn test_build_phase_status_shows_dependencies() {
     assert!(status.contains("deps:"), "should show deps info: {}", status);
 }
 
-#[test]
-fn test_build_phase_status_shows_blocked_deps() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_phase_status_shows_blocked_deps() {
     let dir = TestDir::new("loopr-coord-depblocked");
     let stores = test_stores(&dir);
 
@@ -1597,8 +1596,8 @@ fn test_build_phase_status_shows_blocked_deps() {
 
 // --- Fix #4: retry enforcement tests ---
 
-#[test]
-fn test_increment_attempts_tracks_retries() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_increment_attempts_tracks_retries() {
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     assert_eq!(coord_state.attempts("wi-1"), 0);
     assert_eq!(coord_state.increment_attempts("wi-1"), 1);
@@ -1607,8 +1606,8 @@ fn test_increment_attempts_tracks_retries() {
     assert_eq!(coord_state.attempts("wi-1"), 3);
 }
 
-#[test]
-fn test_decrement_attempts_on_dependency_not_met() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_decrement_attempts_on_dependency_not_met() {
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     // Simulate: increment, then undo (DependencyNotMet)
     coord_state.increment_attempts("wi-1");
@@ -1623,8 +1622,8 @@ fn test_decrement_attempts_on_dependency_not_met() {
 
 // --- Fix #9: failure learnings in build_phase_status ---
 
-#[test]
-fn test_build_phase_status_includes_failure_learnings() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_phase_status_includes_failure_learnings() {
     let dir = TestDir::new("loopr-coord-learnings");
     let stores = test_stores(&dir);
 
@@ -1672,8 +1671,8 @@ fn test_build_phase_status_includes_failure_learnings() {
 
 // --- C2: Recently Merged Bundles in state summary ---
 
-#[test]
-fn test_build_state_summary_includes_recently_merged_bundles() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_includes_recently_merged_bundles() {
     let dir = TestDir::new("loopr-coord-c2-merged");
     let stores = test_stores(&dir);
 
@@ -1699,8 +1698,8 @@ fn test_build_state_summary_includes_recently_merged_bundles() {
     assert!(summary.contains(&wi_id), "should link to parent WI: {}", summary);
 }
 
-#[test]
-fn test_build_state_summary_excludes_merged_when_wi_done() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_excludes_merged_when_wi_done() {
     let dir = TestDir::new("loopr-coord-c2-done");
     let stores = test_stores(&dir);
 
@@ -1726,8 +1725,8 @@ fn test_build_state_summary_excludes_merged_when_wi_done() {
 
 // --- C3: Rejected Bundles state summary tests ---
 
-#[test]
-fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() {
     let dir = TestDir::new("loopr-coord-c3-rej");
     let stores = test_stores(&dir);
 
@@ -1763,8 +1762,8 @@ fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() {
     );
 }
 
-#[test]
-fn test_build_state_summary_rejected_bundle_includes_verification_reason() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_rejected_bundle_includes_verification_reason() {
     let dir = TestDir::new("loopr-coord-c3-reason");
     let stores = test_stores(&dir);
 
@@ -1787,8 +1786,8 @@ fn test_build_state_summary_rejected_bundle_includes_verification_reason() {
     );
 }
 
-#[test]
-fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
     let dir = TestDir::new("loopr-coord-c3-noverify");
     let stores = test_stores(&dir);
 
@@ -1811,8 +1810,8 @@ fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
     );
 }
 
-#[test]
-fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
     let dir = TestDir::new("loopr-coord-c3-noshow");
     let stores = test_stores(&dir);
 
@@ -1837,8 +1836,8 @@ fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
 
 // --- sweep_integrated_to_done tests ---
 
-#[test]
-fn test_sweep_integrated_to_done_transitions_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sweep_integrated_to_done_transitions_works() {
     let dir = TestDir::new("loopr-coord-sweep-basic");
     let stores = test_stores(&dir);
 
@@ -1869,8 +1868,8 @@ fn test_sweep_integrated_to_done_transitions_works() {
     assert_eq!(updated.status(), WorkStatus::Done);
 }
 
-#[test]
-fn test_sweep_noop_when_no_integrated_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sweep_noop_when_no_integrated_works() {
     let dir = TestDir::new("loopr-coord-sweep-noop");
     let stores = test_stores(&dir);
 
@@ -1900,8 +1899,8 @@ fn test_sweep_noop_when_no_integrated_works() {
     assert_eq!(unchanged.status(), WorkStatus::Draft);
 }
 
-#[test]
-fn test_sweep_then_fsm_advances_to_phase_gate() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sweep_then_fsm_advances_to_phase_gate() {
     let dir = TestDir::new("loopr-coord-sweep-fsmadv");
     let stores = test_stores(&dir);
 
@@ -1948,15 +1947,15 @@ fn test_sweep_then_fsm_advances_to_phase_gate() {
 
 // --- last_error_kind_for_work tests ---
 
-#[test]
-fn test_last_error_kind_for_work_returns_none_when_no_sessions() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_last_error_kind_for_work_returns_none_when_no_sessions() {
     let dir = TestDir::new("loopr-coord-errk-none");
     let stores = test_stores(&dir);
     assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
 }
 
-#[test]
-fn test_last_error_kind_for_work_returns_structural_error() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_last_error_kind_for_work_returns_structural_error() {
     let dir = TestDir::new("loopr-coord-errk-struct");
     let stores = test_stores(&dir);
 
@@ -1974,8 +1973,8 @@ fn test_last_error_kind_for_work_returns_structural_error() {
     assert_eq!(kind, Some(AgentErrorKind::ContextOverflow));
 }
 
-#[test]
-fn test_last_error_kind_for_work_ignores_non_failed_sessions() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_last_error_kind_for_work_ignores_non_failed_sessions() {
     let dir = TestDir::new("loopr-coord-errk-nonfail");
     let stores = test_stores(&dir);
 
@@ -1992,8 +1991,8 @@ fn test_last_error_kind_for_work_ignores_non_failed_sessions() {
     assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
 }
 
-#[test]
-fn test_last_error_kind_for_work_ignores_other_works() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_last_error_kind_for_work_ignores_other_works() {
     let dir = TestDir::new("loopr-coord-errk-other");
     let stores = test_stores(&dir);
 
@@ -2012,8 +2011,8 @@ fn test_last_error_kind_for_work_ignores_other_works() {
 
 // --- phase_missing_test_tool tests ---
 
-#[test]
-fn test_phase_missing_test_tool_no_validation_commands() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_phase_missing_test_tool_no_validation_commands() {
     let dir = TestDir::new("loopr-coord-toolguard-novc");
     let stores = test_stores(&dir);
 
@@ -2028,8 +2027,8 @@ fn test_phase_missing_test_tool_no_validation_commands() {
     assert!(warning.is_empty(), "no warning when phase has no validation_commands");
 }
 
-#[test]
-fn test_phase_missing_test_tool_warns_when_no_tool() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_phase_missing_test_tool_warns_when_no_tool() {
     let dir = TestDir::new("loopr-coord-toolguard-warn");
     let stores = test_stores(&dir);
 
@@ -2051,8 +2050,8 @@ fn test_phase_missing_test_tool_warns_when_no_tool() {
     assert!(warning.contains("cargo test"));
 }
 
-#[test]
-fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
     let dir = TestDir::new("loopr-coord-toolguard-ok");
     let stores = test_stores(&dir);
 
@@ -2076,5 +2075,3 @@ fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
     let warning = phase_missing_test_tool(&stores, &coord_state);
     assert!(warning.is_empty(), "no warning when test tool is registered");
 }
-
-*/

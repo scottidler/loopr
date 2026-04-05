@@ -389,7 +389,6 @@ pub(super) fn handle_override_work(
     )))
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -404,7 +403,7 @@ mod tests {
     use crate::test_util::TestDir;
     use std::sync::Arc;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_transition_action_uses_correct_param() {
         let dir = TestDir::new("loopr-exec-transparam");
 
@@ -428,7 +427,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_assign_agent_auto_transitions_draft() {
         let dir = TestDir::new("loopr-exec-autotrans");
 
@@ -464,7 +463,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_create_work() {
         let dir = TestDir::new("loopr-exec-createwi");
         let stores = test_stores(&dir);
@@ -497,7 +496,7 @@ mod tests {
 
     // --- Group B: Git operations ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_spawn_researcher() {
         let dir = TestDir::new("loopr-exec-spawnres");
         let stores = test_stores(&dir);
@@ -516,7 +515,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_transition_role_inference() {
         let dir = TestDir::new("loopr-exec-roleinfer");
         let stores = test_stores(&dir);
@@ -538,7 +537,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_transition_role_inference_all_collections() {
         let dir = TestDir::new("loopr-exec-transall");
         let stores = test_stores(&dir);
@@ -578,7 +577,7 @@ mod tests {
         assert!(matches!(result, ActionResult::Transitioned(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_transition_assignee_validation_for_inprogress() {
         let dir = TestDir::new("loopr-exec-assignee");
         let stores = test_stores(&dir);
@@ -596,7 +595,7 @@ mod tests {
         assert!(result.is_err(), "InProgress without assignee should fail: {:?}", result);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_create_work_error_path() {
         let dir = TestDir::new("loopr-exec-wierr");
         let stores = test_stores(&dir);
@@ -618,7 +617,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_spawn_researcher_via_action() {
         let dir = TestDir::new("loopr-exec-spawnres2");
         let stores = test_stores(&dir);
@@ -637,7 +636,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_assign_agent_dependency_not_met() {
         let dir = TestDir::new("loopr-exec-depnotmet");
         let stores = test_stores(&dir);
@@ -683,7 +682,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_assign_agent_dependency_met() {
         let dir = TestDir::new("loopr-exec-depmet");
         let stores = test_stores(&dir);
@@ -739,7 +738,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_create_work_with_dependencies() {
         let dir = TestDir::new("loopr-exec-wideps");
         let stores = test_stores(&dir);
@@ -765,7 +764,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_create_work_duplicate_rejected() {
         let dir = TestDir::new("loopr-exec-widup");
         let stores = test_stores(&dir);
@@ -800,7 +799,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_create_work_duplicate_case_insensitive() {
         let dir = TestDir::new("loopr-exec-widupcase");
         let stores = test_stores(&dir);
@@ -836,7 +835,7 @@ mod tests {
 
     // --- Fix #1: resolve_latest_published_tick_id tests ---
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_assign_agent_to_done_work_returns_directive_error() {
         let dir = TestDir::new("loopr-exec-assigndone");
         let stores = test_stores(&dir);
@@ -972,7 +971,7 @@ mod tests {
         (wi_id, bundle_id)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_override_guard_merged_blocks_ready() {
         let dir = TestDir::new("loopr-exec-guard-merged");
         let stores = test_stores(&dir);
@@ -1005,7 +1004,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_override_guard_integrating_blocks_ready() {
         let dir = TestDir::new("loopr-exec-guard-integrating");
         let stores = test_stores(&dir);
@@ -1037,7 +1036,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_override_guard_rejected_allows_ready() {
         let dir = TestDir::new("loopr-exec-guard-rejected");
         let stores = test_stores(&dir);
@@ -1059,7 +1058,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_override_guard_merged_allows_abandoned() {
         let dir = TestDir::new("loopr-exec-guard-abandoned");
         let stores = test_stores(&dir);
@@ -1081,7 +1080,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_override_guard_mixed_bundles_merged_blocks() {
         let dir = TestDir::new("loopr-exec-guard-mixed");
         let stores = test_stores(&dir);
@@ -1124,4 +1123,3 @@ mod tests {
 
     // --- Noop Bundle Pathway tests ---
 }
-*/
