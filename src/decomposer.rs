@@ -173,8 +173,8 @@ pub fn extract_acceptance_criteria(content: &str) -> Vec<String> {
 }
 
 /// Call the LLM and parse the response as a JSON array of ChildEntry.
-async fn call_llm_for_children(
-    http_client: &(dyn HttpClient + Sync),
+async fn call_llm_for_children<H: HttpClient + Sync>(
+    http_client: &H,
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<Vec<ChildEntry>> {
@@ -230,8 +230,8 @@ async fn call_llm_for_children(
 }
 
 /// Call the LLM for validation and parse result.
-async fn call_llm_for_validation(
-    http_client: &(dyn HttpClient + Sync),
+async fn call_llm_for_validation<H: HttpClient + Sync>(
+    http_client: &H,
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<ValidationResult> {
@@ -281,8 +281,8 @@ async fn call_llm_for_validation(
 }
 
 /// Call the LLM for ratification and parse result.
-async fn call_llm_for_ratification(
-    http_client: &(dyn HttpClient + Sync),
+async fn call_llm_for_ratification<H: HttpClient + Sync>(
+    http_client: &H,
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<RatifyResult> {
@@ -292,8 +292,8 @@ async fn call_llm_for_ratification(
 }
 
 /// Raw LLM call that returns text (shared helper).
-async fn call_llm_for_children_raw(
-    http_client: &(dyn HttpClient + Sync),
+async fn call_llm_for_children_raw<H: HttpClient + Sync>(
+    http_client: &H,
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<String> {
@@ -346,12 +346,12 @@ async fn call_llm_for_children_raw(
 ///
 /// Uses staging: child files are written to a temp directory first, then
 /// moved to the run directory only if all validation passes.
-async fn decompose_into(
+async fn decompose_into<H: HttpClient + Sync>(
     parent: &Doc,
     target_kind: DocKind,
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &(dyn HttpClient + Sync),
+    http_client: &H,
 ) -> Result<Vec<Doc>> {
     info!("decompose: {} {} -> {}s", parent.kind, parent.id, target_kind);
 
@@ -460,11 +460,11 @@ async fn decompose_into(
 /// Decompose a single parent Doc into child Docs using the natural child kind.
 ///
 /// Thin wrapper around `decompose_into` that computes the child kind from the parent.
-pub async fn decompose(
+pub async fn decompose<H: HttpClient + Sync>(
     parent: &Doc,
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &(dyn HttpClient + Sync),
+    http_client: &H,
 ) -> Result<Vec<Doc>> {
     let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
     decompose_into(parent, ck, run_dir, config, http_client).await
@@ -477,11 +477,11 @@ pub async fn decompose(
 ///
 /// In Brief mode (plan has no contracts), skips Spec and Phase levels
 /// and decomposes Plan directly into Works.
-pub async fn decompose_hierarchy(
+pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &(dyn HttpClient + Sync),
+    http_client: &H,
     brief: bool,
 ) -> Result<Vec<Doc>> {
     let mut all_docs = Vec::new();
@@ -512,12 +512,12 @@ pub async fn decompose_hierarchy(
 }
 
 /// Bottom-up ratification of the decomposition hierarchy.
-async fn ratify_hierarchy(
+async fn ratify_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
     all_docs: &[Doc],
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &(dyn HttpClient + Sync),
+    http_client: &H,
 ) -> Result<()> {
     // Group docs by parent_id
     let mut children_of: HashMap<&str, Vec<&Doc>> = HashMap::new();
