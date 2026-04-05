@@ -43,4 +43,10 @@ mod tests {          // ← forbidden: inline test block in impl file
 
 Keeping tests out of implementation files reduces noise when reading source, makes the module boundary explicit, and avoids the pattern where tests accumulate at the bottom of already-large files.
 
-`tests.rs` and `tests/mod.rs` are equivalent in Rust's module system — use `tests.rs` for a single file, graduate to `tests/` only when the test module itself needs to be split.
+`tests.rs` and `tests/mod.rs` are equivalent in Rust's module system - use `tests.rs` for a single file, graduate to `tests/` only when the test module itself needs to be split.
+
+## Banned Crates
+
+| Crate | Reason | Alternative |
+|-------|--------|-------------|
+| `async-trait` | Unnecessary since Edition 2024 / Rust 1.75+. Generates hidden `Pin<Box<dyn Future>>` that we can write explicitly when needed. | Native `async fn` in traits (non-dyn); manual `Pin<Box<dyn Future + Send + 'a>>` (dyn-required) |

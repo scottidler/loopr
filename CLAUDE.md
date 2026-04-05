@@ -41,6 +41,7 @@ cargo check      # Quick compile check
 - No `#[allow(dead_code)]` in final code
 - No underscore-prefixed unused variables in final code
 - Commit messages: `feat(scope): description` with phase context
+- No `async-trait` crate - use native `async fn` / `impl Future` for non-dyn traits; use manual `Pin<Box<dyn Future>>` for traits requiring dyn dispatch (e.g. Tool)
 
 ## Codebase Map
 

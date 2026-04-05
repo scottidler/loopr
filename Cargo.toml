@@ -32,7 +32,6 @@ thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full"] }
 tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["codec"] }
-async-trait = "0.1.89"
 # Dependencies will be added via cargo add
 
 [build-dependencies]

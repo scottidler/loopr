@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-05
-**Status:** Approved
+**Status:** Superseded by 2026-04-05-async-trait-eradication.md
 **Review Passes Completed:** 5/5
 
 ## Summary
