@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -6,7 +8,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct WriteTool;
 
-#[async_trait]
 impl Tool for WriteTool {
     fn name(&self) -> &str {
         "write"
@@ -33,55 +34,61 @@ impl Tool for WriteTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let path = match input.get("path").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: path".into(),
-                    is_error: true,
-                };
-            }
-        };
-        let content = match input.get("content").and_then(|v| v.as_str()) {
-            Some(c) => c,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: content".into(),
-                    is_error: true,
-                };
-            }
-        };
-
-        let full_path = match ctx.validate_path(path) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResult {
-                    content: e.to_string(),
-                    is_error: true,
-                };
-            }
-        };
-
-        if let Some(parent) = full_path.parent()
-            && let Err(e) = tokio::fs::create_dir_all(parent).await
-        {
-            return ToolResult {
-                content: format!("failed to create directory: {}", e),
-                is_error: true,
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let path = match input.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: path".into(),
+                        is_error: true,
+                    };
+                }
             };
-        }
+            let content = match input.get("content").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: content".into(),
+                        is_error: true,
+                    };
+                }
+            };
 
-        match tokio::fs::write(&full_path, content).await {
-            Ok(()) => ToolResult {
-                content: format!("wrote {} bytes to {}", content.len(), path),
-                is_error: false,
-            },
-            Err(e) => ToolResult {
-                content: format!("failed to write '{}': {}", path, e),
-                is_error: true,
-            },
-        }
+            let full_path = match ctx.validate_path(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult {
+                        content: e.to_string(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            if let Some(parent) = full_path.parent()
+                && let Err(e) = tokio::fs::create_dir_all(parent).await
+            {
+                return ToolResult {
+                    content: format!("failed to create directory: {}", e),
+                    is_error: true,
+                };
+            }
+
+            match tokio::fs::write(&full_path, content).await {
+                Ok(()) => ToolResult {
+                    content: format!("wrote {} bytes to {}", content.len(), path),
+                    is_error: false,
+                },
+                Err(e) => ToolResult {
+                    content: format!("failed to write '{}': {}", path, e),
+                    is_error: true,
+                },
+            }
+        })
     }
 }
 

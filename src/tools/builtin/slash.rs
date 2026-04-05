@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -7,7 +9,6 @@ use crate::tools::traits::{Tool, ToolResult};
 /// Slash command tool — allows the LLM to invoke slash commands (e.g., /commit, /status).
 pub struct SlashTool;
 
-#[async_trait]
 impl Tool for SlashTool {
     fn name(&self) -> &str {
         "slash"
@@ -34,22 +35,28 @@ impl Tool for SlashTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, _ctx: &ToolContext) -> ToolResult {
-        let command = match input.get("command").and_then(|v| v.as_str()) {
-            Some(c) => c,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: command".into(),
-                    is_error: true,
-                };
-            }
-        };
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        _ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let command = match input.get("command").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: command".into(),
+                        is_error: true,
+                    };
+                }
+            };
 
-        // Placeholder — slash commands will be routed through the TUI/agent system
-        ToolResult {
-            content: format!("slash command '{}' acknowledged (not yet implemented)", command),
-            is_error: false,
-        }
+            // Placeholder - slash commands will be routed through the TUI/agent system
+            ToolResult {
+                content: format!("slash command '{}' acknowledged (not yet implemented)", command),
+                is_error: false,
+            }
+        })
     }
 }
 

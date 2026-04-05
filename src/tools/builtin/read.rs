@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -6,7 +8,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct ReadTool;
 
-#[async_trait]
 impl Tool for ReadTool {
     fn name(&self) -> &str {
         "read"
@@ -37,65 +38,71 @@ impl Tool for ReadTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let path = match input.get("path").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: path".into(),
-                    is_error: true,
-                };
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let path = match input.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: path".into(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let full_path = match ctx.validate_path(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult {
+                        content: e.to_string(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let content = match tokio::fs::read_to_string(&full_path).await {
+                Ok(c) => c,
+                Err(e) => {
+                    return ToolResult {
+                        content: format!("failed to read '{}': {}", path, e),
+                        is_error: true,
+                    };
+                }
+            };
+
+            ctx.track_read(&full_path).await;
+
+            let lines: Vec<&str> = content.lines().collect();
+            let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
+            let limit = input.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize);
+
+            let start = offset.saturating_sub(1);
+            let effective_limit = limit.unwrap_or(500);
+            let end = (start + effective_limit).min(lines.len());
+
+            let mut numbered: Vec<String> = lines[start..end]
+                .iter()
+                .enumerate()
+                .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
+                .collect();
+
+            // Append truncation note if file was longer and no explicit limit was set
+            if end < lines.len() && limit.is_none() {
+                numbered.push(format!(
+                    "\n... [{} more lines, use offset/limit to paginate]",
+                    lines.len() - end
+                ));
             }
-        };
 
-        let full_path = match ctx.validate_path(path) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResult {
-                    content: e.to_string(),
-                    is_error: true,
-                };
+            ToolResult {
+                content: numbered.join("\n"),
+                is_error: false,
             }
-        };
-
-        let content = match tokio::fs::read_to_string(&full_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                return ToolResult {
-                    content: format!("failed to read '{}': {}", path, e),
-                    is_error: true,
-                };
-            }
-        };
-
-        ctx.track_read(&full_path).await;
-
-        let lines: Vec<&str> = content.lines().collect();
-        let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1).max(1) as usize;
-        let limit = input.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize);
-
-        let start = offset.saturating_sub(1);
-        let effective_limit = limit.unwrap_or(500);
-        let end = (start + effective_limit).min(lines.len());
-
-        let mut numbered: Vec<String> = lines[start..end]
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
-            .collect();
-
-        // Append truncation note if file was longer and no explicit limit was set
-        if end < lines.len() && limit.is_none() {
-            numbered.push(format!(
-                "\n... [{} more lines, use offset/limit to paginate]",
-                lines.len() - end
-            ));
-        }
-
-        ToolResult {
-            content: numbered.join("\n"),
-            is_error: false,
-        }
+        })
     }
 }
 

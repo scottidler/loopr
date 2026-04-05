@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -13,7 +15,6 @@ use crate::tools::traits::{Tool, ToolResult};
 /// Supports `run_in_background` for long-running commands (builds, tests).
 pub struct ShellTool;
 
-#[async_trait]
 impl Tool for ShellTool {
     fn name(&self) -> &str {
         "shell"
@@ -44,47 +45,53 @@ impl Tool for ShellTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let command = match input.get("command").and_then(|v| v.as_str()) {
-            Some(c) => c,
-            None => {
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let command = match input.get("command").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: command".into(),
+                        is_error: true,
+                    };
+                }
+            };
+            let timeout = input.get("timeout").and_then(|v| v.as_u64()).unwrap_or(120);
+            let background = input
+                .get("run_in_background")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let lane = classify("shell");
+
+            if background {
+                let router: Arc<LaneRouter> = Arc::clone(&ctx.router);
+                let task = router.spawn_background(command, &ctx.working_dir, lane, Some(timeout));
                 return ToolResult {
-                    content: "missing required parameter: command".into(),
-                    is_error: true,
+                    content: format!(
+                        "background task started: {}\nOutput will be written to: {}\nUse the read or grep tool on this path to check results.",
+                        task.task_id,
+                        task.output_path.display()
+                    ),
+                    is_error: false,
                 };
             }
-        };
-        let timeout = input.get("timeout").and_then(|v| v.as_u64()).unwrap_or(120);
-        let background = input
-            .get("run_in_background")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
 
-        let lane = classify("shell");
-
-        if background {
-            let router: Arc<LaneRouter> = Arc::clone(&ctx.router);
-            let task = router.spawn_background(command, &ctx.working_dir, lane, Some(timeout));
-            return ToolResult {
-                content: format!(
-                    "background task started: {}\nOutput will be written to: {}\nUse the read or grep tool on this path to check results.",
-                    task.task_id,
-                    task.output_path.display()
-                ),
-                is_error: false,
-            };
-        }
-
-        match execute_in_lane(command, &ctx.working_dir, lane, timeout, &ctx.router).await {
-            Ok(output) => ToolResult {
-                content: format_shell_output(&output),
-                is_error: output.exit_code != 0,
-            },
-            Err(e) => ToolResult {
-                content: format!("shell command failed: {}", e),
-                is_error: true,
-            },
-        }
+            match execute_in_lane(command, &ctx.working_dir, lane, timeout, &ctx.router).await {
+                Ok(output) => ToolResult {
+                    content: format_shell_output(&output),
+                    is_error: output.exit_code != 0,
+                },
+                Err(e) => ToolResult {
+                    content: format!("shell command failed: {}", e),
+                    is_error: true,
+                },
+            }
+        })
     }
 }
 

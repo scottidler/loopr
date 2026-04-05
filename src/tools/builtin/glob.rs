@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -6,7 +8,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct GlobTool;
 
-#[async_trait]
 impl Tool for GlobTool {
     fn name(&self) -> &str {
         "glob"
@@ -29,45 +30,51 @@ impl Tool for GlobTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let pattern = match input.get("pattern").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: pattern".into(),
-                    is_error: true,
-                };
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let pattern = match input.get("pattern").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: pattern".into(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let full_pattern = ctx.working_dir.join(pattern).to_string_lossy().to_string();
+
+            let matches: Vec<String> = match glob::glob(&full_pattern) {
+                Ok(paths) => paths
+                    .filter_map(|p| p.ok())
+                    .map(|p| {
+                        p.strip_prefix(&ctx.working_dir)
+                            .unwrap_or(&p)
+                            .to_string_lossy()
+                            .to_string()
+                    })
+                    .collect(),
+                Err(e) => {
+                    return ToolResult {
+                        content: format!("invalid glob pattern: {}", e),
+                        is_error: true,
+                    };
+                }
+            };
+
+            ToolResult {
+                content: if matches.is_empty() {
+                    "no matches found".to_string()
+                } else {
+                    matches.join("\n")
+                },
+                is_error: false,
             }
-        };
-
-        let full_pattern = ctx.working_dir.join(pattern).to_string_lossy().to_string();
-
-        let matches: Vec<String> = match glob::glob(&full_pattern) {
-            Ok(paths) => paths
-                .filter_map(|p| p.ok())
-                .map(|p| {
-                    p.strip_prefix(&ctx.working_dir)
-                        .unwrap_or(&p)
-                        .to_string_lossy()
-                        .to_string()
-                })
-                .collect(),
-            Err(e) => {
-                return ToolResult {
-                    content: format!("invalid glob pattern: {}", e),
-                    is_error: true,
-                };
-            }
-        };
-
-        ToolResult {
-            content: if matches.is_empty() {
-                "no matches found".to_string()
-            } else {
-                matches.join("\n")
-            },
-            is_error: false,
-        }
+        })
     }
 }
 

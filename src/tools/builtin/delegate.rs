@@ -1,6 +1,7 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use log::debug;
 use serde_json::json;
 
@@ -25,7 +26,6 @@ impl<L: AgenticLlm + Send + Sync + 'static> DelegateTool<L> {
     }
 }
 
-#[async_trait]
 impl<L: AgenticLlm + Send + Sync + 'static> Tool for DelegateTool<L> {
     fn name(&self) -> &str {
         "delegate"
@@ -58,63 +58,70 @@ impl<L: AgenticLlm + Send + Sync + 'static> Tool for DelegateTool<L> {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let task = match input.get("task").and_then(|v| v.as_str()) {
-            Some(t) => t,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: task".into(),
-                    is_error: true,
-                };
-            }
-        };
-        let max_iter = input.get("max_iterations").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
-
-        let child_id = format!("{}:sub", ctx.exec_id);
-        let child_ctx = ToolContext::new(ctx.working_dir.clone(), child_id);
-
-        let system_prompt = format!(
-            "You are a research subagent. Complete the following task using the available tools. \
-             Be thorough but concise in your final response — your output will be returned \
-             to a parent agent as a tool result.\n\nTask: {}",
-            task
-        );
-
-        let messages = vec![Message {
-            role: "user".to_string(),
-            content: vec![ContentBlock::Text { text: task.to_string() }],
-        }];
-
-        debug!(
-            "delegate: spawning child loop (task_len={}, max_iter={})",
-            task.len(),
-            max_iter
-        );
-
-        match run_tool_loop(
-            self.llm.as_ref(),
-            self.executor.as_ref(),
-            &child_ctx,
-            &system_prompt,
-            messages,
-            max_iter,
-            None, // Child events don't stream to TUI
-            None, // No checkpointing for child loops
-        )
-        .await
-        {
-            Ok(result) => {
-                debug!("delegate: child completed ({} tool calls)", result.tool_calls_count);
-                ToolResult {
-                    content: result.text,
-                    is_error: false,
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let task = match input.get("task").and_then(|v| v.as_str()) {
+                Some(t) => t,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: task".into(),
+                        is_error: true,
+                    };
                 }
+            };
+            let max_iter =
+                input.get("max_iterations").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
+
+            let child_id = format!("{}:sub", ctx.exec_id);
+            let child_ctx = ToolContext::new(ctx.working_dir.clone(), child_id);
+
+            let system_prompt = format!(
+                "You are a research subagent. Complete the following task using the available tools. \
+                 Be thorough but concise in your final response - your output will be returned \
+                 to a parent agent as a tool result.\n\nTask: {}",
+                task
+            );
+
+            let messages = vec![Message {
+                role: "user".to_string(),
+                content: vec![ContentBlock::Text { text: task.to_string() }],
+            }];
+
+            debug!(
+                "delegate: spawning child loop (task_len={}, max_iter={})",
+                task.len(),
+                max_iter
+            );
+
+            match run_tool_loop(
+                self.llm.as_ref(),
+                self.executor.as_ref(),
+                &child_ctx,
+                &system_prompt,
+                messages,
+                max_iter,
+                None, // Child events don't stream to TUI
+                None, // No checkpointing for child loops
+            )
+            .await
+            {
+                Ok(result) => {
+                    debug!("delegate: child completed ({} tool calls)", result.tool_calls_count);
+                    ToolResult {
+                        content: result.text,
+                        is_error: false,
+                    }
+                }
+                Err(e) => ToolResult {
+                    content: format!("subagent failed: {}", e),
+                    is_error: true,
+                },
             }
-            Err(e) => ToolResult {
-                content: format!("subagent failed: {}", e),
-                is_error: true,
-            },
-        }
+        })
     }
 }
 

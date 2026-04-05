@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -6,7 +8,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct TreeTool;
 
-#[async_trait]
 impl Tool for TreeTool {
     fn name(&self) -> &str {
         "tree"
@@ -32,27 +33,33 @@ impl Tool for TreeTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let max_depth = input.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let max_depth = input.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
 
-        let full_path = match ctx.validate_path(path) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResult {
-                    content: e.to_string(),
-                    is_error: true,
-                };
+            let full_path = match ctx.validate_path(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult {
+                        content: e.to_string(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let mut output = Vec::new();
+            build_tree(&full_path, "", 0, max_depth, &mut output);
+
+            ToolResult {
+                content: output.join("\n"),
+                is_error: false,
             }
-        };
-
-        let mut output = Vec::new();
-        build_tree(&full_path, "", 0, max_depth, &mut output);
-
-        ToolResult {
-            content: output.join("\n"),
-            is_error: false,
-        }
+        })
     }
 }
 

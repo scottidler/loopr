@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -6,7 +8,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct ListTool;
 
-#[async_trait]
 impl Tool for ListTool {
     fn name(&self) -> &str {
         "list"
@@ -28,45 +29,51 @@ impl Tool for ListTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-        let full_path = match ctx.validate_path(path) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResult {
-                    content: e.to_string(),
-                    is_error: true,
-                };
+            let full_path = match ctx.validate_path(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult {
+                        content: e.to_string(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let mut entries = match tokio::fs::read_dir(&full_path).await {
+                Ok(e) => e,
+                Err(e) => {
+                    return ToolResult {
+                        content: format!("failed to list '{}': {}", path, e),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let mut names = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let is_dir = entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false);
+                if is_dir {
+                    names.push(format!("{}/", name));
+                } else {
+                    names.push(name);
+                }
             }
-        };
+            names.sort();
 
-        let mut entries = match tokio::fs::read_dir(&full_path).await {
-            Ok(e) => e,
-            Err(e) => {
-                return ToolResult {
-                    content: format!("failed to list '{}': {}", path, e),
-                    is_error: true,
-                };
+            ToolResult {
+                content: names.join("\n"),
+                is_error: false,
             }
-        };
-
-        let mut names = Vec::new();
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.file_type().await.map(|ft| ft.is_dir()).unwrap_or(false);
-            if is_dir {
-                names.push(format!("{}/", name));
-            } else {
-                names.push(name);
-            }
-        }
-        names.sort();
-
-        ToolResult {
-            content: names.join("\n"),
-            is_error: false,
-        }
+        })
     }
 }
 

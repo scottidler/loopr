@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -8,7 +10,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct GrepTool;
 
-#[async_trait]
 impl Tool for GrepTool {
     fn name(&self) -> &str {
         "grep"
@@ -39,38 +40,44 @@ impl Tool for GrepTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let pattern = match input.get("pattern").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: pattern".into(),
-                    is_error: true,
-                };
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let pattern = match input.get("pattern").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: pattern".into(),
+                        is_error: true,
+                    };
+                }
+            };
+            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let include = input.get("include").and_then(|v| v.as_str());
+
+            let mut cmd = format!("grep -rn '{}' '{}'", pattern.replace('\'', "'\\''"), path);
+            if let Some(inc) = include {
+                cmd = format!("{} --include='{}'", cmd, inc);
             }
-        };
-        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let include = input.get("include").and_then(|v| v.as_str());
+            // Limit output
+            cmd = format!("{} | head -100", cmd);
 
-        let mut cmd = format!("grep -rn '{}' '{}'", pattern.replace('\'', "'\\''"), path);
-        if let Some(inc) = include {
-            cmd = format!("{} --include='{}'", cmd, inc);
-        }
-        // Limit output
-        cmd = format!("{} | head -100", cmd);
-
-        let lane = classify("grep");
-        match execute_in_lane(&cmd, &ctx.working_dir, lane, 30, &ctx.router).await {
-            Ok(output) => ToolResult {
-                content: format_shell_output(&output),
-                // grep returns exit 1 for no matches - that's not an error
-                is_error: output.exit_code > 1,
-            },
-            Err(e) => ToolResult {
-                content: format!("grep failed: {}", e),
-                is_error: true,
-            },
-        }
+            let lane = classify("grep");
+            match execute_in_lane(&cmd, &ctx.working_dir, lane, 30, &ctx.router).await {
+                Ok(output) => ToolResult {
+                    content: format_shell_output(&output),
+                    // grep returns exit 1 for no matches - that's not an error
+                    is_error: output.exit_code > 1,
+                },
+                Err(e) => ToolResult {
+                    content: format!("grep failed: {}", e),
+                    is_error: true,
+                },
+            }
+        })
     }
 }
 

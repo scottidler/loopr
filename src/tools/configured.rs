@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::config::ToolEntry;
@@ -19,7 +21,6 @@ impl ConfiguredTool {
     }
 }
 
-#[async_trait]
 impl Tool for ConfiguredTool {
     fn name(&self) -> &str {
         &self.entry.name
@@ -42,37 +43,43 @@ impl Tool for ConfiguredTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let args: Vec<String> = input
-            .get("args")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let args: Vec<String> = input
+                .get("args")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
 
-        let full_command = if args.is_empty() {
-            self.entry.command.clone()
-        } else {
-            format!("{} {}", self.entry.command, args.join(" "))
-        };
+            let full_command = if args.is_empty() {
+                self.entry.command.clone()
+            } else {
+                format!("{} {}", self.entry.command, args.join(" "))
+            };
 
-        let lane = classify(&self.entry.name);
-        match execute_in_lane(
-            &full_command,
-            &ctx.working_dir,
-            lane,
-            self.entry.timeout_secs,
-            &ctx.router,
-        )
-        .await
-        {
-            Ok(output) => ToolResult {
-                content: format_shell_output(&output),
-                is_error: output.exit_code != 0,
-            },
-            Err(e) => ToolResult {
-                content: format!("command failed: {}", e),
-                is_error: true,
-            },
-        }
+            let lane = classify(&self.entry.name);
+            match execute_in_lane(
+                &full_command,
+                &ctx.working_dir,
+                lane,
+                self.entry.timeout_secs,
+                &ctx.router,
+            )
+            .await
+            {
+                Ok(output) => ToolResult {
+                    content: format_shell_output(&output),
+                    is_error: output.exit_code != 0,
+                },
+                Err(e) => ToolResult {
+                    content: format!("command failed: {}", e),
+                    is_error: true,
+                },
+            }
+        })
     }
 }
 

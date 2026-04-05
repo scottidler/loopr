@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde::{Deserialize, Serialize};
 
 /// Result of executing a tool — used by all tools (built-in and configured).
@@ -11,12 +13,15 @@ pub struct ToolResult {
 /// A tool that can be executed by the ToolExecutor.
 /// Both built-in tools (read, write, grep) and configured tools (test, lint, build)
 /// implement this trait.
-#[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn input_schema(&self) -> serde_json::Value;
-    async fn execute(&self, input: serde_json::Value, ctx: &super::context::ToolContext) -> ToolResult;
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a super::context::ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
 }
 
 #[allow(clippy::unwrap_used)]

@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -6,7 +8,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct EditTool;
 
-#[async_trait]
 impl Tool for EditTool {
     fn name(&self) -> &str {
         "edit"
@@ -37,80 +38,86 @@ impl Tool for EditTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let path = match input.get("path").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: path".into(),
-                    is_error: true,
-                };
-            }
-        };
-        let old_string = match input.get("old_string").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: old_string".into(),
-                    is_error: true,
-                };
-            }
-        };
-        let new_string = match input.get("new_string").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: new_string".into(),
-                    is_error: true,
-                };
-            }
-        };
-
-        let full_path = match ctx.validate_path(path) {
-            Ok(p) => p,
-            Err(e) => {
-                return ToolResult {
-                    content: e.to_string(),
-                    is_error: true,
-                };
-            }
-        };
-
-        let content = match tokio::fs::read_to_string(&full_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                return ToolResult {
-                    content: format!("failed to read '{}': {}", path, e),
-                    is_error: true,
-                };
-            }
-        };
-
-        let count = content.matches(old_string).count();
-        if count == 0 {
-            return ToolResult {
-                content: format!("old_string not found in '{}'", path),
-                is_error: true,
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let path = match input.get("path").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: path".into(),
+                        is_error: true,
+                    };
+                }
             };
-        }
-        if count > 1 {
-            return ToolResult {
-                content: format!("old_string found {} times in '{}' — must be unique", count, path),
-                is_error: true,
+            let old_string = match input.get("old_string").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: old_string".into(),
+                        is_error: true,
+                    };
+                }
             };
-        }
+            let new_string = match input.get("new_string").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: new_string".into(),
+                        is_error: true,
+                    };
+                }
+            };
 
-        let new_content = content.replacen(old_string, new_string, 1);
-        match tokio::fs::write(&full_path, &new_content).await {
-            Ok(()) => ToolResult {
-                content: format!("edited {}", path),
-                is_error: false,
-            },
-            Err(e) => ToolResult {
-                content: format!("failed to write '{}': {}", path, e),
-                is_error: true,
-            },
-        }
+            let full_path = match ctx.validate_path(path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return ToolResult {
+                        content: e.to_string(),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let content = match tokio::fs::read_to_string(&full_path).await {
+                Ok(c) => c,
+                Err(e) => {
+                    return ToolResult {
+                        content: format!("failed to read '{}': {}", path, e),
+                        is_error: true,
+                    };
+                }
+            };
+
+            let count = content.matches(old_string).count();
+            if count == 0 {
+                return ToolResult {
+                    content: format!("old_string not found in '{}'", path),
+                    is_error: true,
+                };
+            }
+            if count > 1 {
+                return ToolResult {
+                    content: format!("old_string found {} times in '{}' - must be unique", count, path),
+                    is_error: true,
+                };
+            }
+
+            let new_content = content.replacen(old_string, new_string, 1);
+            match tokio::fs::write(&full_path, &new_content).await {
+                Ok(()) => ToolResult {
+                    content: format!("edited {}", path),
+                    is_error: false,
+                },
+                Err(e) => ToolResult {
+                    content: format!("failed to write '{}': {}", path, e),
+                    is_error: true,
+                },
+            }
+        })
     }
 }
 

@@ -1,4 +1,6 @@
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+
 use serde_json::json;
 
 use crate::tools::context::ToolContext;
@@ -8,7 +10,6 @@ use crate::tools::traits::{Tool, ToolResult};
 
 pub struct FindTool;
 
-#[async_trait]
 impl Tool for FindTool {
     fn name(&self) -> &str {
         "find"
@@ -39,36 +40,42 @@ impl Tool for FindTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let pattern = match input.get("pattern").and_then(|v| v.as_str()) {
-            Some(p) => p,
-            None => {
-                return ToolResult {
-                    content: "missing required parameter: pattern".into(),
-                    is_error: true,
-                };
+    fn execute<'a>(
+        &'a self,
+        input: serde_json::Value,
+        ctx: &'a ToolContext,
+    ) -> Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>> {
+        Box::pin(async move {
+            let pattern = match input.get("pattern").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => {
+                    return ToolResult {
+                        content: "missing required parameter: pattern".into(),
+                        is_error: true,
+                    };
+                }
+            };
+            let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let file_type = input.get("type").and_then(|v| v.as_str());
+
+            let mut cmd = format!("find '{}' -name '{}'", path, pattern.replace('\'', "'\\''"));
+            if let Some(ft) = file_type {
+                cmd = format!("{} -type {}", cmd, ft);
             }
-        };
-        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let file_type = input.get("type").and_then(|v| v.as_str());
+            cmd = format!("{} | head -100", cmd);
 
-        let mut cmd = format!("find '{}' -name '{}'", path, pattern.replace('\'', "'\\''"));
-        if let Some(ft) = file_type {
-            cmd = format!("{} -type {}", cmd, ft);
-        }
-        cmd = format!("{} | head -100", cmd);
-
-        let lane = classify("find");
-        match execute_in_lane(&cmd, &ctx.working_dir, lane, 30, &ctx.router).await {
-            Ok(output) => ToolResult {
-                content: format_shell_output(&output),
-                is_error: output.exit_code != 0,
-            },
-            Err(e) => ToolResult {
-                content: format!("find failed: {}", e),
-                is_error: true,
-            },
-        }
+            let lane = classify("find");
+            match execute_in_lane(&cmd, &ctx.working_dir, lane, 30, &ctx.router).await {
+                Ok(output) => ToolResult {
+                    content: format_shell_output(&output),
+                    is_error: output.exit_code != 0,
+                },
+                Err(e) => ToolResult {
+                    content: format!("find failed: {}", e),
+                    is_error: true,
+                },
+            }
+        })
     }
 }
 
