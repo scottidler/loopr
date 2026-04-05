@@ -35,18 +35,18 @@ pub struct DocValidator {
 }
 
 impl DocValidator {
-    /// Create a DocValidator with a real ureq HTTP client.
+    /// Create a DocValidator with a real reqwest HTTP client.
     pub fn new(config: ValidatorConfig) -> Self {
         debug!("DocValidator::new(model={})", config.model);
         let model = config.model.clone();
         Self {
-            llm_client: LlmClient::with_ureq(config),
+            llm_client: LlmClient::with_reqwest(config),
             model,
         }
     }
 
     /// Validate a Plan document.
-    pub fn validate_plan(
+    pub async fn validate_plan(
         &self,
         target_id: &str,
         title: &str,
@@ -55,11 +55,11 @@ impl DocValidator {
     ) -> Result<ValidationReport> {
         debug!("DocValidator::validate_plan(target_id={})", target_id);
         let prompt = prompts::plan_prompt(title, description, acceptance_criteria);
-        self.run_validation("plans", target_id, &prompt)
+        self.run_validation("plans", target_id, &prompt).await
     }
 
     /// Validate a Spec document.
-    pub fn validate_spec(
+    pub async fn validate_spec(
         &self,
         target_id: &str,
         title: &str,
@@ -68,11 +68,11 @@ impl DocValidator {
     ) -> Result<ValidationReport> {
         debug!("DocValidator::validate_spec(target_id={})", target_id);
         let prompt = prompts::spec_prompt(title, description, plan_title);
-        self.run_validation("specs", target_id, &prompt)
+        self.run_validation("specs", target_id, &prompt).await
     }
 
     /// Validate a Phase document.
-    pub fn validate_phase(
+    pub async fn validate_phase(
         &self,
         target_id: &str,
         title: &str,
@@ -82,11 +82,11 @@ impl DocValidator {
     ) -> Result<ValidationReport> {
         debug!("DocValidator::validate_phase(target_id={})", target_id);
         let prompt = prompts::phase_prompt(title, description, order, spec_title);
-        self.run_validation("phases", target_id, &prompt)
+        self.run_validation("phases", target_id, &prompt).await
     }
 
     /// Internal: send prompt to LLM, parse response, build ValidationReport.
-    fn run_validation(&self, collection: &str, target_id: &str, prompt: &str) -> Result<ValidationReport> {
+    async fn run_validation(&self, collection: &str, target_id: &str, prompt: &str) -> Result<ValidationReport> {
         debug!(
             "DocValidator::run_validation(collection={}, target_id={})",
             collection, target_id
@@ -96,6 +96,7 @@ impl DocValidator {
         let raw = self
             .llm_client
             .call_with_retry(prompt)
+            .await
             .context("LLM validation call failed")?;
 
         let parsed = self.parse_response(&raw).unwrap_or_else(|e| {
@@ -165,6 +166,7 @@ impl DocValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use client::HttpClient;
 
     struct MockHttpClient {
@@ -179,8 +181,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpClient for MockHttpClient {
-        fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
+        async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             Ok(self.response.clone())
         }
     }
@@ -222,14 +225,15 @@ mod tests {
         r#"{"verdict":"warn","issues":[{"severity":"warning","category":"scope","message":"Scope may be too broad","suggestion":null}],"summary":"Passes with warnings."}"#.to_string()
     }
 
-    #[test]
-    fn test_validate_plan_pass() {
+    #[tokio::test]
+    async fn test_validate_plan_pass() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
         let report = validator
             .validate_plan("plan-1", "Test Plan", "A plan", "Must work")
+            .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
         assert_eq!(report.target_collection, "plans");
@@ -239,13 +243,13 @@ mod tests {
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_validate_plan_fail() {
+    #[tokio::test]
+    async fn test_validate_plan_fail() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&failing_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
-        let report = validator.validate_plan("plan-2", "Bad Plan", "Vague", "").unwrap();
+        let report = validator.validate_plan("plan-2", "Bad Plan", "Vague", "").await.unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Fail);
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues[0].severity, IssueSeverity::Error);
@@ -254,14 +258,15 @@ mod tests {
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_validate_spec_warn() {
+    #[tokio::test]
+    async fn test_validate_spec_warn() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&warning_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
         let report = validator
             .validate_spec("spec-1", "My Spec", "Desc", "Parent Plan")
+            .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Warn);
         assert_eq!(report.target_collection, "specs");
@@ -271,14 +276,15 @@ mod tests {
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_validate_phase() {
+    #[tokio::test]
+    async fn test_validate_phase() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
         let report = validator
             .validate_phase("phase-1", "My Phase", "Desc", 1, "Parent Spec")
+            .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
         assert_eq!(report.target_collection, "phases");
@@ -287,26 +293,26 @@ mod tests {
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_parse_response_with_code_fences() {
+    #[tokio::test]
+    async fn test_parse_response_with_code_fences() {
         let (config, env_var) = mock_config_with_key();
         let fenced = format!("```json\n{}\n```", r#"{"verdict":"pass","issues":[],"summary":"ok"}"#);
         let mock = MockHttpClient::new(&mock_anthropic_response(&fenced));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
-        let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
+        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_parse_response_fallback_on_invalid_json() {
+    #[tokio::test]
+    async fn test_parse_response_fallback_on_invalid_json() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
-        let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
+        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         // Should fall back to Fail verdict
         assert_eq!(report.verdict, ValidationVerdict::Fail);
         assert_eq!(report.issues.len(), 1);
@@ -316,25 +322,25 @@ mod tests {
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_report_has_model_field() {
+    #[tokio::test]
+    async fn test_report_has_model_field() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
-        let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
+        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         assert_eq!(report.model_used, "claude-sonnet-4-6");
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_report_has_valid_id_and_timestamp() {
+    #[tokio::test]
+    async fn test_report_has_valid_id_and_timestamp() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
-        let report = validator.validate_plan("p1", "T", "D", "C").unwrap();
+        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         assert!(!report.id.is_empty());
         assert!(report.created_at > 0);
 
