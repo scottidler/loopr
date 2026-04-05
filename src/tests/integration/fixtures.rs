@@ -81,7 +81,7 @@ pub(super) fn test_integrator_config() -> IntegratorConfig {
 }
 
 /// Helper: dispatch a request and assert success, returning the result JSON.
-pub(super) fn dispatch_ok(
+pub(super) async fn dispatch_ok(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
@@ -90,13 +90,13 @@ pub(super) fn dispatch_ok(
     params: serde_json::Value,
 ) -> serde_json::Value {
     let req = DaemonRequest::new(1, method, params);
-    let resp = dispatch(stores, tx, wm, ic, req);
+    let resp = dispatch(stores, tx, wm, ic, req).await;
     assert!(!resp.is_error(), "{method} failed: {:?}", resp.error);
     resp.result.unwrap()
 }
 
 /// Helper: dispatch a request and assert error, returning the error code.
-pub(super) fn dispatch_err(
+pub(super) async fn dispatch_err(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
@@ -105,7 +105,7 @@ pub(super) fn dispatch_err(
     params: serde_json::Value,
 ) -> i32 {
     let req = DaemonRequest::new(1, method, params);
-    let resp = dispatch(stores, tx, wm, ic, req);
+    let resp = dispatch(stores, tx, wm, ic, req).await;
     assert!(resp.is_error(), "{method} expected error but got success");
     resp.error.unwrap().code
 }
@@ -113,7 +113,7 @@ pub(super) fn dispatch_err(
 /// Helper: create Plan->Spec->Phase hierarchy and return (plan_id, spec_id, phase_id).
 /// NOTE: variable names plan_id, spec_id, phase_id are kept here because they
 /// represent the *identity* of these records, not a parent reference.
-pub(super) fn create_test_hierarchy(
+pub(super) async fn create_test_hierarchy(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
@@ -126,7 +126,8 @@ pub(super) fn create_test_hierarchy(
         ic,
         "plan.create",
         json!({"title": "Test Plan", "description": "desc", "acceptance_criteria": "pass"}),
-    );
+    )
+    .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     dispatch_ok(
         stores,
@@ -135,7 +136,8 @@ pub(super) fn create_test_hierarchy(
         ic,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
-    );
+    )
+    .await;
     let spec = dispatch_ok(
         stores,
         tx,
@@ -143,7 +145,8 @@ pub(super) fn create_test_hierarchy(
         ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "Test Spec", "description": "desc", "acceptance_criteria": "pass"}),
-    );
+    )
+    .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
         stores,
@@ -152,7 +155,8 @@ pub(super) fn create_test_hierarchy(
         ic,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
-    );
+    )
+    .await;
     let phase = dispatch_ok(
         stores,
         tx,
@@ -160,7 +164,8 @@ pub(super) fn create_test_hierarchy(
         ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Test Phase", "description": "desc", "acceptance_criteria": "pass"}),
-    );
+    )
+    .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
         stores,
@@ -169,7 +174,8 @@ pub(super) fn create_test_hierarchy(
         ic,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
-    );
+    )
+    .await;
     (plan_id, spec_id, phase_id)
 }
 
@@ -200,7 +206,7 @@ pub(super) fn test_stores_with_persistence(dir: &std::path::Path) -> Arc<Stores>
 
 /// Helper: inject a pre-formed plan with specs, phases, and works, all transitioned to active.
 /// Returns (plan_id, vec of (spec_id, vec of (phase_id, vec of work_ids))).
-pub(super) fn inject_preformed_plan(
+pub(super) async fn inject_preformed_plan(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
@@ -218,7 +224,8 @@ pub(super) fn inject_preformed_plan(
             "description": input.desc,
             "acceptance_criteria": input.criteria,
         }),
-    );
+    )
+    .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     dispatch_ok(
         stores,
@@ -229,7 +236,8 @@ pub(super) fn inject_preformed_plan(
         json!({
             "id": plan_id, "target_status": "active"
         }),
-    );
+    )
+    .await;
 
     let mut spec_results = Vec::new();
     for (spec_title, spec_desc, phases) in input.specs {
@@ -245,7 +253,8 @@ pub(super) fn inject_preformed_plan(
                 "description": spec_desc,
                 "acceptance_criteria": "all tests pass",
             }),
-        );
+        )
+        .await;
         let spec_id = spec["id"].as_str().unwrap().to_string();
         dispatch_ok(
             stores,
@@ -256,7 +265,8 @@ pub(super) fn inject_preformed_plan(
             json!({
                 "id": spec_id, "target_status": "active"
             }),
-        );
+        )
+        .await;
 
         let mut phase_results = Vec::new();
         for (phase_title, phase_desc, order, works) in &phases {
@@ -272,7 +282,8 @@ pub(super) fn inject_preformed_plan(
                     "description": phase_desc,
                     "order": order,
                 }),
-            );
+            )
+            .await;
             let phase_id = phase["id"].as_str().unwrap().to_string();
             dispatch_ok(
                 stores,
@@ -283,7 +294,8 @@ pub(super) fn inject_preformed_plan(
                 json!({
                     "id": phase_id, "target_status": "active"
                 }),
-            );
+            )
+            .await;
 
             let mut work_ids = Vec::new();
             for (work_title, work_desc, resource_tags) in works {
@@ -300,7 +312,8 @@ pub(super) fn inject_preformed_plan(
                         "resource_tags": resource_tags,
                         "acceptance_criteria": ["tests pass"],
                     }),
-                );
+                )
+                .await;
                 work_ids.push(work["id"].as_str().unwrap().to_string());
             }
             phase_results.push((phase_id, work_ids));

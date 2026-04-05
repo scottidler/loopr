@@ -39,8 +39,8 @@ fn test_agents_disabled_by_default() {
     assert!(!config.integrator.enabled, "integrator should be disabled by default");
 }
 
-#[test]
-fn test_dispatch_routes_mvp4_methods() {
+#[tokio::test]
+async fn test_dispatch_routes_mvp4_methods() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -62,7 +62,7 @@ fn test_dispatch_routes_mvp4_methods() {
 
     for method in methods {
         let req = DaemonRequest::new(1, method, json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &ic, req);
+        let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
         // May fail with invalid_params, but should NOT fail with method_not_found
         if let Some(err) = &resp.error {
             assert_ne!(err.code, -32601, "{method} returned method_not_found");

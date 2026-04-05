@@ -10,8 +10,8 @@ use crate::test_util::TestDir;
 
 use super::fixtures::*;
 
-#[test]
-fn test_advisory_review_bundle_accepted_directly() {
+#[tokio::test]
+async fn test_advisory_review_bundle_accepted_directly() {
     // Verify that the Coordinator can accept a Bundle directly (Triaged->Accepted)
     // without waiting for Reviewer verdict (the Integrator is the hard gate).
     let dir = TestDir::new("loopr-int-advisory");
@@ -28,7 +28,8 @@ fn test_advisory_review_bundle_accepted_directly() {
         &ic,
         "plan.create",
         json!({"title": "Advisory Test", "description": "Test advisory review", "acceptance_criteria": "tests pass"}),
-    );
+    )
+    .await;
     let plan_id = plan_resp["id"].as_str().unwrap();
     let spec_resp = dispatch_ok(
         &stores,
@@ -37,7 +38,8 @@ fn test_advisory_review_bundle_accepted_directly() {
         &ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "Spec", "description": "spec"}),
-    );
+    )
+    .await;
     let spec_id = spec_resp["id"].as_str().unwrap();
     let phase_resp = dispatch_ok(
         &stores,
@@ -46,7 +48,8 @@ fn test_advisory_review_bundle_accepted_directly() {
         &ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Phase", "description": "phase", "order": 1}),
-    );
+    )
+    .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
     let work_resp = dispatch_ok(
         &stores,
@@ -55,7 +58,8 @@ fn test_advisory_review_bundle_accepted_directly() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Work", "description": "work", "resource_tags": ["src/main.rs"]}),
-    );
+    )
+    .await;
     let work_id = work_resp["id"].as_str().unwrap();
 
     // Create a bundle
@@ -81,7 +85,8 @@ fn test_advisory_review_bundle_accepted_directly() {
         &ic,
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
     assert_eq!(
         stores.bundles.read().unwrap()[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Triaged
@@ -95,7 +100,8 @@ fn test_advisory_review_bundle_accepted_directly() {
         &ic,
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct accept"}),
-    );
+    )
+    .await;
     assert_eq!(
         stores.bundles.read().unwrap()[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Accepted
@@ -124,8 +130,8 @@ fn test_reviewer_feedback_learning_available_after_advisory_accept() {
     assert!(feedback.content.contains("approve"));
 }
 
-#[test]
-fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
+#[tokio::test]
+async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
     // Verify that only the Coordinator can use Triaged->Accepted through the IPC handler.
     let dir = TestDir::new("loopr-int-advisory-reject");
     let stores = test_stores_with_persistence(&dir);
@@ -141,7 +147,8 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &ic,
         "plan.create",
         json!({"title": "T", "description": "d", "acceptance_criteria": "c"}),
-    );
+    )
+    .await;
     let plan_id = plan_resp["id"].as_str().unwrap();
     let spec_resp = dispatch_ok(
         &stores,
@@ -150,7 +157,8 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "S", "description": "d"}),
-    );
+    )
+    .await;
     let spec_id = spec_resp["id"].as_str().unwrap();
     let phase_resp = dispatch_ok(
         &stores,
@@ -159,7 +167,8 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "P", "description": "d", "order": 1}),
-    );
+    )
+    .await;
     let phase_id = phase_resp["id"].as_str().unwrap();
     let work_resp = dispatch_ok(
         &stores,
@@ -168,7 +177,8 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "W", "description": "d", "resource_tags": ["src/x.rs"]}),
-    );
+    )
+    .await;
     let work_id = work_resp["id"].as_str().unwrap();
 
     // Create and triage a bundle
@@ -186,7 +196,8 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &ic,
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // Reviewer trying Triaged->Accepted should FAIL
     let req = DaemonRequest::new(
@@ -194,7 +205,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "reviewer", "verification": "v"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &ic, req);
+    let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
     assert!(resp.is_error(), "Reviewer should not be able to use Triaged->Accepted");
 
     // Implementer trying Triaged->Accepted should FAIL
@@ -203,7 +214,7 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "implementer", "verification": "v"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &ic, req);
+    let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
     assert!(
         resp.is_error(),
         "Implementer should not be able to use Triaged->Accepted"
@@ -217,7 +228,8 @@ fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &ic,
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "coordinator", "verification": "Coordinator direct"}),
-    );
+    )
+    .await;
     assert_eq!(
         stores.bundles.read().unwrap()[&bundle_id].status(),
         crate::domain::bundle::BundleStatus::Accepted

@@ -15,7 +15,7 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
 use crate::worktree::manager::WorktreeManager;
 
 /// Helper: create plan + spec + phase and return (plan_id, spec_id, phase_id)
-fn create_test_phase(
+async fn create_test_phase(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
@@ -26,7 +26,8 @@ fn create_test_phase(
         wm,
         &test_integrator_config(),
         DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
-    );
+    )
+    .await;
     let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
     let spec_resp = dispatch(
         stores,
@@ -34,7 +35,8 @@ fn create_test_phase(
         wm,
         &test_integrator_config(),
         DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
-    );
+    )
+    .await;
     let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
     let phase_resp = dispatch(
         stores,
@@ -46,18 +48,19 @@ fn create_test_phase(
             "phase.create",
             json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
         ),
-    );
+    )
+    .await;
     let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
     (plan_id, spec_id, phase_id)
 }
 
 /// Helper: create plan + spec + phase + work and return (phase_id, work_id)
-fn create_test_work(
+async fn create_test_work(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
 ) -> (String, String) {
-    let (_, _, phase_id) = create_test_phase(stores, tx, wm);
+    let (_, _, phase_id) = create_test_phase(stores, tx, wm).await;
     let resp = dispatch(
         stores,
         tx,
@@ -68,18 +71,19 @@ fn create_test_work(
             "work.create",
             json!({"parent_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
-    );
+    )
+    .await;
     let wi_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
     (phase_id, wi_id)
 }
 
 /// Helper: create plan + spec + phase + work + bundle and return (work_id, bundle_id)
-fn create_test_bundle(
+async fn create_test_bundle(
     stores: &Arc<Stores>,
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
 ) -> (String, String) {
-    let (_, wi_id) = create_test_work(stores, tx, wm);
+    let (_, wi_id) = create_test_work(stores, tx, wm).await;
     let resp = dispatch(
         stores,
         tx,
@@ -90,7 +94,8 @@ fn create_test_bundle(
             "bundle.create",
             json!({"work_id": wi_id, "branch_name": "feature/test", "base_tick_id": null, "claims": "Initial claims"}),
         ),
-    );
+    )
+    .await;
     assert!(!resp.is_error(), "bundle.create failed: {:?}", resp.error);
     let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
     (wi_id, bundle_id)
@@ -108,12 +113,12 @@ fn insert_published_tick(stores: &Arc<Stores>, number: u32) -> String {
 
 // === Tests from mod.rs lines 1282-1338 ===
 
-#[test]
-fn test_bundle_create_rejects_done_work() {
+#[tokio::test]
+async fn test_bundle_create_rejects_done_work() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     // Directly set work status to Done via the HashMap (bypasses transition preconditions)
     {
@@ -127,17 +132,17 @@ fn test_bundle_create_rejects_done_work() {
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feature/late"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains("Done work"));
 }
 
-#[test]
-fn test_bundle_create_rejects_abandoned_work() {
+#[tokio::test]
+async fn test_bundle_create_rejects_abandoned_work() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     // Transition work: Ready -> Abandoned
     dispatch(
@@ -150,26 +155,27 @@ fn test_bundle_create_rejects_abandoned_work() {
             "work.transition",
             json!({"id": wi_id, "target_status": "Abandoned", "role": "coordinator"}),
         ),
-    );
+    )
+    .await;
 
     let req = DaemonRequest::new(
         2,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feature/abandoned"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains("Abandoned work"));
 }
 
 // === Tests from mod.rs lines 2860-3517 ===
 
-#[test]
-fn test_bundle_create_persists_to_taskstore() {
+#[tokio::test]
+async fn test_bundle_create_persists_to_taskstore() {
     let (_dir, stores) = test_stores_with_taskstore();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let req = DaemonRequest::new(
         40,
@@ -181,7 +187,7 @@ fn test_bundle_create_persists_to_taskstore() {
             "claims": "Persisted bundle"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error());
     let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -192,12 +198,12 @@ fn test_bundle_create_persists_to_taskstore() {
     assert_eq!(retrieved.unwrap().claims, vec!["Persisted bundle".to_string()]);
 }
 
-#[test]
-fn test_bundle_create_success() {
+#[tokio::test]
+async fn test_bundle_create_success() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let req = DaemonRequest::new(
         40,
@@ -209,7 +215,7 @@ fn test_bundle_create_success() {
             "claims": "Add JWT signing"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error());
     let result = resp.result.unwrap();
     assert_eq!(result["work_id"], wi_id);
@@ -220,12 +226,12 @@ fn test_bundle_create_success() {
     assert_eq!(stores.bundles.read().unwrap().len(), 1);
 }
 
-#[test]
-fn test_bundle_create_no_base_tick() {
+#[tokio::test]
+async fn test_bundle_create_no_base_tick() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let req = DaemonRequest::new(
         40,
@@ -235,25 +241,25 @@ fn test_bundle_create_no_base_tick() {
             "branch_name": "feature/init"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error());
     let result = resp.result.unwrap();
     assert!(result["base_tick_id"].is_null());
 }
 
-#[test]
-fn test_bundle_create_missing_work_id() {
+#[tokio::test]
+async fn test_bundle_create_missing_work_id() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(1, "bundle.create", json!({"branch_name": "feature/x"}));
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains("work_id"));
 }
 
-#[test]
-fn test_bundle_create_work_not_found() {
+#[tokio::test]
+async fn test_bundle_create_work_not_found() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -262,30 +268,30 @@ fn test_bundle_create_work_not_found() {
         "bundle.create",
         json!({"work_id": "nonexistent", "branch_name": "feature/x"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert_eq!(resp.error.unwrap().code, -32001);
 }
 
-#[test]
-fn test_bundle_create_missing_branch_name() {
+#[tokio::test]
+async fn test_bundle_create_missing_branch_name() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     let req = DaemonRequest::new(40, "bundle.create", json!({"work_id": wi_id, "claims": "stuff"}));
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains("branch_name"));
 }
 
-#[test]
-fn test_bundle_create_broadcasts_event() {
+#[tokio::test]
+async fn test_bundle_create_broadcasts_event() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let mut rx = tx.subscribe();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     // Drain plan+spec+phase+work create events
     let _ = rx.try_recv();
     let _ = rx.try_recv();
@@ -303,12 +309,12 @@ fn test_bundle_create_broadcasts_event() {
     assert_eq!(event.data["collection"], "bundle");
 }
 
-#[test]
-fn test_bundle_get_success() {
+#[tokio::test]
+async fn test_bundle_get_success() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let create_resp = dispatch(
         &stores,
@@ -320,7 +326,8 @@ fn test_bundle_get_success() {
             "bundle.create",
             json!({"work_id": wi_id, "branch_name": "feature/auth"}),
         ),
-    );
+    )
+    .await;
     let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
     let get_resp = dispatch(
@@ -329,28 +336,29 @@ fn test_bundle_get_success() {
         &wm,
         &test_integrator_config(),
         DaemonRequest::new(41, "bundle.get", json!({"id": bundle_id})),
-    );
+    )
+    .await;
     assert!(!get_resp.is_error());
     assert_eq!(get_resp.result.unwrap()["branch_name"], "feature/auth");
 }
 
-#[test]
-fn test_bundle_get_not_found() {
+#[tokio::test]
+async fn test_bundle_get_not_found() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(1, "bundle.get", json!({"id": "nonexistent"}));
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert_eq!(resp.error.unwrap().code, -32001);
 }
 
-#[test]
-fn test_bundle_get_reads_from_taskstore() {
+#[tokio::test]
+async fn test_bundle_get_reads_from_taskstore() {
     let (_dir, stores) = test_stores_with_taskstore();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     // Create a bundle (writes to both TaskStore and HashMap)
     let create_resp = dispatch(
@@ -363,7 +371,8 @@ fn test_bundle_get_reads_from_taskstore() {
             "bundle.create",
             json!({"work_id": wi_id, "branch_name": "feature/ts-read"}),
         ),
-    );
+    )
+    .await;
     assert!(!create_resp.is_error());
     let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -372,28 +381,28 @@ fn test_bundle_get_reads_from_taskstore() {
 
     // Get should still succeed via TaskStore
     let get_req = DaemonRequest::new(41, "bundle.get", json!({"id": bundle_id}));
-    let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+    let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req).await;
     assert!(!get_resp.is_error());
     assert_eq!(get_resp.result.unwrap()["branch_name"], "feature/ts-read");
 }
 
-#[test]
-fn test_bundle_list_empty() {
+#[tokio::test]
+async fn test_bundle_list_empty() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(1, "bundle.list", json!(null));
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error());
     assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
 }
 
-#[test]
-fn test_bundle_list_filtered_by_work_id() {
+#[tokio::test]
+async fn test_bundle_list_filtered_by_work_id() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm);
+    let (phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm).await;
 
     // Create a second work item under the same phase
     let resp2 = dispatch(
@@ -406,7 +415,8 @@ fn test_bundle_list_filtered_by_work_id() {
             "work.create",
             json!({"parent_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
-    );
+    )
+    .await;
     let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 
     // Create bundles under different work items
@@ -420,7 +430,8 @@ fn test_bundle_list_filtered_by_work_id() {
             "bundle.create",
             json!({"work_id": wi_id_1, "branch_name": "feature/a"}),
         ),
-    );
+    )
+    .await;
     dispatch(
         &stores,
         &tx,
@@ -431,7 +442,8 @@ fn test_bundle_list_filtered_by_work_id() {
             "bundle.create",
             json!({"work_id": wi_id_2, "branch_name": "feature/b"}),
         ),
-    );
+    )
+    .await;
 
     // List all - should have 2
     let all_resp = dispatch(
@@ -440,7 +452,8 @@ fn test_bundle_list_filtered_by_work_id() {
         &wm,
         &test_integrator_config(),
         DaemonRequest::new(50, "bundle.list", json!(null)),
-    );
+    )
+    .await;
     assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
     // List filtered by wi_id_1 - should have 1
@@ -450,19 +463,20 @@ fn test_bundle_list_filtered_by_work_id() {
         &wm,
         &test_integrator_config(),
         DaemonRequest::new(51, "bundle.list", json!({"work_id": wi_id_1})),
-    );
+    )
+    .await;
     let bundles = filtered_resp.result.unwrap();
     let arr = bundles.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["branch_name"], "feature/a");
 }
 
-#[test]
-fn test_bundle_list_reads_from_taskstore() {
+#[tokio::test]
+async fn test_bundle_list_reads_from_taskstore() {
     let (_dir, stores) = test_stores_with_taskstore();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm);
+    let (phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm).await;
 
     // Create a second work item under the same phase
     let resp2 = dispatch(
@@ -475,7 +489,8 @@ fn test_bundle_list_reads_from_taskstore() {
             "work.create",
             json!({"parent_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
-    );
+    )
+    .await;
     let wi_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 
     // Create bundles under different work items (writes to both TaskStore and HashMap)
@@ -489,7 +504,8 @@ fn test_bundle_list_reads_from_taskstore() {
             "bundle.create",
             json!({"work_id": wi_id_1, "branch_name": "feature/a"}),
         ),
-    );
+    )
+    .await;
     dispatch(
         &stores,
         &tx,
@@ -500,7 +516,8 @@ fn test_bundle_list_reads_from_taskstore() {
             "bundle.create",
             json!({"work_id": wi_id_2, "branch_name": "feature/b"}),
         ),
-    );
+    )
+    .await;
 
     // Clear HashMap to prove list reads from TaskStore
     stores.bundles.write().unwrap().clear();
@@ -512,13 +529,14 @@ fn test_bundle_list_reads_from_taskstore() {
         &wm,
         &test_integrator_config(),
         DaemonRequest::new(50, "bundle.list", json!(null)),
-    );
+    )
+    .await;
     assert!(!all_resp.is_error());
     assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
     // Test filtered list also works from TaskStore
     let filtered_req = DaemonRequest::new(51, "bundle.list", json!({"work_id": wi_id_1}));
-    let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+    let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req).await;
     assert!(!filtered_resp.is_error());
     let filtered_items = filtered_resp.result.unwrap();
     let arr = filtered_items.as_array().unwrap();
@@ -526,13 +544,13 @@ fn test_bundle_list_reads_from_taskstore() {
     assert_eq!(arr[0]["branch_name"], "feature/a");
 }
 
-#[test]
-fn test_bundle_transition_proposed_to_triaged() {
+#[tokio::test]
+async fn test_bundle_transition_proposed_to_triaged() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let mut rx = tx.subscribe();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     // Drain plan+spec+phase+work create events
     let _ = rx.try_recv();
     let _ = rx.try_recv();
@@ -549,7 +567,8 @@ fn test_bundle_transition_proposed_to_triaged() {
             "bundle.create",
             json!({"work_id": wi_id, "branch_name": "feature/x"}),
         ),
-    );
+    )
+    .await;
     let _ = rx.try_recv(); // consume bundle create event
     let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -562,7 +581,7 @@ fn test_bundle_transition_proposed_to_triaged() {
             "role": "coordinator"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error());
     assert_eq!(resp.result.unwrap()["status"], "Triaged");
 
@@ -573,12 +592,12 @@ fn test_bundle_transition_proposed_to_triaged() {
     assert_eq!(event.data["to"], "Triaged");
 }
 
-#[test]
-fn test_bundle_transition_invalid_skip_state() {
+#[tokio::test]
+async fn test_bundle_transition_invalid_skip_state() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let create_resp = dispatch(
         &stores,
@@ -590,7 +609,8 @@ fn test_bundle_transition_invalid_skip_state() {
             "bundle.create",
             json!({"work_id": wi_id, "branch_name": "feature/x"}),
         ),
-    );
+    )
+    .await;
     let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
     // Try Proposed -> Accepted (invalid: must go through Triaged -> Reviewed)
@@ -603,17 +623,17 @@ fn test_bundle_transition_invalid_skip_state() {
             "role": "coordinator"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert_eq!(resp.error.unwrap().code, -32000);
 }
 
-#[test]
-fn test_bundle_transition_wrong_role() {
+#[tokio::test]
+async fn test_bundle_transition_wrong_role() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let create_resp = dispatch(
         &stores,
@@ -625,7 +645,8 @@ fn test_bundle_transition_wrong_role() {
             "bundle.create",
             json!({"work_id": wi_id, "branch_name": "feature/x"}),
         ),
-    );
+    )
+    .await;
     let bundle_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
     // Implementer cannot transition Proposed -> Triaged
@@ -638,13 +659,13 @@ fn test_bundle_transition_wrong_role() {
             "role": "implementer"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert_eq!(resp.error.unwrap().code, -32000);
 }
 
-#[test]
-fn test_bundle_transition_not_found() {
+#[tokio::test]
+async fn test_bundle_transition_not_found() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -656,19 +677,19 @@ fn test_bundle_transition_not_found() {
             "target_status": "Triaged"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert_eq!(resp.error.unwrap().code, -32001);
 }
 
 // --- Staleness guard tests ---
 
-#[test]
-fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_exists() {
+#[tokio::test]
+async fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_exists() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     let _ = insert_published_tick(&stores, 1);
 
     let req = DaemonRequest::new(
@@ -679,19 +700,19 @@ fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_exists
             "branch_name": "feature/auth"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     let err = resp.error.unwrap();
     assert_eq!(err.code, -32002);
     assert!(err.message.contains("staleness guard"));
 }
 
-#[test]
-fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
+#[tokio::test]
+async fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     let _ = insert_published_tick(&stores, 1);
     let latest_tick_id = insert_published_tick(&stores, 2);
 
@@ -704,7 +725,7 @@ fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
             "base_tick_id": "old-stale-tick-id"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     let err = resp.error.unwrap();
     assert_eq!(err.code, -32002);
@@ -712,12 +733,12 @@ fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
     assert!(err.message.contains(&latest_tick_id));
 }
 
-#[test]
-fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
+#[tokio::test]
+async fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     let tick_id = insert_published_tick(&stores, 1);
 
     let req = DaemonRequest::new(
@@ -730,19 +751,19 @@ fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
             "claims": "Add auth"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error(), "Expected success but got: {:?}", resp.error);
     let result = resp.result.unwrap();
     assert_eq!(result["base_tick_id"], tick_id);
     assert_eq!(result["status"], "Proposed");
 }
 
-#[test]
-fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
+#[tokio::test]
+async fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     let tick1_id = insert_published_tick(&stores, 1);
     let tick2_id = insert_published_tick(&stores, 2);
 
@@ -757,18 +778,18 @@ fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
             "claims": "Add auth"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(resp.is_error());
     assert!(resp.error.unwrap().message.contains(&tick2_id));
 }
 
-#[test]
-fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
+#[tokio::test]
+async fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let mut rx = tx.subscribe();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     // Drain create events
     while rx.try_recv().is_ok() {}
 
@@ -790,13 +811,13 @@ fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
     assert_eq!(event.data["base_tick_id"], "stale-id");
 }
 
-#[test]
-fn test_bundle_create_bootstrap_no_published_tick_no_base() {
+#[tokio::test]
+async fn test_bundle_create_bootstrap_no_published_tick_no_base() {
     // Bootstrap case: no published tick, no base_tick_id -> OK
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
     let req = DaemonRequest::new(
         40,
@@ -806,18 +827,18 @@ fn test_bundle_create_bootstrap_no_published_tick_no_base() {
             "branch_name": "feature/init"
         }),
     );
-    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     assert!(!resp.is_error());
 }
 
 // === Tests from mod.rs lines 7640-7777 ===
 
-#[test]
-fn test_handle_bundle_update_success() {
+#[tokio::test]
+async fn test_handle_bundle_update_success() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
 
     let resp = dispatch(
         &stores,
@@ -835,7 +856,8 @@ fn test_handle_bundle_update_success() {
                 "base_tick_id": "tick-002"
             }),
         ),
-    );
+    )
+    .await;
     assert!(!resp.is_error(), "bundle.update failed: {:?}", resp.error);
     let result = resp.result.unwrap();
     assert_eq!(result["description"], "Updated desc");
@@ -844,8 +866,8 @@ fn test_handle_bundle_update_success() {
     assert_eq!(result["base_tick_id"], "tick-002");
 }
 
-#[test]
-fn test_handle_bundle_update_not_found() {
+#[tokio::test]
+async fn test_handle_bundle_update_not_found() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -855,12 +877,13 @@ fn test_handle_bundle_update_not_found() {
         &wm,
         &test_integrator_config(),
         DaemonRequest::new(1, "bundle.update", json!({"id": "nonexistent", "description": "x"})),
-    );
+    )
+    .await;
     assert!(resp.is_error());
 }
 
-#[test]
-fn test_handle_bundle_update_missing_id() {
+#[tokio::test]
+async fn test_handle_bundle_update_missing_id() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -870,16 +893,17 @@ fn test_handle_bundle_update_missing_id() {
         &wm,
         &test_integrator_config(),
         DaemonRequest::new(1, "bundle.update", json!({"description": "x"})),
-    );
+    )
+    .await;
     assert!(resp.is_error());
 }
 
-#[test]
-fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
+#[tokio::test]
+async fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
 
     // Default max_files_touched is 8, so 9 paths should be rejected
     let too_many_paths: Vec<String> = (0..9).map(|i| format!("file_{}.rs", i)).collect();
@@ -896,16 +920,17 @@ fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
                 "touched_paths": too_many_paths
             }),
         ),
-    );
+    )
+    .await;
     assert!(resp.is_error(), "expected size policy rejection but got success");
 }
 
-#[test]
-fn test_handle_bundle_update_claims_string_backward_compat() {
+#[tokio::test]
+async fn test_handle_bundle_update_claims_string_backward_compat() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
 
     let resp = dispatch(
         &stores,
@@ -917,7 +942,8 @@ fn test_handle_bundle_update_claims_string_backward_compat() {
             "bundle.update",
             json!({"id": bundle_id, "claims": "single claim string"}),
         ),
-    );
+    )
+    .await;
     assert!(!resp.is_error(), "bundle.update claims string failed: {:?}", resp.error);
     let result = resp.result.unwrap();
     let claims = result["claims"].as_array().unwrap();
@@ -925,12 +951,12 @@ fn test_handle_bundle_update_claims_string_backward_compat() {
     assert_eq!(claims[0], "single claim string");
 }
 
-#[test]
-fn test_handle_bundle_update_claims_array() {
+#[tokio::test]
+async fn test_handle_bundle_update_claims_array() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
 
     let resp = dispatch(
         &stores,
@@ -942,7 +968,8 @@ fn test_handle_bundle_update_claims_array() {
             "bundle.update",
             json!({"id": bundle_id, "claims": ["claim 1", "claim 2"]}),
         ),
-    );
+    )
+    .await;
     assert!(!resp.is_error(), "bundle.update claims array failed: {:?}", resp.error);
     let result = resp.result.unwrap();
     let claims = result["claims"].as_array().unwrap();
@@ -951,12 +978,12 @@ fn test_handle_bundle_update_claims_array() {
     assert_eq!(claims[1], "claim 2");
 }
 
-#[test]
-fn test_handle_bundle_create_rejects_too_many_loc() {
+#[tokio::test]
+async fn test_handle_bundle_create_rejects_too_many_loc() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     // Default max_loc_changed is 300, so 301 should be rejected
     let resp = dispatch(
         &stores,
@@ -973,16 +1000,17 @@ fn test_handle_bundle_create_rejects_too_many_loc() {
                 "loc_changed": 301
             }),
         ),
-    );
+    )
+    .await;
     assert!(resp.is_error(), "expected loc policy rejection");
 }
 
-#[test]
-fn test_handle_bundle_create_accepts_loc_within_limit() {
+#[tokio::test]
+async fn test_handle_bundle_create_accepts_loc_within_limit() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, wi_id) = create_test_work(&stores, &tx, &wm);
+    let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
     let resp = dispatch(
         &stores,
         &tx,
@@ -998,16 +1026,17 @@ fn test_handle_bundle_create_accepts_loc_within_limit() {
                 "loc_changed": 300
             }),
         ),
-    );
+    )
+    .await;
     assert!(!resp.is_error(), "loc within limit should succeed: {:?}", resp.error);
 }
 
-#[test]
-fn test_handle_bundle_update_rejects_too_many_loc() {
+#[tokio::test]
+async fn test_handle_bundle_update_rejects_too_many_loc() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
-    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm);
+    let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
 
     let resp = dispatch(
         &stores,
@@ -1022,6 +1051,7 @@ fn test_handle_bundle_update_rejects_too_many_loc() {
                 "loc_changed": 301
             }),
         ),
-    );
+    )
+    .await;
     assert!(resp.is_error(), "expected loc policy rejection on update");
 }
