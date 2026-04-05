@@ -292,7 +292,11 @@ async fn call_llm_for_ratification(
 }
 
 /// Raw LLM call that returns text (shared helper).
-async fn call_llm_for_children_raw(http_client: &(dyn HttpClient + Sync), config: &DecomposerConfig, prompt: &str) -> Result<String> {
+async fn call_llm_for_children_raw(
+    http_client: &(dyn HttpClient + Sync),
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> Result<String> {
     let api_key =
         std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
 
@@ -932,7 +936,9 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock).await.unwrap();
+        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert!(result[0].id.starts_with("wk-"));

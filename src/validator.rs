@@ -249,7 +249,10 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&failing_llm_response()));
         let validator = DocValidator::with_http_client(config, Box::new(mock));
 
-        let report = validator.validate_plan("plan-2", "Bad Plan", "Vague", "").await.unwrap();
+        let report = validator
+            .validate_plan("plan-2", "Bad Plan", "Vague", "")
+            .await
+            .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Fail);
         assert_eq!(report.issues.len(), 1);
         assert_eq!(report.issues[0].severity, IssueSeverity::Error);

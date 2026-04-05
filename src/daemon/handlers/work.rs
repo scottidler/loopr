@@ -568,7 +568,11 @@ mod tests {
     use super::detect_dependency_cycle;
 
     /// Helper: create a plan and return its id
-    async fn create_test_plan(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_test_plan(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,
@@ -865,7 +869,7 @@ mod tests {
             "work.create",
             json!({"parent_id": phase_id, "title": "WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
-        dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "work");

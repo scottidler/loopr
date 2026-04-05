@@ -303,7 +303,7 @@ async fn test_bundle_create_broadcasts_event() {
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feature/x"}),
     );
-    dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     let event = rx.try_recv().unwrap();
     assert_eq!(event.event, "record.created");
     assert_eq!(event.data["collection"], "bundle");
@@ -804,7 +804,7 @@ async fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
             "base_tick_id": "stale-id"
         }),
     );
-    dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+    dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
     let event = rx.try_recv().unwrap();
     assert_eq!(event.event, "bundle.rejected_stale");
     assert_eq!(event.data["bundle_work_id"], wi_id.as_str());

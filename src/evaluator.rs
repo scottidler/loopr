@@ -75,7 +75,8 @@ impl CoverageEvaluator {
     ) -> Result<CoverageReport> {
         debug!("CoverageEvaluator::evaluate_plan_specs(plan_id={})", plan_id);
         let prompt = prompts::plan_specs_prompt(plan_title, plan_description, plan_acceptance_criteria, specs_list);
-        self.run_evaluation("plans", plan_id, "specs", children_ids, &prompt).await
+        self.run_evaluation("plans", plan_id, "specs", children_ids, &prompt)
+            .await
     }
 
     /// Evaluate coverage of Spec -> Phases.
@@ -90,7 +91,8 @@ impl CoverageEvaluator {
     ) -> Result<CoverageReport> {
         debug!("CoverageEvaluator::evaluate_spec_phases(spec_id={})", spec_id);
         let prompt = prompts::spec_phases_prompt(spec_title, spec_description, plan_title, phases_list);
-        self.run_evaluation("specs", spec_id, "phases", children_ids, &prompt).await
+        self.run_evaluation("specs", spec_id, "phases", children_ids, &prompt)
+            .await
     }
 
     /// Evaluate coverage of Phase -> Works.
@@ -108,7 +110,8 @@ impl CoverageEvaluator {
             &phase.spec_title,
             works_list,
         );
-        self.run_evaluation("phases", &phase.id, "works", children_ids, &prompt).await
+        self.run_evaluation("phases", &phase.id, "works", children_ids, &prompt)
+            .await
     }
 
     /// Internal: send prompt to LLM, parse response, build CoverageReport.
@@ -214,8 +217,8 @@ impl CoverageEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::validator::client::HttpClient;
+    use async_trait::async_trait;
 
     struct MockHttpClient {
         response: String,

@@ -1,0 +1,12 @@
+src/tests/integration/coordinator.rs
+src/tests/integration/cycling.rs
+src/tests/integration/executor.rs
+src/tests/integration/fsm.rs
+src/tests/integration/hierarchy.rs
+src/tests/integration/learning.rs
+src/tests/integration/locks.rs
+src/tests/integration/pipeline.rs
+src/tests/integration/pool.rs
+src/tests/integration/preformed.rs
+src/tests/integration/sessions.rs
+src/tests/integration/tick.rs

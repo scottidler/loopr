@@ -290,7 +290,8 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
                 &c.worktree_manager,
                 &c.config.integrator,
                 start_req,
-            );
+            )
+            .await;
             info!("Auto-started Coordinator agent");
         }
         // Auto-start Integrator when enabled
@@ -306,7 +307,8 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
                 &c.worktree_manager,
                 &c.config.integrator,
                 start_req,
-            );
+            )
+            .await;
             info!("Auto-started Integrator");
         }
     }

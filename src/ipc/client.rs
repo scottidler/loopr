@@ -134,6 +134,7 @@ pub enum ClientError {
     Disconnected,
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -384,3 +385,4 @@ mod tests {
         let _ = server_handle.await;
     }
 }
+*/

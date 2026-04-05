@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, dead_code, unused_imports)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -517,7 +517,8 @@ mod tests {
                     "content": "Always run tests before committing"
                 }),
             ),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["source_id"], "wi-123");
@@ -539,7 +540,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.create", json!({"scope": "global", "content": "insight"})),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("source_id"));
     }
@@ -555,7 +557,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.create", json!({"source_id": "wi-1", "scope": "global"})),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("content"));
     }
@@ -575,7 +578,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "wi-1", "scope": "invalid", "content": "test"}),
             ),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("scope"));
     }
@@ -596,7 +600,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
             ),
-        ).await;
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "learning");
@@ -617,7 +622,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.get", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["source_id"], "wi-123");
     }
@@ -633,7 +639,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.get", json!({"id": "nonexistent"})),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
@@ -670,7 +677,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.list", json!(null)),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
@@ -693,7 +701,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "global", "scope": "global", "content": "global insight"}),
             ),
-        ).await;
+        )
+        .await;
 
         // Filter by global scope
         let resp = dispatch(
@@ -702,7 +711,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "learning.list", json!({"scope": "global"})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         let list = resp.result.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
@@ -728,7 +738,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "global-src", "scope": "global", "content": "global insight"}),
             ),
-        ).await;
+        )
+        .await;
 
         // Clear HashMap to prove list reads from TaskStore
         stores.learnings.write().unwrap().clear();
@@ -740,7 +751,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(10, "learning.list", json!(null)),
-        ).await;
+        )
+        .await;
         assert!(!all_resp.is_error());
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
@@ -751,7 +763,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(11, "learning.list", json!({"scope": "global"})),
-        ).await;
+        )
+        .await;
         assert!(!filtered_resp.is_error());
         let filtered_items = filtered_resp.result.unwrap();
         assert_eq!(filtered_items.as_array().unwrap().len(), 1);
@@ -773,7 +786,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.reinforce", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["reinforcements"], 1);
 
@@ -784,7 +798,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "learning.reinforce", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert_eq!(resp2.result.unwrap()["reinforcements"], 2);
     }
 
@@ -799,7 +814,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.reinforce", json!({"id": "nonexistent"})),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
     }
 
@@ -818,7 +834,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.contradict", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["contradictions"], 1);
     }
@@ -839,7 +856,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert!(resp.result.unwrap()["promoted"].as_bool().unwrap());
 
@@ -850,7 +868,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "learning.demote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp2.is_error());
         assert!(!resp2.result.unwrap()["promoted"].as_bool().unwrap());
     }
@@ -870,7 +889,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.updated");
         assert_eq!(event.data["collection"], "learning");
@@ -889,7 +909,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.reinforce", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
 
         let store = stores.store.as_ref().unwrap().lock().unwrap();
@@ -911,7 +932,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.contradict", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
 
         let store = stores.store.as_ref().unwrap().lock().unwrap();
@@ -933,7 +955,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
 
         let store = stores.store.as_ref().unwrap().lock().unwrap();
@@ -956,7 +979,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
 
         let resp = dispatch(
             &stores,
@@ -964,7 +988,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "learning.demote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
 
         let store = stores.store.as_ref().unwrap().lock().unwrap();
@@ -998,7 +1023,8 @@ mod tests {
                     "resource_tags": ["src/main.rs", "src/lib.rs"]
                 }),
             ),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error(), "learning.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["content"], "Updated content");
@@ -1016,7 +1042,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.update", json!({"id": "nonexistent", "content": "x"})),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
     }
 
@@ -1031,7 +1058,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "learning.update", json!({"content": "x"})),
-        ).await;
+        )
+        .await;
         assert!(resp.is_error());
     }
 
@@ -1052,7 +1080,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
             ),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -1063,7 +1092,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.reinforce", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["reinforcements"], 1);
     }
@@ -1084,7 +1114,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
             ),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -1094,7 +1125,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.contradict", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["contradictions"], 1);
     }
@@ -1115,7 +1147,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
             ),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -1125,7 +1158,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["promoted"], true);
     }
@@ -1146,7 +1180,8 @@ mod tests {
                 "learning.create",
                 json!({"source_id": "wi-1", "scope": "global", "content": "test"}),
             ),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         let learning_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -1157,7 +1192,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "learning.promote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
 
         // Then demote
@@ -1167,7 +1203,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(3, "learning.demote", json!({"id": learning_id})),
-        ).await;
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["promoted"], false);
     }

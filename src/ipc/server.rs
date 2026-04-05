@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use futures::future::BoxFuture;
 use futures::SinkExt;
+use futures::future::BoxFuture;
 use log::debug;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
@@ -178,7 +178,10 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             handle_client(
                 stream,
-                |req| Box::pin(async move { DaemonResponse::ok(req.id, json!({"echo": req.method})) }) as BoxFuture<'static, DaemonResponse>,
+                |req| {
+                    Box::pin(async move { DaemonResponse::ok(req.id, json!({"echo": req.method})) })
+                        as BoxFuture<'static, DaemonResponse>
+                },
                 event_rx,
             )
             .await;
@@ -220,7 +223,15 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_client(stream, |req| Box::pin(async move { DaemonResponse::ok(req.id, json!(null)) }) as BoxFuture<'static, DaemonResponse>, event_rx).await;
+            handle_client(
+                stream,
+                |req| {
+                    Box::pin(async move { DaemonResponse::ok(req.id, json!(null)) })
+                        as BoxFuture<'static, DaemonResponse>
+                },
+                event_rx,
+            )
+            .await;
         });
 
         let stream = UnixStream::connect(&path).await.unwrap();
@@ -253,7 +264,15 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_client(stream, |req| Box::pin(async move { DaemonResponse::ok(req.id, json!(null)) }) as BoxFuture<'static, DaemonResponse>, event_rx).await;
+            handle_client(
+                stream,
+                |req| {
+                    Box::pin(async move { DaemonResponse::ok(req.id, json!(null)) })
+                        as BoxFuture<'static, DaemonResponse>
+                },
+                event_rx,
+            )
+            .await;
         });
 
         let stream = UnixStream::connect(&path).await.unwrap();
@@ -290,7 +309,15 @@ mod tests {
 
         let server_task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            handle_client(stream, |req| Box::pin(async move { DaemonResponse::ok(req.id, json!(null)) }) as BoxFuture<'static, DaemonResponse>, event_rx).await;
+            handle_client(
+                stream,
+                |req| {
+                    Box::pin(async move { DaemonResponse::ok(req.id, json!(null)) })
+                        as BoxFuture<'static, DaemonResponse>
+                },
+                event_rx,
+            )
+            .await;
             // handle_client should return cleanly when client disconnects
         });
 
@@ -316,7 +343,10 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             handle_client(
                 stream,
-                |req| Box::pin(async move { DaemonResponse::ok(req.id, json!({"method": req.method})) }) as BoxFuture<'static, DaemonResponse>,
+                |req| {
+                    Box::pin(async move { DaemonResponse::ok(req.id, json!({"method": req.method})) })
+                        as BoxFuture<'static, DaemonResponse>
+                },
                 event_rx,
             )
             .await;

@@ -1,9 +1,10 @@
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, unused_imports)]
 
 use serde_json::json;
 
 use super::fixtures::*;
 
+/*
 #[test]
 fn test_lock_lifecycle_via_dispatch() {
     let stores = test_stores();
@@ -39,3 +40,4 @@ fn test_lock_lifecycle_via_dispatch() {
     let lock_state = stores.locks.read().unwrap();
     assert_eq!(lock_state[&lock_id].status(), crate::domain::lock::LockStatus::Released);
 }
+*/

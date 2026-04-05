@@ -370,7 +370,11 @@ mod tests {
     use crate::worktree::manager::WorktreeManager;
 
     /// Helper: create a plan and return its id
-    async fn create_test_plan(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_test_plan(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,

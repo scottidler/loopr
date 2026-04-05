@@ -303,7 +303,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         }
                     }
                 };
-                validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria).await
+                validator
+                    .validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
+                    .await
             }
             "spec" | "specs" => {
                 let (spec, plan_title) = {
@@ -321,7 +323,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         .unwrap_or_default();
                     (spec, plan_title)
                 };
-                validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title).await
+                validator
+                    .validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
+                    .await
             }
             "phase" | "phases" => {
                 let (phase, spec_title) = {
@@ -339,7 +343,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         .unwrap_or_default();
                     (phase, spec_title)
                 };
-                validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title).await
+                validator
+                    .validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
+                    .await
             }
             _ => {
                 return Ok(DaemonResponse::err(
@@ -423,14 +429,16 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                         .join("\n");
                     (plan, specs_list, children_ids)
                 };
-                evaluator.evaluate_plan_specs(
-                    &parent_id,
-                    &plan.title,
-                    &plan.description,
-                    &plan.acceptance_criteria,
-                    &specs_list,
-                    children_ids,
-                ).await
+                evaluator
+                    .evaluate_plan_specs(
+                        &parent_id,
+                        &plan.title,
+                        &plan.description,
+                        &plan.acceptance_criteria,
+                        &specs_list,
+                        children_ids,
+                    )
+                    .await
             }
             "spec" | "specs" => {
                 let (spec, plan_title, phases_list, children_ids) = {
@@ -456,14 +464,16 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                         .join("\n");
                     (spec, plan_title, phases_list, children_ids)
                 };
-                evaluator.evaluate_spec_phases(
-                    &parent_id,
-                    &spec.title,
-                    &spec.description,
-                    &plan_title,
-                    &phases_list,
-                    children_ids,
-                ).await
+                evaluator
+                    .evaluate_spec_phases(
+                        &parent_id,
+                        &spec.title,
+                        &spec.description,
+                        &plan_title,
+                        &phases_list,
+                        children_ids,
+                    )
+                    .await
             }
             "phase" | "phases" => {
                 let (params, works_list, children_ids) = {
@@ -648,7 +658,11 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
-    async fn create_sealing_tick(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_sealing_tick(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,

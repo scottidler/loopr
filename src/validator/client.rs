@@ -18,6 +18,7 @@ pub struct ReqwestClient {
 }
 
 impl ReqwestClient {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
@@ -34,15 +35,8 @@ impl HttpClient for ReqwestClient {
         for (key, value) in headers {
             req = req.header(*key, *value);
         }
-        let response = req
-            .body(body.to_string())
-            .send()
-            .await
-            .context("HTTP request failed")?;
-        let text = response
-            .text()
-            .await
-            .context("Failed to read response body")?;
+        let response = req.body(body.to_string()).send().await.context("HTTP request failed")?;
+        let text = response.text().await.context("Failed to read response body")?;
         Ok(text)
     }
 }
