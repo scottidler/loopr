@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use super::*;
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
@@ -31,20 +33,26 @@ impl MockLlm {
     }
 }
 
-#[async_trait]
 impl LlmClient for MockLlm {
-    async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-        Ok(self.response.clone())
+    fn call<'a>(
+        &'a self,
+        _system_prompt: &'a str,
+        _user_message: &'a str,
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move { Ok(self.response.clone()) }
     }
 }
 
 /// Mock LLM that fails.
 struct FailingLlm;
 
-#[async_trait]
 impl LlmClient for FailingLlm {
-    async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-        Err(eyre!("LLM call failed"))
+    fn call<'a>(
+        &'a self,
+        _system_prompt: &'a str,
+        _user_message: &'a str,
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move { Err(eyre!("LLM call failed")) }
     }
 }
 
@@ -112,12 +120,12 @@ fn test_bridge_with_tx(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broa
 
 /// Build an ImplementerAgent for tests, wired to the given stores and directory.
 /// Also inserts the session into stores so `is_cancelled()` works correctly.
-fn test_implementer(
-    llm: Box<dyn LlmClient>,
+fn test_implementer<L: LlmClient>(
+    llm: L,
     stores: Arc<Stores>,
     dir: &Path,
     config: AgentRoleConfig,
-) -> ImplementerAgent {
+) -> ImplementerAgent<L> {
     let wi_id = get_work_id(&stores);
     let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), dir);
     let agent_log = test_agent_logger(dir);
@@ -311,7 +319,7 @@ async fn test_run_iteration_done() {
     let dir = TestDir::new("loopr-impl-iter");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#));
+    let llm = MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -323,7 +331,7 @@ async fn test_run_iteration_need_help() {
     let dir = TestDir::new("loopr-impl-help");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#));
+    let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Ambiguous spec"}]"#);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -335,12 +343,12 @@ async fn test_run_iteration_continue_with_actions() {
     let dir = TestDir::new("loopr-impl-cont");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new(
+    let llm = MockLlm::new(
         r#"[
             {"action": "write_file", "path": "test.txt", "content": "hello"},
             {"action": "read_file", "path": "test.txt"}
         ]"#,
-    ));
+    );
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -354,7 +362,7 @@ async fn test_run_iteration_llm_failure() {
     let dir = TestDir::new("loopr-impl-fail");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm: Box<dyn LlmClient> = Box::new(FailingLlm);
+    let llm = FailingLlm;
     let agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
@@ -366,7 +374,7 @@ async fn test_run_iteration_bad_response() {
     let dir = TestDir::new("loopr-impl-bad");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new("This is not valid JSON"));
+    let llm = MockLlm::new("This is not valid JSON");
     let agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
@@ -378,7 +386,7 @@ async fn test_run_iteration_empty_actions() {
     let dir = TestDir::new("loopr-impl-empty");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new("[]"));
+    let llm = MockLlm::new("[]");
     let agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
@@ -393,7 +401,7 @@ async fn test_run_implementer_completes_on_done() {
     let dir = TestDir::new("loopr-impl-run");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "Complete"}]"#));
+    let llm = MockLlm::new(r#"[{"action": "done", "summary": "Complete"}]"#);
     let mut agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run().await;
@@ -409,9 +417,7 @@ async fn test_run_implementer_max_iterations() {
     config.max_iterations = 3;
 
     // LLM always returns a write action (no done), so loop should hit max
-    let llm = Box::new(MockLlm::new(
-        r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#,
-    ));
+    let llm = MockLlm::new(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#);
     let mut agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run().await;
@@ -425,7 +431,7 @@ async fn test_run_implementer_need_help_stops() {
     let dir = TestDir::new("loopr-impl-helpstop");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new(r#"[{"action": "need_help", "reason": "Stuck"}]"#));
+    let llm = MockLlm::new(r#"[{"action": "need_help", "reason": "Stuck"}]"#);
     let mut agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run().await;
@@ -532,7 +538,7 @@ async fn test_run_iteration_with_staleness_note() {
     let dir = TestDir::new("loopr-impl-stale");
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
-    let llm = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "Rebased and done"}]"#));
+    let llm = MockLlm::new(r#"[{"action": "done", "summary": "Rebased and done"}]"#);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let staleness = Some("New tick published, please review.".to_string());
@@ -557,30 +563,28 @@ async fn test_run_implementer_detects_staleness() {
         event_tx: broadcast::Sender<DaemonEvent>,
     }
 
-    #[async_trait]
     impl LlmClient for StalenessLlm {
-        async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
-            let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                // First iteration: send tick.published, then return a continue action.
-                // The event will be in the broadcast buffer for the next drain.
-                let _ = self.event_tx.send(DaemonEvent::tick_published("tick-new", "newshaval"));
-                Ok(r#"[{"action": "write_file", "path": "x.txt", "content": "v1"}]"#.to_string())
-            } else {
-                // Second iteration: should see staleness warning in user message
-                assert!(
-                    user_msg.contains("Staleness Warning"),
-                    "Expected staleness context in user message"
-                );
-                Ok(r#"[{"action": "done", "summary": "Handled staleness"}]"#.to_string())
+        fn call<'a>(&'a self, _system: &'a str, user_msg: &'a str) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    let _ = self.event_tx.send(DaemonEvent::tick_published("tick-new", "newshaval"));
+                    Ok(r#"[{"action": "write_file", "path": "x.txt", "content": "v1"}]"#.to_string())
+                } else {
+                    assert!(
+                        user_msg.contains("Staleness Warning"),
+                        "Expected staleness context in user message"
+                    );
+                    Ok(r#"[{"action": "done", "summary": "Handled staleness"}]"#.to_string())
+                }
             }
         }
     }
 
-    let llm: Box<dyn LlmClient> = Box::new(StalenessLlm {
+    let llm = StalenessLlm {
         call_count: std::sync::atomic::AtomicU32::new(0),
         event_tx: event_tx.clone(),
-    });
+    };
 
     let mut session = AgentSession::new(AgentKind::Implementer, "test".into());
     session.work_id = Some(wi_id.clone());
@@ -609,13 +613,13 @@ async fn test_action_results_accumulate() {
     let config = AgentRoleConfig::default_implementer();
 
     // LLM returns multiple actions -- all summaries should be joined
-    let llm = Box::new(MockLlm::new(
+    let llm = MockLlm::new(
         r#"[
             {"action": "write_file", "path": "a.txt", "content": "aaa"},
             {"action": "write_file", "path": "b.txt", "content": "bbb"},
             {"action": "read_file", "path": "a.txt"}
         ]"#,
-    ));
+    );
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -688,12 +692,12 @@ async fn test_run_iteration_done_stops_remaining_actions() {
     let config = AgentRoleConfig::default_implementer();
 
     // Done comes first, then a write_file that should NOT execute
-    let llm = Box::new(MockLlm::new(
+    let llm = MockLlm::new(
         r#"[
             {"action": "done", "summary": "Early exit"},
             {"action": "write_file", "path": "should_not_exist.txt", "content": "nope"}
         ]"#,
-    ));
+    );
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -711,12 +715,12 @@ async fn test_action_error_breaks_batch_before_done() {
     let config = AgentRoleConfig::default_implementer();
 
     // edit_file on a nonexistent file produces ActionError
-    let llm = Box::new(MockLlm::new(
+    let llm = MockLlm::new(
         r#"[
             {"action": "edit_file", "path": "nonexistent.lua", "old_string": "x", "new_string": "y"},
             {"action": "done", "summary": "work complete"}
         ]"#,
-    ));
+    );
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -794,21 +798,22 @@ async fn test_run_implementer_session_iteration_persisted() {
         call_count: std::sync::atomic::AtomicU32,
     }
 
-    #[async_trait]
     impl LlmClient for TwoShotLlm {
-        async fn call(&self, _system: &str, _user: &str) -> Result<String> {
-            let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                Ok(r#"[{"action": "write_file", "path": "iter.txt", "content": "1"}]"#.to_string())
-            } else {
-                Ok(r#"[{"action": "done", "summary": "Persisted iteration"}]"#.to_string())
+        fn call<'a>(&'a self, _system: &'a str, _user: &'a str) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    Ok(r#"[{"action": "write_file", "path": "iter.txt", "content": "1"}]"#.to_string())
+                } else {
+                    Ok(r#"[{"action": "done", "summary": "Persisted iteration"}]"#.to_string())
+                }
             }
         }
     }
 
-    let llm: Box<dyn LlmClient> = Box::new(TwoShotLlm {
+    let llm = TwoShotLlm {
         call_count: std::sync::atomic::AtomicU32::new(0),
-    });
+    };
     let mut agent = test_implementer(llm, stores.clone(), &dir, config);
     let session_id = agent.ctx.session.id.clone();
 
@@ -848,18 +853,23 @@ async fn test_implementer_context_includes_goal() {
         captured_user_msg: Arc<StdMutex2<Option<String>>>,
     }
 
-    #[async_trait]
     impl LlmClient for CapturingLlm {
-        async fn call(&self, _system_prompt: &str, user_message: &str) -> Result<String> {
-            *self.captured_user_msg.lock().unwrap() = Some(user_message.to_string());
-            Ok(r#"[{"action": "done", "summary": "done"}]"#.to_string())
+        fn call<'a>(
+            &'a self,
+            _system_prompt: &'a str,
+            user_message: &'a str,
+        ) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move {
+                *self.captured_user_msg.lock().unwrap() = Some(user_message.to_string());
+                Ok(r#"[{"action": "done", "summary": "done"}]"#.to_string())
+            }
         }
     }
 
     let config = AgentRoleConfig::default_implementer();
-    let llm: Box<dyn LlmClient> = Box::new(CapturingLlm {
+    let llm = CapturingLlm {
         captured_user_msg: captured_msg.clone(),
-    });
+    };
     let agent = test_implementer(llm, stores, &dir, config);
 
     let _ = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -888,22 +898,20 @@ async fn test_parse_failure_recovery_via_self_correction() {
         call_count: Arc<std::sync::atomic::AtomicU32>,
     }
 
-    #[async_trait]
     impl LlmClient for ProseThenValidLlm {
-        async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
-            let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if n == 0 {
-                // Return prose -- triggers self-correction re-prompt
-                Ok("I think we should start by reading the file and understanding the codebase.".to_string())
-            } else {
-                // Self-correction re-prompt: default call_with_history extracts last user
-                // message, which is the correction prompt
-                assert!(
-                    user_msg.contains("could not be parsed as a valid JSON action array"),
-                    "expected self-correction prompt, got: {}",
-                    &user_msg[..user_msg.len().min(500)]
-                );
-                Ok(r#"[{"action": "done", "summary": "Recovered via self-correction"}]"#.to_string())
+        fn call<'a>(&'a self, _system: &'a str, user_msg: &'a str) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    Ok("I think we should start by reading the file and understanding the codebase.".to_string())
+                } else {
+                    assert!(
+                        user_msg.contains("could not be parsed as a valid JSON action array"),
+                        "expected self-correction prompt, got: {}",
+                        &user_msg[..user_msg.len().min(500)]
+                    );
+                    Ok(r#"[{"action": "done", "summary": "Recovered via self-correction"}]"#.to_string())
+                }
             }
         }
     }
@@ -913,9 +921,9 @@ async fn test_parse_failure_recovery_via_self_correction() {
     let mut config = AgentRoleConfig::default_implementer();
     config.max_iterations = 3;
 
-    let llm: Box<dyn LlmClient> = Box::new(ProseThenValidLlm {
+    let llm = ProseThenValidLlm {
         call_count: call_count.clone(),
-    });
+    };
     let mut agent = test_implementer(llm, stores.clone(), &dir, config);
     let session_id = agent.ctx.session.id.clone();
 
@@ -996,11 +1004,16 @@ impl RecordingLlm {
     }
 }
 
-#[async_trait]
 impl LlmClient for RecordingLlm {
-    async fn call(&self, _system_prompt: &str, user_message: &str) -> Result<String> {
-        self.calls.lock().unwrap().push(user_message.to_string());
-        Ok(self.response.clone())
+    fn call<'a>(
+        &'a self,
+        _system_prompt: &'a str,
+        user_message: &'a str,
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move {
+            self.calls.lock().unwrap().push(user_message.to_string());
+            Ok(self.response.clone())
+        }
     }
 }
 
@@ -1012,7 +1025,7 @@ async fn test_budget_exhaustion_prompt_injected_at_penultimate_iteration() {
     config.max_iterations = 3; // Budget warning should appear at iterations 2 and 3
 
     let (llm, calls) = RecordingLlm::new(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#);
-    let mut agent = test_implementer(Box::new(llm), stores.clone(), &dir, config);
+    let mut agent = test_implementer(llm, stores.clone(), &dir, config);
 
     stores
         .agent_sessions
@@ -1043,9 +1056,7 @@ async fn test_force_propose_claims_content() {
     config.max_iterations = 1; // Immediately exhaust budget
 
     // LLM returns a write_file (no propose_bundle), so has_proposed stays false
-    let llm = Box::new(MockLlm::new(
-        r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#,
-    ));
+    let llm = MockLlm::new(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#);
     let mut agent = test_implementer(llm, stores.clone(), &dir, config);
 
     stores
@@ -1090,9 +1101,7 @@ async fn test_has_proposed_true_skips_force_propose() {
     config.max_iterations = 2;
 
     // First: write_file only -- has_proposed stays false
-    let llm1 = Box::new(MockLlm::new(
-        r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#,
-    ));
+    let llm1 = MockLlm::new(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#);
     let mut agent1 = test_implementer(llm1, stores.clone(), &dir, config.clone());
 
     stores
@@ -1105,7 +1114,7 @@ async fn test_has_proposed_true_skips_force_propose() {
     // Force-propose should have been attempted (may or may not succeed)
 
     // Second: done action -- returns Ok immediately, no force-propose
-    let llm2 = Box::new(MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#));
+    let llm2 = MockLlm::new(r#"[{"action": "done", "summary": "All done"}]"#);
     let mut agent2 = test_implementer(llm2, stores.clone(), &dir, config);
 
     stores
@@ -1159,14 +1168,19 @@ impl SequenceLlm {
     }
 }
 
-#[async_trait]
 impl LlmClient for SequenceLlm {
-    async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-        self.responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .ok_or_else(|| eyre!("SequenceLlm: no more responses"))
+    fn call<'a>(
+        &'a self,
+        _system_prompt: &'a str,
+        _user_message: &'a str,
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| eyre!("SequenceLlm: no more responses"))
+        }
     }
 }
 
@@ -1178,10 +1192,10 @@ async fn test_self_correction_parse_failure_then_success() {
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         "I think we should read the file first.",               // malformed
         r#"[{"action": "done", "summary": "Self-corrected"}]"#, // valid
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -1199,12 +1213,12 @@ async fn test_self_correction_multiple_retries_then_success() {
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer(); // max_requeries=3
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         "bad response 1",
         "bad response 2",
         "bad response 3",
         r#"[{"action": "done", "summary": "Finally corrected"}]"#,
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -1222,9 +1236,9 @@ async fn test_self_correction_max_requeries_exceeded() {
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer(); // max_requeries=3
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         "bad 1", "bad 2", "bad 3", "bad 4", // 1 initial + 3 retries = 4 calls, then error
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
@@ -1243,10 +1257,10 @@ async fn test_self_correction_disabled_when_max_requeries_zero() {
     let mut config = AgentRoleConfig::default_implementer();
     config.max_requeries = 0;
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         "malformed response",
         r#"[{"action": "done", "summary": "never reached"}]"#,
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let result = agent.run_iteration(1, None, &mut Lifeguard::new()).await;
@@ -1261,9 +1275,7 @@ async fn test_self_correction_no_overhead_on_valid_response() {
     let config = AgentRoleConfig::default_implementer();
 
     // SequenceLlm with only one response — second call would panic
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
-        r#"[{"action": "done", "summary": "First try success"}]"#,
-    ]));
+    let llm = SequenceLlm::new(vec![r#"[{"action": "done", "summary": "First try success"}]"#]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -1287,22 +1299,23 @@ async fn test_self_correction_integrates_with_run_loop() {
         call_count: std::sync::atomic::AtomicU32,
     }
 
-    #[async_trait]
     impl LlmClient for CorrectionThenDoneLlm {
-        async fn call(&self, _system: &str, _user: &str) -> Result<String> {
-            let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            match n {
-                0 => Ok("not json".to_string()), // iter 1: malformed
-                1 => Ok(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#.to_string()), // iter 1: corrected
-                2 => Ok(r#"[{"action": "done", "summary": "All done"}]"#.to_string()),                 // iter 2: done
-                _ => Err(eyre!("unexpected call")),
+        fn call<'a>(&'a self, _system: &'a str, _user: &'a str) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let n = self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                match n {
+                    0 => Ok("not json".to_string()),
+                    1 => Ok(r#"[{"action": "write_file", "path": "x.txt", "content": "x"}]"#.to_string()),
+                    2 => Ok(r#"[{"action": "done", "summary": "All done"}]"#.to_string()),
+                    _ => Err(eyre!("unexpected call")),
+                }
             }
         }
     }
 
-    let llm: Box<dyn LlmClient> = Box::new(CorrectionThenDoneLlm {
+    let llm = CorrectionThenDoneLlm {
         call_count: std::sync::atomic::AtomicU32::new(0),
-    });
+    };
     let mut agent = test_implementer(llm, stores.clone(), &dir, config);
 
     stores
@@ -1326,12 +1339,12 @@ async fn test_tool_error_correction_path_escapes() {
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         // First: returns an action that will fail (path escapes sandbox)
         r#"[{"action": "write_file", "path": "../../etc/passwd", "content": "bad"}]"#,
         // Correction: returns a valid action
         r#"[{"action": "done", "summary": "Corrected path issue"}]"#,
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -1353,9 +1366,7 @@ async fn test_tool_error_correction_non_correctable_falls_through() {
     // RunTool with a tool that doesn't exist in ToolRunner — triggers "unknown tool" which IS correctable
     // Instead, use write_file to a valid path then read_file from a nonexistent path
     // read_file errors are NOT in is_correctable_error, so they fall through
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
-        r#"[{"action": "read_file", "path": "nonexistent_file_xyz.rs"}]"#,
-    ]));
+    let llm = SequenceLlm::new(vec![r#"[{"action": "read_file", "path": "nonexistent_file_xyz.rs"}]"#]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -1376,11 +1387,11 @@ async fn test_tool_error_correction_budget_shared_with_parse() {
     let mut config = AgentRoleConfig::default_implementer();
     config.max_requeries = 1; // Only 1 re-prompt allowed total
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         "not json", // parse fail → uses 1 requery
         r#"[{"action": "write_file", "path": "../../etc/passwd", "content": "bad"}]"#, // corrected parse, but path escapes
                                                                                        // No more re-prompts available — tool error should NOT trigger correction
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();
@@ -1403,12 +1414,12 @@ async fn test_tool_error_correction_parse_failure_on_corrected_response() {
     let stores = setup_stores(&dir);
     let config = AgentRoleConfig::default_implementer();
 
-    let llm: Box<dyn LlmClient> = Box::new(SequenceLlm::new(vec![
+    let llm = SequenceLlm::new(vec![
         // First: path escapes (correctable)
         r#"[{"action": "write_file", "path": "../../etc/passwd", "content": "bad"}]"#,
         // Correction response: malformed (can't parse)
         "I apologize, here is the fix",
-    ]));
+    ]);
     let agent = test_implementer(llm, stores, &dir, config);
 
     let outcome = agent.run_iteration(1, None, &mut Lifeguard::new()).await.unwrap();

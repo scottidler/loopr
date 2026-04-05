@@ -95,7 +95,6 @@ async fn test_coordinator_state_persistence_across_iterations() {
 async fn test_coordinator_assigns_implementer_completes() {
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::implementer::{self, IterationOutcome, LlmClient};
-    use async_trait::async_trait;
     use eyre::Result;
 
     let dir = TestDir::new("loopr-e2e-pipeline");
@@ -167,23 +166,26 @@ async fn test_coordinator_assigns_implementer_completes() {
     // Now run an implementer iteration directly with a mock LLM that writes a file
     struct PipelineLlm;
 
-    #[async_trait]
     impl LlmClient for PipelineLlm {
-        async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
-            // Verify context includes goal and hierarchy
-            assert!(user_msg.contains("Project Goal"), "missing Project Goal in context");
-            assert!(user_msg.contains("hello world"), "missing goal text in context");
-            assert!(user_msg.contains("Write hello.txt"), "missing work item in context");
-
-            Ok(r#"[
-                {"action": "write_file", "path": "hello.txt", "content": "Hello, World!"},
-                {"action": "done", "summary": "Created hello.txt"}
-            ]"#
-            .to_string())
+        fn call<'a>(
+            &'a self,
+            _system: &'a str,
+            user_msg: &'a str,
+        ) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+            async move {
+                assert!(user_msg.contains("Project Goal"), "missing Project Goal in context");
+                assert!(user_msg.contains("hello world"), "missing goal text in context");
+                assert!(user_msg.contains("Write hello.txt"), "missing work item in context");
+                Ok(r#"[
+                    {"action": "write_file", "path": "hello.txt", "content": "Hello, World!"},
+                    {"action": "done", "summary": "Created hello.txt"}
+                ]"#
+                .to_string())
+            }
         }
     }
 
-    let llm: Box<dyn LlmClient> = Box::new(PipelineLlm);
+    let llm = PipelineLlm;
     let log_file_path = dir.join("test-pipeline.log");
     let log_file = std::fs::OpenOptions::new()
         .create(true)

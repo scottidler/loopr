@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use std::future::Future;
+
 use async_trait::async_trait;
 use eyre::{Result, eyre};
 
@@ -39,21 +41,30 @@ impl ChatMessage {
 
 /// Trait for LLM calls — allows mocking in tests.
 /// Phase 4 provides the real streaming implementation (`AgentLlmClient`).
-#[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Call the LLM with a system prompt and user message, return the full response text.
-    async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String>;
+    fn call<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        user_message: &'a str,
+    ) -> impl Future<Output = Result<String>> + Send + 'a;
 
     /// Call with multi-turn conversation history for self-correction.
     /// Default implementation extracts the last user message and delegates to `call`.
-    async fn call_with_history(&self, system_prompt: &str, messages: &[ChatMessage]) -> Result<String> {
-        let last_user = messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.as_str())
-            .unwrap_or("");
-        self.call(system_prompt, last_user).await
+    fn call_with_history<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        messages: &'a [ChatMessage],
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move {
+            let last_user = messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+            self.call(system_prompt, last_user).await
+        }
     }
 }
 
@@ -193,9 +204,9 @@ pub enum IterationOutcome {
 }
 
 /// The Implementer agent — multi-iteration LLM agent that implements Work items.
-pub struct ImplementerAgent {
+pub struct ImplementerAgent<L: LlmClient> {
     pub ctx: AgentContext,
-    llm: Box<dyn LlmClient>,
+    llm: L,
     config: AgentRoleConfig,
     work_id: String,
     worktree_path: PathBuf,
@@ -203,14 +214,8 @@ pub struct ImplementerAgent {
     has_proposed: bool,
 }
 
-impl ImplementerAgent {
-    pub fn new(
-        ctx: AgentContext,
-        llm: Box<dyn LlmClient>,
-        config: AgentRoleConfig,
-        work_id: String,
-        worktree_path: PathBuf,
-    ) -> Self {
+impl<L: LlmClient> ImplementerAgent<L> {
+    pub fn new(ctx: AgentContext, llm: L, config: AgentRoleConfig, work_id: String, worktree_path: PathBuf) -> Self {
         Self {
             ctx,
             llm,
@@ -446,7 +451,7 @@ fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, agent_l
 }
 
 #[async_trait]
-impl Agent for ImplementerAgent {
+impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!(
             "run(session_id={}, work_id={})",

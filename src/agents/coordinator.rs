@@ -352,9 +352,9 @@ pub fn build_state_summary_with_sla(
 }
 
 /// The Coordinator agent — long-lived FSM-driven agent that manages the planning/execution lifecycle.
-pub struct CoordinatorAgent {
+pub struct CoordinatorAgent<L: LlmClient> {
     pub ctx: AgentContext,
-    llm: Box<dyn LlmClient>,
+    llm: L,
     config: CoordinatorConfig,
     iteration: u32,
     previous_summary: Option<String>,
@@ -1138,7 +1138,7 @@ fn check_fsm_transition(
 mod run;
 
 #[async_trait]
-impl Agent for CoordinatorAgent {
+impl<L: LlmClient + 'static> Agent for CoordinatorAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!("run(session_id={})", self.ctx.session.id));
 

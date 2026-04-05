@@ -1,4 +1,8 @@
 #![deny(clippy::unwrap_used)]
+// manual_async_fn is suppressed because our LlmClient/AgenticLlm traits require
+// explicit fn -> impl Future + Send + 'a signatures to guarantee Send on futures.
+// Using async fn would lose the Send bound and break thread safety.
+#![allow(clippy::manual_async_fn)]
 
 pub mod agents;
 pub mod clarity;

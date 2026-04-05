@@ -11,14 +11,13 @@ use crate::domain::tick::Tick;
 use crate::domain::work::{Work, WorkStatus};
 use crate::test_util::TestDir;
 use crate::worktree::manager::WorktreeManager;
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use taskstore::Store;
 use tokio::sync::broadcast;
 
 /// Mock LLM client for testing.
-struct MockLlm {
+pub(crate) struct MockLlm {
     responses: StdMutex<Vec<String>>,
 }
 
@@ -30,14 +29,19 @@ impl MockLlm {
     }
 }
 
-#[async_trait]
 impl LlmClient for MockLlm {
-    async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-        let mut responses = self.responses.lock().unwrap();
-        if responses.is_empty() {
-            Ok(r#"[{"action": "done", "summary": "No more responses"}]"#.to_string())
-        } else {
-            Ok(responses.remove(0))
+    fn call<'a>(
+        &'a self,
+        _system_prompt: &'a str,
+        _user_message: &'a str,
+    ) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+        async move {
+            let mut responses = self.responses.lock().unwrap();
+            if responses.is_empty() {
+                Ok(r#"[{"action": "done", "summary": "No more responses"}]"#.to_string())
+            } else {
+                Ok(responses.remove(0))
+            }
         }
     }
 }
@@ -74,7 +78,7 @@ pub(crate) fn test_coordinator(
     stores: &Arc<Stores>,
     responses: Vec<String>,
     config: CoordinatorConfig,
-) -> CoordinatorAgent {
+) -> CoordinatorAgent<MockLlm> {
     let (event_tx, _rx) = broadcast::channel(16);
     let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
@@ -90,7 +94,7 @@ pub(crate) fn test_coordinator(
         log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
-    let llm = Box::new(MockLlm::new(responses));
+    let llm = MockLlm::new(responses);
     CoordinatorAgent::new(ctx, llm, config)
 }
 

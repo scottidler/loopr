@@ -80,15 +80,15 @@ pub fn parse_review_result(response: &str, log: &crate::agents::agent_logger::Ag
 }
 
 /// The Reviewer agent — single-iteration LLM agent.
-pub struct ReviewerAgent {
+pub struct ReviewerAgent<L: LlmClient> {
     pub ctx: AgentContext,
-    llm: Box<dyn LlmClient>,
+    llm: L,
     config: AgentRoleConfig,
     bundle_id: String,
 }
 
-impl ReviewerAgent {
-    pub fn new(ctx: AgentContext, llm: Box<dyn LlmClient>, config: AgentRoleConfig) -> Result<Self> {
+impl<L: LlmClient> ReviewerAgent<L> {
+    pub fn new(ctx: AgentContext, llm: L, config: AgentRoleConfig) -> Result<Self> {
         let bundle_id = ctx
             .session
             .bundle_id
@@ -105,7 +105,7 @@ impl ReviewerAgent {
 }
 
 #[async_trait]
-impl Agent for ReviewerAgent {
+impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!(
             "run(session_id={}, bundle_id={})",
@@ -331,7 +331,6 @@ mod tests {
     use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
-    use async_trait::async_trait;
     use std::path::Path;
     use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
@@ -349,19 +348,25 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl LlmClient for MockReviewLlm {
-        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-            Ok(self.response.clone())
+        fn call<'a>(
+            &'a self,
+            _system_prompt: &'a str,
+            _user_message: &'a str,
+        ) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move { Ok(self.response.clone()) }
         }
     }
 
     struct FailingReviewLlm;
 
-    #[async_trait]
     impl LlmClient for FailingReviewLlm {
-        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-            Err(eyre!("LLM call failed"))
+        fn call<'a>(
+            &'a self,
+            _system_prompt: &'a str,
+            _user_message: &'a str,
+        ) -> impl Future<Output = Result<String>> + Send + 'a {
+            async move { Err(eyre!("LLM call failed")) }
         }
     }
 
@@ -378,22 +383,33 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl LlmClient for SequentialReviewLlm {
-        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                return Err(eyre!("no more responses"));
+        fn call<'a>(
+            &'a self,
+            _system_prompt: &'a str,
+            _user_message: &'a str,
+        ) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let mut responses = self.responses.lock().unwrap();
+                if responses.is_empty() {
+                    return Err(eyre!("no more responses"));
+                }
+                Ok(responses.remove(0))
             }
-            Ok(responses.remove(0))
         }
 
-        async fn call_with_history(&self, _system_prompt: &str, _messages: &[ChatMessage]) -> Result<String> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                return Err(eyre!("no more responses"));
+        fn call_with_history<'a>(
+            &'a self,
+            _system_prompt: &'a str,
+            _messages: &'a [ChatMessage],
+        ) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let mut responses = self.responses.lock().unwrap();
+                if responses.is_empty() {
+                    return Err(eyre!("no more responses"));
+                }
+                Ok(responses.remove(0))
             }
-            Ok(responses.remove(0))
         }
     }
 
@@ -457,7 +473,7 @@ mod tests {
         AgentLogger::_new_for_test(AgentKind::Reviewer, "test-session", file, file_path)
     }
 
-    fn test_reviewer(dir: &Path, stores: Arc<Stores>, bundle_id: &str, llm: Box<dyn LlmClient>) -> ReviewerAgent {
+    fn test_reviewer<L: LlmClient>(dir: &Path, stores: Arc<Stores>, bundle_id: &str, llm: L) -> ReviewerAgent<L> {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
@@ -638,9 +654,7 @@ mod tests {
         let dir = TestDir::new("loopr-rev-approve");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let llm = Box::new(MockReviewLlm::new(
-            r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#,
-        ));
+        let llm = MockReviewLlm::new(r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#);
         let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_ok(), "run failed: {:?}", result.err());
@@ -656,9 +670,9 @@ mod tests {
         let dir = TestDir::new("loopr-rev-reject");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let llm = Box::new(MockReviewLlm::new(
+        let llm = MockReviewLlm::new(
             r#"{"verdict": "reject", "issues": [{"severity": "error", "file": "src/main.rs", "message": "Wrong approach"}], "summary": "Fundamentally wrong"}"#,
-        ));
+        );
         let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_ok());
@@ -678,9 +692,9 @@ mod tests {
         let dir = TestDir::new("loopr-rev-changes");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let llm = Box::new(MockReviewLlm::new(
+        let llm = MockReviewLlm::new(
             r#"{"verdict": "request_changes", "issues": [{"severity": "warning", "file": "src/lib.rs", "message": "Add more tests"}], "summary": "Needs work"}"#,
-        ));
+        );
         let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_ok());
@@ -716,7 +730,7 @@ mod tests {
             log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
-        let llm = Box::new(MockReviewLlm::new("{}"));
+        let llm = MockReviewLlm::new("{}");
         let result = ReviewerAgent::new(ctx, llm, AgentRoleConfig::default_reviewer());
         let err = result.err().expect("expected error for missing bundle_id");
         assert!(err.to_string().contains("missing bundle_id"));
@@ -727,7 +741,7 @@ mod tests {
         let dir = TestDir::new("loopr-rev-fail");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(FailingReviewLlm);
+        let llm = FailingReviewLlm;
         let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_err());
@@ -739,7 +753,7 @@ mod tests {
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         // With retry, bad response must exhaust all retries before failing
-        let llm = Box::new(MockReviewLlm::new("Not valid JSON"));
+        let llm = MockReviewLlm::new("Not valid JSON");
         let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_err());
@@ -758,10 +772,10 @@ mod tests {
         let dir = TestDir::new("loopr-rev-retry-ok");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let llm = Box::new(SequentialReviewLlm::new(vec![
+        let llm = SequentialReviewLlm::new(vec![
             "Not valid JSON",
             r#"{"verdict": "approve", "issues": [], "summary": "LGTM after retry"}"#,
-        ]));
+        ]);
         let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_ok(), "retry should succeed: {:?}", result.err());
@@ -777,7 +791,7 @@ mod tests {
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
         // 4 bad responses: 1 initial + 3 retries (max_requeries=3) -> exhaustion
-        let llm = Box::new(SequentialReviewLlm::new(vec!["bad 1", "bad 2", "bad 3", "bad 4"]));
+        let llm = SequentialReviewLlm::new(vec!["bad 1", "bad 2", "bad 3", "bad 4"]);
         let mut agent = test_reviewer(&dir, stores, &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_err());
@@ -805,9 +819,7 @@ mod tests {
             bundle.force_status(BundleStatus::Accepted);
         }
 
-        let llm = Box::new(MockReviewLlm::new(
-            r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#,
-        ));
+        let llm = MockReviewLlm::new(r#"{"verdict": "approve", "issues": [], "summary": "LGTM"}"#);
         let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
         let result = agent.run().await;
         // Should succeed (not error) even though bundle.transition fails
@@ -834,9 +846,7 @@ mod tests {
         let dir = TestDir::new("loopr-rev-feedback");
         let (stores, bundle_id) = setup_stores_with_bundle(&dir);
 
-        let llm = Box::new(MockReviewLlm::new(
-            r#"{"verdict": "approve", "issues": [], "summary": "Clean code"}"#,
-        ));
+        let llm = MockReviewLlm::new(r#"{"verdict": "approve", "issues": [], "summary": "Clean code"}"#);
         let mut agent = test_reviewer(&dir, stores.clone(), &bundle_id, llm);
         let result = agent.run().await;
         assert!(result.is_ok());

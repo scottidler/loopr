@@ -1,9 +1,8 @@
-use std::time::{Duration, Instant};
-
-use async_trait::async_trait;
 use eyre::{Result, eyre};
 use log::{debug, info, trace, warn};
 use reqwest::Client;
+use std::future::Future;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
 use crate::agents::implementer::{ChatMessage, LlmClient};
@@ -201,24 +200,35 @@ impl AgentLlmClient {
     }
 }
 
-#[async_trait]
 impl LlmClient for AgentLlmClient {
-    async fn call(&self, system_prompt: &str, user_message: &str) -> Result<String> {
-        debug!(
-            "AgentLlmClient::call(system_prompt_len={}, user_msg_len={})",
-            system_prompt.len(),
-            user_message.len()
-        );
-        self.call_streaming(system_prompt, user_message).await
+    fn call<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        user_message: &'a str,
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move {
+            debug!(
+                "AgentLlmClient::call(system_prompt_len={}, user_msg_len={})",
+                system_prompt.len(),
+                user_message.len()
+            );
+            self.call_streaming(system_prompt, user_message).await
+        }
     }
 
-    async fn call_with_history(&self, system_prompt: &str, messages: &[ChatMessage]) -> Result<String> {
-        debug!(
-            "AgentLlmClient::call_with_history(system_prompt_len={}, messages={})",
-            system_prompt.len(),
-            messages.len()
-        );
-        self.call_streaming_with_messages(system_prompt, messages).await
+    fn call_with_history<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        messages: &'a [ChatMessage],
+    ) -> impl Future<Output = Result<String>> + Send + 'a {
+        async move {
+            debug!(
+                "AgentLlmClient::call_with_history(system_prompt_len={}, messages={})",
+                system_prompt.len(),
+                messages.len()
+            );
+            self.call_streaming_with_messages(system_prompt, messages).await
+        }
     }
 }
 

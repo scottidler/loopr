@@ -189,15 +189,15 @@ fn is_allowed_researcher_action(action: &AgentAction) -> bool {
 }
 
 /// The Researcher agent — multi-iteration LLM agent for codebase investigation.
-pub struct ResearcherAgent {
+pub struct ResearcherAgent<L: LlmClient> {
     pub ctx: AgentContext,
-    llm: Box<dyn LlmClient>,
+    llm: L,
     config: AgentRoleConfig,
     previous_summary: Option<String>,
 }
 
-impl ResearcherAgent {
-    pub fn new(ctx: AgentContext, llm: Box<dyn LlmClient>, config: AgentRoleConfig) -> Self {
+impl<L: LlmClient> ResearcherAgent<L> {
+    pub fn new(ctx: AgentContext, llm: L, config: AgentRoleConfig) -> Self {
         Self {
             ctx,
             llm,
@@ -368,7 +368,7 @@ impl ResearcherAgent {
 }
 
 #[async_trait]
-impl Agent for ResearcherAgent {
+impl<L: LlmClient + 'static> Agent for ResearcherAgent<L> {
     async fn run(&mut self) -> Result<()> {
         self.ctx.debug(&format!("run(session_id={})", self.ctx.session.id));
         self.ctx.info(&format!(
@@ -464,7 +464,6 @@ mod tests {
     use crate::test_util::TestDir;
     use crate::tools::ToolRunner;
     use crate::worktree::manager::WorktreeManager;
-    use async_trait::async_trait;
     use std::path::Path;
     use std::sync::{Arc, Mutex as StdMutex};
     use taskstore::Store;
@@ -482,14 +481,19 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl LlmClient for MockLlm {
-        async fn call(&self, _system_prompt: &str, _user_message: &str) -> Result<String> {
-            let mut responses = self.responses.lock().unwrap();
-            if responses.is_empty() {
-                Ok(r#"[{"action": "done", "summary": "No more responses"}]"#.to_string())
-            } else {
-                Ok(responses.remove(0))
+        fn call<'a>(
+            &'a self,
+            _system_prompt: &'a str,
+            _user_message: &'a str,
+        ) -> impl std::future::Future<Output = Result<String>> + Send + 'a {
+            async move {
+                let mut responses = self.responses.lock().unwrap();
+                if responses.is_empty() {
+                    Ok(r#"[{"action": "done", "summary": "No more responses"}]"#.to_string())
+                } else {
+                    Ok(responses.remove(0))
+                }
             }
         }
     }
@@ -519,7 +523,7 @@ mod tests {
         AgentLogger::_new_for_test(AgentKind::Researcher, "test-session", file, file_path)
     }
 
-    fn test_researcher_agent(dir: &Path, stores: Arc<Stores>, llm: Box<dyn LlmClient>) -> ResearcherAgent {
+    fn test_researcher_agent<L: LlmClient>(dir: &Path, stores: Arc<Stores>, llm: L) -> ResearcherAgent<L> {
         let (event_tx, _) = broadcast::channel(64);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
@@ -787,9 +791,9 @@ mod tests {
         let dir = TestDir::new("loopr-res-done");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+        let llm = MockLlm::new(vec![
             r#"[{"action": "done", "summary": "Found the pattern"}]"#.to_string(),
-        ]));
+        ]);
         let mut agent = test_researcher_agent(&dir, stores, llm);
         let result = agent.run().await;
         assert!(result.is_ok());
@@ -801,9 +805,9 @@ mod tests {
         let dir = TestDir::new("loopr-res-help");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+        let llm = MockLlm::new(vec![
             r#"[{"action": "need_help", "reason": "Cannot find module"}]"#.to_string(),
-        ]));
+        ]);
         let mut agent = test_researcher_agent(&dir, stores, llm);
         let result = agent.run().await;
         assert!(result.is_err());
@@ -823,7 +827,7 @@ mod tests {
                 r#"[{"action": "search_code", "pattern": "fn main", "glob": "*.rs", "path": "src"}]"#.to_string(),
             );
         }
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(responses));
+        let llm = MockLlm::new(responses);
 
         // Need custom config with max_iterations = 3
         let (event_tx, _) = broadcast::channel(64);
@@ -861,7 +865,7 @@ mod tests {
         let dir = TestDir::new("loopr-res-canc");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![]));
+        let llm = MockLlm::new(vec![]);
         let mut agent = test_researcher_agent(&dir, stores.clone(), llm);
 
         // Cancel the agent's session
@@ -882,9 +886,9 @@ mod tests {
         let dir = TestDir::new("loopr-res-block");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+        let llm = MockLlm::new(vec![
             r#"[{"action": "write_file", "path": "hack.txt", "content": "pwned"}, {"action": "done", "summary": "tried to write"}]"#.to_string(),
-        ]));
+        ]);
         let mut agent = test_researcher_agent(&dir, stores, llm);
         let result = agent.run().await;
         assert!(result.is_ok());
@@ -1020,7 +1024,7 @@ mod tests {
         let dir = TestDir::new("loopr-res-empty-act");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![r#"[]"#.to_string()]));
+        let llm = MockLlm::new(vec![r#"[]"#.to_string()]);
         let mut agent = test_researcher_agent(&dir, stores, llm);
         let result = agent.run().await;
         assert!(result.is_ok());
@@ -1031,9 +1035,9 @@ mod tests {
         let dir = TestDir::new("loopr-res-mixed");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+        let llm = MockLlm::new(vec![
             r#"[{"action": "write_file", "path": "bad.txt", "content": "nope"}, {"action": "done", "summary": "mixed test done"}]"#.to_string(),
-        ]));
+        ]);
         let mut agent = test_researcher_agent(&dir, stores, llm);
         let result = agent.run().await;
         assert!(result.is_ok());
@@ -1063,10 +1067,10 @@ mod tests {
         let dir = TestDir::new("loopr-res-selfcorr1");
         let stores = test_stores(&dir);
 
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+        let llm = MockLlm::new(vec![
             "I'll investigate the codebase now.".to_string(), // malformed
             r#"[{"action": "done", "summary": "Self-corrected researcher"}]"#.to_string(), // valid
-        ]));
+        ]);
         let mut agent = test_researcher_agent(&dir, stores, llm);
 
         let result = agent.run().await;
@@ -1086,12 +1090,12 @@ mod tests {
         let stores = test_stores(&dir);
 
         // max_requeries=3 default: initial + 3 retries = 4 responses, all bad
-        let llm: Box<dyn LlmClient> = Box::new(MockLlm::new(vec![
+        let llm = MockLlm::new(vec![
             "bad 1".to_string(),
             "bad 2".to_string(),
             "bad 3".to_string(),
             "bad 4".to_string(),
-        ]));
+        ]);
 
         let mut agent = test_researcher_agent(&dir, stores, llm);
 

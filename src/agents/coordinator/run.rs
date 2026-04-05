@@ -1,7 +1,7 @@
 use super::*;
 
-impl CoordinatorAgent {
-    pub fn new(ctx: AgentContext, llm: Box<dyn LlmClient>, config: CoordinatorConfig) -> Self {
+impl<L: LlmClient> CoordinatorAgent<L> {
+    pub fn new(ctx: AgentContext, llm: L, config: CoordinatorConfig) -> Self {
         Self {
             ctx,
             llm,
