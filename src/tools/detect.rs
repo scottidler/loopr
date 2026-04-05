@@ -32,6 +32,36 @@ fn js_preset() -> Vec<ToolEntry> {
     ]
 }
 
+/// Built-in tool presets for Rust/Cargo projects.
+fn cargo_preset() -> Vec<ToolEntry> {
+    vec![
+        ToolEntry {
+            name: "test".into(),
+            command: "cargo test".into(),
+            timeout_secs: TOOL_TEST_TIMEOUT_SECS,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "clippy".into(),
+            command: "cargo clippy".into(),
+            timeout_secs: TOOL_LINT_TIMEOUT_SECS,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "fmt".into(),
+            command: "cargo fmt --all".into(),
+            timeout_secs: TOOL_FORMAT_TIMEOUT_SECS,
+            worktree: true,
+        },
+        ToolEntry {
+            name: "build".into(),
+            command: "cargo build".into(),
+            timeout_secs: TOOL_TEST_TIMEOUT_SECS,
+            worktree: true,
+        },
+    ]
+}
+
 /// Built-in tool presets for Python projects.
 fn python_preset() -> Vec<ToolEntry> {
     vec![
@@ -67,7 +97,7 @@ pub fn detect_project_tools(worktree: &Path) -> Vec<ToolEntry> {
             let tools = match *marker {
                 "package.json" => js_preset(),
                 "pyproject.toml" => python_preset(),
-                "Cargo.toml" => return Vec::new(),
+                "Cargo.toml" => cargo_preset(),
                 _ => continue,
             };
             debug!("Detected project marker '{}', using {} tools", marker, tools.len());
@@ -106,15 +136,17 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_rust_project_returns_empty() {
+    fn test_detect_rust_project_returns_cargo_preset() {
         let dir = TestDir::new("loopr-detect-rs");
         std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
 
         let tools = detect_project_tools(&dir);
-        assert!(
-            tools.is_empty(),
-            "Cargo.toml detection should return empty, not fallback"
-        );
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"test"), "expected 'test' in cargo preset");
+        assert!(names.contains(&"clippy"), "expected 'clippy' in cargo preset");
+        assert!(names.contains(&"fmt"), "expected 'fmt' in cargo preset");
+        assert!(names.contains(&"build"), "expected 'build' in cargo preset");
+        assert!(tools.iter().all(|t| t.command.contains("cargo")));
     }
 
     #[test]

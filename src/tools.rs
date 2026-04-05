@@ -422,15 +422,16 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_rust_returns_empty() {
+    fn test_detect_rust_returns_cargo_preset() {
         let dir = TestDir::new("loopr-tool-rs");
         std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
 
         let runner = ToolRunner::detect_or_default(&dir);
-        assert!(
-            runner.available_tools().is_empty(),
-            "Cargo.toml detection should return empty runner"
-        );
+        let tools = runner.available_tools();
+        assert!(tools.contains(&"test"), "cargo preset should have 'test'");
+        assert!(tools.contains(&"clippy"), "cargo preset should have 'clippy'");
+        assert!(tools.contains(&"fmt"), "cargo preset should have 'fmt'");
+        assert!(tools.contains(&"build"), "cargo preset should have 'build'");
     }
 
     #[test]
