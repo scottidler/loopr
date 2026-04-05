@@ -70,7 +70,7 @@ impl fmt::Display for Tier {
 ///
 /// Uses Haiku (or whatever model the ValidatorConfig specifies) - this is a binary
 /// classification task, not a reasoning task.
-pub fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) -> Tier {
+pub async fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) -> Tier {
     let prompt_template = crate::prompts::store().tier_gate.clone();
     if prompt_template.is_empty() {
         log::warn!("tier-gate prompt is empty, defaulting to Full");
@@ -79,7 +79,7 @@ pub fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) 
 
     let prompt = format!("{}\n{}", prompt_template, plan.description);
 
-    match client.call(&prompt) {
+    match client.call(&prompt).await {
         Ok(response) => match parse_tier(&response) {
             Some(tier) => {
                 log::info!("Tier classification: {:?} (plan={})", tier, plan.id);
@@ -91,7 +91,7 @@ pub fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) 
                     response.trim(),
                     plan.id
                 );
-                retry_tier(client, &response, &plan.id)
+                retry_tier(client, &response, &plan.id).await
             }
         },
         Err(e) => {
@@ -109,14 +109,14 @@ fn parse_tier(response: &str) -> Option<Tier> {
     }
 }
 
-fn retry_tier(client: &crate::validator::client::LlmClient, bad_response: &str, plan_id: &str) -> Tier {
+async fn retry_tier(client: &crate::validator::client::LlmClient, bad_response: &str, plan_id: &str) -> Tier {
     let correction = format!(
         "You responded with {:?} but the only valid responses are \
          exactly \"Brief\" or \"Full\". Reply with one of those two \
          words only, nothing else.",
         bad_response.trim()
     );
-    match client.call(&correction) {
+    match client.call(&correction).await {
         Ok(response) => match parse_tier(&response) {
             Some(tier) => {
                 log::info!("Tier classification on retry: {:?} (plan={})", tier, plan_id);

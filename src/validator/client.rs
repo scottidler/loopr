@@ -1,29 +1,49 @@
+use async_trait::async_trait;
 use eyre::{Context, Result, bail};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::config::ValidatorConfig;
 
 /// Trait for HTTP clients, enabling mock injection in tests.
+#[async_trait]
 pub trait HttpClient: Send + Sync {
-    fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String>;
+    async fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String>;
 }
 
-/// Real HTTP client using ureq for synchronous requests.
-pub struct UreqClient;
+/// Real HTTP client using reqwest for async requests.
+pub struct ReqwestClient {
+    client: reqwest::Client,
+}
 
-impl HttpClient for UreqClient {
-    fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
-        let mut req = ureq::post(url);
+impl ReqwestClient {
+    pub fn new() -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("reqwest client construction is infallible with valid config");
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl HttpClient for ReqwestClient {
+    async fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
+        let mut req = self.client.post(url);
         for (key, value) in headers {
             req = req.header(*key, *value);
         }
-        let mut response = req.send(body.as_bytes()).context("HTTP request failed")?;
-        let body = response
-            .body_mut()
-            .read_to_string()
+        let response = req
+            .body(body.to_string())
+            .send()
+            .await
+            .context("HTTP request failed")?;
+        let text = response
+            .text()
+            .await
             .context("Failed to read response body")?;
-        Ok(body)
+        Ok(text)
     }
 }
 
@@ -65,14 +85,14 @@ impl LlmClient {
         Self { config, http_client }
     }
 
-    /// Create an LlmClient with the real ureq HTTP client.
-    pub fn with_ureq(config: ValidatorConfig) -> Self {
-        Self::new(config, Box::new(UreqClient))
+    /// Create an LlmClient with the real reqwest HTTP client.
+    pub fn with_reqwest(config: ValidatorConfig) -> Self {
+        Self::new(config, Box::new(ReqwestClient::new()))
     }
 
     /// Send a prompt to the LLM and return the raw text response.
     /// Retries once on parse failure with error feedback.
-    pub fn call(&self, prompt: &str) -> Result<String> {
+    pub async fn call(&self, prompt: &str) -> Result<String> {
         let api_key = std::env::var(&self.config.api_key_env)
             .context(format!("Missing API key env var: {}", self.config.api_key_env))?;
 
@@ -107,6 +127,7 @@ impl LlmClient {
         let response_text = self
             .http_client
             .post(api_url, &headers, &body)
+            .await
             .context("LLM API call failed")?;
 
         let response: AnthropicResponse = serde_json::from_str(&response_text)
@@ -128,8 +149,8 @@ impl LlmClient {
     }
 
     /// Send a prompt and retry once if the response isn't valid JSON.
-    pub fn call_with_retry(&self, prompt: &str) -> Result<String> {
-        match self.call(prompt) {
+    pub async fn call_with_retry(&self, prompt: &str) -> Result<String> {
+        match self.call(prompt).await {
             Ok(text) => {
                 // Check if it's valid JSON
                 if serde_json::from_str::<serde_json::Value>(&text).is_ok() {
@@ -143,7 +164,7 @@ impl LlmClient {
                      Your previous response was:\n{}",
                     prompt, text
                 );
-                self.call(&retry_prompt)
+                self.call(&retry_prompt).await
             }
             Err(e) => Err(e),
         }
@@ -168,8 +189,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpClient for MockHttpClient {
-        fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
+        async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             Ok(self.response.clone())
         }
     }
@@ -192,8 +214,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl HttpClient for RecordingHttpClient {
-        fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
+        async fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
             self.calls.lock().unwrap().push((
                 url.to_string(),
                 headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
@@ -206,14 +229,15 @@ mod tests {
     /// Mock that fails on HTTP.
     struct FailingHttpClient;
 
+    #[async_trait]
     impl HttpClient for FailingHttpClient {
-        fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
+        async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             bail!("connection refused")
         }
     }
 
     /// Generate a unique env var name and set it, returning a config that uses it.
-    /// Returns (config, env_var_name) — caller must clean up the env var.
+    /// Returns (config, env_var_name) - caller must clean up the env var.
     fn test_config_with_key(key_value: &str) -> (ValidatorConfig, String) {
         let env_var = format!("TEST_ANTHROPIC_API_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_var, key_value) };
@@ -237,22 +261,22 @@ mod tests {
         .to_string()
     }
 
-    #[test]
-    fn test_llm_client_call_success() {
+    #[tokio::test]
+    async fn test_llm_client_call_success() {
         let (config, env_var) = test_config_with_key("test-key-123");
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"Looks good"}"#;
         let mock = MockHttpClient::new(&mock_anthropic_response(response_json));
         let client = LlmClient::new(config, Box::new(mock));
 
-        let result = client.call("test prompt").unwrap();
+        let result = client.call("test prompt").await.unwrap();
         assert_eq!(result, response_json);
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_missing_api_key() {
+    #[tokio::test]
+    async fn test_llm_client_missing_api_key() {
         let missing_var = format!("TEST_ANTHROPIC_MISSING_{}", crate::id::generate_id("xx"));
         unsafe { std::env::remove_var(&missing_var) };
         let config = ValidatorConfig {
@@ -266,39 +290,39 @@ mod tests {
         let mock = MockHttpClient::new("{}");
         let client = LlmClient::new(config, Box::new(mock));
 
-        let result = client.call("test prompt");
+        let result = client.call("test prompt").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Missing API key"));
     }
 
-    #[test]
-    fn test_llm_client_unsupported_provider() {
+    #[tokio::test]
+    async fn test_llm_client_unsupported_provider() {
         let (mut config, env_var) = test_config_with_key("test-key");
         config.provider = "openai".to_string();
 
         let mock = MockHttpClient::new("{}");
         let client = LlmClient::new(config, Box::new(mock));
 
-        let result = client.call("test");
+        let result = client.call("test").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unsupported LLM provider"));
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_http_failure() {
+    #[tokio::test]
+    async fn test_llm_client_http_failure() {
         let (config, env_var) = test_config_with_key("test-key");
 
         let client = LlmClient::new(config, Box::new(FailingHttpClient));
-        let result = client.call("test");
+        let result = client.call("test").await;
         assert!(result.is_err());
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_sends_correct_headers() {
+    #[tokio::test]
+    async fn test_llm_client_sends_correct_headers() {
         let (config, env_var) = test_config_with_key("my-api-key");
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
@@ -306,27 +330,27 @@ mod tests {
             config: config.clone(),
             http_client: Box::new(RecordingHttpClient::new(&mock_anthropic_response(response_json))),
         };
-        let _ = recorder_client.call("test prompt").unwrap();
+        let _ = recorder_client.call("test prompt").await.unwrap();
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_call_with_retry_valid_json() {
+    #[tokio::test]
+    async fn test_llm_client_call_with_retry_valid_json() {
         let (config, env_var) = test_config_with_key("test-key");
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
         let mock = MockHttpClient::new(&mock_anthropic_response(response_json));
         let client = LlmClient::new(config, Box::new(mock));
 
-        let result = client.call_with_retry("test prompt").unwrap();
+        let result = client.call_with_retry("test prompt").await.unwrap();
         assert_eq!(result, response_json);
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_empty_response() {
+    #[tokio::test]
+    async fn test_llm_client_empty_response() {
         let (config, env_var) = test_config_with_key("test-key");
 
         let response = serde_json::json!({
@@ -336,30 +360,30 @@ mod tests {
         let mock = MockHttpClient::new(&response);
         let client = LlmClient::new(config, Box::new(mock));
 
-        let result = client.call("test");
+        let result = client.call("test").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty response"));
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_invalid_api_response() {
+    #[tokio::test]
+    async fn test_llm_client_invalid_api_response() {
         let (config, env_var) = test_config_with_key("test-key");
 
         let mock = MockHttpClient::new("not json at all");
         let client = LlmClient::new(config, Box::new(mock));
 
-        let result = client.call("test");
+        let result = client.call("test").await;
         assert!(result.is_err());
 
         unsafe { std::env::remove_var(&env_var) };
     }
 
-    #[test]
-    fn test_llm_client_with_ureq_constructor() {
+    #[tokio::test]
+    async fn test_llm_client_with_reqwest_constructor() {
         let (config, _env_var) = test_config_with_key("test-key");
-        let _client = LlmClient::with_ureq(config);
+        let _client = LlmClient::with_reqwest(config);
         // Just verify construction doesn't panic
     }
 }
