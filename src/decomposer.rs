@@ -723,7 +723,6 @@ mod tests {
         responses: std::sync::Mutex<Vec<String>>,
     }
 
-    #[async_trait::async_trait]
     impl HttpClient for SequenceMockHttp {
         async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             let mut responses = self.responses.lock().unwrap();

@@ -7,7 +7,7 @@ use crate::config::ValidatorConfig;
 use crate::domain::coverage::{
     CoverageGap, CoverageReport, CoverageReportParams, CoverageVerdict, GapSeverity, OutOfScopeItem,
 };
-use crate::validator::client::LlmClient;
+use crate::validator::client::{HttpClient, LlmClient, ReqwestClient};
 
 /// Parsed LLM response before it becomes a full CoverageReport.
 #[derive(Debug, serde::Deserialize)]
@@ -47,12 +47,12 @@ pub struct PhaseWorksParams {
 /// - Coverage Evaluator: validates **parent + children set** against coverage criteria
 ///
 /// Both use async LLM calls (reqwest via `LlmClient`), both produce persisted reports.
-pub struct CoverageEvaluator {
-    llm_client: LlmClient,
+pub struct CoverageEvaluator<H: HttpClient = ReqwestClient> {
+    llm_client: LlmClient<H>,
     model: String,
 }
 
-impl CoverageEvaluator {
+impl CoverageEvaluator<ReqwestClient> {
     /// Create a CoverageEvaluator with a real reqwest HTTP client.
     pub fn new(config: ValidatorConfig) -> Self {
         debug!("CoverageEvaluator::new(model={})", config.model);
@@ -62,7 +62,9 @@ impl CoverageEvaluator {
             model,
         }
     }
+}
 
+impl<H: HttpClient> CoverageEvaluator<H> {
     /// Evaluate coverage of Plan -> Specs.
     pub async fn evaluate_plan_specs(
         &self,
@@ -199,12 +201,9 @@ impl CoverageEvaluator {
 
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
-impl CoverageEvaluator {
+impl<H: HttpClient> CoverageEvaluator<H> {
     /// Create a CoverageEvaluator with a mock HTTP client (for tests).
-    pub fn with_http_client(
-        config: ValidatorConfig,
-        http_client: Box<dyn crate::validator::client::HttpClient>,
-    ) -> Self {
+    pub fn with_http_client(config: ValidatorConfig, http_client: H) -> Self {
         let model = config.model.clone();
         Self {
             llm_client: LlmClient::new(config, http_client),
@@ -218,7 +217,6 @@ impl CoverageEvaluator {
 mod tests {
     use super::*;
     use crate::validator::client::HttpClient;
-    use async_trait::async_trait;
 
     struct MockHttpClient {
         response: String,
@@ -232,7 +230,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpClient for MockHttpClient {
         async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             Ok(self.response.clone())
@@ -275,7 +272,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_plan_specs(
@@ -303,7 +300,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&incomplete_llm_response()));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_plan_specs(
@@ -331,7 +328,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_spec_phases(
@@ -356,7 +353,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let params = PhaseWorksParams {
             id: "ph-123".into(),
@@ -382,7 +379,7 @@ mod tests {
         let (config, env_var) = mock_config_with_key();
         let fenced = format!("```json\n{}\n```", &complete_llm_response());
         let mock = MockHttpClient::new(&mock_anthropic_response(&fenced));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
@@ -398,7 +395,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
@@ -417,7 +414,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
@@ -433,7 +430,7 @@ mod tests {
         crate::prompts::init_defaults();
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
-        let evaluator = CoverageEvaluator::with_http_client(config, Box::new(mock));
+        let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
             .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
@@ -449,7 +446,7 @@ mod tests {
     fn test_parse_response_direct() {
         let (config, _env_var) = mock_config_with_key();
         let evaluator = CoverageEvaluator {
-            llm_client: LlmClient::new(config, Box::new(MockHttpClient::new(""))),
+            llm_client: LlmClient::new(config, MockHttpClient::new("")),
             model: "test".to_string(),
         };
 

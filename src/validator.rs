@@ -7,7 +7,7 @@ use log::{debug, info};
 use crate::config::ValidatorConfig;
 use crate::domain::validation::{IssueSeverity, ValidationIssue, ValidationReport, ValidationVerdict};
 
-use client::LlmClient;
+use client::{HttpClient, LlmClient, ReqwestClient};
 
 /// Parsed LLM response before it becomes a full ValidationReport.
 #[derive(Debug, serde::Deserialize)]
@@ -29,12 +29,12 @@ struct LlmIssue {
 ///
 /// Uses a trait-based HTTP client for testability. When `validator.enabled = false`
 /// in config, the daemon should not construct a DocValidator at all.
-pub struct DocValidator {
-    llm_client: LlmClient,
+pub struct DocValidator<H: HttpClient = ReqwestClient> {
+    llm_client: LlmClient<H>,
     model: String,
 }
 
-impl DocValidator {
+impl DocValidator<ReqwestClient> {
     /// Create a DocValidator with a real reqwest HTTP client.
     pub fn new(config: ValidatorConfig) -> Self {
         debug!("DocValidator::new(model={})", config.model);
@@ -44,7 +44,9 @@ impl DocValidator {
             model,
         }
     }
+}
 
+impl<H: HttpClient> DocValidator<H> {
     /// Validate a Plan document.
     pub async fn validate_plan(
         &self,
@@ -151,9 +153,9 @@ impl DocValidator {
 
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
-impl DocValidator {
+impl<H: HttpClient> DocValidator<H> {
     /// Create a DocValidator with a mock HTTP client (for tests).
-    pub fn with_http_client(config: ValidatorConfig, http_client: Box<dyn client::HttpClient>) -> Self {
+    pub fn with_http_client(config: ValidatorConfig, http_client: H) -> Self {
         let model = config.model.clone();
         Self {
             llm_client: LlmClient::new(config, http_client),
@@ -166,7 +168,6 @@ impl DocValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use client::HttpClient;
 
     struct MockHttpClient {
@@ -181,7 +182,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpClient for MockHttpClient {
         async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             Ok(self.response.clone())
@@ -229,7 +229,7 @@ mod tests {
     async fn test_validate_plan_pass() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
             .validate_plan("plan-1", "Test Plan", "A plan", "Must work")
@@ -247,7 +247,7 @@ mod tests {
     async fn test_validate_plan_fail() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&failing_llm_response()));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
             .validate_plan("plan-2", "Bad Plan", "Vague", "")
@@ -265,7 +265,7 @@ mod tests {
     async fn test_validate_spec_warn() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&warning_llm_response()));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
             .validate_spec("spec-1", "My Spec", "Desc", "Parent Plan")
@@ -283,7 +283,7 @@ mod tests {
     async fn test_validate_phase() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
             .validate_phase("phase-1", "My Phase", "Desc", 1, "Parent Spec")
@@ -301,7 +301,7 @@ mod tests {
         let (config, env_var) = mock_config_with_key();
         let fenced = format!("```json\n{}\n```", r#"{"verdict":"pass","issues":[],"summary":"ok"}"#);
         let mock = MockHttpClient::new(&mock_anthropic_response(&fenced));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
@@ -313,7 +313,7 @@ mod tests {
     async fn test_parse_response_fallback_on_invalid_json() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         // Should fall back to Fail verdict
@@ -329,7 +329,7 @@ mod tests {
     async fn test_report_has_model_field() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         assert_eq!(report.model_used, "claude-sonnet-4-6");
@@ -341,7 +341,7 @@ mod tests {
     async fn test_report_has_valid_id_and_timestamp() {
         let (config, env_var) = mock_config_with_key();
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
-        let validator = DocValidator::with_http_client(config, Box::new(mock));
+        let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
         assert!(!report.id.is_empty());
@@ -354,7 +354,7 @@ mod tests {
     fn test_parse_response_direct() {
         let (config, _env_var) = mock_config_with_key();
         let validator = DocValidator {
-            llm_client: LlmClient::new(config, Box::new(MockHttpClient::new(""))),
+            llm_client: LlmClient::new(config, MockHttpClient::new("")),
             model: "test".to_string(),
         };
 

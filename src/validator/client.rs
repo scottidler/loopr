@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use eyre::{Context, Result, bail};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use std::time::Duration;
 use crate::config::ValidatorConfig;
 
 /// Trait for HTTP clients, enabling mock injection in tests.
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait HttpClient: Send + Sync {
     async fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String>;
 }
@@ -28,7 +27,6 @@ impl ReqwestClient {
     }
 }
 
-#[async_trait]
 impl HttpClient for ReqwestClient {
     async fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
         let mut req = self.client.post(url);
@@ -69,19 +67,14 @@ struct ContentBlock {
 }
 
 /// LLM client that calls the Anthropic Messages API.
-pub struct LlmClient {
+pub struct LlmClient<H: HttpClient = ReqwestClient> {
     config: ValidatorConfig,
-    http_client: Box<dyn HttpClient>,
+    http_client: H,
 }
 
-impl LlmClient {
-    pub fn new(config: ValidatorConfig, http_client: Box<dyn HttpClient>) -> Self {
+impl<H: HttpClient> LlmClient<H> {
+    pub fn new(config: ValidatorConfig, http_client: H) -> Self {
         Self { config, http_client }
-    }
-
-    /// Create an LlmClient with the real reqwest HTTP client.
-    pub fn with_reqwest(config: ValidatorConfig) -> Self {
-        Self::new(config, Box::new(ReqwestClient::new()))
     }
 
     /// Send a prompt to the LLM and return the raw text response.
@@ -165,6 +158,13 @@ impl LlmClient {
     }
 }
 
+impl LlmClient<ReqwestClient> {
+    /// Create an LlmClient with the real reqwest HTTP client.
+    pub fn with_reqwest(config: ValidatorConfig) -> Self {
+        Self::new(config, ReqwestClient::new())
+    }
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -183,7 +183,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpClient for MockHttpClient {
         async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             Ok(self.response.clone())
@@ -208,7 +207,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl HttpClient for RecordingHttpClient {
         async fn post(&self, url: &str, headers: &[(&str, &str)], body: &str) -> Result<String> {
             self.calls.lock().unwrap().push((
@@ -223,7 +221,6 @@ mod tests {
     /// Mock that fails on HTTP.
     struct FailingHttpClient;
 
-    #[async_trait]
     impl HttpClient for FailingHttpClient {
         async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             bail!("connection refused")
@@ -261,7 +258,7 @@ mod tests {
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"Looks good"}"#;
         let mock = MockHttpClient::new(&mock_anthropic_response(response_json));
-        let client = LlmClient::new(config, Box::new(mock));
+        let client = LlmClient::new(config, mock);
 
         let result = client.call("test prompt").await.unwrap();
         assert_eq!(result, response_json);
@@ -282,7 +279,7 @@ mod tests {
             temperature: 0.0,
         };
         let mock = MockHttpClient::new("{}");
-        let client = LlmClient::new(config, Box::new(mock));
+        let client = LlmClient::new(config, mock);
 
         let result = client.call("test prompt").await;
         assert!(result.is_err());
@@ -295,7 +292,7 @@ mod tests {
         config.provider = "openai".to_string();
 
         let mock = MockHttpClient::new("{}");
-        let client = LlmClient::new(config, Box::new(mock));
+        let client = LlmClient::new(config, mock);
 
         let result = client.call("test").await;
         assert!(result.is_err());
@@ -308,7 +305,7 @@ mod tests {
     async fn test_llm_client_http_failure() {
         let (config, env_var) = test_config_with_key("test-key");
 
-        let client = LlmClient::new(config, Box::new(FailingHttpClient));
+        let client = LlmClient::new(config, FailingHttpClient);
         let result = client.call("test").await;
         assert!(result.is_err());
 
@@ -322,7 +319,7 @@ mod tests {
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
         let recorder_client = LlmClient {
             config: config.clone(),
-            http_client: Box::new(RecordingHttpClient::new(&mock_anthropic_response(response_json))),
+            http_client: RecordingHttpClient::new(&mock_anthropic_response(response_json)),
         };
         let _ = recorder_client.call("test prompt").await.unwrap();
 
@@ -335,7 +332,7 @@ mod tests {
 
         let response_json = r#"{"verdict":"pass","issues":[],"summary":"ok"}"#;
         let mock = MockHttpClient::new(&mock_anthropic_response(response_json));
-        let client = LlmClient::new(config, Box::new(mock));
+        let client = LlmClient::new(config, mock);
 
         let result = client.call_with_retry("test prompt").await.unwrap();
         assert_eq!(result, response_json);
@@ -352,7 +349,7 @@ mod tests {
         })
         .to_string();
         let mock = MockHttpClient::new(&response);
-        let client = LlmClient::new(config, Box::new(mock));
+        let client = LlmClient::new(config, mock);
 
         let result = client.call("test").await;
         assert!(result.is_err());
@@ -366,7 +363,7 @@ mod tests {
         let (config, env_var) = test_config_with_key("test-key");
 
         let mock = MockHttpClient::new("not json at all");
-        let client = LlmClient::new(config, Box::new(mock));
+        let client = LlmClient::new(config, mock);
 
         let result = client.call("test").await;
         assert!(result.is_err());
