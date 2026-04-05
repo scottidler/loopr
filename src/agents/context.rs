@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use eyre::{Result, eyre};
+use eyre::{Result, bail, eyre};
 use log::{debug, warn};
 
 use crate::agents::error::AgentError;
@@ -248,7 +248,7 @@ pub struct ContextBuilder<'a> {
     scope_ids: Vec<(String, LearningScope)>,
     // IDs for sibling lookups
     work_id: Option<String>,
-    phase_id: Option<String>,
+    parent_id: Option<String>,
     // Optional sections
     bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, touched_paths)
     bundle_diff: Option<String>,
@@ -291,7 +291,7 @@ impl<'a> ContextBuilder<'a> {
             dependency_summaries: Vec::new(),
             scope_ids: Vec::new(),
             work_id: None,
-            phase_id: None,
+            parent_id: None,
             bundle_info: None,
             bundle_diff: None,
             bundle_noop_reason: None,
@@ -307,10 +307,10 @@ impl<'a> ContextBuilder<'a> {
         }
     }
 
-    /// Load the full hierarchy from a work ID: Work -> Phase -> Spec -> Plan.
+    /// Load the work hierarchy: Brief (Work -> Plan) or Full (Work -> Phase -> Spec -> Plan).
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_work_hierarchy(work_id={})", work_id);
-        let (wi_title, wi_desc, phase_id, wi_ac, wi_rt, dep_summaries) = {
+        let (wi_title, wi_desc, parent_id, wi_ac, wi_rt, dep_summaries) = {
             let guard = self.stores.read_works()?;
             let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
             let deps: Vec<DependencySummary> = wi
@@ -334,55 +334,76 @@ impl<'a> ContextBuilder<'a> {
             )
         };
 
-        let (ph_title, ph_desc, spec_id, phase_id_owned) = {
-            let guard = self.stores.read_phases()?;
-            let phase = guard
-                .get(&phase_id)
-                .ok_or_else(|| eyre!("phase not found: {}", phase_id))?;
-            (
-                phase.title.clone(),
-                phase.description.clone(),
-                phase.parent_id.clone(),
-                phase.id.clone(),
-            )
-        };
-
-        let (spec_title, spec_desc, plan_id, spec_id_owned) = {
-            let guard = self.stores.read_specs()?;
-            let spec = guard
-                .get(&spec_id)
-                .ok_or_else(|| eyre!("spec not found: {}", spec_id))?;
-            (
-                spec.title.clone(),
-                spec.description.clone(),
-                spec.parent_id.clone(),
-                spec.id.clone(),
-            )
-        };
-
-        let (plan_title, plan_desc, plan_id_owned) = {
-            let guard = self.stores.read_plans()?;
-            let plan = guard
-                .get(&plan_id)
-                .ok_or_else(|| eyre!("plan not found: {}", plan_id))?;
-            (plan.title.clone(), plan.description.clone(), plan.id.clone())
-        };
-
-        self.plan = Some((plan_title, plan_desc));
-        self.spec = Some((spec_title, spec_desc));
-        self.phase = Some((ph_title, ph_desc));
         self.work = Some((wi_title, wi_desc));
         self.work_acceptance_criteria = wi_ac;
         self.work_resource_tags = wi_rt;
         self.dependency_summaries = dep_summaries;
         self.work_id = Some(work_id.to_string());
-        self.phase_id = Some(phase_id_owned.clone());
-        self.scope_ids = vec![
-            (work_id.to_string(), LearningScope::Work),
-            (phase_id_owned, LearningScope::Phase),
-            (spec_id_owned, LearningScope::Spec),
-            (plan_id_owned, LearningScope::Plan),
-        ];
+
+        if parent_id.starts_with("pl-") {
+            // Brief mode: Work parented directly to a Plan
+            let (plan_title, plan_desc, plan_id_owned) = {
+                let guard = self.stores.read_plans()?;
+                let plan = guard
+                    .get(&parent_id)
+                    .ok_or_else(|| eyre!("plan not found: {}", parent_id))?;
+                (plan.title.clone(), plan.description.clone(), plan.id.clone())
+            };
+            self.plan = Some((plan_title, plan_desc));
+            self.parent_id = Some(plan_id_owned.clone());
+            self.scope_ids = vec![
+                (work_id.to_string(), LearningScope::Work),
+                (plan_id_owned, LearningScope::Plan),
+            ];
+        } else if parent_id.starts_with("ph-") {
+            // Full mode: Work -> Phase -> Spec -> Plan
+            let (ph_title, ph_desc, spec_id, phase_id_owned) = {
+                let guard = self.stores.read_phases()?;
+                let phase = guard
+                    .get(&parent_id)
+                    .ok_or_else(|| eyre!("phase not found: {}", parent_id))?;
+                (
+                    phase.title.clone(),
+                    phase.description.clone(),
+                    phase.parent_id.clone(),
+                    phase.id.clone(),
+                )
+            };
+
+            let (spec_title, spec_desc, plan_id, spec_id_owned) = {
+                let guard = self.stores.read_specs()?;
+                let spec = guard
+                    .get(&spec_id)
+                    .ok_or_else(|| eyre!("spec not found: {}", spec_id))?;
+                (
+                    spec.title.clone(),
+                    spec.description.clone(),
+                    spec.parent_id.clone(),
+                    spec.id.clone(),
+                )
+            };
+
+            let (plan_title, plan_desc, plan_id_owned) = {
+                let guard = self.stores.read_plans()?;
+                let plan = guard
+                    .get(&plan_id)
+                    .ok_or_else(|| eyre!("plan not found: {}", plan_id))?;
+                (plan.title.clone(), plan.description.clone(), plan.id.clone())
+            };
+
+            self.plan = Some((plan_title, plan_desc));
+            self.spec = Some((spec_title, spec_desc));
+            self.phase = Some((ph_title, ph_desc));
+            self.parent_id = Some(phase_id_owned.clone());
+            self.scope_ids = vec![
+                (work_id.to_string(), LearningScope::Work),
+                (phase_id_owned, LearningScope::Phase),
+                (spec_id_owned, LearningScope::Spec),
+                (plan_id_owned, LearningScope::Plan),
+            ];
+        } else {
+            bail!("unexpected parent prefix for work {}: {}", work_id, parent_id);
+        }
 
         Ok(self)
     }
@@ -587,12 +608,12 @@ impl<'a> ContextBuilder<'a> {
         }
 
         // --- Sibling Works section (after hierarchy) ---
-        if let (Some(phase_id), Some(current_wi_id)) = (&self.phase_id, &self.work_id)
+        if let (Some(parent_id), Some(current_wi_id)) = (&self.parent_id, &self.work_id)
             && let Ok(works) = self.stores.read_works()
         {
             let siblings: Vec<String> = works
                 .values()
-                .filter(|wi| wi.parent_id == *phase_id && wi.id != *current_wi_id)
+                .filter(|wi| wi.parent_id == *parent_id && wi.id != *current_wi_id)
                 .map(|wi| format!("- [{}] {}", wi.status(), wi.title))
                 .collect();
             if !siblings.is_empty() {

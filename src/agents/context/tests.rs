@@ -1070,3 +1070,46 @@ fn test_build_omits_empty_enrichment() {
     assert!(!assembled.user_message.contains("**Allowed Files:**"));
     assert!(!assembled.user_message.contains("**Dependencies:**"));
 }
+
+fn setup_stores_brief(dir: &std::path::Path) -> (Stores, String) {
+    let config = Config {
+        project: ProjectConfig {
+            repo_path: dir.to_path_buf(),
+            ..ProjectConfig::default()
+        },
+        ..Config::default()
+    };
+    let store = Store::open(dir).unwrap();
+    let mut stores = Stores::new();
+    stores.store = Some(Arc::new(StdMutex::new(store)));
+    stores.config = config;
+
+    let plan = Plan::new("Brief Plan".into(), "A brief plan".into(), "criteria".into());
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+    // Work parented directly to the Plan (Brief mode - no Phase or Spec)
+    let wi = Work::new(plan_id.clone(), "Brief Work".into(), "Do the thing".into());
+    let wi_id = wi.id.clone();
+    stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+    (stores, wi_id)
+}
+
+#[test]
+fn test_load_work_hierarchy_brief() {
+    let dir = TestDir::new("loopr-ctx-brief");
+    let (stores, wi_id) = setup_stores_brief(&dir);
+
+    let builder = ContextBuilder::new(&stores, Role::Implementer)
+        .load_work_hierarchy(&wi_id)
+        .unwrap();
+
+    assert!(builder.plan.is_some());
+    assert!(builder.spec.is_none());
+    assert!(builder.phase.is_none());
+    assert!(builder.work.is_some());
+    assert_eq!(builder.scope_ids.len(), 2);
+    assert!(matches!(builder.scope_ids[0].1, LearningScope::Work));
+    assert!(matches!(builder.scope_ids[1].1, LearningScope::Plan));
+}
