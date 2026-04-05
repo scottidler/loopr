@@ -1,0 +1,1220 @@
+[check] === Checking compilation ===
+[check]     Checking loopr v0.1.77 (/home/saidler/repos/scottidler/loopr)
+[check] error[E0308]: mismatched types
+[check]    --> src/ipc/client.rs:166:27
+[check]     |
+[check] 166 |                     |req| DaemonResponse::ok(req.id, json!({"echo": req.method})),
+[check]     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:208:25
+[check]     |
+[check] 208 |                         DaemonResponse::ok(req.id, serde_json::json!({"ok": true}))
+[check]     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/ipc/client.rs:251:25
+[check]     |
+[check] 251 |                         DaemonResponse::ok(req.id, json!({"created": true}))
+[check]     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/ipc/client.rs:289:45
+[check]     |
+[check] 289 | ...ient(stream, |req| DaemonResponse::ok(req.id, json!(null)), event_rx).await;
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:250:45
+[check]     |
+[check] 250 |                 handle_client(stream, |req| mock_handshake(&req), event_rx).await;
+[check]     |                                             ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:287:45
+[check]     |
+[check] 287 |                 handle_client(stream, |req| mock_handshake(&req), event_rx).await;
+[check]     |                                             ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:389:29
+[check]     |
+[check] 389 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:391:29
+[check]     |
+[check] 391 | ...                   DaemonResponse::ok(req.id, plans.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:393:29
+[check]     |
+[check] 393 | ...                   DaemonResponse::ok(req.id, serde_json::json!(null))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:444:29
+[check]     |
+[check] 444 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:446:29
+[check]     |
+[check] 446 | ...                   DaemonResponse::ok(req.id, wis.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:448:29
+[check]     |
+[check] 448 | ...                   DaemonResponse::ok(req.id, serde_json::json!(null))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:495:29
+[check]     |
+[check] 495 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:497:29
+[check]     |
+[check] 497 | ...                   DaemonResponse::ok(req.id, serde_json::json!([]))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:546:29
+[check]     |
+[check] 546 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:548:29
+[check]     |
+[check] 548 | ...                   DaemonResponse::ok(req.id, bundles.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:550:29
+[check]     |
+[check] 550 | ...                   DaemonResponse::ok(req.id, serde_json::json!(null))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:599:29
+[check]     |
+[check] 599 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:601:29
+[check]     |
+[check] 601 | ...                   DaemonResponse::ok(req.id, ticks.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:603:29
+[check]     |
+[check] 603 | ...                   DaemonResponse::ok(req.id, serde_json::json!(null))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:648:29
+[check]     |
+[check] 648 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:651:29
+[check]     |
+[check] 651 | ...                   DaemonResponse::ok(req.id, serde_json::json!("not an array"))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:713:29
+[check]     |
+[check] 713 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:715:29
+[check]     |
+[check] 715 | ...                   DaemonResponse::ok(req.id, specs.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:764:29
+[check]     |
+[check] 764 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:766:29
+[check]     |
+[check] 766 | ...                   DaemonResponse::ok(req.id, phases.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:819:29
+[check]     |
+[check] 819 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:821:29
+[check]     |
+[check] 821 | ...                   DaemonResponse::ok(req.id, learnings.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:869:29
+[check]     |
+[check] 869 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:871:29
+[check]     |
+[check] 871 | ...                   DaemonResponse::ok(req.id, locks.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:920:29
+[check]     |
+[check] 920 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:922:29
+[check]     |
+[check] 922 | ...                   DaemonResponse::ok(req.id, sessions.clone())
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:966:29
+[check]     |
+[check] 966 | ...                   mock_handshake(&req)
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tui/run/ipc.rs:969:29
+[check]     |
+[check] 969 | ...                   DaemonResponse::ok(req.id, serde_json::json!({"not": "an array"}))
+[check]     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Pin<Box<...>>`, found `DaemonResponse`
+[check]     |
+[check]     = note: expected struct `Pin<Box<(dyn futures::Future<Output = protocol::DaemonResponse> + std::marker::Send + 'static)>>`
+[check]                found struct `protocol::DaemonResponse`
+[check]
+[check] error[E0308]: mismatched types
+[check]   --> src/tests/integration/coordinator.rs:23:9
+[check]    |
+[check] 23 |     let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]    |         |
+[check]    |         expected future, found `(_, _, _)`
+[check]    |
+[check]    = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                     found tuple `(_, _, _)`
+[check]    = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7008029549590733373.txt'
+[check]    = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tests/integration/coordinator.rs:125:9
+[check]     |
+[check] 125 |     let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]     |         |
+[check]     |         expected future, found `(_, _, _)`
+[check]     |
+[check]     = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                      found tuple `(_, _, _)`
+[check]     = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-2799312969245311094.txt'
+[check]     = note: consider using `--verbose` to print the full type name to the console
+[check] help: consider `await`ing on the `Future`
+[check]     |
+[check] 125 |     let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
+[check]     |                                                                                       ++++++
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/coordinator.rs:136:19
+[check]     |
+[check] 136 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]     |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/coordinator.rs:145:23
+[check]     |
+[check] 145 |     assert_eq!(wi_resp["status"].as_str().unwrap(), "Ready");
+[check]     |                       ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/coordinator.rs:162:16
+[check]     |
+[check] 162 |         wi_resp["status"].as_str().unwrap(),
+[check]     |                ^^^^^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]   --> src/tests/integration/cycling.rs:19:9
+[check]    |
+[check] 19 |     let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]    |         ^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]    |         |
+[check]    |         expected future, found `(_, _, _)`
+[check]    |
+[check]    = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                     found tuple `(_, _, _)`
+[check]    = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7008029549590733373.txt'
+[check]    = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:36:23
+[check]    |
+[check] 36 |     let wi_a_id = wi_a["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:54:23
+[check]    |
+[check] 54 |     let wi_b_id = wi_b["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:72:23
+[check]    |
+[check] 72 |     let wi_c_id = wi_c["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:76:62
+[check]    |
+[check] 76 |     let b_deps: Vec<String> = serde_json::from_value(wi_b_get["dependencies"].clone()).unw...
+[check]    |                                                              ^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:80:62
+[check]    |
+[check] 80 |     let c_deps: Vec<String> = serde_json::from_value(wi_c_get["dependencies"].clone()).unw...
+[check]    |                                                              ^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:84:20
+[check]    |
+[check] 84 |     assert_eq!(wi_a["status"].as_str().unwrap(), "Ready");
+[check]    |                    ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:86:20
+[check]    |
+[check] 86 |     assert_eq!(wi_b["status"].as_str().unwrap(), "Ready");
+[check]    |                    ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/cycling.rs:88:20
+[check]    |
+[check] 88 |     assert_eq!(wi_c["status"].as_str().unwrap(), "Ready");
+[check]    |                    ^^^^^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tests/integration/cycling.rs:100:9
+[check]     |
+[check] 100 |     let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]     |         ^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]     |         |
+[check]     |         expected future, found `(_, _, _)`
+[check]     |
+[check]     = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                      found tuple `(_, _, _)`
+[check]     = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7008029549590733373.txt'
+[check]     = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0369]: binary operation `==` cannot be applied to type `impl futures::Future<Output = i32>`
+[check]    --> src/tests/integration/cycling.rs:135:5
+[check]     |
+[check] 135 |     assert_eq!(err_code, -32005, "duplicate WI should return precondition_failed");
+[check]     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[check]     |     |
+[check]     |     impl futures::Future<Output = i32>
+[check]     |     {integer}
+[check]     |
+[check]     = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+[check]
+[check] error[E0277]: `impl futures::Future<Output = i32>` doesn't implement `std::fmt::Debug`
+[check]    --> src/tests/integration/cycling.rs:135:5
+[check]     |
+[check] 135 |     assert_eq!(err_code, -32005, "duplicate WI should return precondition_failed");
+[check]     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `impl futures::Future<Output = i32>`
+[check]     |
+[check]     = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/cycling.rs:174:23
+[check]     |
+[check] 174 |     let plan_id = plan["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/cycling.rs:192:23
+[check]     |
+[check] 192 |     let spec_id = spec["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/cycling.rs:210:27
+[check]     |
+[check] 210 |     let phase1_id = phase1["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/cycling.rs:228:27
+[check]     |
+[check] 228 |     let phase2_id = phase2["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/cycling.rs:245:19
+[check]     |
+[check] 245 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]     |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/cycling.rs:294:24
+[check]     |
+[check] 294 |     assert_eq!(wi_final["status"].as_str().unwrap(), "Done");
+[check]     |                        ^^^^^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]   --> src/tests/integration/executor.rs:26:9
+[check]    |
+[check] 26 |     let (plan_id, spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]    |         |
+[check]    |         expected future, found `(_, _, _)`
+[check]    |
+[check]    = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                     found tuple `(_, _, _)`
+[check]    = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-2831216192839823018.txt'
+[check]    = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0308]: mismatched types
+[check]   --> src/tests/integration/executor.rs:84:9
+[check]    |
+[check] 84 |     let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]    |         ^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]    |         |
+[check]    |         expected future, found `(_, _, _)`
+[check]    |
+[check]    = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                     found tuple `(_, _, _)`
+[check]    = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-16655436008660557807.txt'
+[check]    = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/executor.rs:93:19
+[check]    |
+[check] 93 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]    |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/executor.rs:120:27
+[check]     |
+[check] 120 |     let bundle_id = bundle["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]   --> src/tests/integration/fsm.rs:18:9
+[check]    |
+[check] 18 |     let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]    |         |
+[check]    |         expected future, found `(_, _, _)`
+[check]    |
+[check]    = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                     found tuple `(_, _, _)`
+[check]    = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7008029549590733373.txt'
+[check]    = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/fsm.rs:29:19
+[check]    |
+[check] 29 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]    |                   ^^^^^^
+[check]
+[check] error[E0369]: binary operation `==` cannot be applied to type `impl futures::Future<Output = i32>`
+[check]   --> src/tests/integration/fsm.rs:40:5
+[check]    |
+[check] 40 |     assert_ne!(code, 0, "should reject invalid transition");
+[check]    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[check]    |     |
+[check]    |     impl futures::Future<Output = i32>
+[check]    |     {integer}
+[check]    |
+[check]    = note: this error originates in the macro `assert_ne` (in Nightly builds, run with -Z macro-backtrace for more info)
+[check]
+[check] error[E0277]: `impl futures::Future<Output = i32>` doesn't implement `std::fmt::Debug`
+[check]   --> src/tests/integration/fsm.rs:40:5
+[check]    |
+[check] 40 |     assert_ne!(code, 0, "should reject invalid transition");
+[check]    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `impl futures::Future<Output = i32>`
+[check]    |
+[check]    = note: this error originates in the macro `assert_ne` (in Nightly builds, run with -Z macro-backtrace for more info)
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:23:23
+[check]    |
+[check] 23 |     let plan_id = plan["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:24:20
+[check]    |
+[check] 24 |     assert_eq!(plan["status"], "draft");
+[check]    |                    ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:35:27
+[check]    |
+[check] 35 |     assert_eq!(plan_active["status"], "active");
+[check]    |                           ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:46:23
+[check]    |
+[check] 46 |     let spec_id = spec["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:47:20
+[check]    |
+[check] 47 |     assert_eq!(spec["status"], "draft");
+[check]    |                    ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:68:25
+[check]    |
+[check] 68 |     let phase_id = phase["id"].as_str().unwrap().to_string();
+[check]    |                         ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:89:19
+[check]    |
+[check] 89 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]    |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/hierarchy.rs:90:18
+[check]    |
+[check] 90 |     assert_eq!(wi["status"], "Ready");
+[check]    |                  ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/hierarchy.rs:111:27
+[check]     |
+[check] 111 |     let bundle_id = bundle["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/hierarchy.rs:112:22
+[check]     |
+[check] 112 |     assert_eq!(bundle["status"], "Proposed");
+[check]     |                      ^^^^^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tests/integration/hierarchy.rs:140:9
+[check]     |
+[check] 140 |     let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]     |         |
+[check]     |         expected future, found `(_, _, _)`
+[check]     |
+[check]     = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                      found tuple `(_, _, _)`
+[check]     = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7008029549590733373.txt'
+[check]     = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/hierarchy.rs:151:19
+[check]     |
+[check] 151 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]     |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/hierarchy.rs:162:27
+[check]     |
+[check] 162 |     let bundle_id = bundle["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/learning.rs:27:31
+[check]    |
+[check] 27 |     let learning_id = learning["id"].as_str().unwrap().to_string();
+[check]    |                               ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/learning.rs:28:24
+[check]    |
+[check] 28 |     assert_eq!(learning["promoted"], false);
+[check]    |                        ^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/learning.rs:29:24
+[check]    |
+[check] 29 |     assert_eq!(learning["reinforcements"], 0);
+[check]    |                        ^^^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/learning.rs:34:26
+[check]    |
+[check] 34 |         assert_eq!(result["reinforcements"], i);
+[check]    |                          ^^^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/learning.rs:62:22
+[check]    |
+[check] 62 |     let id = learning["id"].as_str().unwrap().to_string();
+[check]    |                      ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/learning.rs:97:22
+[check]    |
+[check] 97 |     let id = learning["id"].as_str().unwrap().to_string();
+[check]    |                      ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:100:22
+[check]     |
+[check] 100 |     assert!((learning["confidence"].as_f64().unwrap() - 0.5).abs() < 0.01);
+[check]     |                      ^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:104:16
+[check]     |
+[check] 104 |     assert!((r1["confidence"].as_f64().unwrap() - 1.0).abs() < 0.01);
+[check]     |                ^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:108:16
+[check]     |
+[check] 108 |     assert!((c1["confidence"].as_f64().unwrap() - 0.5).abs() < 0.01);
+[check]     |                ^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:113:16
+[check]     |
+[check] 113 |     assert!((r3["confidence"].as_f64().unwrap() - 0.75).abs() < 0.01);
+[check]     |                ^^^^^^^^^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tests/integration/learning.rs:123:9
+[check]     |
+[check] 123 |     let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+[check]     |         ^^^^^^^^^^^^^^^^   --------------------------------------------- this expression has type `impl Future<Output = (String, String, String)>`
+[check]     |         |
+[check]     |         expected future, found `(_, _, _)`
+[check]     |
+[check]     = note: expected opaque type `impl futures::Future<Output = (std::string::String, std::string::String, std::string::String)>`
+[check]                      found tuple `(_, _, _)`
+[check]     = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7008029549590733373.txt'
+[check]     = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:140:19
+[check]     |
+[check] 140 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]     |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:156:31
+[check]     |
+[check] 156 |     let learning_id = learning["id"].as_str().unwrap().to_string();
+[check]     |                               ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:161:25
+[check]     |
+[check] 161 |     assert_eq!(retrieved["source_id"].as_str().unwrap(), wi_id);
+[check]     |                         ^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:162:25
+[check]     |
+[check] 162 |     assert_eq!(retrieved["scope"].as_str().unwrap(), "work");
+[check]     |                         ^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:163:22
+[check]     |
+[check] 163 |     assert!(retrieved["content"].as_str().unwrap().contains("thiserror"));
+[check]     |                      ^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/learning.rs:177:59
+[check]     |
+[check] 177 |     let tags: Vec<String> = serde_json::from_value(updated["resource_tags"].clone()).unwr...
+[check]     |                                                           ^^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/locks.rs:27:23
+[check]    |
+[check] 27 |     let lock_id = lock["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/locks.rs:28:20
+[check]    |
+[check] 28 |     assert_eq!(lock["resource"], "src/main.rs");
+[check]    |                    ^^^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/locks.rs:29:20
+[check]    |
+[check] 29 |     assert_eq!(lock["status"], "active");
+[check]    |                    ^^^^^^^^^^
+[check]
+[check] error[E0599]: no method named `as_array` found for opaque type `impl futures::Future<Output = serde_json::Value>` in the current scope
+[check]   --> src/tests/integration/locks.rs:33:22
+[check]    |
+[check] 33 |     assert_eq!(locks.as_array().unwrap().len(), 1);
+[check]    |                      ^^^^^^^^ method not found in `impl futures::Future<Output = serde_json::Value>`
+[check]    |
+[check] help: consider `await`ing on the `Future` and calling the method on its `Output`
+[check]    |
+[check] 33 |     assert_eq!(locks.await.as_array().unwrap().len(), 1);
+[check]    |                      ++++++
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/pipeline.rs:30:23
+[check]    |
+[check] 30 |     let plan_id = plan["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/pipeline.rs:48:23
+[check]    |
+[check] 48 |     let spec_id = spec["id"].as_str().unwrap().to_string();
+[check]    |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/pipeline.rs:66:25
+[check]    |
+[check] 66 |     let phase_id = phase["id"].as_str().unwrap().to_string();
+[check]    |                         ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/pipeline.rs:84:19
+[check]    |
+[check] 84 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]    |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:104:27
+[check]     |
+[check] 104 |     let bundle_id = bundle["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:136:23
+[check]     |
+[check] 136 |     let tick_id = tick["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:228:23
+[check]     |
+[check] 228 |     let plan_id = plan["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:247:23
+[check]     |
+[check] 247 |     let spec_id = spec["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:266:25
+[check]     |
+[check] 266 |     let phase_id = phase["id"].as_str().unwrap().to_string();
+[check]     |                         ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:285:19
+[check]     |
+[check] 285 |     let wi_id = wi["id"].as_str().unwrap().to_string();
+[check]     |                   ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:312:27
+[check]     |
+[check] 312 |     let bundle_id = bundle["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:355:26
+[check]     |
+[check] 355 |     assert_eq!(final_goal["goal"], "Build example website");
+[check]     |                          ^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:356:26
+[check]     |
+[check] 356 |     assert_eq!(final_goal["active"], true);
+[check]     |                          ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:407:23
+[check]     |
+[check] 407 |     let plan_id = plan["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:425:23
+[check]     |
+[check] 425 |     let spec_id = spec["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:443:25
+[check]     |
+[check] 443 |     let phase_id = phase["id"].as_str().unwrap().to_string();
+[check]     |                         ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:462:21
+[check]     |
+[check] 462 |     let wi1_id = wi1["id"].as_str().unwrap().to_string();
+[check]     |                     ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:472:21
+[check]     |
+[check] 472 |     let wi2_id = wi2["id"].as_str().unwrap().to_string();
+[check]     |                     ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:483:23
+[check]     |
+[check] 483 |     let lock_id = lock["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:484:20
+[check]     |
+[check] 484 |     assert_eq!(lock["status"], "active");
+[check]     |                    ^^^^^^^^^^
+[check]
+[check] error[E0599]: no method named `as_array` found for opaque type `impl futures::Future<Output = serde_json::Value>` in the current scope
+[check]    --> src/tests/integration/pipeline.rs:487:19
+[check]     |
+[check] 487 |     assert!(locks.as_array().unwrap().iter().any(|l| l["id"] == lock_id));
+[check]     |                   ^^^^^^^^ method not found in `impl futures::Future<Output = serde_json::Value>`
+[check]     |
+[check] help: consider `await`ing on the `Future` and calling the method on its `Output`
+[check]     |
+[check] 487 |     assert!(locks.await.as_array().unwrap().iter().any(|l| l["id"] == lock_id));
+[check]     |                   ++++++
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:491:24
+[check]     |
+[check] 491 |     assert_eq!(released["status"], "released");
+[check]     |                        ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:560:27
+[check]     |
+[check] 560 |     let bundle_id = bundle["id"].as_str().unwrap().to_string();
+[check]     |                           ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:561:22
+[check]     |
+[check] 561 |     assert_eq!(bundle["status"], "Proposed");
+[check]     |                      ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:620:29
+[check]     |
+[check] 620 |     let bundle2_id = bundle2["id"].as_str().unwrap().to_string();
+[check]     |                             ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:646:29
+[check]     |
+[check] 646 |     let bundle3_id = bundle3["id"].as_str().unwrap().to_string();
+[check]     |                             ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:681:23
+[check]     |
+[check] 681 |     let tick_id = tick["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:682:20
+[check]     |
+[check] 682 |     assert_eq!(tick["status"], "Open");
+[check]     |                    ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:692:25
+[check]     |
+[check] 692 |     assert_eq!(published["status"], "Published");
+[check]     |                         ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:693:22
+[check]     |
+[check] 693 |     assert!(published["integration_sha"].as_str().is_some_and(|s| !s.is_empty()));
+[check]     |                      ^^^^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0282]: type annotations needed
+[check]    --> src/tests/integration/pipeline.rs:693:64
+[check]     |
+[check] 693 |     assert!(published["integration_sha"].as_str().is_some_and(|s| !s.is_empty()));
+[check]     |                                                                ^   - type must be known at this point
+[check]     |
+[check] help: consider giving this closure parameter an explicit type
+[check]     |
+[check] 693 |     assert!(published["integration_sha"].as_str().is_some_and(|s: /* Type */| !s.is_empty()));
+[check]     |                                                                 ++++++++++++
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:695:18
+[check]     |
+[check] 695 |         published["validation_log"]
+[check]     |                  ^^^^^^^^^^^^^^^^^^
+[check]
+[check] error[E0282]: type annotations needed
+[check]    --> src/tests/integration/pipeline.rs:697:27
+[check]     |
+[check] 697 |             .is_some_and(|s| s.contains("PASSED"))
+[check]     |                           ^  - type must be known at this point
+[check]     |
+[check] help: consider giving this closure parameter an explicit type
+[check]     |
+[check] 697 |             .is_some_and(|s: /* Type */| s.contains("PASSED"))
+[check]     |                            ++++++++++++
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/pipeline.rs:702:26
+[check]     |
+[check] 702 |     assert_eq!(final_goal["goal"], "Build portfolio site");
+[check]     |                          ^^^^^^^^
+[check]
+[check] error[E0369]: binary operation `==` cannot be applied to type `impl futures::Future<Output = i32>`
+[check]   --> src/tests/integration/pool.rs:33:5
+[check]    |
+[check] 33 |     assert_eq!(code, -32004, "expected pool_exhausted error code");
+[check]    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[check]    |     |
+[check]    |     impl futures::Future<Output = i32>
+[check]    |     {integer}
+[check]    |
+[check]    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+[check]
+[check] error[E0277]: `impl futures::Future<Output = i32>` doesn't implement `std::fmt::Debug`
+[check]   --> src/tests/integration/pool.rs:33:5
+[check]    |
+[check] 33 |     assert_eq!(code, -32004, "expected pool_exhausted error code");
+[check]    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Debug` is not implemented for `impl futures::Future<Output = i32>`
+[check]    |
+[check]    = note: this error originates in the macro `assert_eq` (in Nightly builds, run with -Z macro-backtrace for more info)
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/pool.rs:44:17
+[check]    |
+[check] 44 |     assert!(resp["id"].as_str().is_some());
+[check]    |                 ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/pool.rs:73:17
+[check]    |
+[check] 73 |     assert!(resp["id"].as_str().is_some());
+[check]    |                 ^^^^^^
+[check]
+[check] error[E0308]: mismatched types
+[check]   --> src/tests/integration/preformed.rs:14:9
+[check]    |
+[check] 14 |       let (plan_id, spec_results) = inject_preformed_plan(
+[check]    |  _________^^^^^^^^^^^^^^^^^^^^^^^___-
+[check]    | |         |
+[check]    | |         expected future, found `(_, _)`
+[check] 15 | |         &stores,
+[check] 16 | |         &tx,
+[check] 17 | |         &wm,
+[check] ...  |
+[check] 82 | |         },
+[check] 83 | |     );
+[check]    | |_____- this expression has type `impl Future<Output = (String, Vec<(..., ...)>)>`
+[check]    |
+[check]    = note: expected opaque type `impl futures::Future<Output = (std::string::String, Vec<(std::string::String, Vec<(std::string::String, Vec<std::string::String>)>)>)>`
+[check]                     found tuple `(_, _)`
+[check]    = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7928993260773169830.txt'
+[check]    = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0282]: type annotations needed
+[check]    --> src/tests/integration/preformed.rs:102:31
+[check]     |
+[check] 102 |     for (i, (phase_id, _)) in phases.iter().enumerate() {
+[check]     |                               ^^^^^^ cannot infer type
+[check]
+[check] error[E0282]: type annotations needed
+[check]    --> src/tests/integration/preformed.rs:112:16
+[check]     |
+[check] 112 |     assert_eq!(phase1_works.len(), 2);
+[check]     |                ^^^^^^^^^^^^ cannot infer type
+[check]
+[check] error[E0282]: type annotations needed
+[check]    --> src/tests/integration/preformed.rs:118:16
+[check]     |
+[check] 118 |     assert_eq!(phase2_works.len(), 4);
+[check]     |                ^^^^^^^^^^^^ cannot infer type
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tests/integration/preformed.rs:136:9
+[check]     |
+[check] 136 |       let (plan_id, spec_results) = inject_preformed_plan(
+[check]     |  _________^^^^^^^^^^^^^^^^^^^^^^^___-
+[check]     | |         |
+[check]     | |         expected future, found `(_, _)`
+[check] 137 | |         &stores,
+[check] 138 | |         &tx,
+[check] 139 | |         &wm,
+[check] ...   |
+[check] 203 | |         },
+[check] 204 | |     );
+[check]     | |_____- this expression has type `impl Future<Output = (String, Vec<(..., ...)>)>`
+[check]     |
+[check]     = note: expected opaque type `impl futures::Future<Output = (std::string::String, Vec<(std::string::String, Vec<(std::string::String, Vec<std::string::String>)>)>)>`
+[check]                      found tuple `(_, _)`
+[check]     = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7928993260773169830.txt'
+[check]     = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0282]: type annotations needed
+[check]    --> src/tests/integration/preformed.rs:228:31
+[check]     |
+[check] 228 |     for (i, (phase_id, _)) in phases.iter().enumerate() {
+[check]     |                               ^^^^^^ cannot infer type
+[check]
+[check] error[E0308]: mismatched types
+[check]    --> src/tests/integration/preformed.rs:240:9
+[check]     |
+[check] 240 |       let (_, spec_results) = inject_preformed_plan(
+[check]     |  _________^^^^^^^^^^^^^^^^^___-
+[check]     | |         |
+[check]     | |         expected future, found `(_, _)`
+[check] 241 | |         &stores,
+[check] 242 | |         &tx,
+[check] 243 | |         &wm,
+[check] ...   |
+[check] 259 | |         },
+[check] 260 | |     );
+[check]     | |_____- this expression has type `impl Future<Output = (String, Vec<(..., ...)>)>`
+[check]     |
+[check]     = note: expected opaque type `impl futures::Future<Output = (std::string::String, Vec<(std::string::String, Vec<(std::string::String, Vec<std::string::String>)>)>)>`
+[check]                      found tuple `(_, _)`
+[check]     = note: the full name for the type has been written to '/home/saidler/repos/scottidler/loopr/target/debug/deps/loopr-16ac135973a0c253.long-type-7928993260773169830.txt'
+[check]     = note: consider using `--verbose` to print the full type name to the console
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/preformed.rs:273:22
+[check]     |
+[check] 273 |     assert_eq!(result["status"], "InProgress");
+[check]     |                      ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `&&impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/sessions.rs:46:19
+[check]    |
+[check] 46 |         .map(|r| r["id"].as_str().unwrap())
+[check]    |                   ^^^^^^
+[check]
+[check] error[E0599]: no method named `as_array` found for opaque type `impl futures::Future<Output = serde_json::Value>` in the current scope
+[check]   --> src/tests/integration/sessions.rs:53:21
+[check]    |
+[check] 53 |     assert_eq!(list.as_array().unwrap().len(), 3);
+[check]    |                     ^^^^^^^^ method not found in `impl futures::Future<Output = serde_json::Value>`
+[check]    |
+[check] help: consider `await`ing on the `Future` and calling the method on its `Output`
+[check]    |
+[check] 53 |     assert_eq!(list.await.as_array().unwrap().len(), 3);
+[check]    |                     ++++++
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/sessions.rs:72:26
+[check]    |
+[check] 72 |     let session_id = resp["id"].as_str().unwrap().to_string();
+[check]    |                          ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/sessions.rs:83:22
+[check]    |
+[check] 83 |     assert_eq!(paused["status"], "paused");
+[check]    |                      ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/sessions.rs:94:23
+[check]    |
+[check] 94 |     assert_eq!(resumed["status"], "running");
+[check]    |                       ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/sessions.rs:98:23
+[check]    |
+[check] 98 |     assert_eq!(stopped["status"], "cancelled");
+[check]    |                       ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/sessions.rs:110:23
+[check]     |
+[check] 110 |     let tick_id = tick["id"].as_str().unwrap().to_string();
+[check]     |                       ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]    --> src/tests/integration/sessions.rs:111:20
+[check]     |
+[check] 111 |     assert_eq!(tick["status"], "Open");
+[check]     |                    ^^^^^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/tick.rs:52:25
+[check]    |
+[check] 52 |     let tick1_id = tick1["id"].as_str().unwrap().to_string();
+[check]    |                         ^^^^^^
+[check]
+[check] error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+[check]   --> src/tests/integration/tick.rs:94:25
+[check]    |
+[check] 94 |     let tick2_id = tick2["id"].as_str().unwrap().to_string();
+[check]    |                         ^^^^^^
+[check]
+[check] Some errors have detailed explanations: E0277, E0282, E0308, E0369, E0599, E0608.
+[check] For more information about an error, try `rustc --explain E0277`.
+[check] error: could not compile `loopr` (lib test) due to 155 previous errors
+[check] failed
+Task check failed with exit code Some(101)
+
+Error output (last 20 lines):
+   --> src/tests/integration/sessions.rs:111:20
+    |
+111 |     assert_eq!(tick["status"], "Open");
+    |                    ^^^^^^^^^^
+
+error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+  --> src/tests/integration/tick.rs:52:25
+   |
+52 |     let tick1_id = tick1["id"].as_str().unwrap().to_string();
+   |                         ^^^^^^
+
+error[E0608]: cannot index into a value of type `impl futures::Future<Output = serde_json::Value>`
+  --> src/tests/integration/tick.rs:94:25
+   |
+94 |     let tick2_id = tick2["id"].as_str().unwrap().to_string();
+   |                         ^^^^^^
+
+Some errors have detailed explanations: E0277, E0282, E0308, E0369, E0599, E0608.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `loopr` (lib test) due to 155 previous errors
+
+Logs:
+  stdout: /home/saidler/.otto/loopr-fab8a972/1775403175/tasks/check/stdout.log
+  stderr: /home/saidler/.otto/loopr-fab8a972/1775403175/tasks/check/stderr.log

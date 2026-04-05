@@ -1,5 +1,9 @@
 # Loopr v3 - Claude Code Instructions
 
+## Rules
+
+@.claude/rules/rust.md
+
 ## 🚨 CRITICAL WARNINGS 🚨
 - **DO NOT install git hooks (like `post-checkout`, `post-merge`, etc.) in the Loopr orchestrator repository itself.** Hooks like "Syncing database from JSONL files..." are meant exclusively for the TARGET repo being orchestrated. Conflating the Loopr codebase with the target repo is a fatal error.
 
