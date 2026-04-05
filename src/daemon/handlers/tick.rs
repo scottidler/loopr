@@ -321,28 +321,33 @@ mod tests {
     use crate::worktree::manager::WorktreeManager;
 
     /// Helper: create a tick and return its id
-    fn create_test_tick(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_test_tick(
+        stores: &Arc<Stores>,
+        tx: &broadcast::Sender<DaemonEvent>,
+        wm: &WorktreeManager,
+    ) -> String {
         let resp = dispatch(
             stores,
             tx,
             wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "tick.create failed: {:?}", resp.error);
         resp.result.unwrap()["id"].as_str().unwrap().to_string()
     }
 
     // === Tests from mod.rs lines 3519-4074 ===
 
-    #[test]
-    fn test_tick_create_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_tick_create_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
         let req = DaemonRequest::new(50, "tick.create", json!({"number": 7}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let tick_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -353,14 +358,14 @@ mod tests {
         assert_eq!(retrieved.unwrap().number, 7);
     }
 
-    #[test]
-    fn test_tick_create_success() {
+    #[tokio::test]
+    async fn test_tick_create_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
         let req = DaemonRequest::new(50, "tick.create", json!({"number": 1}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["number"], 1);
@@ -370,33 +375,33 @@ mod tests {
         assert_eq!(stores.ticks.read().unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_tick_create_missing_number() {
+    #[tokio::test]
+    async fn test_tick_create_missing_number() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.create", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("number"));
     }
 
-    #[test]
-    fn test_tick_create_broadcasts_event() {
+    #[tokio::test]
+    async fn test_tick_create_broadcasts_event() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
 
         let req = DaemonRequest::new(50, "tick.create", json!({"number": 1}));
-        dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "tick");
     }
 
-    #[test]
-    fn test_tick_create_singleton_guard_blocks_second() {
+    #[tokio::test]
+    async fn test_tick_create_singleton_guard_blocks_second() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -409,7 +414,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         assert!(!resp1.is_error());
 
         // Second create should fail - non-terminal Tick exists
@@ -419,7 +425,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(51, "tick.create", json!({"number": 2})),
-        );
+        )
+        .await;
         assert!(resp2.is_error());
         assert!(
             resp2
@@ -430,8 +437,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tick_create_singleton_guard_allows_after_terminal() {
+    #[tokio::test]
+    async fn test_tick_create_singleton_guard_allows_after_terminal() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -444,7 +451,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let t1_id = c1.result.unwrap()["id"].as_str().unwrap().to_string();
         dispatch(
             &stores,
@@ -456,7 +464,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": t1_id, "target_status": "Sealing", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -467,7 +476,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": t1_id, "target_status": "Validating", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -478,7 +488,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": t1_id, "target_status": "Published", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
 
         // Now creation should succeed
         let resp2 = dispatch(
@@ -487,12 +498,13 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(54, "tick.create", json!({"number": 2})),
-        );
+        )
+        .await;
         assert!(!resp2.is_error());
     }
 
-    #[test]
-    fn test_tick_get_success() {
+    #[tokio::test]
+    async fn test_tick_get_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -503,7 +515,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 42})),
-        );
+        )
+        .await;
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let get_resp = dispatch(
@@ -512,24 +525,25 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(51, "tick.get", json!({"id": tick_id})),
-        );
+        )
+        .await;
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["number"], 42);
     }
 
-    #[test]
-    fn test_tick_get_not_found() {
+    #[tokio::test]
+    async fn test_tick_get_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_tick_get_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_tick_get_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -541,7 +555,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 99})),
-        );
+        )
+        .await;
         assert!(!create_resp.is_error());
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -550,24 +565,24 @@ mod tests {
 
         // Get should still succeed via TaskStore
         let get_req = DaemonRequest::new(51, "tick.get", json!({"id": tick_id}));
-        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req).await;
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["number"], 99);
     }
 
-    #[test]
-    fn test_tick_list_empty() {
+    #[tokio::test]
+    async fn test_tick_list_empty() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
 
-    #[test]
-    fn test_tick_list_filtered_by_status() {
+    #[tokio::test]
+    async fn test_tick_list_filtered_by_status() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -580,7 +595,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick1_id = create1.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Transition tick 1 through to Published so we can create another
@@ -594,7 +610,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": tick1_id, "target_status": "Sealing", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -605,7 +622,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": tick1_id, "target_status": "Validating", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -616,7 +634,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": tick1_id, "target_status": "Published", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
 
         // Now create second tick (singleton guard allows it since tick 1 is terminal)
         let create2 = dispatch(
@@ -625,7 +644,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(55, "tick.create", json!({"number": 2})),
-        );
+        )
+        .await;
         let tick2_id = create2.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Transition tick 2 to Sealing
@@ -639,10 +659,11 @@ mod tests {
                 "tick.transition",
                 json!({"id": tick2_id, "target_status": "Sealing", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
 
         // List all - should have 2
-        let all_resp = dispatch(&stores, &tx, &wm, &ic, DaemonRequest::new(60, "tick.list", json!(null)));
+        let all_resp = dispatch(&stores, &tx, &wm, &ic, DaemonRequest::new(60, "tick.list", json!(null))).await;
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by Published - should have 1 (tick 1)
@@ -652,15 +673,16 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(61, "tick.list", json!({"status": "Published"})),
-        );
+        )
+        .await;
         let ticks = filtered_resp.result.unwrap();
         let arr = ticks.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["number"], 1);
     }
 
-    #[test]
-    fn test_tick_list_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_tick_list_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -673,7 +695,8 @@ mod tests {
             &wm,
             &ic,
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let t1_id = c1.result.unwrap()["id"].as_str().unwrap().to_string();
         dispatch(
             &stores,
@@ -685,7 +708,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": t1_id, "target_status": "Sealing", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -696,7 +720,8 @@ mod tests {
                 "tick.transition",
                 json!({"id": t1_id, "target_status": "Validating", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -707,14 +732,16 @@ mod tests {
                 "tick.transition",
                 json!({"id": t1_id, "target_status": "Published", "role": "integrator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
             &wm,
             &ic,
             DaemonRequest::new(55, "tick.create", json!({"number": 2})),
-        );
+        )
+        .await;
 
         // Clear HashMap to prove list reads from TaskStore
         stores.ticks.write().unwrap().clear();
@@ -726,22 +753,23 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(60, "tick.list", json!(null)),
-        );
+        )
+        .await;
         assert!(!all_resp.is_error());
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list by status also works from TaskStore
         // Tick 1 is Published, tick 2 is Open
         let filtered_req = DaemonRequest::new(61, "tick.list", json!({"status": "Open"}));
-        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req).await;
         assert!(!filtered_resp.is_error());
         let filtered_items = filtered_resp.result.unwrap();
         let arr = filtered_items.as_array().unwrap();
         assert_eq!(arr.len(), 1);
     }
 
-    #[test]
-    fn test_tick_transition_open_to_sealing() {
+    #[tokio::test]
+    async fn test_tick_transition_open_to_sealing() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -753,7 +781,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let _ = rx.try_recv(); // consume create event
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -762,7 +791,7 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Sealing");
 
@@ -773,8 +802,8 @@ mod tests {
         assert_eq!(event.data["to"], "Sealing");
     }
 
-    #[test]
-    fn test_tick_transition_invalid_skip_state() {
+    #[tokio::test]
+    async fn test_tick_transition_invalid_skip_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -785,7 +814,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Try Open -> Published (invalid: must go through Sealing -> Validating)
@@ -794,13 +824,13 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
 
-    #[test]
-    fn test_tick_transition_wrong_role() {
+    #[tokio::test]
+    async fn test_tick_transition_wrong_role() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -811,7 +841,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Coordinator cannot transition tick (Integrator-only)
@@ -820,13 +851,13 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Sealing", "role": "coordinator"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
 
-    #[test]
-    fn test_tick_transition_not_found() {
+    #[tokio::test]
+    async fn test_tick_transition_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -835,13 +866,13 @@ mod tests {
             "tick.transition",
             json!({"id": "nonexistent", "target_status": "Sealing"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_tick_transition_default_role_is_integrator() {
+    #[tokio::test]
+    async fn test_tick_transition_default_role_is_integrator() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -852,7 +883,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(50, "tick.create", json!({"number": 1})),
-        );
+        )
+        .await;
         let tick_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Omit role - should default to Integrator and succeed
@@ -861,19 +893,19 @@ mod tests {
             "tick.transition",
             json!({"id": tick_id, "target_status": "Sealing"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "Sealing");
     }
 
     // === Tests from mod.rs lines 7781-7839 ===
 
-    #[test]
-    fn test_handle_tick_update_success() {
+    #[tokio::test]
+    async fn test_handle_tick_update_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let tick_id = create_test_tick(&stores, &tx, &wm);
+        let tick_id = create_test_tick(&stores, &tx, &wm).await;
 
         let resp = dispatch(
             &stores,
@@ -890,7 +922,8 @@ mod tests {
                     "attempted_bundle_ids": ["b-1", "b-2", "b-3"]
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "tick.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["validation_log"], "All tests passed");
@@ -898,8 +931,8 @@ mod tests {
         assert_eq!(result["attempted_bundle_ids"].as_array().unwrap().len(), 3);
     }
 
-    #[test]
-    fn test_handle_tick_update_not_found() {
+    #[tokio::test]
+    async fn test_handle_tick_update_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -909,12 +942,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tick.update", json!({"id": "nonexistent", "validation_log": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_tick_update_missing_id() {
+    #[tokio::test]
+    async fn test_handle_tick_update_missing_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -924,7 +958,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "tick.update", json!({"validation_log": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 }
