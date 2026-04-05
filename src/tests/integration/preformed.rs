@@ -4,9 +4,8 @@ use serde_json::json;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_preformed_todo_app_plan() {
+#[tokio::test]
+async fn test_preformed_todo_app_plan() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -81,7 +80,7 @@ fn test_preformed_todo_app_plan() {
                 ],
             )],
         },
-    );
+    ).await;
 
     // Verify hierarchy counts
     assert_eq!(stores.plans.read().unwrap().len(), 1);
@@ -127,10 +126,8 @@ fn test_preformed_todo_app_plan() {
     }
 }
 
-*/
-/*
-#[test]
-fn test_preformed_calculator_app_plan() {
+#[tokio::test]
+async fn test_preformed_calculator_app_plan() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -204,7 +201,7 @@ fn test_preformed_calculator_app_plan() {
                 ],
             )],
         },
-    );
+    ).await;
 
     // Verify hierarchy counts
     assert_eq!(stores.plans.read().unwrap().len(), 1);
@@ -233,10 +230,8 @@ fn test_preformed_calculator_app_plan() {
     }
 }
 
-*/
-/*
-#[test]
-fn test_preformed_plan_work_can_transition_to_in_progress() {
+#[tokio::test]
+async fn test_preformed_plan_work_can_transition_to_in_progress() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -262,7 +257,8 @@ fn test_preformed_plan_work_can_transition_to_in_progress() {
                 )],
             )],
         },
-    );
+    )
+    .await;
 
     let work_id = &spec_results[0].1[0].1[0];
 
@@ -274,7 +270,8 @@ fn test_preformed_plan_work_can_transition_to_in_progress() {
         &ic,
         "work.transition",
         json!({"id": work_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-impl-1"}),
-    );
+    )
+    .await;
     assert_eq!(result["status"], "InProgress");
 
     // Verify the work is assigned
@@ -283,4 +280,3 @@ fn test_preformed_plan_work_can_transition_to_in_progress() {
     assert_eq!(work.status().to_string(), "InProgress");
     assert_eq!(work.assignee.as_deref(), Some("agent-impl-1"));
 }
-*/

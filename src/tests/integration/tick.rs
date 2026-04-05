@@ -6,9 +6,8 @@ use crate::domain::tick::TickStatus;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_tick_crash_recovery_state() {
+#[tokio::test]
+async fn test_tick_crash_recovery_state() {
     use crate::domain::tick::Tick;
 
     let stores = test_stores();
@@ -41,17 +40,15 @@ fn test_tick_crash_recovery_state() {
     assert_eq!(ticks[&tick2_id].status(), TickStatus::Failed);
 }
 
-*/
-/*
-#[test]
-fn test_worktree_base_uses_published_tick() {
+#[tokio::test]
+async fn test_worktree_base_uses_published_tick() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
     // Create tick 1
-    let tick1 = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1}));
+    let tick1 = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1})).await;
     let tick1_id = tick1["id"].as_str().unwrap().to_string();
 
     // Tick1: Open -> Sealing -> Validating -> Published
@@ -62,7 +59,8 @@ fn test_worktree_base_uses_published_tick() {
         &ic,
         "tick.transition",
         json!({"id": tick1_id, "target_status": "Sealing"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -70,7 +68,8 @@ fn test_worktree_base_uses_published_tick() {
         &ic,
         "tick.transition",
         json!({"id": tick1_id, "target_status": "Validating"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -78,7 +77,8 @@ fn test_worktree_base_uses_published_tick() {
         &ic,
         "tick.transition",
         json!({"id": tick1_id, "target_status": "Published"}),
-    );
+    )
+    .await;
 
     // Verify find_latest_published_tick returns tick1
     {
@@ -93,7 +93,7 @@ fn test_worktree_base_uses_published_tick() {
     }
 
     // Create tick2 (now possible since tick1 is Published = terminal)
-    let tick2 = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 2}));
+    let tick2 = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 2})).await;
     let tick2_id = tick2["id"].as_str().unwrap().to_string();
 
     // Publish tick2 (higher number)
@@ -104,7 +104,8 @@ fn test_worktree_base_uses_published_tick() {
         &ic,
         "tick.transition",
         json!({"id": tick2_id, "target_status": "Sealing"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -112,7 +113,8 @@ fn test_worktree_base_uses_published_tick() {
         &ic,
         "tick.transition",
         json!({"id": tick2_id, "target_status": "Validating"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -120,7 +122,8 @@ fn test_worktree_base_uses_published_tick() {
         &ic,
         "tick.transition",
         json!({"id": tick2_id, "target_status": "Published"}),
-    );
+    )
+    .await;
 
     // Now tick2 (higher number) should be the latest published
     let ticks = stores.ticks.read().unwrap();
@@ -132,4 +135,3 @@ fn test_worktree_base_uses_published_tick() {
     assert!(latest_published.is_some());
     assert_eq!(latest_published.unwrap().id, tick2_id);
 }
-*/

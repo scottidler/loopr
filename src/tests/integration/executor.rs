@@ -9,11 +9,9 @@ use crate::test_util::TestDir;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_coordinator_creates_work_via_executor() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_coordinator_creates_work_via_executor() {
     // Use create_test_hierarchy fixture to build Plan/Spec/Phase, then verify CreateWork via executor
-    let rt = tokio::runtime::Runtime::new().unwrap();
     let dir = TestDir::new("loopr-e2e-hierarchy");
 
     let stores = test_stores();
@@ -24,24 +22,24 @@ fn test_coordinator_creates_work_via_executor() {
     let agent_log = test_agent_logger(&dir);
     let ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
 
-    let (plan_id, spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+    let (plan_id, spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
 
     // Create Work via executor (the live path)
-    let wi_result = rt
-        .block_on(execute_action(
-            &AgentAction::CreateWork {
-                parent_id: phase_id.clone(),
-                title: "Add login".into(),
-                description: "Add login endpoint".into(),
-                resource_tags: vec!["src/".into()],
-                acceptance_criteria: vec!["tests pass".into()],
-                dependencies: vec![],
-            },
-            &ctx,
-            &dir,
-            None,
-        ))
-        .unwrap();
+    let wi_result = execute_action(
+        &AgentAction::CreateWork {
+            parent_id: phase_id.clone(),
+            title: "Add login".into(),
+            description: "Add login endpoint".into(),
+            resource_tags: vec!["src/".into()],
+            acceptance_criteria: vec!["tests pass".into()],
+            dependencies: vec![],
+        },
+        &ctx,
+        &dir,
+        None,
+    )
+    .await
+    .unwrap();
     let wi_id = match wi_result {
         ActionResult::RecordCreated { collection, id } => {
             assert_eq!(collection, "works");
@@ -67,14 +65,11 @@ fn test_coordinator_creates_work_via_executor() {
     assert_eq!(wi.parent_id, phase_id);
 }
 
-*/
-/*
-#[test]
-fn test_coordinator_triage_accept_bundle_via_executor() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_coordinator_triage_accept_bundle_via_executor() {
     // Create hierarchy + bundle -> TriageBundle -> AcceptBundle through executor
     use crate::domain::bundle::BundleStatus;
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
     let dir = TestDir::new("loopr-e2e-triage");
 
     let stores = test_stores();
@@ -84,7 +79,7 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
     let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
 
     // Create hierarchy + work item (via dispatch for speed)
-    let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+    let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
     let wi = dispatch_ok(
         &stores,
         &tx,
@@ -92,7 +87,7 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "WI", "description": "d", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // Transition WI to InProgress so bundle can be proposed (already Ready via auto-promotion)
@@ -103,7 +98,8 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
-    );
+    )
+    .await;
 
     // Create a bundle
     let bundle = dispatch_ok(
@@ -119,22 +115,23 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
             "commit_sha": "abc123",
             "branch_name": "feature-auth"
         }),
-    );
+    )
+    .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
     // TriageBundle via executor
     let agent_log = test_agent_logger(&dir);
     let ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
-    let triage_result = rt
-        .block_on(execute_action(
-            &AgentAction::TriageBundle {
-                bundle_id: bundle_id.clone(),
-            },
-            &ctx,
-            &dir,
-            None,
-        ))
-        .unwrap();
+    let triage_result = execute_action(
+        &AgentAction::TriageBundle {
+            bundle_id: bundle_id.clone(),
+        },
+        &ctx,
+        &dir,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(
         matches!(triage_result, ActionResult::Transitioned(ref s) if s.contains("Triaged")),
         "expected Transitioned(Triaged), got: {:?}",
@@ -155,19 +152,20 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-    );
+    )
+    .await;
 
     // AcceptBundle via executor
-    let accept_result = rt
-        .block_on(execute_action(
-            &AgentAction::AcceptBundle {
-                bundle_id: bundle_id.clone(),
-            },
-            &ctx,
-            &dir,
-            None,
-        ))
-        .unwrap();
+    let accept_result = execute_action(
+        &AgentAction::AcceptBundle {
+            bundle_id: bundle_id.clone(),
+        },
+        &ctx,
+        &dir,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(
         matches!(accept_result, ActionResult::Transitioned(ref s) if s.contains("Accepted")),
         "expected Transitioned(Accepted), got: {:?}",
@@ -180,4 +178,3 @@ fn test_coordinator_triage_accept_bundle_via_executor() {
         assert_eq!(bundles[&bundle_id].status(), BundleStatus::Accepted);
     }
 }
-*/

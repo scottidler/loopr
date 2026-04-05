@@ -6,7 +6,6 @@ use crate::agents::{AgentKind, AgentSession, AgentStatus};
 
 use super::fixtures::*;
 
-/*
 #[tokio::test]
 async fn test_pool_exhaustion_multi_type() {
     let stores = test_stores();
@@ -30,7 +29,8 @@ async fn test_pool_exhaustion_multi_type() {
         &ic,
         "agent.start",
         json!({"agent_type": "coordinator"}),
-    );
+    )
+    .await;
     assert_eq!(code, -32004, "expected pool_exhausted error code");
 
     // But Researcher should still work (different pool)
@@ -41,12 +41,11 @@ async fn test_pool_exhaustion_multi_type() {
         &ic,
         "agent.start",
         json!({"agent_type": "researcher"}),
-    );
+    )
+    .await;
     assert!(resp["id"].as_str().is_some());
 }
 
-*/
-/*
 #[tokio::test]
 async fn test_pool_allows_after_terminal_session() {
     let stores = test_stores();
@@ -72,7 +71,7 @@ async fn test_pool_allows_after_terminal_session() {
         &ic,
         "agent.start",
         json!({"agent_type": "coordinator"}),
-    );
+    )
+    .await;
     assert!(resp["id"].as_str().is_some());
 }
-*/

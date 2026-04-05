@@ -12,16 +12,15 @@ use crate::worktree::manager::WorktreeManager;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_coordinator_state_summary_multi_record() {
+#[tokio::test]
+async fn test_coordinator_state_summary_multi_record() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
     // Create hierarchy first so work.create can find a valid phase
-    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
 
     // Create work item under the real phase
     dispatch_ok(
@@ -31,7 +30,7 @@ fn test_coordinator_state_summary_multi_record() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "WI-1", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
 
     // Add agent session
     let session = AgentSession::new(AgentKind::Implementer, "model".into());
@@ -54,10 +53,8 @@ fn test_coordinator_state_summary_multi_record() {
     );
 }
 
-*/
-/*
-#[test]
-fn test_coordinator_state_persistence_across_iterations() {
+#[tokio::test]
+async fn test_coordinator_state_persistence_across_iterations() {
     use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 
     let stores = test_stores();
@@ -94,9 +91,7 @@ fn test_coordinator_state_persistence_across_iterations() {
     assert!(deserialized.phase_activated_at.is_some());
 }
 
-*/
-/*
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_coordinator_assigns_implementer_completes() {
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::implementer::{self, IterationOutcome, LlmClient};
@@ -127,7 +122,7 @@ async fn test_coordinator_assigns_implementer_completes() {
     let ic = test_integrator_config();
 
     // Create hierarchy via IPC
-    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
 
     // Create work item
     let wi = dispatch_ok(
@@ -137,7 +132,7 @@ async fn test_coordinator_assigns_implementer_completes() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // Set coordinator goal
@@ -146,7 +141,7 @@ async fn test_coordinator_assigns_implementer_completes() {
     stores.coordinator_goals.write().unwrap().insert(goal.id.clone(), goal);
 
     // Verify work item starts as Ready (auto-promoted from Draft since acceptance_criteria present)
-    let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
+    let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id})).await;
     assert_eq!(wi_resp["status"].as_str().unwrap(), "Ready");
 
     // Execute AssignAgent - should auto-transition Ready->InProgress
@@ -162,7 +157,7 @@ async fn test_coordinator_assigns_implementer_completes() {
     let _ = crate::agents::executor::execute_action(&assign_action, &assign_ctx, &dir, None).await;
 
     // Verify work item is now InProgress
-    let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id}));
+    let wi_resp = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id})).await;
     assert_eq!(
         wi_resp["status"].as_str().unwrap(),
         "InProgress",
@@ -174,8 +169,6 @@ async fn test_coordinator_assigns_implementer_completes() {
 
     #[async_trait]
     impl LlmClient for PipelineLlm {
-*/
-/*
         async fn call(&self, _system: &str, user_msg: &str) -> Result<String> {
             // Verify context includes goal and hierarchy
             assert!(user_msg.contains("Project Goal"), "missing Project Goal in context");
@@ -239,4 +232,3 @@ async fn test_coordinator_assigns_implementer_completes() {
     let content = std::fs::read_to_string(dir.join("hello.txt")).unwrap();
     assert_eq!(content, "Hello, World!");
 }
-*/

@@ -7,16 +7,15 @@ use crate::config::InterviewMode;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_work_fsm_enforcement_via_dispatch() {
+#[tokio::test]
+async fn test_work_fsm_enforcement_via_dispatch() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
     // Create hierarchy so work.create can find a valid phase
-    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
 
     // Create Work (starts as Draft)
     let wi = dispatch_ok(
@@ -26,7 +25,7 @@ fn test_work_fsm_enforcement_via_dispatch() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // Invalid: Ready -> Done (must go through InProgress first)
@@ -37,7 +36,8 @@ fn test_work_fsm_enforcement_via_dispatch() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
-    );
+    )
+    .await;
     assert_ne!(code, 0, "should reject invalid transition");
 
     // Verify state unchanged (auto-promoted to Ready since acceptance_criteria present)
@@ -45,10 +45,8 @@ fn test_work_fsm_enforcement_via_dispatch() {
     assert_eq!(wis[&wi_id].status(), crate::domain::work::WorkStatus::Ready);
 }
 
-*/
-/*
-#[test]
-fn test_full_fsm_cycle() {
+#[tokio::test]
+async fn test_full_fsm_cycle() {
     use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 
     let stores = test_stores();
@@ -99,10 +97,8 @@ fn test_full_fsm_cycle() {
     assert_eq!(retrieved.phases_completed, vec!["phase-1"]);
 }
 
-*/
-/*
-#[test]
-fn test_role_inference_from_agent_type() {
+#[tokio::test]
+async fn test_role_inference_from_agent_type() {
     use crate::domain::role::Role;
 
     assert_eq!(AgentKind::Implementer.default_role(), Role::Implementer);
@@ -111,4 +107,3 @@ fn test_role_inference_from_agent_type() {
     assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
     assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
 }
-*/

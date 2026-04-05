@@ -4,9 +4,8 @@ use serde_json::json;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_full_hierarchy_creation_via_dispatch() {
+#[tokio::test]
+async fn test_full_hierarchy_creation_via_dispatch() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -20,7 +19,8 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "plan.create",
         json!({"title": "Auth System", "description": "Add authentication", "acceptance_criteria": "All tests pass"}),
-    );
+    )
+    .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     assert_eq!(plan["status"], "draft");
 
@@ -32,7 +32,8 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
-    );
+    )
+    .await;
     assert_eq!(plan_active["status"], "active");
 
     // Create Spec under Plan
@@ -43,7 +44,7 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "JWT Auth", "description": "Implement JWT-based auth", "acceptance_criteria": "JWT tokens work"}),
-    );
+    ).await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     assert_eq!(spec["status"], "draft");
 
@@ -55,7 +56,8 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     // Create Phase under Spec
     let phase = dispatch_ok(
@@ -65,7 +67,7 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Token Generation", "description": "Create token gen module", "acceptance_criteria": "Tokens are signed"}),
-    );
+    ).await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
 
     // Transition Phase: Draft -> Active
@@ -76,7 +78,8 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     // Create Work under Phase
     let wi = dispatch_ok(
@@ -86,7 +89,7 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
     assert_eq!(wi["status"], "Ready");
 
@@ -98,7 +101,8 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
-    );
+    )
+    .await;
 
     // Create Bundle for Work
     let bundle = dispatch_ok(
@@ -108,7 +112,8 @@ fn test_full_hierarchy_creation_via_dispatch() {
         &ic,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feat/jwt-sign", "claims": "Added sign() function"}),
-    );
+    )
+    .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
     assert_eq!(bundle["status"], "Proposed");
 
@@ -130,17 +135,15 @@ fn test_full_hierarchy_creation_via_dispatch() {
     assert_eq!(bundles[&bundle_id].work_id, wi_id);
 }
 
-*/
-/*
-#[test]
-fn test_bundle_lifecycle_via_dispatch() {
+#[tokio::test]
+async fn test_bundle_lifecycle_via_dispatch() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
 
     // Create hierarchy so work.create can find a valid phase
-    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic);
+    let (_plan_id, _spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
 
     // Create Work
     let wi = dispatch_ok(
@@ -150,7 +153,7 @@ fn test_bundle_lifecycle_via_dispatch() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // Create Bundle
@@ -161,7 +164,8 @@ fn test_bundle_lifecycle_via_dispatch() {
         &ic,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feat/task", "claims": "Did it"}),
-    );
+    )
+    .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
     // Proposed -> Triaged (Coordinator triages)
@@ -172,7 +176,8 @@ fn test_bundle_lifecycle_via_dispatch() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // Triaged -> Reviewed (Reviewer reviews)
     dispatch_ok(
@@ -182,7 +187,8 @@ fn test_bundle_lifecycle_via_dispatch() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-    );
+    )
+    .await;
 
     // Reviewed -> Accepted (Coordinator accepts)
     dispatch_ok(
@@ -192,7 +198,8 @@ fn test_bundle_lifecycle_via_dispatch() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // Verify final state
     let bundles = stores.bundles.read().unwrap();
@@ -201,4 +208,3 @@ fn test_bundle_lifecycle_via_dispatch() {
         crate::domain::bundle::BundleStatus::Accepted
     );
 }
-*/

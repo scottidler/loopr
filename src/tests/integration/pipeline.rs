@@ -9,9 +9,8 @@ use crate::worktree::manager::WorktreeManager;
 
 use super::fixtures::*;
 
-/*
-#[test]
-fn test_full_pipeline_plan_to_bundle_acceptance() {
+#[tokio::test]
+async fn test_full_pipeline_plan_to_bundle_acceptance() {
     let stores = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
@@ -27,7 +26,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "plan.create",
         json!({"title": "User Auth", "description": "Auth system", "acceptance_criteria": "Tests pass"}),
-    );
+    )
+    .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -36,7 +36,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     let spec = dispatch_ok(
         &stores,
@@ -45,7 +46,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "JWT", "description": "JWT auth", "acceptance_criteria": "OK"}),
-    );
+    )
+    .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -54,7 +56,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     let phase = dispatch_ok(
         &stores,
@@ -63,7 +66,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Token", "description": "Token gen", "acceptance_criteria": "OK"}),
-    );
+    )
+    .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -72,7 +76,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     let wi = dispatch_ok(
         &stores,
@@ -81,7 +86,7 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "sign()", "description": "Sign JWT", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // 3. Coordinator assigns, implementer works on it (already Ready via auto-promotion)
@@ -92,7 +97,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
-    );
+    )
+    .await;
 
     let bundle = dispatch_ok(
         &stores,
@@ -101,7 +107,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feat/sign", "claims": "Added sign()"}),
-    );
+    )
+    .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
     // 4. Coordinator triages, reviewer reviews
@@ -112,7 +119,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -120,7 +128,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-    );
+    )
+    .await;
 
     // 5. Coordinator accepts
     dispatch_ok(
@@ -130,10 +139,11 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // 6. Integrator creates tick and publishes
-    let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1}));
+    let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1})).await;
     let tick_id = tick["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -142,7 +152,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "tick.transition",
         json!({"id": tick_id, "target_status": "Sealing", "role": "integrator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -150,7 +161,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "tick.transition",
         json!({"id": tick_id, "target_status": "Validating", "role": "integrator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -158,7 +170,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "tick.transition",
         json!({"id": tick_id, "target_status": "Published", "role": "integrator"}),
-    );
+    )
+    .await;
 
     // 7. Mark work item as InReview -> Integrated -> Done
     dispatch_ok(
@@ -168,7 +181,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -176,7 +190,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -184,7 +199,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // Verify final state across all stores
     let plans = stores.plans.read().unwrap();
@@ -207,10 +223,8 @@ fn test_full_pipeline_plan_to_bundle_acceptance() {
     assert!(goals.values().any(|g| g.active && g.goal == "Implement user auth"));
 }
 
-*/
-/*
-#[test]
-fn test_full_mvp4_pipeline() {
+#[tokio::test]
+async fn test_full_mvp4_pipeline() {
     // End-to-end: goal -> plan -> spec -> phase -> work -> bundle -> triage -> review -> accept
     let stores = test_stores();
     let tx = test_event_tx();
@@ -227,7 +241,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "plan.create",
         json!({"title": "Website Plan", "description": "Build a static site", "acceptance_criteria": "Site loads"}),
-    );
+    )
+    .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -236,7 +251,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     // 3. Create Spec
     let spec = dispatch_ok(
@@ -246,7 +262,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "HTML Structure", "description": "Create HTML pages"}),
-    );
+    )
+    .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -255,7 +272,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     // 4. Create Phase
     let phase = dispatch_ok(
@@ -265,7 +283,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Phase 1: Index", "description": "Create index.html"}),
-    );
+    )
+    .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -274,7 +293,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     // 5. Create Work
     let wi = dispatch_ok(
@@ -284,7 +304,7 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
     // 6. Assign Work (transition to InProgress; already Ready via auto-promotion)
@@ -295,7 +315,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "work.transition",
         json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
-    );
+    )
+    .await;
 
     // 7. Create Bundle (implementer output)
     let bundle = dispatch_ok(
@@ -311,7 +332,8 @@ fn test_full_mvp4_pipeline() {
             "commit_sha": "def456",
             "branch_name": "feature-index"
         }),
-    );
+    )
+    .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
     // 8. Triage (Coordinator)
@@ -322,7 +344,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // 9. Review (Reviewer)
     dispatch_ok(
@@ -332,7 +355,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-    );
+    )
+    .await;
 
     // 10. Accept (Coordinator)
     dispatch_ok(
@@ -342,7 +366,8 @@ fn test_full_mvp4_pipeline() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
-    );
+    )
+    .await;
 
     // Verify final state
     {
@@ -354,7 +379,7 @@ fn test_full_mvp4_pipeline() {
     }
 
     // Verify goal still active
-    let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
+    let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({})).await;
     assert_eq!(final_goal["goal"], "Build example website");
     assert_eq!(final_goal["active"], true);
 
@@ -367,10 +392,8 @@ fn test_full_mvp4_pipeline() {
     assert_eq!(stores.coordinator_goals.read().unwrap().len(), 1);
 }
 
-*/
-/*
-#[test]
-fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
+#[tokio::test]
+async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     let dir = TestDir::new("loopr-e2e-full");
 
     // Initialize a real git repo so tick publish can get HEAD sha
@@ -408,7 +431,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "plan.create",
         json!({"title": "Portfolio", "description": "Build a portfolio website"}),
-    );
+    )
+    .await;
     let plan_id = plan["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -417,7 +441,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     let spec = dispatch_ok(
         &stores,
@@ -426,7 +451,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "spec.create",
         json!({"parent_id": plan_id, "title": "Pages", "description": "HTML pages"}),
-    );
+    )
+    .await;
     let spec_id = spec["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -435,7 +461,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     let phase = dispatch_ok(
         &stores,
@@ -444,7 +471,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Phase 1", "description": "Structure", "order": 1}),
-    );
+    )
+    .await;
     let phase_id = phase["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -453,7 +481,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
-    );
+    )
+    .await;
 
     // --- 3. Create work items ---
     let wi1 = dispatch_ok(
@@ -463,7 +492,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Create index.html", "description": "Homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
     let wi2 = dispatch_ok(
@@ -473,7 +502,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.create",
         json!({"parent_id": phase_id, "title": "Create about.html", "description": "About page", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
-    );
+    ).await;
     let wi2_id = wi2["id"].as_str().unwrap().to_string();
 
     // --- 4. Lock lifecycle ---
@@ -484,15 +513,16 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "lock.create",
         json!({"resource": "index.html", "holder_id": wi1_id, "granted_by": "coordinator"}),
-    );
+    )
+    .await;
     let lock_id = lock["id"].as_str().unwrap().to_string();
     assert_eq!(lock["status"], "active");
 
-    let locks = dispatch_ok(&stores, &tx, &wm, &ic, "lock.list", json!({}));
+    let locks = dispatch_ok(&stores, &tx, &wm, &ic, "lock.list", json!({})).await;
     assert!(locks.as_array().unwrap().iter().any(|l| l["id"] == lock_id));
 
-    dispatch_ok(&stores, &tx, &wm, &ic, "lock.release", json!({"id": lock_id}));
-    let released = dispatch_ok(&stores, &tx, &wm, &ic, "lock.get", json!({"id": lock_id}));
+    dispatch_ok(&stores, &tx, &wm, &ic, "lock.release", json!({"id": lock_id})).await;
+    let released = dispatch_ok(&stores, &tx, &wm, &ic, "lock.get", json!({"id": lock_id})).await;
     assert_eq!(released["status"], "released");
 
     // --- 5. Full work item lifecycle: Ready -> InProgress -> InReview -> Integrated -> Done ---
@@ -504,7 +534,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.transition",
         json!({"id": wi1_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
-    );
+    )
+    .await;
     // Create a bundle before InReview (required by #15 invariant)
     dispatch_ok(
         &stores,
@@ -513,7 +544,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.create",
         json!({"work_id": wi1_id, "branch_name": "feature/index"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -521,7 +553,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.transition",
         json!({"id": wi1_id, "target_status": "InReview", "role": "implementer"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -529,7 +562,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.transition",
         json!({"id": wi1_id, "target_status": "Integrated", "role": "integrator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -537,7 +571,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.transition",
         json!({"id": wi1_id, "target_status": "Done", "role": "coordinator"}),
-    );
+    )
+    .await;
     {
         let wis = stores.works.read().unwrap();
         assert_eq!(wis[&wi1_id].status(), crate::domain::work::WorkStatus::Done);
@@ -552,7 +587,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "work.transition",
         json!({"id": wi2_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
-    );
+    )
+    .await;
 
     let bundle = dispatch_ok(
         &stores,
@@ -561,7 +597,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.create",
         json!({"work_id": wi2_id, "description": "About page", "branch_name": "feature/about"}),
-    );
+    )
+    .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
     assert_eq!(bundle["status"], "Proposed");
 
@@ -572,7 +609,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -580,7 +618,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -588,7 +627,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Accepted", "role": "coordinator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -596,7 +636,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Integrating", "role": "integrator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -604,7 +645,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle_id, "target_status": "Merged", "role": "integrator"}),
-    );
+    )
+    .await;
     {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(
@@ -621,7 +663,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.create",
         json!({"work_id": wi2_id, "description": "Bad bundle", "branch_name": "feature/bad"}),
-    );
+    )
+    .await;
     let bundle2_id = bundle2["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -630,7 +673,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle2_id, "target_status": "Rejected", "role": "reviewer"}),
-    );
+    )
+    .await;
     {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(
@@ -647,7 +691,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.create",
         json!({"work_id": wi2_id, "description": "Reviewed then rejected", "branch_name": "feature/rev-reject"}),
-    );
+    )
+    .await;
     let bundle3_id = bundle3["id"].as_str().unwrap().to_string();
     dispatch_ok(
         &stores,
@@ -656,7 +701,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle3_id, "target_status": "Triaged", "role": "coordinator"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -664,7 +710,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle3_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-    );
+    )
+    .await;
     dispatch_ok(
         &stores,
         &tx,
@@ -672,7 +719,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "bundle.transition",
         json!({"id": bundle3_id, "target_status": "Rejected", "role": "reviewer"}),
-    );
+    )
+    .await;
     {
         let bundles = stores.bundles.read().unwrap();
         assert_eq!(
@@ -682,7 +730,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     }
 
     // --- 9. Tick publish with validation in tmpdir git repo ---
-    let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1}));
+    let tick = dispatch_ok(&stores, &tx, &wm, &ic, "tick.create", json!({"number": 1})).await;
     let tick_id = tick["id"].as_str().unwrap().to_string();
     assert_eq!(tick["status"], "Open");
 
@@ -693,7 +741,8 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &ic,
         "integrator.publish",
         json!({"tick_id": tick_id}),
-    );
+    )
+    .await;
     assert_eq!(published["status"], "Published");
     assert!(published["integration_sha"].as_str().is_some_and(|s| !s.is_empty()));
     assert!(
@@ -703,7 +752,7 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     );
 
     // --- 10. Goal still active ---
-    let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({}));
+    let final_goal = dispatch_ok(&stores, &tx, &wm, &ic, "coordinator.get_goal", json!({})).await;
     assert_eq!(final_goal["goal"], "Build portfolio site");
 
     // --- 11. Verify counts ---
@@ -717,4 +766,3 @@ fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&dir);
 }
-*/
