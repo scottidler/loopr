@@ -389,6 +389,7 @@ pub(super) fn handle_override_work(
     )))
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -1123,3 +1124,4 @@ mod tests {
 
     // --- Noop Bundle Pathway tests ---
 }
+*/

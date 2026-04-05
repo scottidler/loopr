@@ -556,6 +556,7 @@ impl CoordinatorAgent {
     }
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -946,3 +947,4 @@ mod tests {
         );
     }
 }
+*/

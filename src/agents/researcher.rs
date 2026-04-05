@@ -638,6 +638,7 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_injects_query() {
+        crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-res-sysprompt");
         let agent_log = test_agent_logger(&dir);
         let prompt = build_system_prompt("Find all error handling patterns", &agent_log);

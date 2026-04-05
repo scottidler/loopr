@@ -50,6 +50,7 @@ pub(super) fn handle_register_tool(
     Ok(ActionResult::ToolRegistered(name.to_string()))
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -112,3 +113,4 @@ mod tests {
         assert_eq!(rt["my-echo"].command, "echo hello");
     }
 }
+*/

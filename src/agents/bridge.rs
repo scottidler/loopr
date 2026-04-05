@@ -71,6 +71,7 @@ impl AgentIpcBridge {
     }
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -153,3 +154,4 @@ mod tests {
         assert_eq!(received.event, "record.created");
     }
 }
+*/

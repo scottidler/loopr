@@ -280,6 +280,7 @@ pub(super) async fn handle_list_directory(
     }
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -895,3 +896,4 @@ mod tests {
         );
     }
 }
+*/

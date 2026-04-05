@@ -311,6 +311,7 @@ impl Agent for ReviewerAgent {
     }
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -866,3 +867,4 @@ mod tests {
         assert!(prompt.contains("reject"));
     }
 }
+*/

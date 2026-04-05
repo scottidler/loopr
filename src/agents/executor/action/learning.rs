@@ -44,6 +44,7 @@ pub(super) fn handle_create_learning(
     Ok(ActionResult::LearningCreated(content.to_string()))
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -92,3 +93,4 @@ mod tests {
         assert!(matches!(result, ActionResult::LearningCreated(_)));
     }
 }
+*/

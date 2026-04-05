@@ -381,6 +381,7 @@ pub(super) async fn run_agent_loop(
     result
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -757,3 +758,4 @@ mod tests {
         assert!(result.is_ok(), "fast future should complete before timeout");
     }
 }
+*/

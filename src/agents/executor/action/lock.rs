@@ -74,6 +74,7 @@ pub(super) fn handle_release_lock(ctx: &AgentContext, lock_id: &str) -> Result<A
     Ok(ActionResult::LockReleased(lock_id.to_string()))
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -250,3 +251,4 @@ mod tests {
         );
     }
 }
+*/

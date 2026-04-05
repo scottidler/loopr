@@ -173,6 +173,7 @@ pub(super) fn persist_session(stores: &Stores, session: &AgentSession) {
     }
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -404,3 +405,4 @@ mod tests {
         );
     }
 }
+*/

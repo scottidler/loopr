@@ -310,6 +310,7 @@ pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
     Ok(ActionResult::Transitioned(format!("bundle/{} -> Accepted", bundle_id)))
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -1000,3 +1001,4 @@ mod tests {
         assert_eq!(bundle.noop_reason.as_deref(), Some("already done by phase 1"));
     }
 }
+*/

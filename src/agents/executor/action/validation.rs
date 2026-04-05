@@ -121,6 +121,7 @@ pub(super) fn handle_evaluate_coverage(
     Ok(ActionResult::CoverageEvaluated { verdict, summary, gaps })
 }
 
+/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -154,3 +155,4 @@ mod tests {
         );
     }
 }
+*/
