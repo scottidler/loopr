@@ -173,8 +173,8 @@ pub fn extract_acceptance_criteria(content: &str) -> Vec<String> {
 }
 
 /// Call the LLM and parse the response as a JSON array of ChildEntry.
-fn call_llm_for_children(
-    http_client: &dyn HttpClient,
+async fn call_llm_for_children(
+    http_client: &(dyn HttpClient + Sync),
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<Vec<ChildEntry>> {
@@ -200,7 +200,7 @@ fn call_llm_for_children(
         ("anthropic-version", "2023-06-01"),
     ];
 
-    let response_text = http_client.post(api_url, &headers, &body)?;
+    let response_text = http_client.post(api_url, &headers, &body).await?;
 
     let response: serde_json::Value =
         serde_json::from_str(&response_text).context("Failed to parse LLM API response")?;
@@ -230,8 +230,8 @@ fn call_llm_for_children(
 }
 
 /// Call the LLM for validation and parse result.
-fn call_llm_for_validation(
-    http_client: &dyn HttpClient,
+async fn call_llm_for_validation(
+    http_client: &(dyn HttpClient + Sync),
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<ValidationResult> {
@@ -261,7 +261,7 @@ fn call_llm_for_validation(
         ("anthropic-version", "2023-06-01"),
     ];
 
-    let response_text = http_client.post(api_url, &headers, &body)?;
+    let response_text = http_client.post(api_url, &headers, &body).await?;
     let response: serde_json::Value = serde_json::from_str(&response_text)?;
 
     let text = response["content"]
@@ -281,18 +281,18 @@ fn call_llm_for_validation(
 }
 
 /// Call the LLM for ratification and parse result.
-fn call_llm_for_ratification(
-    http_client: &dyn HttpClient,
+async fn call_llm_for_ratification(
+    http_client: &(dyn HttpClient + Sync),
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<RatifyResult> {
     // Uses the main model for ratification (reasoning task, not structural check)
-    call_llm_for_children_raw(http_client, config, prompt)
-        .and_then(|text| serde_json::from_str(&text).context("Failed to parse ratification response"))
+    let text = call_llm_for_children_raw(http_client, config, prompt).await?;
+    serde_json::from_str(&text).context("Failed to parse ratification response")
 }
 
 /// Raw LLM call that returns text (shared helper).
-fn call_llm_for_children_raw(http_client: &dyn HttpClient, config: &DecomposerConfig, prompt: &str) -> Result<String> {
+async fn call_llm_for_children_raw(http_client: &(dyn HttpClient + Sync), config: &DecomposerConfig, prompt: &str) -> Result<String> {
     let api_key =
         std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
 
@@ -315,7 +315,7 @@ fn call_llm_for_children_raw(http_client: &dyn HttpClient, config: &DecomposerCo
         ("anthropic-version", "2023-06-01"),
     ];
 
-    let response_text = http_client.post(api_url, &headers, &body)?;
+    let response_text = http_client.post(api_url, &headers, &body).await?;
     let response: serde_json::Value = serde_json::from_str(&response_text)?;
 
     let text = response["content"]
@@ -342,12 +342,12 @@ fn call_llm_for_children_raw(http_client: &dyn HttpClient, config: &DecomposerCo
 ///
 /// Uses staging: child files are written to a temp directory first, then
 /// moved to the run directory only if all validation passes.
-fn decompose_into(
+async fn decompose_into(
     parent: &Doc,
     target_kind: DocKind,
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &dyn HttpClient,
+    http_client: &(dyn HttpClient + Sync),
 ) -> Result<Vec<Doc>> {
     info!("decompose: {} {} -> {}s", parent.kind, parent.id, target_kind);
 
@@ -358,7 +358,7 @@ fn decompose_into(
 
     // Build prompt and call LLM
     let prompt = build_decompose_prompt(target_kind, &parent_content)?;
-    let children = match call_llm_for_children(http_client, config, &prompt) {
+    let children = match call_llm_for_children(http_client, config, &prompt).await {
         Ok(c) => c,
         Err(e) => {
             warn!("Decomposition failed, retrying once: {}", e);
@@ -366,14 +366,14 @@ fn decompose_into(
                 "{}\n\n## Previous Attempt Failed\n\n{}\n\nPlease fix the issues and try again.",
                 prompt, e
             );
-            call_llm_for_children(http_client, config, &retry_prompt)?
+            call_llm_for_children(http_client, config, &retry_prompt).await?
         }
     };
 
     // Validate each child
     for child in &children {
         let validate_prompt = build_validate_prompt(target_kind, &child.content);
-        match call_llm_for_validation(http_client, config, &validate_prompt) {
+        match call_llm_for_validation(http_client, config, &validate_prompt).await {
             Ok(result) if !result.valid => {
                 warn!("Validation failed for '{}': {:?}", child.title, result.issues);
                 // Could retry here, but design says one retry at decompose level
@@ -456,14 +456,14 @@ fn decompose_into(
 /// Decompose a single parent Doc into child Docs using the natural child kind.
 ///
 /// Thin wrapper around `decompose_into` that computes the child kind from the parent.
-pub fn decompose(
+pub async fn decompose(
     parent: &Doc,
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &dyn HttpClient,
+    http_client: &(dyn HttpClient + Sync),
 ) -> Result<Vec<Doc>> {
     let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
-    decompose_into(parent, ck, run_dir, config, http_client)
+    decompose_into(parent, ck, run_dir, config, http_client).await
 }
 
 /// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
@@ -473,26 +473,26 @@ pub fn decompose(
 ///
 /// In Brief mode (plan has no contracts), skips Spec and Phase levels
 /// and decomposes Plan directly into Works.
-pub fn decompose_hierarchy(
+pub async fn decompose_hierarchy(
     plan: &Doc,
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &dyn HttpClient,
+    http_client: &(dyn HttpClient + Sync),
     brief: bool,
 ) -> Result<Vec<Doc>> {
     let mut all_docs = Vec::new();
 
     if brief {
         // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
-        let works = decompose_into(plan, DocKind::Work, run_dir, config, http_client)?;
+        let works = decompose_into(plan, DocKind::Work, run_dir, config, http_client).await?;
         all_docs.extend(works);
     } else {
         // Full mode: Plan -> Specs -> Phases -> Works
-        let specs = decompose(plan, run_dir, config, http_client)?;
+        let specs = decompose(plan, run_dir, config, http_client).await?;
         for spec in &specs {
-            let phases = decompose(spec, run_dir, config, http_client)?;
+            let phases = decompose(spec, run_dir, config, http_client).await?;
             for phase in &phases {
-                let works = decompose(phase, run_dir, config, http_client)?;
+                let works = decompose(phase, run_dir, config, http_client).await?;
                 all_docs.extend(works);
             }
             all_docs.extend(phases);
@@ -502,18 +502,18 @@ pub fn decompose_hierarchy(
 
     // Hierarchical ratification (bottom-up)
     // Each ratification is one LLM call: parent + its direct children
-    ratify_hierarchy(plan, &all_docs, run_dir, config, http_client)?;
+    ratify_hierarchy(plan, &all_docs, run_dir, config, http_client).await?;
 
     Ok(all_docs)
 }
 
 /// Bottom-up ratification of the decomposition hierarchy.
-fn ratify_hierarchy(
+async fn ratify_hierarchy(
     plan: &Doc,
     all_docs: &[Doc],
     run_dir: &Path,
     config: &DecomposerConfig,
-    http_client: &dyn HttpClient,
+    http_client: &(dyn HttpClient + Sync),
 ) -> Result<()> {
     // Group docs by parent_id
     let mut children_of: HashMap<&str, Vec<&Doc>> = HashMap::new();
@@ -550,7 +550,7 @@ fn ratify_hierarchy(
         }
 
         let prompt = build_ratify_prompt(&parent_content, &child_pairs);
-        match call_llm_for_ratification(http_client, config, &prompt) {
+        match call_llm_for_ratification(http_client, config, &prompt).await {
             Ok(result) if !result.passed => {
                 warn!(
                     "Ratification failed for parent {}: {:?}",
@@ -719,8 +719,9 @@ mod tests {
         responses: std::sync::Mutex<Vec<String>>,
     }
 
+    #[async_trait::async_trait]
     impl HttpClient for SequenceMockHttp {
-        fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
+        async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
             let mut responses = self.responses.lock().unwrap();
             if responses.is_empty() {
                 bail!("no more mock responses");
@@ -740,8 +741,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_decompose_plan_to_specs() {
+    #[tokio::test]
+    async fn test_decompose_plan_to_specs() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-decompose-test");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
@@ -786,7 +787,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose(&parent, &dir, &config, &mock).unwrap();
+        let result = decompose(&parent, &dir, &config, &mock).await.unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].kind, DocKind::Spec);
         assert_eq!(result[1].kind, DocKind::Spec);
@@ -806,8 +807,8 @@ mod tests {
         unsafe { std::env::remove_var(&env_key) };
     }
 
-    #[test]
-    fn test_decompose_cycle_detection_fails() {
+    #[tokio::test]
+    async fn test_decompose_cycle_detection_fails() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-decompose-cycle");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
@@ -843,15 +844,15 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose(&parent, &dir, &config, &mock);
+        let result = decompose(&parent, &dir, &config, &mock).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cycle"));
 
         unsafe { std::env::remove_var(&env_key) };
     }
 
-    #[test]
-    fn test_decompose_work_extraction() {
+    #[tokio::test]
+    async fn test_decompose_work_extraction() {
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-decompose-work");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
@@ -884,7 +885,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose(&parent, &dir, &config, &mock).unwrap();
+        let result = decompose(&parent, &dir, &config, &mock).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert_eq!(
@@ -895,8 +896,8 @@ mod tests {
         unsafe { std::env::remove_var(&env_key) };
     }
 
-    #[test]
-    fn test_decompose_into_plan_to_works_brief() {
+    #[tokio::test]
+    async fn test_decompose_into_plan_to_works_brief() {
         // Brief mode: decompose_into with DocKind::Work from a Plan parent
         crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-decompose-brief");
@@ -931,7 +932,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock).unwrap();
+        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert!(result[0].id.starts_with("wk-"));
