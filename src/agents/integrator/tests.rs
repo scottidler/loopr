@@ -1,4 +1,3 @@
-/*
 use super::*;
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
@@ -115,8 +114,8 @@ fn test_integrator_with_stores_config(
 
 // --- is_cancelled tests (via AgentContext) ---
 
-#[test]
-fn test_is_cancelled_false() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_is_cancelled_false() {
     let dir = TestDir::new("loopr-intg-canc1");
     let stores = test_stores(&dir);
 
@@ -129,8 +128,8 @@ fn test_is_cancelled_false() {
     assert!(!agent.ctx.is_cancelled());
 }
 
-#[test]
-fn test_is_cancelled_true() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_is_cancelled_true() {
     let dir = TestDir::new("loopr-intg-canc2");
     let stores = test_stores(&dir);
 
@@ -155,8 +154,8 @@ fn test_is_cancelled_true() {
     assert!(agent.ctx.is_cancelled());
 }
 
-#[test]
-fn test_is_cancelled_missing() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_is_cancelled_missing() {
     let dir = TestDir::new("loopr-intg-canc3");
     let stores = test_stores(&dir);
     let agent = test_integrator(&dir, stores.clone(), test_config());
@@ -167,16 +166,16 @@ fn test_is_cancelled_missing() {
 
 // --- Helper method tests ---
 
-#[test]
-fn test_latest_published_tick_id_none() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_latest_published_tick_id_none() {
     let dir = TestDir::new("loopr-intg-latest1");
     let stores = test_stores(&dir);
     let agent = test_integrator(&dir, stores, test_config());
     assert!(agent.latest_published_tick_id().is_none());
 }
 
-#[test]
-fn test_latest_published_tick_id_some() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_latest_published_tick_id_some() {
     let dir = TestDir::new("loopr-intg-latest2");
     let stores = test_stores(&dir);
 
@@ -196,16 +195,16 @@ fn test_latest_published_tick_id_some() {
     assert_eq!(agent.latest_published_tick_id(), Some(tick2_id));
 }
 
-#[test]
-fn test_next_tick_number_empty() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_next_tick_number_empty() {
     let dir = TestDir::new("loopr-intg-next1");
     let stores = test_stores(&dir);
     let agent = test_integrator(&dir, stores, test_config());
     assert_eq!(agent.next_tick_number().unwrap(), 1);
 }
 
-#[test]
-fn test_next_tick_number_with_existing() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_next_tick_number_with_existing() {
     let dir = TestDir::new("loopr-intg-next2");
     let stores = test_stores(&dir);
 
@@ -216,8 +215,8 @@ fn test_next_tick_number_with_existing() {
     assert_eq!(agent.next_tick_number().unwrap(), 6);
 }
 
-#[test]
-fn test_has_tick_in_progress_false() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_has_tick_in_progress_false() {
     let dir = TestDir::new("loopr-intg-tip1");
     let stores = test_stores(&dir);
     let agent = test_integrator(&dir, stores.clone(), test_config());
@@ -229,8 +228,8 @@ fn test_has_tick_in_progress_false() {
     assert!(!agent.has_tick_in_progress().unwrap());
 }
 
-#[test]
-fn test_has_tick_in_progress_true() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_has_tick_in_progress_true() {
     let dir = TestDir::new("loopr-intg-tip2");
     let stores = test_stores(&dir);
 
@@ -243,16 +242,16 @@ fn test_has_tick_in_progress_true() {
 
 // --- recover_stuck_ticks tests ---
 
-#[test]
-fn test_recover_stuck_ticks_none() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_recover_stuck_ticks_none() {
     let dir = TestDir::new("loopr-intg-recov1");
     let stores = test_stores(&dir);
     let agent = test_integrator(&dir, stores, test_config());
     assert_eq!(agent.recover_stuck_ticks().unwrap(), 0);
 }
 
-#[test]
-fn test_recover_stuck_ticks_sealing() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_recover_stuck_ticks_sealing() {
     let dir = TestDir::new("loopr-intg-recov2");
     let stores = test_stores(&dir);
 
@@ -268,8 +267,8 @@ fn test_recover_stuck_ticks_sealing() {
     assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
 }
 
-#[test]
-fn test_recover_stuck_ticks_validating() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_recover_stuck_ticks_validating() {
     let dir = TestDir::new("loopr-intg-recov3");
     let stores = test_stores(&dir);
 
@@ -287,8 +286,8 @@ fn test_recover_stuck_ticks_validating() {
 
 // --- run_cycle tests ---
 
-#[test]
-fn test_cycle_idle_no_bundles() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_idle_no_bundles() {
     let dir = TestDir::new("loopr-intg-cycle1");
     let stores = test_stores(&dir);
     let agent = test_integrator(&dir, stores, test_config());
@@ -296,8 +295,8 @@ fn test_cycle_idle_no_bundles() {
     assert_eq!(result, IntegratorCycleResult::Idle);
 }
 
-#[test]
-fn test_cycle_recovers_open_tick() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_recovers_open_tick() {
     let dir = TestDir::new("loopr-intg-cycle2");
     let stores = test_stores(&dir);
 
@@ -317,8 +316,8 @@ fn test_cycle_recovers_open_tick() {
     assert_eq!(ticks[&tick_id].status(), TickStatus::Failed);
 }
 
-#[test]
-fn test_cycle_recovers_stuck_tick() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_recovers_stuck_tick() {
     let dir = TestDir::new("loopr-intg-cycle3");
     let stores = test_stores(&dir);
 
@@ -331,8 +330,8 @@ fn test_cycle_recovers_stuck_tick() {
     assert_eq!(result, IntegratorCycleResult::Recovered { count: 1 });
 }
 
-#[test]
-fn test_cycle_publishes_tick() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_publishes_tick() {
     let dir = TestDir::new("loopr-intg-cycle4");
     let stores = test_stores(&dir);
 
@@ -353,8 +352,8 @@ fn test_cycle_publishes_tick() {
     assert_eq!(bundles[&bundle_id].status(), BundleStatus::Merged);
 }
 
-#[test]
-fn test_cycle_validation_failure() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_validation_failure() {
     let dir = TestDir::new("loopr-intg-cycle5");
     let stores = test_stores(&dir);
 
@@ -375,8 +374,8 @@ fn test_cycle_validation_failure() {
     assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
 }
 
-#[test]
-fn test_cycle_stale_bundle_rejected() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_stale_bundle_rejected() {
     let dir = TestDir::new("loopr-intg-cycle6");
     let stores = test_stores(&dir);
 
@@ -407,8 +406,8 @@ fn test_cycle_stale_bundle_rejected() {
     assert_eq!(ticks[&tick_id].status(), TickStatus::Published);
 }
 
-#[test]
-fn test_cycle_mixed_stale_and_valid() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_mixed_stale_and_valid() {
     let dir = TestDir::new("loopr-intg-cycle7");
     let stores = test_stores(&dir);
 
@@ -468,8 +467,8 @@ fn test_stores_with_config(dir: &std::path::Path, config: Config) -> Arc<Stores>
 
 // --- has_tick_in_progress: all non-terminal states ---
 
-#[test]
-fn test_has_tick_in_progress_all_states() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_has_tick_in_progress_all_states() {
     let dir = TestDir::new("loopr-intg-tipall");
 
     let stores = test_stores(&dir);
@@ -503,8 +502,8 @@ fn test_has_tick_in_progress_all_states() {
 
 // --- Stale policy tests ---
 
-#[test]
-fn test_stale_policy_replan_at_safe_point() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_stale_policy_replan_at_safe_point() {
     let dir = TestDir::new("loopr-intg-replan");
 
     let mut config = Config {
@@ -549,8 +548,8 @@ fn test_stale_policy_replan_at_safe_point() {
     assert!(found_replan, "expected bundle.stale_replan_needed event");
 }
 
-#[test]
-fn test_stale_rejection_resets_work_to_ready() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_stale_rejection_resets_work_to_ready() {
     let dir = TestDir::new("loopr-intg-stale-reset");
     let stores = test_stores(&dir);
 
@@ -588,8 +587,8 @@ fn test_stale_rejection_resets_work_to_ready() {
     );
 }
 
-#[test]
-fn test_stale_rejection_creates_learning() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_stale_rejection_creates_learning() {
     let dir = TestDir::new("loopr-intg-stale-learn");
     let stores = test_stores(&dir);
 
@@ -626,8 +625,8 @@ fn test_stale_rejection_creates_learning() {
     );
 }
 
-#[test]
-fn test_stale_rejection_handles_terminal_work() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_stale_rejection_handles_terminal_work() {
     let dir = TestDir::new("loopr-intg-stale-term");
     let stores = test_stores(&dir);
 
@@ -660,8 +659,8 @@ fn test_stale_rejection_handles_terminal_work() {
     assert_eq!(works[&wi_id].status(), WorkStatus::Done);
 }
 
-#[test]
-fn test_stale_policy_auto_replay_and_verify() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_stale_policy_auto_replay_and_verify() {
     let dir = TestDir::new("loopr-intg-replay");
 
     let mut config = Config {
@@ -732,8 +731,8 @@ fn test_stale_policy_auto_replay_and_verify() {
 
 // --- recover_stuck_ticks learning creation ---
 
-#[test]
-fn test_recover_stuck_ticks_learning_creation() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_recover_stuck_ticks_learning_creation() {
     let dir = TestDir::new("loopr-intg-recovlearn");
     let stores = test_stores(&dir);
 
@@ -761,8 +760,8 @@ fn test_recover_stuck_ticks_learning_creation() {
 
 // --- Tick creation and sealing error handling ---
 
-#[test]
-fn test_cycle_tick_creation_error_handling() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_tick_creation_error_handling() {
     let dir = TestDir::new("loopr-intg-tcreate");
     let stores = test_stores(&dir);
     let config = IntegratorConfig {
@@ -787,8 +786,8 @@ fn test_cycle_tick_creation_error_handling() {
     }
 }
 
-#[test]
-fn test_cycle_bundle_sealing_error_handling() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_bundle_sealing_error_handling() {
     let dir = TestDir::new("loopr-intg-bseal");
     let stores = test_stores(&dir);
 
@@ -811,8 +810,8 @@ fn test_cycle_bundle_sealing_error_handling() {
 
 // --- Validation with multiple commands ---
 
-#[test]
-fn test_cycle_validation_multi_command_sequence() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_validation_multi_command_sequence() {
     let dir = TestDir::new("loopr-intg-multi");
     let stores = test_stores(&dir);
 
@@ -866,8 +865,8 @@ fn test_cycle_validation_multi_command_sequence() {
 
 // --- Tick publish creates learning on failure ---
 
-#[test]
-fn test_cycle_tick_publish_learning_creation() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cycle_tick_publish_learning_creation() {
     let dir = TestDir::new("loopr-intg-publearn");
     let stores = test_stores(&dir);
 
@@ -895,7 +894,7 @@ fn test_cycle_tick_publish_learning_creation() {
 
 // --- Agent::run() async loop tests ---
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_integrator_cancellation() {
     let dir = TestDir::new("loopr-intg-cancel");
     let stores = test_stores(&dir);
@@ -921,7 +920,7 @@ async fn test_run_integrator_cancellation() {
     assert!(result.is_ok(), "cancelled integrator should return Ok: {:?}", result);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_integrator_timeout() {
     let dir = TestDir::new("loopr-intg-timeout");
     let stores = test_stores(&dir);
@@ -956,35 +955,35 @@ async fn test_run_integrator_timeout() {
 
 // --- run_validation_commands tests ---
 
-#[test]
-fn test_validation_commands_pass() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_validation_commands_pass() {
     let (passed, log) = run_validation_commands(&["true".to_string()]);
     assert!(passed);
     assert!(log.contains("PASSED"));
 }
 
-#[test]
-fn test_validation_commands_fail() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_validation_commands_fail() {
     let (passed, log) = run_validation_commands(&["false".to_string()]);
     assert!(!passed);
     assert!(log.contains("FAILED"));
 }
 
-#[test]
-fn test_validation_commands_empty() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_validation_commands_empty() {
     let (passed, log) = run_validation_commands(&[]);
     assert!(passed);
     assert!(log.is_empty());
 }
 
-#[test]
-fn test_validation_commands_multiple_pass() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_validation_commands_multiple_pass() {
     let (passed, _) = run_validation_commands(&["true".to_string(), "true".to_string()]);
     assert!(passed);
 }
 
-#[test]
-fn test_validation_commands_first_fails() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_validation_commands_first_fails() {
     let (passed, log) = run_validation_commands(&["false".to_string(), "true".to_string()]);
     assert!(!passed);
     assert!(log.contains("FAILED"));
@@ -992,8 +991,8 @@ fn test_validation_commands_first_fails() {
 
 // --- Fix #3: merge_bundle_branches cleanup tests ---
 
-#[test]
-fn test_merge_bundle_branches_success() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_merge_bundle_branches_success() {
     fn git(dir: &Path, args: &[&str]) -> std::process::Output {
         let out = std::process::Command::new("git")
             .args(args)
@@ -1035,8 +1034,8 @@ fn test_merge_bundle_branches_success() {
     assert!(result.is_ok(), "merge should succeed: {:?}", result);
 }
 
-#[test]
-fn test_merge_bundle_branches_failure_cleans_up() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_merge_bundle_branches_failure_cleans_up() {
     fn git(dir: &Path, args: &[&str]) -> std::process::Output {
         let out = std::process::Command::new("git")
             .args(args)
@@ -1094,8 +1093,8 @@ fn test_merge_bundle_branches_failure_cleans_up() {
 
 // --- effective_validation_commands tests ---
 
-#[test]
-fn test_effective_validation_commands_global_only() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_effective_validation_commands_global_only() {
     let dir = TestDir::new("loopr-int-evc-global");
     let stores = test_stores(&dir);
     let global = vec!["echo global".to_string()];
@@ -1103,8 +1102,8 @@ fn test_effective_validation_commands_global_only() {
     assert_eq!(result, vec!["echo global"]);
 }
 
-#[test]
-fn test_effective_validation_commands_with_phase() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_effective_validation_commands_with_phase() {
     use crate::domain::phase::Phase;
 
     let dir = TestDir::new("loopr-int-evc-phase");
@@ -1131,8 +1130,8 @@ fn test_effective_validation_commands_with_phase() {
     assert_eq!(result, vec!["echo global", "echo phase"]);
 }
 
-#[test]
-fn test_effective_validation_commands_deduplicates() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_effective_validation_commands_deduplicates() {
     use crate::domain::phase::Phase;
 
     let dir = TestDir::new("loopr-int-evc-dedup");
@@ -1157,8 +1156,8 @@ fn test_effective_validation_commands_deduplicates() {
     assert_eq!(result, vec!["echo global", "echo phase"]);
 }
 
-#[test]
-fn test_effective_validation_commands_empty_phase() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_effective_validation_commands_empty_phase() {
     use crate::domain::phase::Phase;
 
     let dir = TestDir::new("loopr-int-evc-empty");
@@ -1214,8 +1213,8 @@ fn init_test_git_repo(dir: &std::path::Path) {
         .unwrap();
 }
 
-#[test]
-fn test_audit_git_state_skips_non_git_dir() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_audit_git_state_skips_non_git_dir() {
     let dir = TestDir::new("loopr-intg-audit-nogit");
     let stores = test_stores(&dir);
     // Put a Published tick with no SHA into stores — would be catastrophic if git exists
@@ -1229,8 +1228,8 @@ fn test_audit_git_state_skips_non_git_dir() {
     assert!(!stores.degraded.load(std::sync::atomic::Ordering::Relaxed));
 }
 
-#[test]
-fn test_audit_tick_shas_sets_degraded_on_missing_sha() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_audit_tick_shas_sets_degraded_on_missing_sha() {
     let dir = TestDir::new("loopr-intg-audit-sha");
     init_test_git_repo(&dir);
     let stores = test_stores(&dir);
@@ -1246,8 +1245,8 @@ fn test_audit_tick_shas_sets_degraded_on_missing_sha() {
     assert!(stores.degraded.load(std::sync::atomic::Ordering::Relaxed));
 }
 
-#[test]
-fn test_audit_branches_rejects_bundle_with_missing_branch() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_audit_branches_rejects_bundle_with_missing_branch() {
     let dir = TestDir::new("loopr-intg-audit-branch");
     init_test_git_repo(&dir);
     let stores = test_stores(&dir);
@@ -1273,8 +1272,8 @@ fn test_audit_branches_rejects_bundle_with_missing_branch() {
     );
 }
 
-#[test]
-fn test_run_cycle_returns_idle_when_degraded() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_cycle_returns_idle_when_degraded() {
     let dir = TestDir::new("loopr-intg-degraded");
     init_test_git_repo(&dir);
     let stores = test_stores(&dir);
@@ -1302,5 +1301,3 @@ fn test_run_cycle_returns_idle_when_degraded() {
         "run_cycle should return Idle when degraded"
     );
 }
-
-*/

@@ -1,4 +1,3 @@
-/*
 use super::*;
 use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
@@ -151,8 +150,8 @@ fn test_implementer(
 
 // --- parse_actions tests ---
 
-#[test]
-fn test_parse_actions_direct_json() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_direct_json() {
     let dir = TestDir::new("loopr-impl-parse1");
     let agent_log = test_agent_logger(&dir);
     let json = r#"[{"action": "done", "summary": "All done"}]"#;
@@ -161,8 +160,8 @@ fn test_parse_actions_direct_json() {
     assert!(matches!(actions[0], AgentAction::Done { .. }));
 }
 
-#[test]
-fn test_parse_actions_wrapped_in_code_block() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_wrapped_in_code_block() {
     let dir = TestDir::new("loopr-impl-parse2");
     let agent_log = test_agent_logger(&dir);
     let response = "Here are the actions:\n```json\n[{\"action\": \"done\", \"summary\": \"done\"}]\n```";
@@ -170,8 +169,8 @@ fn test_parse_actions_wrapped_in_code_block() {
     assert_eq!(actions.len(), 1);
 }
 
-#[test]
-fn test_parse_actions_multiple() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_multiple() {
     let dir = TestDir::new("loopr-impl-parse3");
     let agent_log = test_agent_logger(&dir);
     let json = r#"[
@@ -183,16 +182,16 @@ fn test_parse_actions_multiple() {
     assert_eq!(actions.len(), 3);
 }
 
-#[test]
-fn test_parse_actions_invalid() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_invalid() {
     let dir = TestDir::new("loopr-impl-parse4");
     let agent_log = test_agent_logger(&dir);
     let bad = "This is not JSON at all";
     assert!(parse_actions(bad, &agent_log).is_err());
 }
 
-#[test]
-fn test_parse_actions_empty_array() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_empty_array() {
     let dir = TestDir::new("loopr-impl-parse5");
     let agent_log = test_agent_logger(&dir);
     let json = "[]";
@@ -202,20 +201,20 @@ fn test_parse_actions_empty_array() {
 
 // --- strip_markdown_fences tests ---
 
-#[test]
-fn test_strip_markdown_fences_json_block() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_strip_markdown_fences_json_block() {
     let input = "```json\n[]\n```";
     assert_eq!(strip_markdown_fences(input), "[]");
 }
 
-#[test]
-fn test_strip_markdown_fences_bare_input() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_strip_markdown_fences_bare_input() {
     let input = "[]";
     assert_eq!(strip_markdown_fences(input), "[]");
 }
 
-#[test]
-fn test_strip_markdown_fences_with_content() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_strip_markdown_fences_with_content() {
     let input = "```json\n[{\"action\": \"done\", \"summary\": \"ok\"}]\n```";
     assert_eq!(
         strip_markdown_fences(input),
@@ -223,20 +222,20 @@ fn test_strip_markdown_fences_with_content() {
     );
 }
 
-#[test]
-fn test_strip_markdown_fences_no_language_tag() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_strip_markdown_fences_no_language_tag() {
     let input = "```\n[]\n```";
     assert_eq!(strip_markdown_fences(input), "[]");
 }
 
-#[test]
-fn test_strip_markdown_fences_prose_not_fenced() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_strip_markdown_fences_prose_not_fenced() {
     let input = "Here is the result: []";
     assert_eq!(strip_markdown_fences(input), "Here is the result: []");
 }
 
-#[test]
-fn test_parse_actions_fenced_empty_array() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_fenced_empty_array() {
     let dir = TestDir::new("loopr-impl-parse-fenced-empty");
     let agent_log = test_agent_logger(&dir);
     let response = "```json\n[]\n```";
@@ -244,8 +243,8 @@ fn test_parse_actions_fenced_empty_array() {
     assert!(actions.is_empty());
 }
 
-#[test]
-fn test_parse_actions_fenced_non_empty_array() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_fenced_non_empty_array() {
     let dir = TestDir::new("loopr-impl-parse-fenced-nonempty");
     let agent_log = test_agent_logger(&dir);
     let response = "```json\n[{\"action\": \"done\", \"summary\": \"All done\"}]\n```";
@@ -254,8 +253,8 @@ fn test_parse_actions_fenced_non_empty_array() {
     assert!(matches!(actions[0], AgentAction::Done { .. }));
 }
 
-#[test]
-fn test_parse_actions_prose_then_fenced_empty_array() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_prose_then_fenced_empty_array() {
     let dir = TestDir::new("loopr-impl-parse-prose-fenced");
     let agent_log = test_agent_logger(&dir);
     let response = "Nothing to do right now. The workers are handling it.\n\n```json\n[]\n```";
@@ -265,8 +264,8 @@ fn test_parse_actions_prose_then_fenced_empty_array() {
 
 // --- context builder integration tests ---
 
-#[test]
-fn test_context_builder_for_implementer() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_context_builder_for_implementer() {
     let dir = TestDir::new("loopr-impl-ctx");
     let stores = setup_stores(&dir);
     let tool_runner = ToolRunner::new(&[ToolEntry {
@@ -295,8 +294,8 @@ fn test_context_builder_for_implementer() {
     assert!(assembled.system_prompt.contains("Implementer agent"));
 }
 
-#[test]
-fn test_context_builder_missing_work() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_context_builder_missing_work() {
     let dir = TestDir::new("loopr-impl-miss");
     let stores = setup_stores(&dir);
 
@@ -307,7 +306,7 @@ fn test_context_builder_missing_work() {
 
 // --- run_iteration tests ---
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_done() {
     let dir = TestDir::new("loopr-impl-iter");
     let stores = setup_stores(&dir);
@@ -319,7 +318,7 @@ async fn test_run_iteration_done() {
     assert!(matches!(outcome, IterationOutcome::Done(ref s) if s == "All done"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_need_help() {
     let dir = TestDir::new("loopr-impl-help");
     let stores = setup_stores(&dir);
@@ -331,7 +330,7 @@ async fn test_run_iteration_need_help() {
     assert!(matches!(outcome, IterationOutcome::NeedHelp(ref r) if r == "Ambiguous spec"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_continue_with_actions() {
     let dir = TestDir::new("loopr-impl-cont");
     let stores = setup_stores(&dir);
@@ -350,7 +349,7 @@ async fn test_run_iteration_continue_with_actions() {
     assert!(dir.join("test.txt").exists());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_llm_failure() {
     let dir = TestDir::new("loopr-impl-fail");
     let stores = setup_stores(&dir);
@@ -362,7 +361,7 @@ async fn test_run_iteration_llm_failure() {
     assert!(result.is_err());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_bad_response() {
     let dir = TestDir::new("loopr-impl-bad");
     let stores = setup_stores(&dir);
@@ -374,7 +373,7 @@ async fn test_run_iteration_bad_response() {
     assert!(result.is_err());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_empty_actions() {
     let dir = TestDir::new("loopr-impl-empty");
     let stores = setup_stores(&dir);
@@ -389,7 +388,7 @@ async fn test_run_iteration_empty_actions() {
 
 // --- run_implementer tests ---
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_implementer_completes_on_done() {
     let dir = TestDir::new("loopr-impl-run");
     let stores = setup_stores(&dir);
@@ -402,7 +401,7 @@ async fn test_run_implementer_completes_on_done() {
     assert_eq!(agent.ctx.session.iteration, 1);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_implementer_max_iterations() {
     let dir = TestDir::new("loopr-impl-max");
     let stores = setup_stores(&dir);
@@ -421,7 +420,7 @@ async fn test_run_implementer_max_iterations() {
     assert_eq!(agent.ctx.session.iteration, 3);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_implementer_need_help_stops() {
     let dir = TestDir::new("loopr-impl-helpstop");
     let stores = setup_stores(&dir);
@@ -436,8 +435,8 @@ async fn test_run_implementer_need_help_stops() {
 
 // --- system prompt tests ---
 
-#[test]
-fn test_system_prompt_contains_key_instructions() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_system_prompt_contains_key_instructions() {
     crate::prompts::init_defaults();
     let prompt = &crate::prompts::store().implementer;
     assert!(prompt.contains("Implementer agent"));
@@ -450,8 +449,8 @@ fn test_system_prompt_contains_key_instructions() {
 
 // --- staleness cascade tests ---
 
-#[test]
-fn test_drain_tick_published_empty() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_empty() {
     let dir = TestDir::new("loopr-impl-drain1");
     let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
@@ -460,8 +459,8 @@ fn test_drain_tick_published_empty() {
     assert!(result.is_none());
 }
 
-#[test]
-fn test_drain_tick_published_finds_tick() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_finds_tick() {
     let dir = TestDir::new("loopr-impl-drain2");
     let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
@@ -470,8 +469,8 @@ fn test_drain_tick_published_finds_tick() {
     assert_eq!(result, Some("tick-42".to_string()));
 }
 
-#[test]
-fn test_drain_tick_published_returns_latest() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_returns_latest() {
     let dir = TestDir::new("loopr-impl-drain3");
     let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
@@ -482,8 +481,8 @@ fn test_drain_tick_published_returns_latest() {
     assert_eq!(result, Some("tick-3".to_string()));
 }
 
-#[test]
-fn test_drain_tick_published_ignores_other_events() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_ignores_other_events() {
     let dir = TestDir::new("loopr-impl-drain4");
     let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
@@ -499,8 +498,8 @@ fn test_drain_tick_published_ignores_other_events() {
     assert!(result.is_none());
 }
 
-#[test]
-fn test_drain_tick_published_mixed_events() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_mixed_events() {
     let dir = TestDir::new("loopr-impl-drain5");
     let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
@@ -511,8 +510,8 @@ fn test_drain_tick_published_mixed_events() {
     assert_eq!(result, Some("tick-5".to_string()));
 }
 
-#[test]
-fn test_context_builder_with_staleness() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_context_builder_with_staleness() {
     let dir = TestDir::new("loopr-impl-stale2");
     let stores = setup_stores(&dir);
     let wi_id = get_work_id(&stores);
@@ -528,7 +527,7 @@ fn test_context_builder_with_staleness() {
     assert!(assembled.user_message.contains("tick-99"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_with_staleness_note() {
     let dir = TestDir::new("loopr-impl-stale");
     let stores = setup_stores(&dir);
@@ -541,7 +540,7 @@ async fn test_run_iteration_with_staleness_note() {
     assert!(matches!(outcome, IterationOutcome::Done(_)));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_implementer_detects_staleness() {
     let dir = TestDir::new("loopr-impl-staleness");
     let stores = setup_stores(&dir);
@@ -603,7 +602,7 @@ async fn test_run_implementer_detects_staleness() {
     assert!(result.is_ok(), "Expected success, got: {:?}", result);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_action_results_accumulate() {
     let dir = TestDir::new("loopr-impl-accum");
     let stores = setup_stores(&dir);
@@ -630,8 +629,8 @@ async fn test_action_results_accumulate() {
     }
 }
 
-#[test]
-fn test_parse_actions_skips_malformed_in_fallback() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_skips_malformed_in_fallback() {
     let dir = TestDir::new("loopr-impl-parse6");
     let agent_log = test_agent_logger(&dir);
     // Array with one valid and one malformed action — fallback should skip the bad one
@@ -644,8 +643,8 @@ fn test_parse_actions_skips_malformed_in_fallback() {
     assert!(matches!(actions[0], AgentAction::Done { .. }));
 }
 
-#[test]
-fn test_parse_actions_normalizes_type_to_action() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_normalizes_type_to_action() {
     let dir = TestDir::new("loopr-impl-parse7");
     let agent_log = test_agent_logger(&dir);
     // LLMs sometimes use "type" instead of "action" as the discriminant key
@@ -655,8 +654,8 @@ fn test_parse_actions_normalizes_type_to_action() {
     assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
 }
 
-#[test]
-fn test_parse_actions_normalizes_type_in_prose() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_parse_actions_normalizes_type_in_prose() {
     let dir = TestDir::new("loopr-impl-parse8");
     let agent_log = test_agent_logger(&dir);
     let response = r#"I'll read the file first.
@@ -669,8 +668,8 @@ fn test_parse_actions_normalizes_type_in_prose() {
     assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
 }
 
-#[test]
-fn test_build_implementer_summary_empty_locks_and_siblings() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_implementer_summary_empty_locks_and_siblings() {
     let dir = TestDir::new("loopr-impl-emptysummary");
     let stores = setup_stores(&dir);
     let wi_id = get_work_id(&stores);
@@ -681,7 +680,7 @@ fn test_build_implementer_summary_empty_locks_and_siblings() {
     assert!(summary.is_empty(), "expected empty summary, got: {}", summary);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_iteration_done_stops_remaining_actions() {
     // When a Done action appears mid-list, subsequent actions should not execute
     let dir = TestDir::new("loopr-impl-donestop");
@@ -703,7 +702,7 @@ async fn test_run_iteration_done_stops_remaining_actions() {
     assert!(!dir.join("should_not_exist.txt").exists());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_action_error_breaks_batch_before_done() {
     // When an action fails with ActionError, the subsequent done must NOT fire.
     // The error should feed back via IterationOutcome::Continue.
@@ -729,8 +728,8 @@ async fn test_action_error_breaks_batch_before_done() {
     );
 }
 
-#[test]
-fn test_drain_tick_published_closed_channel() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_closed_channel() {
     let dir = TestDir::new("loopr-impl-drain6");
     let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
@@ -742,8 +741,8 @@ fn test_drain_tick_published_closed_channel() {
     assert_eq!(result, Some("tick-closed".to_string()));
 }
 
-#[test]
-fn test_drain_tick_published_lagged_channel() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_tick_published_lagged_channel() {
     let dir = TestDir::new("loopr-impl-drain7");
     let agent_log = test_agent_logger(&dir);
     // Create a very small buffer so sending more messages than capacity causes lag
@@ -758,8 +757,8 @@ fn test_drain_tick_published_lagged_channel() {
     assert_eq!(result, Some("tick-lagged".to_string()));
 }
 
-#[test]
-fn test_format_action_summary_truncated_tool_output() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_format_action_summary_truncated_tool_output() {
     use crate::tools::ToolResult;
 
     // Create stdout that exceeds MAX_SUMMARY_CONTENT (4000 chars)
@@ -783,7 +782,7 @@ fn test_format_action_summary_truncated_tool_output() {
     assert!(summary.len() < long_output.len());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_run_implementer_session_iteration_persisted() {
     let dir = TestDir::new("loopr-impl-persist");
     let stores = setup_stores(&dir);
@@ -830,7 +829,7 @@ async fn test_run_implementer_session_iteration_persisted() {
     assert_eq!(stored.iteration, 2, "Stored iteration should be 2");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_implementer_context_includes_goal() {
     use crate::domain::coordinator_goal::CoordinatorGoal;
     use std::sync::Mutex as StdMutex2;
@@ -878,7 +877,7 @@ async fn test_implementer_context_includes_goal() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_parse_failure_recovery_via_self_correction() {
     // First call returns prose (parse failure), second call returns valid JSON.
     // With self-correction, the parse failure is corrected within the same iteration
@@ -944,8 +943,8 @@ async fn test_parse_failure_recovery_via_self_correction() {
     );
 }
 
-#[test]
-fn test_build_implementer_summary_with_locks_and_siblings() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_implementer_summary_with_locks_and_siblings() {
     use crate::domain::lock::{Lock, LockStatus};
     let dir = TestDir::new("loopr-impl-fullsummary");
     let stores = setup_stores(&dir);
@@ -1005,7 +1004,7 @@ impl LlmClient for RecordingLlm {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_budget_exhaustion_prompt_injected_at_penultimate_iteration() {
     let dir = TestDir::new("loopr-impl-budget");
     let stores = setup_stores(&dir);
@@ -1034,7 +1033,7 @@ async fn test_budget_exhaustion_prompt_injected_at_penultimate_iteration() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_force_propose_claims_content() {
     // Verify the force-propose uses the expected claims text
     let dir = TestDir::new("loopr-impl-forceclaims");
@@ -1082,7 +1081,7 @@ async fn test_force_propose_claims_content() {
     let _ = work_resp;
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_has_proposed_true_skips_force_propose() {
     // If the LLM proposes a bundle within the loop, force-propose should not trigger
     let dir = TestDir::new("loopr-impl-noforceprop");
@@ -1121,23 +1120,23 @@ async fn test_has_proposed_true_skips_force_propose() {
 
 // --- is_correctable_error tests ---
 
-#[test]
-fn test_is_correctable_error_schema_errors() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_is_correctable_error_schema_errors() {
     assert!(is_correctable_error("missing field `summary`"));
     assert!(is_correctable_error("unknown field `files`"));
     assert!(is_correctable_error("invalid type: found object, expected array"));
     assert!(is_correctable_error("expected array of actions"));
 }
 
-#[test]
-fn test_is_correctable_error_path_errors() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_is_correctable_error_path_errors() {
     assert!(is_correctable_error("path escapes sandbox: ../../../etc/passwd"));
     assert!(is_correctable_error("unknown tool: cargo_test"));
     assert!(is_correctable_error("path traversal detected"));
 }
 
-#[test]
-fn test_is_correctable_error_non_correctable() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_is_correctable_error_non_correctable() {
     assert!(!is_correctable_error("cargo test failed with exit code 1"));
     assert!(!is_correctable_error("compilation error: expected `;`"));
     assert!(!is_correctable_error("network error: connection refused"));
@@ -1171,7 +1170,7 @@ impl LlmClient for SequenceLlm {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_self_correction_parse_failure_then_success() {
     // First response is malformed, second is valid JSON.
     // Self-correction loop should re-prompt and succeed within the same iteration.
@@ -1193,7 +1192,7 @@ async fn test_self_correction_parse_failure_then_success() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_self_correction_multiple_retries_then_success() {
     // Three malformed responses, then valid. max_requeries=3 means 3 retries allowed.
     let dir = TestDir::new("loopr-impl-selfcorrect2");
@@ -1216,7 +1215,7 @@ async fn test_self_correction_multiple_retries_then_success() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_self_correction_max_requeries_exceeded() {
     // All responses are malformed. After max_requeries retries, should return Err.
     let dir = TestDir::new("loopr-impl-selfcorrect3");
@@ -1236,7 +1235,7 @@ async fn test_self_correction_max_requeries_exceeded() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_self_correction_disabled_when_max_requeries_zero() {
     // max_requeries=0 means no correction attempts — first parse failure returns Err immediately.
     let dir = TestDir::new("loopr-impl-selfcorrect4");
@@ -1254,7 +1253,7 @@ async fn test_self_correction_disabled_when_max_requeries_zero() {
     assert!(result.is_err(), "expected immediate error with max_requeries=0");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_self_correction_no_overhead_on_valid_response() {
     // Valid response on first try — no correction loop, no extra calls.
     let dir = TestDir::new("loopr-impl-selfcorrect5");
@@ -1275,7 +1274,7 @@ async fn test_self_correction_no_overhead_on_valid_response() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_self_correction_integrates_with_run_loop() {
     // Self-correction within run_iteration should not count as a separate iteration.
     // First iteration: malformed → corrected. Second iteration: done.
@@ -1320,7 +1319,7 @@ async fn test_self_correction_integrates_with_run_loop() {
 
 // --- Tool error correction tests (Phase 2) ---
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_tool_error_correction_path_escapes() {
     // WriteFile with path traversal → correctable error → LLM re-prompt → corrected action
     let dir = TestDir::new("loopr-impl-toolcorr1");
@@ -1343,7 +1342,7 @@ async fn test_tool_error_correction_path_escapes() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_tool_error_correction_non_correctable_falls_through() {
     // Non-correctable errors (like test failures) should NOT trigger re-prompt.
     // They go to the lifeguard path instead.
@@ -1368,7 +1367,7 @@ async fn test_tool_error_correction_non_correctable_falls_through() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_tool_error_correction_budget_shared_with_parse() {
     // If parse corrections used some budget, tool corrections get the remainder.
     // max_requeries=1: use 1 for parse correction → 0 left for tool correction
@@ -1396,7 +1395,7 @@ async fn test_tool_error_correction_budget_shared_with_parse() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_tool_error_correction_parse_failure_on_corrected_response() {
     // Tool error triggers correction, but the corrected response is also malformed.
     // Should fall back to ActionError for the original error.
@@ -1423,5 +1422,3 @@ async fn test_tool_error_correction_parse_failure_on_corrected_response() {
         );
     }
 }
-
-*/
