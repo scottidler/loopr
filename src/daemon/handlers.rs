@@ -58,6 +58,17 @@ macro_rules! try_handler {
     }};
 }
 
+/// Async variant of try_handler! for handlers that contain .await calls.
+macro_rules! try_async_handler {
+    ($req_id:expr, $body:expr) => {{
+        let __result: eyre::Result<DaemonResponse> = async { $body }.await;
+        match __result {
+            Ok(resp) => resp,
+            Err(e) => DaemonResponse::err($req_id, RpcError::internal(&e.to_string())),
+        }
+    }};
+}
+
 /// Returns the configured max_pool for a given agent type.
 fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
     match agent_type {

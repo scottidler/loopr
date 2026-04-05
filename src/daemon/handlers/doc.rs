@@ -37,7 +37,7 @@ use crate::domain::plan::{Plan, PlanStatus};
 use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::work::{Work, WorkStatus};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
-use crate::validator::client::{LlmClient, UreqClient};
+use crate::validator::client::{LlmClient, ReqwestClient};
 use crate::worktree::manager::WorktreeManager;
 
 use super::common::persist_doc;
@@ -49,14 +49,14 @@ use super::common::persist_doc;
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
-pub(super) fn handle_doc_accept(
+pub(super) async fn handle_doc_accept(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    try_handler!(req.id, {
+    try_async_handler!(req.id, {
         debug!(
             "handle_doc_accept(markdown_len={:?})",
             req.params.get("markdown").and_then(|v| v.as_str()).map(|s| s.len())
@@ -87,6 +87,7 @@ pub(super) fn handle_doc_accept(
             markdown,
             skip_decompose,
         )
+        .await
     })
 }
 
@@ -97,14 +98,14 @@ pub(super) fn handle_doc_accept(
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
-pub(super) fn handle_doc_inject(
+pub(super) async fn handle_doc_inject(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    try_handler!(req.id, {
+    try_async_handler!(req.id, {
         debug!(
             "handle_doc_inject(path={:?})",
             req.params.get("path").and_then(|v| v.as_str())
@@ -153,11 +154,12 @@ pub(super) fn handle_doc_inject(
             markdown,
             skip_decompose,
         )
+        .await
     })
 }
 
 /// Shared entry pipeline: write plan.md, create Doc, optionally decompose, start Coordinator.
-pub(super) fn accept_plan_markdown(
+pub(super) async fn accept_plan_markdown(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
@@ -192,12 +194,13 @@ pub(super) fn accept_plan_markdown(
         child_count = 0;
     } else {
         let dc = &stores.config.decomposer;
-        let client = UreqClient;
+        let client = ReqwestClient::new();
 
-        let brief = classify_brief(stores, &markdown);
+        let brief = classify_brief(stores, &markdown).await;
         info!("doc entry: starting decomposition (brief={})", brief);
 
         let child_docs = decompose_hierarchy(&plan_doc, &run_dir, dc, &client, brief)
+            .await
             .map_err(|e| eyre!("Decomposition failed: {}", e))?;
 
         child_count = child_docs.len();
@@ -254,23 +257,17 @@ pub(super) fn accept_plan_markdown(
         stores.write_coordinator_states()?.insert(cs_id, coord_state);
     }
 
-    // Start the Coordinator agent (best-effort; no-op if no Tokio runtime in tests)
-    let (coordinator_session_id, coordinator_already_running) = if tokio::runtime::Handle::try_current().is_ok() {
-        let start_req = DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
-        let start_resp = super::dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
-        let already_running = start_resp.is_error();
-        let session_id = start_resp
-            .result
-            .as_ref()
-            .and_then(|r| r.get("session_id"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        (session_id, already_running)
-    } else {
-        debug!("No Tokio runtime available; Coordinator agent not auto-started");
-        (String::new(), false)
-    };
+    // Start the Coordinator agent
+    let start_req = DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
+    let start_resp = super::dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req);
+    let coordinator_already_running = start_resp.is_error();
+    let coordinator_session_id = start_resp
+        .result
+        .as_ref()
+        .and_then(|r| r.get("session_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let _ = event_tx.send(DaemonEvent::new(
         "doc.plan_accepted",
@@ -452,7 +449,7 @@ pub(super) fn extract_plan_title(markdown: &str) -> String {
 ///
 /// Uses the tier-gate config when enabled. Defaults to Full (returns false) on any error.
 /// Returns true for Brief, false for Full.
-fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
+async fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
     let tg = &stores.config.tier_gate;
     if !tg.enabled {
         return false;
@@ -466,13 +463,13 @@ fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
         max_tokens: tg.max_tokens,
         temperature: tg.temperature,
     };
-    let client = LlmClient::with_ureq(tier_config);
+    let client = LlmClient::with_reqwest(tier_config);
     let prompt_template = crate::prompts::store().tier_gate.clone();
     if prompt_template.is_empty() {
         return false;
     }
     let prompt = format!("{}\n{}", prompt_template, plan_content);
-    match client.call(&prompt) {
+    match client.call(&prompt).await {
         Ok(response) => response.trim().to_lowercase() == "brief",
         Err(e) => {
             log::warn!("Tier classification failed, defaulting to Full: {}", e);
@@ -516,30 +513,30 @@ mod tests {
 
     // --- doc.accept handler ---
 
-    #[test]
-    fn test_doc_accept_missing_markdown() {
+    #[tokio::test]
+    async fn test_doc_accept_missing_markdown() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.accept", json!({}));
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("markdown"));
     }
 
-    #[test]
-    fn test_doc_accept_empty_markdown() {
+    #[tokio::test]
+    async fn test_doc_accept_empty_markdown() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": "   " }));
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("markdown"));
     }
 
-    #[test]
-    fn test_doc_accept_skip_decompose_creates_doc() {
+    #[tokio::test]
+    async fn test_doc_accept_skip_decompose_creates_doc() {
         let dir = TestDir::new("doc-accept-test");
         let mut stores = crate::daemon::context::Stores::new();
         stores.config.project.repo_path = dir.to_path_buf();
@@ -549,7 +546,7 @@ mod tests {
 
         let markdown = "# Auth Refactor Plan\n\n## Summary\n\nRefactor the auth module.";
         let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": markdown, "skip_decompose": true }));
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
 
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
         let result = resp.result.unwrap();
@@ -571,8 +568,8 @@ mod tests {
         assert!(content.contains("Auth Refactor Plan"));
     }
 
-    #[test]
-    fn test_doc_accept_creates_goal_and_state() {
+    #[tokio::test]
+    async fn test_doc_accept_creates_goal_and_state() {
         let dir = TestDir::new("doc-accept-goal-test");
         let mut stores = crate::daemon::context::Stores::new();
         stores.config.project.repo_path = dir.to_path_buf();
@@ -585,7 +582,7 @@ mod tests {
             "doc.accept",
             json!({ "markdown": "# Test Plan\n\n## Summary\n\nDo a thing.", "skip_decompose": true }),
         );
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
 
         // CoordinatorGoal created
@@ -600,30 +597,30 @@ mod tests {
 
     // --- doc.inject handler ---
 
-    #[test]
-    fn test_doc_inject_missing_path() {
+    #[tokio::test]
+    async fn test_doc_inject_missing_path() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.inject", json!({}));
-        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("path"));
     }
 
-    #[test]
-    fn test_doc_inject_nonexistent_file() {
+    #[tokio::test]
+    async fn test_doc_inject_nonexistent_file() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.inject", json!({ "path": "/nonexistent/plan.md" }));
-        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("not found"));
     }
 
-    #[test]
-    fn test_doc_inject_from_file_skip_decompose() {
+    #[tokio::test]
+    async fn test_doc_inject_from_file_skip_decompose() {
         let dir = TestDir::new("doc-inject-test");
         let plan_path = dir.join("my-plan.md");
         let content = "# Feature Implementation\n\n## Summary\n\nImplement the feature.";
@@ -643,7 +640,7 @@ mod tests {
                 "skip_decompose": true
             }),
         );
-        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
 
         let result = resp.result.unwrap();
