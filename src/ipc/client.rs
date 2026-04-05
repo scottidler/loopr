@@ -134,14 +134,22 @@ pub enum ClientError {
     Disconnected,
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse};
     use crate::ipc::server::{IpcServer, handle_client};
+    use futures::future::BoxFuture;
     use serde_json::json;
     use std::path::PathBuf;
+
+    fn sync_h<F>(f: F) -> impl Fn(DaemonRequest) -> BoxFuture<'static, DaemonResponse> + Send + 'static
+    where
+        F: Fn(DaemonRequest) -> DaemonResponse + Send + 'static,
+    {
+        move |req| Box::pin(std::future::ready(f(req))) as BoxFuture<'static, DaemonResponse>
+    }
 
     fn temp_socket_path() -> PathBuf {
         let dir = std::env::temp_dir().join("loopr-test");
@@ -164,7 +172,7 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    |req| DaemonResponse::ok(req.id, json!({"echo": req.method})),
+                    sync_h(|req| DaemonResponse::ok(req.id, json!({"echo": req.method}))),
                     event_rx,
                 )
                 .await;
@@ -246,11 +254,11 @@ mod tests {
                 // Use a handler that triggers an event broadcast
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         // Broadcast an event before responding
                         let _ = tx_clone.send(DaemonEvent::record_created("plan", "p1"));
                         DaemonResponse::ok(req.id, json!({"created": true}))
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -287,7 +295,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
                 let event_rx = event_tx.subscribe();
-                handle_client(stream, |req| DaemonResponse::ok(req.id, json!(null)), event_rx).await;
+                handle_client(stream, sync_h(|req| DaemonResponse::ok(req.id, json!(null))), event_rx).await;
             }
             server.cleanup();
         });
@@ -385,4 +393,3 @@ mod tests {
         let _ = server_handle.await;
     }
 }
-*/

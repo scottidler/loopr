@@ -147,7 +147,6 @@ pub fn event_collection(event: &DaemonEvent) -> Option<&str> {
     }
 }
 
-/*
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -156,6 +155,15 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::ipc::protocol::{DaemonRequest, DaemonResponse};
+    use futures::future::BoxFuture;
+
+    fn sync_h<F>(f: F) -> impl Fn(DaemonRequest) -> BoxFuture<'static, DaemonResponse> + Send + 'static
+    where
+        F: Fn(DaemonRequest) -> DaemonResponse + Send + 'static,
+    {
+        move |req| Box::pin(std::future::ready(f(req))) as BoxFuture<'static, DaemonResponse>
+    }
 
     /// Build a mock handshake response that passes version checking.
     fn mock_handshake(req: &crate::ipc::protocol::DaemonRequest) -> crate::ipc::protocol::DaemonResponse {
@@ -199,7 +207,7 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method != "system.handshake" {
                             captured_clone
                                 .lock()
@@ -207,7 +215,7 @@ mod tests {
                                 .push((req.method.clone(), req.params.clone()));
                         }
                         DaemonResponse::ok(req.id, serde_json::json!({"ok": true}))
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -248,7 +256,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
                 let event_rx = event_tx.subscribe();
-                handle_client(stream, |req| mock_handshake(&req), event_rx).await;
+                handle_client(stream, sync_h(|req| mock_handshake(&req)), event_rx).await;
             }
             server.cleanup();
         });
@@ -285,7 +293,7 @@ mod tests {
         let server_handle = tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
                 let event_rx = event_tx.subscribe();
-                handle_client(stream, |req| mock_handshake(&req), event_rx).await;
+                handle_client(stream, sync_h(|req| mock_handshake(&req)), event_rx).await;
             }
             server.cleanup();
         });
@@ -385,7 +393,7 @@ mod tests {
                 let plans = plans_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else if req.method == "plan.list" {
@@ -393,7 +401,7 @@ mod tests {
                         } else {
                             DaemonResponse::ok(req.id, serde_json::json!(null))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -440,7 +448,7 @@ mod tests {
                 let wis = wis_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else if req.method == "work.list" {
@@ -448,7 +456,7 @@ mod tests {
                         } else {
                             DaemonResponse::ok(req.id, serde_json::json!(null))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -491,13 +499,13 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, serde_json::json!([]))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -542,7 +550,7 @@ mod tests {
                 let bundles = bundles_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else if req.method == "bundle.list" {
@@ -550,7 +558,7 @@ mod tests {
                         } else {
                             DaemonResponse::ok(req.id, serde_json::json!(null))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -595,7 +603,7 @@ mod tests {
                 let ticks = ticks_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else if req.method == "tick.list" {
@@ -603,7 +611,7 @@ mod tests {
                         } else {
                             DaemonResponse::ok(req.id, serde_json::json!(null))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -644,14 +652,14 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             // Return a string instead of an array -- will fail deserialization
                             DaemonResponse::ok(req.id, serde_json::json!("not an array"))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -709,13 +717,13 @@ mod tests {
                 let specs = specs_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, specs.clone())
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -760,13 +768,13 @@ mod tests {
                 let phases = phases_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, phases.clone())
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -815,13 +823,13 @@ mod tests {
                 let learnings = learnings_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, learnings.clone())
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -865,13 +873,13 @@ mod tests {
                 let locks = locks_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, locks.clone())
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -916,13 +924,13 @@ mod tests {
                 let sessions = sessions_json.clone();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             DaemonResponse::ok(req.id, sessions.clone())
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -962,14 +970,14 @@ mod tests {
                 let event_rx = event_tx.subscribe();
                 handle_client(
                     stream,
-                    move |req| {
+                    sync_h(move |req| {
                         if req.method == "system.handshake" {
                             mock_handshake(&req)
                         } else {
                             // Return a non-array value that won't deserialize as Vec<T>
                             DaemonResponse::ok(req.id, serde_json::json!({"not": "an array"}))
                         }
-                    },
+                    }),
                     event_rx,
                 )
                 .await;
@@ -1115,4 +1123,3 @@ mod tests {
         let _ = server_handle.await;
     }
 }
-*/
