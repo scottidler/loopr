@@ -407,7 +407,7 @@ async fn decompose_into<H: HttpClient + Sync>(
         let filename = write_doc_file(&staging_dir, target_kind, &child.title, &child.content, &taken)?;
         taken.push(filename.clone());
 
-        let mut doc = Doc::new(target_kind, Some(parent.id.clone()), filename);
+        let mut doc = Doc::new(target_kind, Some(parent.id.clone()), child.title.clone(), filename);
 
         doc.acceptance_criteria = if child.acceptance_criteria.is_empty() && target_kind == DocKind::Work {
             extract_acceptance_criteria(&child.content)
@@ -758,7 +758,7 @@ mod tests {
         )
         .unwrap();
 
-        let parent = Doc::new(DocKind::Plan, None, "plan-test.md".to_string());
+        let parent = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
 
         let children_json = serde_json::json!([
             {
@@ -818,7 +818,7 @@ mod tests {
         unsafe { std::env::set_var(&env_key, "test-key") };
 
         std::fs::write(dir.join("plan-test.md"), "# Plan\n\nTest").unwrap();
-        let parent = Doc::new(DocKind::Plan, None, "plan-test.md".to_string());
+        let parent = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
 
         // Circular dependencies
         let children_json = serde_json::json!([
@@ -865,6 +865,7 @@ mod tests {
         let parent = Doc::new(
             DocKind::Phase,
             Some("sp-abc12".to_string()),
+            "Test Phase".to_string(),
             "phase-test.md".to_string(),
         );
 
@@ -913,7 +914,12 @@ mod tests {
         )
         .unwrap();
 
-        let parent = Doc::new(DocKind::Plan, None, "plan-brief.md".to_string());
+        let parent = Doc::new(
+            DocKind::Plan,
+            None,
+            "Brief Plan".to_string(),
+            "plan-brief.md".to_string(),
+        );
 
         let children_json = serde_json::json!([
             {

@@ -66,6 +66,10 @@ pub struct Doc {
     pub id: String,
     pub kind: DocKind,
     pub parent_id: Option<String>,
+    /// Human-readable title from the LLM output (e.g. "Core Implementation").
+    /// Stored on creation so it is available without re-parsing the .md file.
+    #[serde(default)]
+    pub title: String,
     /// Filename relative to the run directory (e.g. `plan-auth-refactor.md`).
     pub markdown: String,
     /// IDs of sibling docs that must be complete before this one can proceed.
@@ -77,12 +81,13 @@ pub struct Doc {
 }
 
 impl Doc {
-    pub fn new(kind: DocKind, parent_id: Option<String>, markdown: String) -> Self {
+    pub fn new(kind: DocKind, parent_id: Option<String>, title: String, markdown: String) -> Self {
         let now = id::now_millis();
         Self {
             id: id::generate_id(kind.id_prefix()),
             kind,
             parent_id,
+            title,
             markdown,
             dependencies: Vec::new(),
             acceptance_criteria: Vec::new(),
@@ -126,26 +131,26 @@ pub struct PhaseDoc(pub Doc);
 pub struct WorkDoc(pub Doc);
 
 impl PlanDoc {
-    pub fn new(markdown: String) -> Self {
-        Self(Doc::new(DocKind::Plan, None, markdown))
+    pub fn new(title: String, markdown: String) -> Self {
+        Self(Doc::new(DocKind::Plan, None, title, markdown))
     }
 }
 
 impl SpecDoc {
-    pub fn new(parent_id: String, markdown: String) -> Self {
-        Self(Doc::new(DocKind::Spec, Some(parent_id), markdown))
+    pub fn new(parent_id: String, title: String, markdown: String) -> Self {
+        Self(Doc::new(DocKind::Spec, Some(parent_id), title, markdown))
     }
 }
 
 impl PhaseDoc {
-    pub fn new(parent_id: String, markdown: String) -> Self {
-        Self(Doc::new(DocKind::Phase, Some(parent_id), markdown))
+    pub fn new(parent_id: String, title: String, markdown: String) -> Self {
+        Self(Doc::new(DocKind::Phase, Some(parent_id), title, markdown))
     }
 }
 
 impl WorkDoc {
-    pub fn new(parent_id: String, markdown: String) -> Self {
-        Self(Doc::new(DocKind::Work, Some(parent_id), markdown))
+    pub fn new(parent_id: String, title: String, markdown: String) -> Self {
+        Self(Doc::new(DocKind::Work, Some(parent_id), title, markdown))
     }
 }
 
@@ -268,10 +273,11 @@ mod tests {
 
     #[test]
     fn test_doc_new_plan() {
-        let doc = Doc::new(DocKind::Plan, None, "plan-impl.md".to_string());
+        let doc = Doc::new(DocKind::Plan, None, "Plan Impl".to_string(), "plan-impl.md".to_string());
         assert!(doc.id.starts_with("pl-"));
         assert_eq!(doc.kind, DocKind::Plan);
         assert!(doc.parent_id.is_none());
+        assert_eq!(doc.title, "Plan Impl");
         assert_eq!(doc.markdown, "plan-impl.md");
         assert!(doc.dependencies.is_empty());
         assert!(doc.acceptance_criteria.is_empty());
@@ -281,7 +287,12 @@ mod tests {
 
     #[test]
     fn test_doc_new_spec() {
-        let doc = Doc::new(DocKind::Spec, Some("pl-abc12".to_string()), "spec-core.md".to_string());
+        let doc = Doc::new(
+            DocKind::Spec,
+            Some("pl-abc12".to_string()),
+            "Core Spec".to_string(),
+            "spec-core.md".to_string(),
+        );
         assert!(doc.id.starts_with("sp-"));
         assert_eq!(doc.kind, DocKind::Spec);
         assert_eq!(doc.parent_id.as_deref(), Some("pl-abc12"));
@@ -292,6 +303,7 @@ mod tests {
         let doc = Doc::new(
             DocKind::Phase,
             Some("sp-abc12".to_string()),
+            "Phase Data".to_string(),
             "phase-data.md".to_string(),
         );
         assert!(doc.id.starts_with("ph-"));
@@ -302,6 +314,7 @@ mod tests {
         let doc = Doc::new(
             DocKind::Work,
             Some("ph-abc12".to_string()),
+            "Work Schema".to_string(),
             "work-schema.md".to_string(),
         );
         assert!(doc.id.starts_with("wk-"));
@@ -309,14 +322,19 @@ mod tests {
 
     #[test]
     fn test_doc_unique_ids() {
-        let d1 = Doc::new(DocKind::Plan, None, "a.md".to_string());
-        let d2 = Doc::new(DocKind::Plan, None, "b.md".to_string());
+        let d1 = Doc::new(DocKind::Plan, None, "Plan A".to_string(), "a.md".to_string());
+        let d2 = Doc::new(DocKind::Plan, None, "Plan B".to_string(), "b.md".to_string());
         assert_ne!(d1.id, d2.id);
     }
 
     #[test]
     fn test_doc_serde_roundtrip() {
-        let mut doc = Doc::new(DocKind::Spec, Some("pl-abc12".to_string()), "spec-api.md".to_string());
+        let mut doc = Doc::new(
+            DocKind::Spec,
+            Some("pl-abc12".to_string()),
+            "API Spec".to_string(),
+            "spec-api.md".to_string(),
+        );
         doc.dependencies = vec!["sp-x1y2z".to_string()];
         doc.acceptance_criteria = vec!["Must handle errors".to_string(), "Must log failures".to_string()];
 
@@ -325,11 +343,30 @@ mod tests {
         assert_eq!(doc.id, restored.id);
         assert_eq!(doc.kind, restored.kind);
         assert_eq!(doc.parent_id, restored.parent_id);
+        assert_eq!(doc.title, restored.title);
         assert_eq!(doc.markdown, restored.markdown);
         assert_eq!(doc.dependencies, restored.dependencies);
         assert_eq!(doc.acceptance_criteria, restored.acceptance_criteria);
         assert_eq!(doc.created_at, restored.created_at);
         assert_eq!(doc.updated_at, restored.updated_at);
+    }
+
+    #[test]
+    fn test_doc_serde_backward_compat_without_title() {
+        // Old records serialized without the title field must deserialize with empty string.
+        let json = serde_json::json!({
+            "id": "pl-abc123",
+            "kind": "plan",
+            "parent_id": null,
+            "markdown": "plan-foo.md",
+            "dependencies": [],
+            "acceptance_criteria": [],
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let doc: Doc = serde_json::from_value(json).unwrap();
+        assert_eq!(doc.title, "", "old records without title must default to empty string");
+        assert_ne!(doc.title, "Untitled Plan");
     }
 
     // --- Record trait ---
@@ -341,19 +378,24 @@ mod tests {
 
     #[test]
     fn test_doc_record_id() {
-        let doc = Doc::new(DocKind::Plan, None, "p.md".to_string());
+        let doc = Doc::new(DocKind::Plan, None, "My Plan".to_string(), "p.md".to_string());
         assert_eq!(Record::id(&doc), doc.id.as_str());
     }
 
     #[test]
     fn test_doc_record_updated_at() {
-        let doc = Doc::new(DocKind::Work, None, "w.md".to_string());
+        let doc = Doc::new(DocKind::Work, None, "My Work".to_string(), "w.md".to_string());
         assert_eq!(Record::updated_at(&doc), doc.updated_at);
     }
 
     #[test]
     fn test_doc_indexed_fields_with_parent() {
-        let doc = Doc::new(DocKind::Spec, Some("pl-abc12".to_string()), "s.md".to_string());
+        let doc = Doc::new(
+            DocKind::Spec,
+            Some("pl-abc12".to_string()),
+            "My Spec".to_string(),
+            "s.md".to_string(),
+        );
         let fields = doc.indexed_fields();
         assert_eq!(fields.get("kind"), Some(&IndexValue::String("spec".to_string())));
         assert_eq!(
@@ -364,7 +406,7 @@ mod tests {
 
     #[test]
     fn test_doc_indexed_fields_no_parent() {
-        let doc = Doc::new(DocKind::Plan, None, "p.md".to_string());
+        let doc = Doc::new(DocKind::Plan, None, "My Plan".to_string(), "p.md".to_string());
         let fields = doc.indexed_fields();
         assert_eq!(fields.get("kind"), Some(&IndexValue::String("plan".to_string())));
         assert!(!fields.contains_key("parent_id"));
@@ -374,29 +416,45 @@ mod tests {
 
     #[test]
     fn test_plan_doc_new() {
-        let pd = PlanDoc::new("plan-foo.md".to_string());
+        let pd = PlanDoc::new("Foo Plan".to_string(), "plan-foo.md".to_string());
         assert_eq!(pd.0.kind, DocKind::Plan);
         assert!(pd.0.parent_id.is_none());
         assert!(pd.0.id.starts_with("pl-"));
+        assert_eq!(pd.0.title, "Foo Plan");
     }
 
     #[test]
     fn test_spec_doc_new() {
-        let sd = SpecDoc::new("pl-abc12".to_string(), "spec-foo.md".to_string());
+        let sd = SpecDoc::new(
+            "pl-abc12".to_string(),
+            "Foo Spec".to_string(),
+            "spec-foo.md".to_string(),
+        );
         assert_eq!(sd.0.kind, DocKind::Spec);
         assert_eq!(sd.0.parent_id.as_deref(), Some("pl-abc12"));
+        assert_eq!(sd.0.title, "Foo Spec");
     }
 
     #[test]
     fn test_phase_doc_new() {
-        let pd = PhaseDoc::new("sp-abc12".to_string(), "phase-foo.md".to_string());
+        let pd = PhaseDoc::new(
+            "sp-abc12".to_string(),
+            "Foo Phase".to_string(),
+            "phase-foo.md".to_string(),
+        );
         assert_eq!(pd.0.kind, DocKind::Phase);
+        assert_eq!(pd.0.title, "Foo Phase");
     }
 
     #[test]
     fn test_work_doc_new() {
-        let wd = WorkDoc::new("ph-abc12".to_string(), "work-foo.md".to_string());
+        let wd = WorkDoc::new(
+            "ph-abc12".to_string(),
+            "Foo Work".to_string(),
+            "work-foo.md".to_string(),
+        );
         assert_eq!(wd.0.kind, DocKind::Work);
+        assert_eq!(wd.0.title, "Foo Work");
     }
 
     // --- Slug generation ---

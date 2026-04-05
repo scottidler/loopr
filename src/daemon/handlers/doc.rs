@@ -181,7 +181,7 @@ pub(super) async fn accept_plan_markdown(
         .map_err(|e| eyre!("Failed to write plan.md: {}", e))?;
 
     // Build the plan Doc record
-    let mut plan_doc = Doc::new(DocKind::Plan, None, filename);
+    let mut plan_doc = Doc::new(DocKind::Plan, None, title.clone(), filename);
     plan_doc.acceptance_criteria = extract_acceptance_criteria(&markdown);
     let plan_doc_id = plan_doc.id.clone();
 
@@ -356,7 +356,7 @@ fn double_write_old_records(
                 continue;
             }
         };
-        let child_title = extract_plan_title(&content);
+        let child_title = child.title.clone();
 
         let old_id = match child.kind {
             DocKind::Spec => {
@@ -573,6 +573,9 @@ mod tests {
         assert!(plan_path.exists(), "plan.md not found at {}", plan_path.display());
         let content = std::fs::read_to_string(&plan_path).unwrap();
         assert!(content.contains("Auth Refactor Plan"));
+
+        // Title must be stored on the Doc (not "Untitled Plan")
+        assert_eq!(doc.title, "Auth Refactor Plan", "Doc.title must match the H1 heading");
     }
 
     #[tokio::test]
@@ -671,7 +674,7 @@ mod tests {
     fn test_persist_doc_in_memory() {
         let stores = test_stores();
         let tx = test_event_tx();
-        let doc = Doc::new(DocKind::Plan, None, "plan-test.md".to_string());
+        let doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
         let id = doc.id.clone();
 
         persist_doc(&stores, doc, &tx).unwrap();
