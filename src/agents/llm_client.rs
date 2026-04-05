@@ -222,7 +222,6 @@ impl LlmClient for AgentLlmClient {
     }
 }
 
-#[async_trait]
 impl AgenticLlm for AgentLlmClient {
     /// Call the Anthropic Messages API with SSE streaming and tool support.
     ///

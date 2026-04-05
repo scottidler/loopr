@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::Instant;
 
 use log::debug;
@@ -87,30 +88,32 @@ pub fn estimate_message_tokens(messages: &[Message]) -> usize {
 
 /// Callback trait for the LLM completion step in the agentic loop.
 /// Separated from the existing LlmClient to avoid coupling.
-#[async_trait::async_trait]
 pub trait AgenticLlm: Send + Sync {
-    async fn complete(
-        &self,
-        system_prompt: &str,
-        messages: &[Message],
-        tools: &[ToolDefinition],
-    ) -> eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)>;
+    fn complete<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        messages: &'a [Message],
+        tools: &'a [ToolDefinition],
+    ) -> impl Future<Output = eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)>> + Send + 'a;
 
     /// Streaming variant: sends completed ContentBlocks through the channel as they
     /// arrive from SSE, enabling tool execution to overlap with model generation.
     /// Default implementation falls back to `complete()` and sends all blocks after.
-    async fn complete_streaming(
-        &self,
-        system_prompt: &str,
-        messages: &[Message],
-        tools: &[ToolDefinition],
+    fn complete_streaming<'a>(
+        &'a self,
+        system_prompt: &'a str,
+        messages: &'a [Message],
+        tools: &'a [ToolDefinition],
         block_tx: mpsc::UnboundedSender<ContentBlock>,
-    ) -> eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)> {
-        let (blocks, stop_reason) = self.complete(system_prompt, messages, tools).await?;
-        for block in &blocks {
-            let _ = block_tx.send(block.clone());
+    ) -> impl Future<Output = eyre::Result<(Vec<ContentBlock>, Option<crate::tools::types::StopReason>)>> + Send + 'a
+    {
+        async move {
+            let (blocks, stop_reason) = self.complete(system_prompt, messages, tools).await?;
+            for block in &blocks {
+                let _ = block_tx.send(block.clone());
+            }
+            Ok((blocks, stop_reason))
         }
-        Ok((blocks, stop_reason))
     }
 }
 
@@ -129,7 +132,7 @@ pub type OnCheckpoint = dyn Fn(&[Message]) + Send + Sync;
 /// Auto-compact old messages when context exceeds COMPACTION_THRESHOLD.
 /// Uses the LLM to summarize old messages before discarding them.
 /// Falls back to dumb truncation if summarization fails.
-async fn auto_compact(llm: &dyn AgenticLlm, system_prompt: &str, messages: &mut Vec<Message>) {
+async fn auto_compact<L: AgenticLlm>(llm: &L, system_prompt: &str, messages: &mut Vec<Message>) {
     let total = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
     if total <= COMPACTION_THRESHOLD {
         return;
@@ -279,8 +282,8 @@ fn microcompact(messages: &mut [Message], protected_tail: usize) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run_tool_loop(
-    llm: &dyn AgenticLlm,
+pub async fn run_tool_loop<L: AgenticLlm>(
+    llm: &L,
     executor: &ToolExecutor,
     ctx: &ToolContext,
     system_prompt: &str,
@@ -650,7 +653,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl AgenticLlm for MockAgenticLlm {
         async fn complete(
             &self,
@@ -1099,7 +1101,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl AgenticLlm for StreamingMockLlm {
         async fn complete(
             &self,

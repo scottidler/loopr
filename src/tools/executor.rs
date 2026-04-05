@@ -50,7 +50,7 @@ impl ToolExecutor {
     /// Chat executor with delegate tool for subagent delegation.
     /// The child executor (used by delegate) does NOT include the delegate tool itself,
     /// preventing unbounded recursion.
-    pub fn chat_with_delegation(configured: &[ToolEntry], llm: Arc<dyn AgenticLlm>) -> Self {
+    pub fn chat_with_delegation<L: AgenticLlm + Send + Sync + 'static>(configured: &[ToolEntry], llm: Arc<L>) -> Self {
         let mut exec = Self::chat(configured);
         let child_executor = Arc::new(Self::chat(configured));
         let delegate = DelegateTool::new(llm, child_executor);

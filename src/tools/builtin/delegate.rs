@@ -14,19 +14,19 @@ use crate::tools::types::{ContentBlock, Message};
 /// window, returning only the summary to the parent. This prevents bulk operations
 /// (reading many files, searching large codebases) from consuming the parent's
 /// context window.
-pub struct DelegateTool {
-    llm: Arc<dyn AgenticLlm>,
+pub struct DelegateTool<L: AgenticLlm + Send + Sync + 'static> {
+    llm: Arc<L>,
     executor: Arc<ToolExecutor>,
 }
 
-impl DelegateTool {
-    pub fn new(llm: Arc<dyn AgenticLlm>, executor: Arc<ToolExecutor>) -> Self {
+impl<L: AgenticLlm + Send + Sync + 'static> DelegateTool<L> {
+    pub fn new(llm: Arc<L>, executor: Arc<ToolExecutor>) -> Self {
         Self { llm, executor }
     }
 }
 
 #[async_trait]
-impl Tool for DelegateTool {
+impl<L: AgenticLlm + Send + Sync + 'static> Tool for DelegateTool<L> {
     fn name(&self) -> &str {
         "delegate"
     }
@@ -130,7 +130,6 @@ mod tests {
         call_count: AtomicUsize,
     }
 
-    #[async_trait]
     impl AgenticLlm for MockLlm {
         async fn complete(
             &self,

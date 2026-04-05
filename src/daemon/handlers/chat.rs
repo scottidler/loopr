@@ -164,20 +164,19 @@ pub(super) fn handle_chat_submit(
 
         // Create a separate LLM client for delegate subagents (fast model)
         let delegate_config = stores.config.chat.to_delegate_role_config();
-        let delegate_llm: Arc<dyn crate::tools::agentic_loop::AgenticLlm> =
-            match crate::agents::llm_client::AgentLlmClient::new(
-                delegate_config,
-                format!("{}:delegate", session_id),
-                event_tx.clone(),
-            ) {
-                Ok(c) => Arc::new(c),
-                Err(e) => {
-                    return Ok(DaemonResponse::err(
-                        req.id,
-                        RpcError::internal(&format!("failed to create delegate LLM client: {}", e)),
-                    ));
-                }
-            };
+        let delegate_llm = match crate::agents::llm_client::AgentLlmClient::new(
+            delegate_config,
+            format!("{}:delegate", session_id),
+            event_tx.clone(),
+        ) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::internal(&format!("failed to create delegate LLM client: {}", e)),
+                ));
+            }
+        };
 
         // Build orchestration status for Executing state system prompt
         let orch_status = if funnel_state == crate::domain::chat::FunnelState::Executing {
