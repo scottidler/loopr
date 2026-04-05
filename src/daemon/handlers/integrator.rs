@@ -262,8 +262,8 @@ pub(super) fn handle_integrator_publish(
 
 // --- Validator handlers ---
 
-pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    try_handler!(req.id, {
+pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_async_handler!(req.id, {
         debug!("handle_validator_validate()");
         let validator = match &stores.validator {
             Some(v) => v.clone(),
@@ -302,7 +302,7 @@ pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest
                     }
                 };
                 drop(plans);
-                validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
+                validator.validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria).await
             }
             "spec" | "specs" => {
                 let specs = stores.read_specs()?;
@@ -319,7 +319,7 @@ pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest
                     .get(&spec.parent_id)
                     .map(|p| p.title.clone())
                     .unwrap_or_default();
-                validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
+                validator.validate_spec(&target_id, &spec.title, &spec.description, &plan_title).await
             }
             "phase" | "phases" => {
                 let phases = stores.read_phases()?;
@@ -336,7 +336,7 @@ pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest
                     .get(&phase.parent_id)
                     .map(|s| s.title.clone())
                     .unwrap_or_default();
-                validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
+                validator.validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title).await
             }
             _ => {
                 return Ok(DaemonResponse::err(
@@ -366,8 +366,8 @@ pub(super) fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest
 
 // --- Coverage Evaluator handler ---
 
-pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
-    try_handler!(req.id, {
+pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_async_handler!(req.id, {
         debug!("handle_coverage_evaluate()");
         let evaluator = match &stores.evaluator {
             Some(e) => e.clone(),
@@ -426,7 +426,7 @@ pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest)
                     &plan.acceptance_criteria,
                     &specs_list,
                     children_ids,
-                )
+                ).await
             }
             "spec" | "specs" => {
                 let specs = stores.read_specs()?;
@@ -457,7 +457,7 @@ pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest)
                     &plan_title,
                     &phases_list,
                     children_ids,
-                )
+                ).await
             }
             "phase" | "phases" => {
                 let phases = stores.read_phases()?;
@@ -488,7 +488,7 @@ pub(super) fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest)
                     order: phase.order,
                     spec_title,
                 };
-                evaluator.evaluate_phase_works(&params, &works_list, children_ids)
+                evaluator.evaluate_phase_works(&params, &works_list, children_ids).await
             }
             _ => {
                 return Ok(DaemonResponse::err(
