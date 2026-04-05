@@ -321,8 +321,8 @@ mod tests {
 
     // --- plan.create tests ---
 
-    #[test]
-    fn test_plan_create_success() {
+    #[tokio::test]
+    async fn test_plan_create_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -335,7 +335,7 @@ mod tests {
                 "acceptance_criteria": "It works"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Test Plan");
@@ -344,32 +344,32 @@ mod tests {
         assert_eq!(stores.plans.read().unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_plan_create_missing_title() {
+    #[tokio::test]
+    async fn test_plan_create_missing_title() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.create", json!({"description": "no title"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
     }
 
-    #[test]
-    fn test_plan_create_broadcasts_event() {
+    #[tokio::test]
+    async fn test_plan_create_broadcasts_event() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
         let req = DaemonRequest::new(1, "plan.create", json!({"title": "Plan"}));
-        dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "plan");
     }
 
-    #[test]
-    fn test_plan_create_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_plan_create_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -378,7 +378,7 @@ mod tests {
             "plan.create",
             json!({"title": "Persisted Plan", "description": "desc"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let plan_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -389,66 +389,66 @@ mod tests {
         assert_eq!(retrieved.unwrap().title, "Persisted Plan");
     }
 
-    #[test]
-    fn test_plan_create_rejects_duplicate_draft() {
+    #[tokio::test]
+    async fn test_plan_create_rejects_duplicate_draft() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Create first Draft Plan - succeeds
         let req1 = DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"}));
-        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1).await;
         assert!(!resp1.is_error());
 
         // Create second Draft Plan - rejected
         let req2 = DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"}));
-        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
         assert!(resp2.is_error());
         assert_eq!(resp2.error.unwrap().code, -32005); // precondition_failed
     }
 
     // --- plan.get tests ---
 
-    #[test]
-    fn test_plan_get_success() {
+    #[tokio::test]
+    async fn test_plan_get_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Create a plan first
         let create_req = DaemonRequest::new(1, "plan.create", json!({"title": "My Plan"}));
-        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
+        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req).await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Get it
         let get_req = DaemonRequest::new(2, "plan.get", json!({"id": plan_id}));
-        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req).await;
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "My Plan");
     }
 
-    #[test]
-    fn test_plan_get_not_found() {
+    #[tokio::test]
+    async fn test_plan_get_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_plan_get_missing_id() {
+    #[tokio::test]
+    async fn test_plan_get_missing_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.get", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("id"));
     }
 
-    #[test]
-    fn test_plan_get_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_plan_get_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -459,7 +459,7 @@ mod tests {
             "plan.create",
             json!({"title": "TaskStore Plan", "description": "persistent"}),
         );
-        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
+        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req).await;
         assert!(!create_resp.is_error());
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -468,28 +468,28 @@ mod tests {
 
         // Get should still succeed via TaskStore
         let get_req = DaemonRequest::new(2, "plan.get", json!({"id": plan_id}));
-        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req).await;
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "TaskStore Plan");
     }
 
     // --- plan.list tests ---
 
-    #[test]
-    fn test_plan_list_empty() {
+    #[tokio::test]
+    async fn test_plan_list_empty() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "plan.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let plans = resp.result.unwrap();
         assert!(plans.is_array());
         assert_eq!(plans.as_array().unwrap().len(), 0);
     }
 
-    #[test]
-    fn test_plan_list_with_plans() {
+    #[tokio::test]
+    async fn test_plan_list_with_plans() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -500,7 +500,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})),
-        );
+        )
+        .await;
         let plan_a_id = resp1.result.unwrap()["id"].as_str().unwrap().to_string();
         dispatch(
             &stores,
@@ -512,24 +513,26 @@ mod tests {
                 "plan.transition",
                 json!({"id": plan_a_id, "target_status": "abandoned", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"})),
-        );
+        )
+        .await;
 
         let req = DaemonRequest::new(3, "plan.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let plans = resp.result.unwrap();
         assert_eq!(plans.as_array().unwrap().len(), 2);
     }
 
-    #[test]
-    fn test_plan_list_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_plan_list_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -541,7 +544,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan A"})),
-        );
+        )
+        .await;
         let plan_a_id = resp1.result.unwrap()["id"].as_str().unwrap().to_string();
         dispatch(
             &stores,
@@ -553,21 +557,23 @@ mod tests {
                 "plan.transition",
                 json!({"id": plan_a_id, "target_status": "abandoned", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "plan.create", json!({"title": "Plan B"})),
-        );
+        )
+        .await;
 
         // Clear HashMap to prove list reads from TaskStore
         stores.plans.write().unwrap().clear();
 
         // List should still return both plans via TaskStore
         let req = DaemonRequest::new(3, "plan.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let plans = resp.result.unwrap();
         assert_eq!(plans.as_array().unwrap().len(), 2);
@@ -575,8 +581,8 @@ mod tests {
 
     // --- plan.transition tests ---
 
-    #[test]
-    fn test_plan_transition_draft_to_active() {
+    #[tokio::test]
+    async fn test_plan_transition_draft_to_active() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -589,7 +595,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
-        );
+        )
+        .await;
         let _ = rx.try_recv(); // consume create event
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -603,7 +610,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -614,8 +621,8 @@ mod tests {
         assert_eq!(event.data["to"], "active");
     }
 
-    #[test]
-    fn test_plan_transition_invalid_skip_state() {
+    #[tokio::test]
+    async fn test_plan_transition_invalid_skip_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -626,7 +633,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Try to skip Draft -> Complete (invalid: must go through Active)
@@ -639,13 +647,13 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
 
-    #[test]
-    fn test_plan_transition_wrong_role() {
+    #[tokio::test]
+    async fn test_plan_transition_wrong_role() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -656,7 +664,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Implementer cannot transition plans
@@ -669,13 +678,13 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
 
-    #[test]
-    fn test_plan_transition_not_found() {
+    #[tokio::test]
+    async fn test_plan_transition_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -687,29 +696,29 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_plan_transition_missing_params() {
+    #[tokio::test]
+    async fn test_plan_transition_missing_params() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Missing id
         let req = DaemonRequest::new(1, "plan.transition", json!({"target_status": "active"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
 
         // Missing target_status
         let req = DaemonRequest::new(2, "plan.transition", json!({"id": "x"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_plan_transition_default_role_coordinator() {
+    #[tokio::test]
+    async fn test_plan_transition_default_role_coordinator() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -720,7 +729,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // No role specified - defaults to Coordinator, which is valid for hierarchy transitions
@@ -732,13 +742,13 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
-    #[test]
-    fn test_plan_transition_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_plan_transition_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -750,7 +760,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Transition Plan"})),
-        );
+        )
+        .await;
         assert!(!create_resp.is_error());
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -764,7 +775,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -778,8 +789,8 @@ mod tests {
 
     // --- plan validation gate tests ---
 
-    #[test]
-    fn test_plan_transition_blocked_no_report_when_validator_enabled() {
+    #[tokio::test]
+    async fn test_plan_transition_blocked_no_report_when_validator_enabled() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -791,7 +802,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Try Draft -> Active without any validation report - should be blocked
@@ -809,14 +821,15 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert_eq!(resp.error.as_ref().unwrap().code, -32003);
         assert!(resp.error.unwrap().message.contains("validator.validate"));
     }
 
-    #[test]
-    fn test_plan_transition_allowed_with_pass_report() {
+    #[tokio::test]
+    async fn test_plan_transition_allowed_with_pass_report() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -827,7 +840,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Insert a passing validation report into TaskStore
@@ -856,13 +870,14 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
-    #[test]
-    fn test_plan_transition_allowed_with_warn_report() {
+    #[tokio::test]
+    async fn test_plan_transition_allowed_with_warn_report() {
         let (_dir, stores) =
             test_stores_with_validator_strictness(crate::config::ValidatorStrictness::AllowAmbiguityWithFlags);
         let tx = test_event_tx();
@@ -874,7 +889,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Insert a Warn validation report
@@ -903,13 +919,14 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
-    #[test]
-    fn test_plan_transition_blocked_with_fail_report() {
+    #[tokio::test]
+    async fn test_plan_transition_blocked_with_fail_report() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -920,7 +937,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Insert a Fail validation report
@@ -949,13 +967,14 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32003);
     }
 
-    #[test]
-    fn test_plan_transition_skip_validation_override() {
+    #[tokio::test]
+    async fn test_plan_transition_skip_validation_override() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -966,7 +985,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Gate Test Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft -> Active with skip_validation=true - should succeed even without report
@@ -985,13 +1005,14 @@ mod tests {
                     "skip_validation": true
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
-    #[test]
-    fn test_plan_transition_no_gate_when_validator_disabled() {
+    #[tokio::test]
+    async fn test_plan_transition_no_gate_when_validator_disabled() {
         // test_stores_with_taskstore has no validator - gate should not apply
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
@@ -1003,7 +1024,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "No Gate Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft -> Active should succeed without any validation report
@@ -1021,15 +1043,16 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
     // --- plan.update tests ---
 
-    #[test]
-    fn test_handle_plan_update_success() {
+    #[tokio::test]
+    async fn test_handle_plan_update_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1039,7 +1062,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
-        );
+        )
+        .await;
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let resp = dispatch(
@@ -1057,7 +1081,8 @@ mod tests {
                     "acceptance_criteria": "New criteria"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "plan.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Updated Plan");
@@ -1065,8 +1090,8 @@ mod tests {
         assert_eq!(result["acceptance_criteria"], "New criteria");
     }
 
-    #[test]
-    fn test_handle_plan_update_not_found() {
+    #[tokio::test]
+    async fn test_handle_plan_update_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1076,12 +1101,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.update", json!({"id": "nonexistent", "title": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_plan_update_missing_id() {
+    #[tokio::test]
+    async fn test_handle_plan_update_missing_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1091,7 +1117,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.update", json!({"title": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 }

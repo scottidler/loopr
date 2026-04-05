@@ -370,42 +370,44 @@ mod tests {
     use crate::worktree::manager::WorktreeManager;
 
     /// Helper: create a plan and return its id
-    fn create_test_plan(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
+    async fn create_test_plan(stores: &Arc<Stores>, tx: &broadcast::Sender<DaemonEvent>, wm: &WorktreeManager) -> String {
         let resp = dispatch(
             stores,
             tx,
             wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
-        );
+        )
+        .await;
         resp.result.unwrap()["id"].as_str().unwrap().to_string()
     }
 
     /// Helper: create a plan + spec and return (plan_id, spec_id)
-    fn create_test_spec(
+    async fn create_test_spec(
         stores: &Arc<Stores>,
         tx: &broadcast::Sender<DaemonEvent>,
         wm: &WorktreeManager,
     ) -> (String, String) {
-        let plan_id = create_test_plan(stores, tx, wm);
+        let plan_id = create_test_plan(stores, tx, wm).await;
         let resp = dispatch(
             stores,
             tx,
             wm,
             &test_integrator_config(),
             DaemonRequest::new(10, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
-        );
+        )
+        .await;
         let spec_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id)
     }
 
     /// Helper: create a plan + spec + phase and return (plan_id, spec_id, phase_id)
-    fn create_test_phase(
+    async fn create_test_phase(
         stores: &Arc<Stores>,
         tx: &broadcast::Sender<DaemonEvent>,
         wm: &WorktreeManager,
     ) -> (String, String, String) {
-        let (plan_id, spec_id) = create_test_spec(stores, tx, wm);
+        let (plan_id, spec_id) = create_test_spec(stores, tx, wm).await;
         let resp = dispatch(
             stores,
             tx,
@@ -416,26 +418,27 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id, "title": "Parent Phase", "order": 1}),
             ),
-        );
+        )
+        .await;
         let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
         (plan_id, spec_id, phase_id)
     }
 
     // --- phase create tests ---
 
-    #[test]
-    fn test_phase_create_rejects_duplicate_draft() {
+    #[tokio::test]
+    async fn test_phase_create_rejects_duplicate_draft() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
         // Create first Draft Phase - succeeds
         let req1 = DaemonRequest::new(
             1,
             "phase.create",
             json!({"parent_id": spec_id, "title": "Phase A", "order": 1}),
         );
-        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1);
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1).await;
         assert!(!resp1.is_error());
 
         // Create second Draft Phase under same Spec - rejected
@@ -444,17 +447,17 @@ mod tests {
             "phase.create",
             json!({"parent_id": spec_id, "title": "Phase B", "order": 2}),
         );
-        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2);
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
         assert!(resp2.is_error());
         assert_eq!(resp2.error.unwrap().code, -32005);
     }
 
-    #[test]
-    fn test_phase_create_rejects_complete_spec() {
+    #[tokio::test]
+    async fn test_phase_create_rejects_complete_spec() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         // Transition spec: Draft -> Active -> Complete
         dispatch(
@@ -467,7 +470,8 @@ mod tests {
                 "spec.transition",
                 json!({"id": spec_id, "target_status": "active", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -478,24 +482,25 @@ mod tests {
                 "spec.transition",
                 json!({"id": spec_id, "target_status": "complete", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
 
         let req = DaemonRequest::new(
             2,
             "phase.create",
             json!({"parent_id": spec_id, "title": "Phase Under Complete", "order": 1}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("complete spec"));
     }
 
-    #[test]
-    fn test_phase_create_rejects_abandoned_spec() {
+    #[tokio::test]
+    async fn test_phase_create_rejects_abandoned_spec() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         // Transition spec: Draft -> Abandoned
         dispatch(
@@ -508,24 +513,25 @@ mod tests {
                 "spec.transition",
                 json!({"id": spec_id, "target_status": "abandoned", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
 
         let req = DaemonRequest::new(
             2,
             "phase.create",
             json!({"parent_id": spec_id, "title": "Phase Under Abandoned", "order": 1}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("abandoned spec"));
     }
 
-    #[test]
-    fn test_phase_create_success() {
+    #[tokio::test]
+    async fn test_phase_create_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         let req = DaemonRequest::new(
             20,
@@ -537,7 +543,7 @@ mod tests {
                 "order": 1
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Test Phase");
@@ -547,74 +553,74 @@ mod tests {
         assert_eq!(stores.phases.read().unwrap().len(), 1);
     }
 
-    #[test]
-    fn test_phase_create_missing_spec_id() {
+    #[tokio::test]
+    async fn test_phase_create_missing_spec_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.create", json!({"title": "Phase"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("parent_id"));
     }
 
-    #[test]
-    fn test_phase_create_spec_not_found() {
+    #[tokio::test]
+    async fn test_phase_create_spec_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.create", json!({"parent_id": "nonexistent", "title": "Phase"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_phase_create_missing_title() {
+    #[tokio::test]
+    async fn test_phase_create_missing_title() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
         let req = DaemonRequest::new(
             20,
             "phase.create",
             json!({"parent_id": spec_id, "description": "no title"}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
     }
 
-    #[test]
-    fn test_phase_create_broadcasts_event() {
+    #[tokio::test]
+    async fn test_phase_create_broadcasts_event() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
         // Drain plan+spec create events
         let _ = rx.try_recv();
         let _ = rx.try_recv();
 
         let req = DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"}));
-        dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         let event = rx.try_recv().unwrap();
         assert_eq!(event.event, "record.created");
         assert_eq!(event.data["collection"], "phase");
     }
 
-    #[test]
-    fn test_phase_create_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_phase_create_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
         let req = DaemonRequest::new(
             20,
             "phase.create",
             json!({"parent_id": spec_id, "title": "Persisted Phase", "description": "desc", "order": 1}),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let phase_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -627,12 +633,12 @@ mod tests {
 
     // --- phase get tests ---
 
-    #[test]
-    fn test_phase_get_success() {
+    #[tokio::test]
+    async fn test_phase_get_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         let create_resp = dispatch(
             &stores,
@@ -644,7 +650,8 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id, "title": "My Phase", "order": 3}),
             ),
-        );
+        )
+        .await;
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let get_resp = dispatch(
@@ -653,30 +660,31 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(21, "phase.get", json!({"id": phase_id})),
-        );
+        )
+        .await;
         assert!(!get_resp.is_error());
         let result = get_resp.result.unwrap();
         assert_eq!(result["title"], "My Phase");
         assert_eq!(result["order"], 3);
     }
 
-    #[test]
-    fn test_phase_get_not_found() {
+    #[tokio::test]
+    async fn test_phase_get_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.get", json!({"id": "nonexistent"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_phase_get_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_phase_get_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         // Create a phase (writes to both TaskStore and HashMap)
         let create_req = DaemonRequest::new(
@@ -684,7 +692,7 @@ mod tests {
             "phase.create",
             json!({"parent_id": spec_id, "title": "TaskStore Phase", "order": 1}),
         );
-        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req);
+        let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req).await;
         assert!(!create_resp.is_error());
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -693,30 +701,30 @@ mod tests {
 
         // Get should still succeed via TaskStore
         let get_req = DaemonRequest::new(21, "phase.get", json!({"id": phase_id}));
-        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req);
+        let get_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), get_req).await;
         assert!(!get_resp.is_error());
         assert_eq!(get_resp.result.unwrap()["title"], "TaskStore Phase");
     }
 
     // --- phase list tests ---
 
-    #[test]
-    fn test_phase_list_empty() {
+    #[tokio::test]
+    async fn test_phase_list_empty() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.list", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 0);
     }
 
-    #[test]
-    fn test_phase_list_filtered_by_spec_id() {
+    #[tokio::test]
+    async fn test_phase_list_filtered_by_spec_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+        let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm).await;
 
         // Activate first spec so we can create a second Draft Spec (and phases under both)
         dispatch(
@@ -729,7 +737,8 @@ mod tests {
                 "spec.transition",
                 json!({"id": spec_id_1, "target_status": "active", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
 
         // Create a second spec under the same plan
         let resp2 = dispatch(
@@ -738,7 +747,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(11, "spec.create", json!({"parent_id": plan_id, "title": "Spec 2"})),
-        );
+        )
+        .await;
         let spec_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Create phases under different specs
@@ -752,7 +762,8 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id_1, "title": "Phase A", "order": 1}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -763,7 +774,8 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id_2, "title": "Phase B", "order": 1}),
             ),
-        );
+        )
+        .await;
 
         // List all - should have 2
         let all_resp = dispatch(
@@ -772,7 +784,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(30, "phase.list", json!(null)),
-        );
+        )
+        .await;
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // List filtered by spec_id_1 - should have 1
@@ -782,19 +795,20 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(31, "phase.list", json!({"parent_id": spec_id_1})),
-        );
+        )
+        .await;
         let phases = filtered_resp.result.unwrap();
         let arr = phases.as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["title"], "Phase A");
     }
 
-    #[test]
-    fn test_phase_list_reads_from_taskstore() {
+    #[tokio::test]
+    async fn test_phase_list_reads_from_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm);
+        let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm).await;
 
         // Activate first spec so we can create a second Draft Spec
         dispatch(
@@ -807,7 +821,8 @@ mod tests {
                 "spec.transition",
                 json!({"id": spec_id_1, "target_status": "active", "role": "coordinator"}),
             ),
-        );
+        )
+        .await;
 
         // Create a second spec under the same plan
         let resp2 = dispatch(
@@ -816,7 +831,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(11, "spec.create", json!({"parent_id": plan_id, "title": "Spec 2"})),
-        );
+        )
+        .await;
         let spec_id_2 = resp2.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Create phases under different specs (writes to both TaskStore and HashMap)
@@ -830,7 +846,8 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id_1, "title": "Phase A", "order": 1}),
             ),
-        );
+        )
+        .await;
         dispatch(
             &stores,
             &tx,
@@ -841,7 +858,8 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id_2, "title": "Phase B", "order": 1}),
             ),
-        );
+        )
+        .await;
 
         // Clear HashMap to prove list reads from TaskStore
         stores.phases.write().unwrap().clear();
@@ -853,13 +871,14 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(30, "phase.list", json!(null)),
-        );
+        )
+        .await;
         assert!(!all_resp.is_error());
         assert_eq!(all_resp.result.unwrap().as_array().unwrap().len(), 2);
 
         // Test filtered list also works from TaskStore
         let filtered_req = DaemonRequest::new(31, "phase.list", json!({"parent_id": spec_id_1}));
-        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req);
+        let filtered_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), filtered_req).await;
         assert!(!filtered_resp.is_error());
         let filtered_phases = filtered_resp.result.unwrap();
         let arr = filtered_phases.as_array().unwrap();
@@ -869,13 +888,13 @@ mod tests {
 
     // --- phase transition tests ---
 
-    #[test]
-    fn test_phase_transition_draft_to_active() {
+    #[tokio::test]
+    async fn test_phase_transition_draft_to_active() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
         // Drain plan+spec create events
         let _ = rx.try_recv();
         let _ = rx.try_recv();
@@ -886,7 +905,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"})),
-        );
+        )
+        .await;
         let _ = rx.try_recv(); // consume phase create event
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -899,7 +919,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -910,12 +930,12 @@ mod tests {
         assert_eq!(event.data["to"], "active");
     }
 
-    #[test]
-    fn test_phase_transition_invalid_skip_state() {
+    #[tokio::test]
+    async fn test_phase_transition_invalid_skip_state() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         let create_resp = dispatch(
             &stores,
@@ -923,7 +943,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"})),
-        );
+        )
+        .await;
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let req = DaemonRequest::new(
@@ -935,17 +956,17 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
 
-    #[test]
-    fn test_phase_transition_wrong_role() {
+    #[tokio::test]
+    async fn test_phase_transition_wrong_role() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         let create_resp = dispatch(
             &stores,
@@ -953,7 +974,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id, "title": "Phase"})),
-        );
+        )
+        .await;
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let req = DaemonRequest::new(
@@ -965,13 +987,13 @@ mod tests {
                 "role": "implementer"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32000);
     }
 
-    #[test]
-    fn test_phase_transition_not_found() {
+    #[tokio::test]
+    async fn test_phase_transition_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -983,17 +1005,17 @@ mod tests {
                 "target_status": "active"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32001);
     }
 
-    #[test]
-    fn test_phase_transition_persists_to_taskstore() {
+    #[tokio::test]
+    async fn test_phase_transition_persists_to_taskstore() {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, spec_id) = create_test_spec(&stores, &tx, &wm);
+        let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
 
         // Create phase (also persisted to TaskStore)
         let create_resp = dispatch(
@@ -1006,7 +1028,8 @@ mod tests {
                 "phase.create",
                 json!({"parent_id": spec_id, "title": "Transition Phase"}),
             ),
-        );
+        )
+        .await;
         assert!(!create_resp.is_error());
         let phase_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
@@ -1020,7 +1043,7 @@ mod tests {
                 "role": "coordinator"
             }),
         );
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req);
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
 
@@ -1034,8 +1057,8 @@ mod tests {
 
     // --- phase validation gate tests ---
 
-    #[test]
-    fn test_phase_transition_blocked_no_report_when_validator_enabled() {
+    #[tokio::test]
+    async fn test_phase_transition_blocked_no_report_when_validator_enabled() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1047,7 +1070,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
-        );
+        )
+        .await;
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let spec_resp = dispatch(
@@ -1056,7 +1080,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
-        );
+        )
+        .await;
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let phase_resp = dispatch(
@@ -1071,7 +1096,8 @@ mod tests {
                     "parent_id": spec_id, "title": "Gate Test Phase", "order": 1
                 }),
             ),
-        );
+        )
+        .await;
         let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft -> Active without report - blocked
@@ -1089,13 +1115,14 @@ mod tests {
                     "role": "coordinator"
                 }),
             ),
-        );
+        )
+        .await;
         assert!(resp.is_error());
         assert_eq!(resp.error.unwrap().code, -32003);
     }
 
-    #[test]
-    fn test_phase_transition_skip_validation_override() {
+    #[tokio::test]
+    async fn test_phase_transition_skip_validation_override() {
         let (_dir, stores) = test_stores_with_validator();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1106,7 +1133,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "plan.create", json!({"title": "Parent Plan"})),
-        );
+        )
+        .await;
         let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let spec_resp = dispatch(
@@ -1115,7 +1143,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Parent Spec"})),
-        );
+        )
+        .await;
         let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         let phase_resp = dispatch(
@@ -1130,7 +1159,8 @@ mod tests {
                     "parent_id": spec_id, "title": "Gate Test Phase", "order": 1
                 }),
             ),
-        );
+        )
+        .await;
         let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
         // Draft -> Active with skip_validation - should succeed
@@ -1149,19 +1179,20 @@ mod tests {
                     "skip_validation": true
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "active");
     }
 
     // --- phase update tests ---
 
-    #[test]
-    fn test_handle_phase_update_success() {
+    #[tokio::test]
+    async fn test_handle_phase_update_success() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm);
+        let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
 
         let resp = dispatch(
             &stores,
@@ -1178,15 +1209,16 @@ mod tests {
                     "order": 5
                 }),
             ),
-        );
+        )
+        .await;
         assert!(!resp.is_error(), "phase.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Updated Phase");
         assert_eq!(result["order"], 5);
     }
 
-    #[test]
-    fn test_handle_phase_update_not_found() {
+    #[tokio::test]
+    async fn test_handle_phase_update_not_found() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1196,12 +1228,13 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "phase.update", json!({"id": "nonexistent", "title": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 
-    #[test]
-    fn test_handle_phase_update_missing_id() {
+    #[tokio::test]
+    async fn test_handle_phase_update_missing_id() {
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1211,7 +1244,8 @@ mod tests {
             &wm,
             &test_integrator_config(),
             DaemonRequest::new(1, "phase.update", json!({"title": "x"})),
-        );
+        )
+        .await;
         assert!(resp.is_error());
     }
 }
