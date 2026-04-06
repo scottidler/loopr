@@ -13,6 +13,8 @@ use eyre::{Context, Result, bail};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 
+use futures::future::try_join_all;
+
 use crate::config::DecomposerConfig;
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
 use crate::validator::client::HttpClient;
@@ -415,8 +417,10 @@ async fn decompose_into<H: HttpClient + Sync>(
         .collect();
     detect_cycles(&dep_graph)?;
 
-    // Stage: write .md files and create Doc records
-    let staging_dir = run_dir.join(".staging");
+    // Stage: write .md files and create Doc records.
+    // Each decompose_into call uses a unique staging dir (parent.id suffix) so that
+    // concurrent calls on the same run_dir do not conflict.
+    let staging_dir = run_dir.join(format!(".staging-{}", parent.id));
     std::fs::create_dir_all(&staging_dir)?;
 
     let mut docs = Vec::new();
@@ -449,19 +453,22 @@ async fn decompose_into<H: HttpClient + Sync>(
 
     let mut final_docs: Vec<Doc> = Vec::new();
     for (mut doc, _, dep_titles) in docs {
-        doc.dependencies = dep_titles
-            .iter()
-            .filter_map(|title| {
-                local_title_to_id
-                    .get(title)
-                    .or_else(|| global_title_to_id.get(title))
-                    .cloned()
-                    .or_else(|| {
-                        warn!("dependency '{}' not found in plan scope", title);
-                        None
-                    })
-            })
-            .collect();
+        let mut resolved = Vec::new();
+        let mut unresolved = Vec::new();
+        for title in &dep_titles {
+            if let Some(id) = local_title_to_id.get(title).or_else(|| global_title_to_id.get(title)) {
+                resolved.push(id.clone());
+            } else {
+                // Stash unresolved titles for the post-merge cross-spec resolution pass.
+                warn!(
+                    "dependency '{}' not yet resolvable, deferring to post-merge pass",
+                    title
+                );
+                unresolved.push(title.clone());
+            }
+        }
+        doc.dependencies = resolved;
+        doc.unresolved_dep_titles = unresolved;
         final_docs.push(doc);
     }
 
@@ -501,9 +508,10 @@ pub async fn decompose<H: HttpClient + Sync>(
 
 /// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
 ///
-/// This is the entry point for plan activation. It calls `decompose_into()` at each
-/// level with a shared `global_title_to_id` map so that Works in Spec B can resolve
-/// dependencies on Works in Spec A even though they were decomposed in separate calls.
+/// This is the entry point for plan activation. Specs are decomposed concurrently
+/// (try_join_all), each spec's phases are also concurrent within the spec branch.
+/// After all branches complete, a post-merge pass resolves cross-spec/cross-phase
+/// dependencies that could not be resolved during parallel execution.
 ///
 /// In Brief mode (plan has no contracts), skips Spec and Phase levels
 /// and decomposes Plan directly into Works.
@@ -515,63 +523,101 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     brief: bool,
 ) -> Result<Vec<Doc>> {
     let mut all_docs = Vec::new();
-    let mut global_title_to_id: HashMap<String, String> = HashMap::new();
 
     if brief {
         // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
-        let works = decompose_into(
-            plan,
-            DocKind::Work,
-            run_dir,
-            config,
-            http_client,
-            &mut global_title_to_id,
-        )
-        .await?;
+        let mut local_map = HashMap::new();
+        let works = decompose_into(plan, DocKind::Work, run_dir, config, http_client, &mut local_map).await?;
         all_docs.extend(works);
     } else {
-        // Full mode: Plan -> Specs -> Phases -> Works
-        let specs = decompose_into(
-            plan,
-            DocKind::Spec,
-            run_dir,
-            config,
-            http_client,
-            &mut global_title_to_id,
-        )
-        .await?;
-        for spec in &specs {
-            let phases = decompose_into(
-                spec,
-                DocKind::Phase,
-                run_dir,
-                config,
-                http_client,
-                &mut global_title_to_id,
-            )
-            .await?;
-            for phase in &phases {
-                let works = decompose_into(
-                    phase,
-                    DocKind::Work,
-                    run_dir,
-                    config,
-                    http_client,
-                    &mut global_title_to_id,
-                )
-                .await?;
-                all_docs.extend(works);
-            }
-            all_docs.extend(phases);
+        // Full mode: Plan -> Specs (sequential) -> Phases + Works (parallel per spec)
+        let mut spec_map = HashMap::new();
+        let specs = decompose_into(plan, DocKind::Spec, run_dir, config, http_client, &mut spec_map).await?;
+
+        // Decompose each spec branch concurrently.
+        // Each branch returns (docs, local_title_to_id). Branches are polled on the
+        // same async task (no tokio::spawn) so no Send bound is needed.
+        let spec_futures: Vec<_> = specs
+            .iter()
+            .map(|spec| decompose_spec_branch(spec, run_dir, config, http_client))
+            .collect();
+        let branch_results = try_join_all(spec_futures).await?;
+
+        // Merge all branch title maps into a single global map for post-pass resolution.
+        let mut global_title_to_id = spec_map;
+        for (_, branch_map) in &branch_results {
+            global_title_to_id.extend(branch_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+
+        // Collect all docs from all branches, then resolve cross-branch deps.
+        for (branch_docs, _) in branch_results {
+            all_docs.extend(branch_docs);
         }
         all_docs.extend(specs);
+        resolve_cross_branch_deps(&mut all_docs, &global_title_to_id);
     }
 
-    // Hierarchical ratification (bottom-up)
-    // Each ratification is one LLM call: parent + its direct children
+    // Hierarchical ratification (bottom-up, sequential by design)
     ratify_hierarchy(plan, &all_docs, run_dir, config, http_client).await?;
 
     Ok(all_docs)
+}
+
+/// Decompose one spec into phases + works, with phases' work-decompositions running concurrently.
+/// Returns (phases + works, merged title-to-id map for this branch).
+async fn decompose_spec_branch<H: HttpClient + Sync>(
+    spec: &Doc,
+    run_dir: &Path,
+    config: &DecomposerConfig,
+    http_client: &H,
+) -> Result<(Vec<Doc>, HashMap<String, String>)> {
+    let mut branch_map = HashMap::new();
+    let phases = decompose_into(spec, DocKind::Phase, run_dir, config, http_client, &mut branch_map).await?;
+
+    // Decompose works for each phase concurrently within this spec branch.
+    let phase_futures: Vec<_> = phases
+        .iter()
+        .map(|phase| decompose_phase_branch(phase, run_dir, config, http_client))
+        .collect();
+    let phase_results = try_join_all(phase_futures).await?;
+
+    let mut all_docs = phases;
+    for (works, phase_map) in phase_results {
+        all_docs.extend(works);
+        branch_map.extend(phase_map.into_iter());
+    }
+
+    Ok((all_docs, branch_map))
+}
+
+/// Decompose one phase into works, returning the works and the local title-to-id map.
+async fn decompose_phase_branch<H: HttpClient + Sync>(
+    phase: &Doc,
+    run_dir: &Path,
+    config: &DecomposerConfig,
+    http_client: &H,
+) -> Result<(Vec<Doc>, HashMap<String, String>)> {
+    let mut phase_map = HashMap::new();
+    let works = decompose_into(phase, DocKind::Work, run_dir, config, http_client, &mut phase_map).await?;
+    Ok((works, phase_map))
+}
+
+/// After all parallel branches finish and maps are merged, resolve any dependency titles
+/// that were deferred because the referenced doc was being built in a sibling branch.
+fn resolve_cross_branch_deps(docs: &mut [Doc], global_map: &HashMap<String, String>) {
+    for doc in docs.iter_mut() {
+        if doc.unresolved_dep_titles.is_empty() {
+            continue;
+        }
+        let pending = std::mem::take(&mut doc.unresolved_dep_titles);
+        for title in pending {
+            if let Some(id) = global_map.get(&title) {
+                doc.dependencies.push(id.clone());
+            } else {
+                warn!("cross-branch dep '{}' could not be resolved after merge", title);
+            }
+        }
+    }
 }
 
 /// Bottom-up ratification of the decomposition hierarchy.
@@ -1141,6 +1187,196 @@ mod tests {
             beta.dependencies,
             vec![alpha.id.clone()],
             "Work Beta must resolve its cross-spec dependency to Work Alpha's ID"
+        );
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test]
+    async fn test_decompose_hierarchy_parallel_specs_complete() {
+        // Verify that decompose_hierarchy produces docs for ALL specs when specs are
+        // decomposed in parallel. Two specs, each with one phase and one work.
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-parallel-specs");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(
+            dir.join("plan-parallel.md"),
+            "# Parallel Plan\n\n## Problem Statement\n\nTwo independent tracks.\n\n## Goals\n\nBoth must complete.",
+        )
+        .unwrap();
+        let plan = Doc::new(
+            DocKind::Plan,
+            None,
+            "Parallel Plan".to_string(),
+            "plan-parallel.md".to_string(),
+        );
+
+        let valid_json = r#"{"valid": true, "issues": []}"#;
+        let ratify_json = r#"{"passed": true, "issues": []}"#;
+
+        let specs_json = serde_json::json!([
+            {"title": "Track One", "content": "# Track One\n\n## Overview\n\nFirst.", "dependencies": []},
+            {"title": "Track Two", "content": "# Track Two\n\n## Overview\n\nSecond.", "dependencies": []}
+        ])
+        .to_string();
+        let phases_one = serde_json::json!([
+            {"title": "Phase One", "content": "# Phase One\n\n## Overview\n\nPhase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_one = serde_json::json!([
+            {"title": "Work One", "content": "# Work\n\n## Description\n\nDo one.\n\n## Acceptance Criteria\n\nassert one()\n\n## Dependencies\n\nNone", "dependencies": []}
+        ])
+        .to_string();
+        let phases_two = serde_json::json!([
+            {"title": "Phase Two", "content": "# Phase Two\n\n## Overview\n\nPhase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_two = serde_json::json!([
+            {"title": "Work Two", "content": "# Work\n\n## Description\n\nDo two.\n\n## Acceptance Criteria\n\nassert two()\n\n## Dependencies\n\nNone", "dependencies": []}
+        ])
+        .to_string();
+
+        let mk = |text: &str| serde_json::json!({"content": [{"type": "text", "text": text}]}).to_string();
+
+        // Responses are popped LIFO. Order matches the actual call sequence with the
+        // synchronous mock (Spec A branch completes before Spec B branch due to cooperative
+        // polling on a single async task):
+        // 1: plan -> specs (validate x2)
+        // 2: spec Track One -> phases (validate x1)
+        // 3: phase Phase One -> works (validate x1)
+        // 4: spec Track Two -> phases (validate x1)
+        // 5: phase Phase Two -> works (validate x1)
+        // 6+: ratifications (5 groups)
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(valid_json),  // validate Work Two
+                mk(&works_two),  // decompose Phase Two -> works
+                mk(valid_json),  // validate Phase Two
+                mk(&phases_two), // decompose Track Two -> phases
+                mk(valid_json),  // validate Track Two spec
+                mk(valid_json),  // validate Work One
+                mk(&works_one),  // decompose Phase One -> works
+                mk(valid_json),  // validate Phase One
+                mk(&phases_one), // decompose Track One -> phases
+                mk(valid_json),  // validate Track One spec
+                mk(valid_json),  // validate Track Two spec (from plan decompose)
+                mk(&specs_json), // decompose plan -> specs
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let all_docs = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+
+        let specs: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
+        let phases: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
+        let works: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
+        assert_eq!(specs.len(), 2, "expected 2 specs, got {}", specs.len());
+        assert_eq!(phases.len(), 2, "expected 2 phases, got {}", phases.len());
+        assert_eq!(works.len(), 2, "expected 2 works, got {}", works.len());
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test]
+    async fn test_decompose_hierarchy_cross_spec_deps_resolved() {
+        // With parallel spec branches, Work Beta (in Spec B) depends on Work Alpha
+        // (in Spec A). During Spec B's branch, Work Alpha's ID is unknown. The
+        // post-merge pass must resolve it from the merged global map.
+        // This is identical in spirit to test_decompose_hierarchy_cross_scope_dependency_resolved
+        // but explicitly targets the post-merge path (unresolved_dep_titles → dependencies).
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-parallel-cross-spec");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(
+            dir.join("plan-cross.md"),
+            "# Cross-Spec Plan\n\n## Problem Statement\n\nCross-spec dep test.\n\n## Goals\n\nBeta depends on Alpha.",
+        )
+        .unwrap();
+        let plan = Doc::new(
+            DocKind::Plan,
+            None,
+            "Cross-Spec Plan".to_string(),
+            "plan-cross.md".to_string(),
+        );
+
+        let valid_json = r#"{"valid": true, "issues": []}"#;
+        let ratify_json = r#"{"passed": true, "issues": []}"#;
+
+        let specs_json = serde_json::json!([
+            {"title": "Spec Alpha", "content": "# Spec Alpha\n\n## Overview\n\nFirst.", "dependencies": []},
+            {"title": "Spec Beta",  "content": "# Spec Beta\n\n## Overview\n\nSecond.", "dependencies": []}
+        ])
+        .to_string();
+        let phases_alpha = serde_json::json!([
+            {"title": "Phase Alpha", "content": "# Phase Alpha\n\n## Overview\n\nPhase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_alpha = serde_json::json!([
+            {"title": "Work Alpha", "content": "# Work\n\n## Description\n\nDo alpha.\n\n## Acceptance Criteria\n\nassert alpha()\n\n## Dependencies\n\nNone", "dependencies": []}
+        ])
+        .to_string();
+        let phases_beta = serde_json::json!([
+            {"title": "Phase Beta", "content": "# Phase Beta\n\n## Overview\n\nPhase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_beta = serde_json::json!([
+            {"title": "Work Beta", "content": "# Work\n\n## Description\n\nDo beta.\n\n## Acceptance Criteria\n\nassert beta()\n\n## Dependencies\n\nWork Alpha", "dependencies": ["Work Alpha"]}
+        ])
+        .to_string();
+
+        let mk = |text: &str| serde_json::json!({"content": [{"type": "text", "text": text}]}).to_string();
+
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(valid_json),    // validate Work Beta
+                mk(&works_beta),   // decompose Phase Beta -> works
+                mk(valid_json),    // validate Phase Beta
+                mk(&phases_beta),  // decompose Spec Beta -> phases
+                mk(valid_json),    // validate Spec Beta (from spec branch)
+                mk(valid_json),    // validate Work Alpha
+                mk(&works_alpha),  // decompose Phase Alpha -> works
+                mk(valid_json),    // validate Phase Alpha
+                mk(&phases_alpha), // decompose Spec Alpha -> phases
+                mk(valid_json),    // validate Spec Alpha (from spec branch)
+                mk(valid_json),    // validate Spec Beta (from plan decompose)
+                mk(&specs_json),   // decompose plan -> specs
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let all_docs = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+
+        let alpha = all_docs
+            .iter()
+            .find(|d| d.title == "Work Alpha")
+            .expect("Work Alpha not found");
+        let beta = all_docs
+            .iter()
+            .find(|d| d.title == "Work Beta")
+            .expect("Work Beta not found");
+
+        assert_eq!(
+            beta.dependencies,
+            vec![alpha.id.clone()],
+            "Work Beta must resolve its cross-spec dep to Work Alpha's ID via post-merge pass"
         );
 
         unsafe { std::env::remove_var(&env_key) };

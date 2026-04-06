@@ -74,6 +74,10 @@ pub struct Doc {
     pub markdown: String,
     /// IDs of sibling docs that must be complete before this one can proceed.
     pub dependencies: Vec<String>,
+    /// Dep titles that could not be resolved during decomposition; cleared by the
+    /// post-merge cross-spec resolution pass. Never persisted.
+    #[serde(skip, default)]
+    pub unresolved_dep_titles: Vec<String>,
     /// Extracted from the `## Acceptance Criteria` section at creation time.
     pub acceptance_criteria: Vec<String>,
     pub created_at: i64,
@@ -90,6 +94,7 @@ impl Doc {
             title,
             markdown,
             dependencies: Vec::new(),
+            unresolved_dep_titles: Vec::new(),
             acceptance_criteria: Vec::new(),
             created_at: now,
             updated_at: now,
