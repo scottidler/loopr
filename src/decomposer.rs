@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use eyre::{Context, Result, bail};
-use log::{info, warn};
+use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
 use futures::future::try_join_all;
@@ -183,6 +183,10 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<Vec<ChildEntry>> {
+    debug!(
+        "call_llm_for_children: model={} provider={}",
+        config.model, config.provider
+    );
     let api_key =
         std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
 
@@ -236,6 +240,7 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
         bail!("LLM produced zero child documents");
     }
 
+    debug!("call_llm_for_children: got {} children", children.len());
     Ok(children)
 }
 
@@ -245,6 +250,10 @@ async fn call_llm_for_validation<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<ValidationResult> {
+    debug!(
+        "call_llm_for_validation: model={} provider={}",
+        config.validation_model, config.provider
+    );
     // Use the validation model (Haiku) for structural checks
     let mut validation_config = config.clone();
     validation_config.model = config.validation_model.clone();
@@ -301,6 +310,10 @@ async fn call_llm_for_ratification<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<RatifyResult> {
+    debug!(
+        "call_llm_for_ratification: model={} provider={}",
+        config.model, config.provider
+    );
     // Uses the main model for ratification (reasoning task, not structural check)
     let text = call_llm_for_children_raw(http_client, config, prompt).await?;
     serde_json::from_str(&text).context("Failed to parse ratification response")
@@ -312,6 +325,10 @@ async fn call_llm_for_children_raw<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<String> {
+    debug!(
+        "call_llm_for_children_raw: model={} provider={}",
+        config.model, config.provider
+    );
     let api_key =
         std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
 
@@ -374,7 +391,10 @@ async fn decompose_into<H: HttpClient + Sync>(
     http_client: &H,
     global_title_to_id: &mut HashMap<String, String>,
 ) -> Result<Vec<Doc>> {
-    info!("decompose: {} {} -> {}s", parent.kind, parent.id, target_kind);
+    debug!(
+        "decompose_into: parent={} ({}) title={:?} -> target={}",
+        parent.id, parent.kind, parent.title, target_kind
+    );
 
     // Read parent content
     let parent_path = run_dir.join(&parent.markdown);
@@ -397,6 +417,10 @@ async fn decompose_into<H: HttpClient + Sync>(
 
     // Validate each child
     for child in &children {
+        trace!(
+            "decompose_into: validating child title={:?} kind={}",
+            child.title, target_kind
+        );
         let validate_prompt = build_validate_prompt(target_kind, &child.content);
         match call_llm_for_validation(http_client, config, &validate_prompt).await {
             Ok(result) if !result.valid => {
@@ -406,7 +430,9 @@ async fn decompose_into<H: HttpClient + Sync>(
             Err(e) => {
                 warn!("Validation call failed for '{}': {}", child.title, e);
             }
-            Ok(_) => {}
+            Ok(_) => {
+                trace!("decompose_into: validation passed for {:?}", child.title);
+            }
         }
     }
 
@@ -481,11 +507,11 @@ async fn decompose_into<H: HttpClient + Sync>(
     std::fs::remove_dir(&staging_dir)?;
 
     info!(
-        "decompose: produced {} {} docs from {} {}",
-        final_docs.len(),
-        target_kind,
+        "decompose_into: done parent={} ({}) -> {} {}(s) produced",
+        parent.id,
         parent.kind,
-        parent.id
+        final_docs.len(),
+        target_kind
     );
 
     Ok(final_docs)
@@ -522,6 +548,13 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     http_client: &H,
     brief: bool,
 ) -> Result<Vec<Doc>> {
+    debug!(
+        "decompose_hierarchy: plan={} title={:?} brief={} run_dir={}",
+        plan.id,
+        plan.title,
+        brief,
+        run_dir.display()
+    );
     let mut all_docs = Vec::new();
 
     if brief {
@@ -533,6 +566,10 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
         // Full mode: Plan -> Specs (sequential) -> Phases + Works (parallel per spec)
         let mut spec_map = HashMap::new();
         let specs = decompose_into(plan, DocKind::Spec, run_dir, config, http_client, &mut spec_map).await?;
+        info!(
+            "decompose_hierarchy: {} specs produced, starting parallel spec branches",
+            specs.len()
+        );
 
         // Decompose each spec branch concurrently.
         // Each branch returns (docs, local_title_to_id). Branches are polled on the
@@ -542,6 +579,7 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
             .map(|spec| decompose_spec_branch(spec, run_dir, config, http_client))
             .collect();
         let branch_results = try_join_all(spec_futures).await?;
+        info!("decompose_hierarchy: all {} spec branches complete", specs.len());
 
         // Merge all branch title maps into a single global map for post-pass resolution.
         let mut global_title_to_id = spec_map;
@@ -557,6 +595,11 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
         resolve_cross_branch_deps(&mut all_docs, &global_title_to_id);
     }
 
+    info!(
+        "decompose_hierarchy: hierarchy complete plan={} total_docs={}",
+        plan.id,
+        all_docs.len()
+    );
     // Hierarchical ratification (bottom-up, sequential by design)
     ratify_hierarchy(plan, &all_docs, run_dir, config, http_client).await?;
 
@@ -571,8 +614,14 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     http_client: &H,
 ) -> Result<(Vec<Doc>, HashMap<String, String>)> {
+    debug!("decompose_spec_branch: spec={} title={:?}", spec.id, spec.title);
     let mut branch_map = HashMap::new();
     let phases = decompose_into(spec, DocKind::Phase, run_dir, config, http_client, &mut branch_map).await?;
+    debug!(
+        "decompose_spec_branch: spec={} got {} phases, starting parallel phase branches",
+        spec.id,
+        phases.len()
+    );
 
     // Decompose works for each phase concurrently within this spec branch.
     let phase_futures: Vec<_> = phases
@@ -580,6 +629,7 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
         .map(|phase| decompose_phase_branch(phase, run_dir, config, http_client))
         .collect();
     let phase_results = try_join_all(phase_futures).await?;
+    debug!("decompose_spec_branch: spec={} all phase branches complete", spec.id);
 
     let mut all_docs = phases;
     for (works, phase_map) in phase_results {
@@ -587,6 +637,11 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
         branch_map.extend(phase_map.into_iter());
     }
 
+    debug!(
+        "decompose_spec_branch: spec={} branch total docs={}",
+        spec.id,
+        all_docs.len()
+    );
     Ok((all_docs, branch_map))
 }
 
@@ -597,19 +652,30 @@ async fn decompose_phase_branch<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     http_client: &H,
 ) -> Result<(Vec<Doc>, HashMap<String, String>)> {
+    debug!("decompose_phase_branch: phase={} title={:?}", phase.id, phase.title);
     let mut phase_map = HashMap::new();
     let works = decompose_into(phase, DocKind::Work, run_dir, config, http_client, &mut phase_map).await?;
+    debug!("decompose_phase_branch: phase={} got {} works", phase.id, works.len());
     Ok((works, phase_map))
 }
 
 /// After all parallel branches finish and maps are merged, resolve any dependency titles
 /// that were deferred because the referenced doc was being built in a sibling branch.
 fn resolve_cross_branch_deps(docs: &mut [Doc], global_map: &HashMap<String, String>) {
+    debug!(
+        "resolve_cross_branch_deps: checking {} docs for unresolved deps",
+        docs.len()
+    );
     for doc in docs.iter_mut() {
         if doc.unresolved_dep_titles.is_empty() {
             continue;
         }
         let pending = std::mem::take(&mut doc.unresolved_dep_titles);
+        debug!(
+            "resolve_cross_branch_deps: doc={} has {} unresolved dep titles",
+            doc.id,
+            pending.len()
+        );
         for title in pending {
             if let Some(id) = global_map.get(&title) {
                 doc.dependencies.push(id.clone());
@@ -628,6 +694,7 @@ async fn ratify_hierarchy<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     http_client: &H,
 ) -> Result<()> {
+    debug!("ratify_hierarchy: plan={} all_docs={}", plan.id, all_docs.len());
     // Group docs by parent_id
     let mut children_of: HashMap<&str, Vec<&Doc>> = HashMap::new();
     for doc in all_docs {
@@ -662,6 +729,11 @@ async fn ratify_hierarchy<H: HttpClient + Sync>(
             continue;
         }
 
+        trace!(
+            "ratify_hierarchy: ratifying parent={} with {} children",
+            parent_id,
+            child_pairs.len()
+        );
         let prompt = build_ratify_prompt(&parent_content, &child_pairs);
         match call_llm_for_ratification(http_client, config, &prompt).await {
             Ok(result) if !result.passed => {
@@ -675,7 +747,7 @@ async fn ratify_hierarchy<H: HttpClient + Sync>(
                 warn!("Ratification call failed for parent {}: {}", parent_id, e);
             }
             Ok(_) => {
-                info!("Ratification passed for parent {}", parent_id);
+                debug!("ratify_hierarchy: parent={} passed", parent_id);
             }
         }
     }
