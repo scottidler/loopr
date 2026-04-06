@@ -39,14 +39,13 @@ pub(super) fn detect_dependency_cycle(works: &HashMap<String, Work>, new_id: &st
     false
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
 pub(super) fn handle_work_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_work_create()");
         let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
@@ -231,10 +230,9 @@ pub(super) fn handle_work_create(
     })
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_work_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -317,14 +315,13 @@ pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
 pub(super) fn handle_work_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_work_transition()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -475,14 +472,13 @@ pub(super) fn handle_work_transition(
     })
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_work_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_work_update()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

@@ -27,7 +27,7 @@ pub async fn run_agent_task(
     event_tx: broadcast::Sender<DaemonEvent>,
     worktree_mgr: WorktreeManager,
 ) {
-    debug!("run_agent_task(session_id={}, agent_type={})", session_id, agent_type);
+    debug!("session_id={} agent_type={}", session_id, agent_type);
     info!("Agent task started: {} ({})", session_id, agent_type);
 
     // Create a worktree for the agent before starting the loop.

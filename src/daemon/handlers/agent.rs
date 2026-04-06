@@ -12,7 +12,7 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(agent_type = ?req.params.get("agent_type"), work_id = ?req.params.get("work_id"), bundle_id = ?req.params.get("bundle_id")))]
 pub(super) fn handle_agent_start(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -20,12 +20,6 @@ pub(super) fn handle_agent_start(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!(
-            "handle_agent_start(agent_type={:?}, work_id={:?}, bundle_id={:?})",
-            req.params.get("agent_type"),
-            req.params.get("work_id"),
-            req.params.get("bundle_id"),
-        );
         let agent_type: AgentKind = match req.params.get("agent_type") {
             Some(v) => match serde_json::from_value(v.clone()) {
                 Ok(t) => t,
@@ -239,14 +233,13 @@ pub(super) fn handle_agent_start(
     })
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(session_id = ?req.params.get("session_id")))]
 pub(super) fn handle_agent_stop(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_agent_stop(params={})", req.params);
         let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
@@ -337,7 +330,6 @@ pub(super) fn handle_agent_pause(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_agent_pause()");
         let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
@@ -398,7 +390,6 @@ pub(super) fn handle_agent_resume(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_agent_resume()");
         let session_id = match req.params.get("session_id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {

@@ -262,10 +262,9 @@ pub(super) fn handle_integrator_publish(
 
 // --- Validator handlers ---
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(collection = ?req.params.get("collection"), id = ?req.params.get("id")))]
 pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_async_handler!(req.id, {
-        debug!("handle_validator_validate()");
         let validator = match &stores.validator {
             Some(v) => v.clone(),
             None => {
@@ -376,10 +375,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
 
 // --- Coverage Evaluator handler ---
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(parent_collection = ?req.params.get("parent_collection"), parent_id = ?req.params.get("parent_id")))]
 pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_async_handler!(req.id, {
-        debug!("handle_coverage_evaluate()");
         let evaluator = match &stores.evaluator {
             Some(e) => e.clone(),
             None => {

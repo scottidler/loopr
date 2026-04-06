@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use eyre::{bail, eyre};
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -50,7 +50,7 @@ use super::common::persist_doc;
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(skip_decompose = ?req.params.get("skip_decompose")))]
 pub(super) async fn handle_doc_accept(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -59,11 +59,6 @@ pub(super) async fn handle_doc_accept(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_async_handler!(req.id, {
-        debug!(
-            "handle_doc_accept(markdown_len={:?})",
-            req.params.get("markdown").and_then(|v| v.as_str()).map(|s| s.len())
-        );
-
         let markdown = match req.params.get("markdown").and_then(|v| v.as_str()) {
             Some(m) if !m.trim().is_empty() => m.to_string(),
             _ => {
@@ -100,7 +95,7 @@ pub(super) async fn handle_doc_accept(
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(path = ?req.params.get("path")))]
 pub(super) async fn handle_doc_inject(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -109,11 +104,6 @@ pub(super) async fn handle_doc_inject(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_async_handler!(req.id, {
-        debug!(
-            "handle_doc_inject(path={:?})",
-            req.params.get("path").and_then(|v| v.as_str())
-        );
-
         let path_str = match req.params.get("path").and_then(|v| v.as_str()) {
             Some(p) => p.to_string(),
             None => {

@@ -242,19 +242,13 @@ impl AgenticLlm for AgentLlmClient {
     /// Tool input JSON is buffered silently until `content_block_stop`, then assembled
     /// into complete `ContentBlock::ToolUse` entries. Returns the same atomic
     /// `(Vec<ContentBlock>, Option<StopReason>)` that `run_tool_loop` expects.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(message_count = %messages.len(), tool_count = %tools.len()))]
     async fn complete(
         &self,
         system_prompt: &str,
         messages: &[Message],
         tools: &[ToolDefinition],
     ) -> Result<(Vec<ContentBlock>, Option<StopReason>)> {
-        debug!(
-            "AgentLlmClient::complete(messages={}, tools={})",
-            messages.len(),
-            tools.len()
-        );
-
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| {

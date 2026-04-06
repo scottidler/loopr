@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use tracing::{debug, info, instrument};
+use tracing::{info, instrument};
 
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
@@ -79,19 +79,13 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
 
 /// Handle chat.submit - send a user message and start/resume the Chat agentic loop.
 /// Spawns a daemon-side Tokio task running run_tool_loop with per-iteration checkpointing.
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(session_id = ?req.params.get("session_id"), funnel_state = ?req.params.get("funnel_state")))]
 pub(super) fn handle_chat_submit(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!(
-            "handle_chat_submit(session_id={:?}, funnel_state={:?}, message_len={:?})",
-            req.params.get("session_id"),
-            req.params.get("funnel_state"),
-            req.params.get("message").and_then(|v| v.as_str()).map(|s| s.len()),
-        );
         let session_id = req
             .params
             .get("session_id")
@@ -292,7 +286,6 @@ pub(super) fn handle_chat_submit(
 #[instrument(skip_all)]
 pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_chat_attach()");
         let session_id = req
             .params
             .get("session_id")
@@ -326,7 +319,6 @@ pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> Da
 #[instrument(skip_all)]
 pub(super) fn handle_chat_history(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_chat_history()");
         let session_id = req
             .params
             .get("session_id")
