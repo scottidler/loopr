@@ -125,6 +125,22 @@ impl WorktreeManager {
             // Directory exists but isn't a worktree — clean up and recreate
             std::fs::remove_dir_all(&path)?;
         }
+        // Prune stale worktree registrations before creating.
+        // If a previous agent session for this work_id crashed without cleanup, git
+        // still has the worktree registered even though the directory is gone. That
+        // causes `git worktree add` to fail with "missing but already registered".
+        // `git worktree prune` removes any registrations whose directories no longer exist.
+        let prune_out = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&self.repo_path)
+            .output();
+        if let Ok(o) = &prune_out {
+            if !o.status.success() {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                log::warn!("git worktree prune failed (non-fatal): {}", stderr.trim());
+            }
+        }
+
         // create() may fail with GitCommand if the branch "agent/<work_id>" already
         // exists (TOCTOU race with another agent). If the path now exists after the
         // failed create (the other agent won), just return it.
