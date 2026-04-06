@@ -36,6 +36,19 @@ else
     warn "daemon.log not found at $DAEMON_LOG"
 fi
 
+DECOMPOSER_LOG=$(ls -t "$TARGET/agents/"decomposer-*.log 2>/dev/null | head -n 1)
+echo
+echo "--- decomposer log (last 20 lines) ---"
+if [ -n "$DECOMPOSER_LOG" ] && [ -f "$DECOMPOSER_LOG" ]; then
+    echo "Found log: $DECOMPOSER_LOG"
+    /usr/bin/tail -n 20 "$DECOMPOSER_LOG"
+    if grep -qi "error\|panic\|failed" "$DECOMPOSER_LOG"; then
+        warn "Errors detected in $DECOMPOSER_LOG!"
+    fi
+else
+    warn "decomposer-*.log not found in $TARGET/agents/"
+fi
+
 # ── 2. Git Worktree State ─────────────────────────────────────────────────────
 section "2. Git Worktree State"
 if [ -d "$TARGET/.git" ]; then
