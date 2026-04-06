@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use eyre::eyre;
+use eyre::{bail, eyre};
 use log::{debug, info, warn};
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -274,16 +274,26 @@ pub(super) async fn accept_plan_markdown(
                 Ok(child_docs) => {
                     let child_count = child_docs.len();
                     info!("doc entry (bg): decomposition produced {} child docs", child_count);
-                    double_write_old_records(&stores_bg, &plan_doc_bg, &markdown_bg, &child_docs, &run_dir_bg);
-                    for child in child_docs {
-                        if let Err(e) = persist_doc(&stores_bg, child, &event_tx_bg) {
-                            warn!("doc entry (bg): failed to persist child doc: {}", e);
+                    match double_write_old_records(&stores_bg, &plan_doc_bg, &markdown_bg, &child_docs, &run_dir_bg) {
+                        Ok(()) => {
+                            for child in child_docs {
+                                if let Err(e) = persist_doc(&stores_bg, child, &event_tx_bg) {
+                                    warn!("doc entry (bg): failed to persist child doc: {}", e);
+                                }
+                            }
+                            let _ = event_tx_bg.send(DaemonEvent::new(
+                                "decomposition.completed",
+                                json!({ "goal_id": goal_id_bg, "child_count": child_count }),
+                            ));
+                        }
+                        Err(e) => {
+                            warn!("doc entry (bg): persist failed: {}", e);
+                            let _ = event_tx_bg.send(DaemonEvent::new(
+                                "decomposition.failed",
+                                json!({ "goal_id": goal_id_bg, "error": e.to_string() }),
+                            ));
                         }
                     }
-                    let _ = event_tx_bg.send(DaemonEvent::new(
-                        "decomposition.completed",
-                        json!({ "goal_id": goal_id_bg, "child_count": child_count }),
-                    ));
                 }
                 Err(e) => {
                     warn!("doc entry (bg): decomposition failed: {}", e);
@@ -307,6 +317,9 @@ pub(super) async fn accept_plan_markdown(
     ))
     .await;
     let coordinator_already_running = start_resp.is_error();
+    if coordinator_already_running {
+        info!("doc entry: coordinator already running, relying on existing session");
+    }
     let coordinator_session_id = start_resp
         .result
         .as_ref()
@@ -336,15 +349,15 @@ pub(super) async fn accept_plan_markdown(
 /// Double-write old-style Plan/Spec/Phase/Work records alongside Docs so the
 /// Coordinator (which reads old stores) can execute the plan.
 ///
-/// Non-fatal: logs warnings on any failure and continues. The Doc records are
-/// the source of truth; old records are transitional.
+/// Returns `Err` on any failure; the caller must treat a failed double-write as
+/// `decomposition.failed` so the coordinator never gets stuck in `Decomposing`.
 fn double_write_old_records(
     stores: &Arc<Stores>,
     plan_doc: &Doc,
     plan_markdown: &str,
     child_docs: &[Doc],
     run_dir: &Path,
-) {
+) -> eyre::Result<()> {
     let title = extract_plan_title(plan_markdown);
     let ac_joined = plan_doc.acceptance_criteria.join("\n");
 
@@ -353,21 +366,14 @@ fn double_write_old_records(
     old_plan.force_status(PlanStatus::Active);
     let old_plan_id = old_plan.id.clone();
 
-    let persist_plan = (|| {
-        if let Some(store_arc) = &stores.store {
-            store_arc
-                .lock()
-                .map_err(|_| eyre!("taskstore lock poisoned"))?
-                .create(old_plan.clone())
-                .map_err(|e| eyre!("Failed to persist old Plan: {}", e))?;
-        }
-        stores.write_plans()?.insert(old_plan_id.clone(), old_plan);
-        Ok::<(), eyre::Error>(())
-    })();
-    if let Err(e) = persist_plan {
-        warn!("double-write: failed to create old Plan: {}", e);
-        return;
+    if let Some(store_arc) = &stores.store {
+        store_arc
+            .lock()
+            .map_err(|_| eyre!("taskstore lock poisoned"))?
+            .create(old_plan.clone())
+            .map_err(|e| eyre!("failed to persist old Plan: {}", e))?;
     }
+    stores.write_plans()?.insert(old_plan_id.clone(), old_plan);
 
     let mut doc_to_old: HashMap<String, String> = HashMap::new();
     doc_to_old.insert(plan_doc.id.clone(), old_plan_id);
@@ -384,17 +390,11 @@ fn double_write_old_records(
             continue;
         };
         let Some(old_parent_id) = doc_to_old.get(doc_parent_id).cloned() else {
-            warn!("double-write: no old record for parent Doc {}", doc_parent_id);
-            continue;
+            bail!("double-write: no old record for parent Doc {}", doc_parent_id);
         };
 
-        let content = match std::fs::read_to_string(run_dir.join(&child.markdown)) {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("double-write: failed to read {}: {}", child.markdown, e);
-                continue;
-            }
-        };
+        let content = std::fs::read_to_string(run_dir.join(&child.markdown))
+            .map_err(|e| eyre!("double-write: failed to read {}: {}", child.markdown, e))?;
         let child_title = child.title.clone();
 
         let old_id = match child.kind {
@@ -402,21 +402,14 @@ fn double_write_old_records(
                 let mut spec = Spec::new(old_parent_id, child_title, content);
                 spec.force_status(SpecStatus::Active);
                 let old_id = spec.id.clone();
-                let res = (|| {
-                    if let Some(store_arc) = &stores.store {
-                        store_arc
-                            .lock()
-                            .map_err(|_| eyre!("taskstore lock poisoned"))?
-                            .create(spec.clone())
-                            .map_err(|e| eyre!("Failed to persist old Spec: {}", e))?;
-                    }
-                    stores.write_specs()?.insert(old_id.clone(), spec);
-                    Ok::<(), eyre::Error>(())
-                })();
-                if let Err(e) = res {
-                    warn!("double-write: failed to create old Spec: {}", e);
-                    continue;
+                if let Some(store_arc) = &stores.store {
+                    store_arc
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .create(spec.clone())
+                        .map_err(|e| eyre!("failed to persist old Spec: {}", e))?;
                 }
+                stores.write_specs()?.insert(old_id.clone(), spec);
                 old_id
             }
             DocKind::Phase => {
@@ -426,21 +419,14 @@ fn double_write_old_records(
                 let mut phase = Phase::new(old_parent_id, child_title, content, current_order);
                 phase.force_status(PhaseStatus::Active);
                 let old_id = phase.id.clone();
-                let res = (|| {
-                    if let Some(store_arc) = &stores.store {
-                        store_arc
-                            .lock()
-                            .map_err(|_| eyre!("taskstore lock poisoned"))?
-                            .create(phase.clone())
-                            .map_err(|e| eyre!("Failed to persist old Phase: {}", e))?;
-                    }
-                    stores.write_phases()?.insert(old_id.clone(), phase);
-                    Ok::<(), eyre::Error>(())
-                })();
-                if let Err(e) = res {
-                    warn!("double-write: failed to create old Phase: {}", e);
-                    continue;
+                if let Some(store_arc) = &stores.store {
+                    store_arc
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .create(phase.clone())
+                        .map_err(|e| eyre!("failed to persist old Phase: {}", e))?;
                 }
+                stores.write_phases()?.insert(old_id.clone(), phase);
                 old_id
             }
             DocKind::Work => {
@@ -453,27 +439,21 @@ fn double_write_old_records(
                     .filter_map(|dep_doc_id| doc_to_old.get(dep_doc_id).cloned())
                     .collect();
                 let old_id = work.id.clone();
-                let res = (|| {
-                    if let Some(store_arc) = &stores.store {
-                        store_arc
-                            .lock()
-                            .map_err(|_| eyre!("taskstore lock poisoned"))?
-                            .create(work.clone())
-                            .map_err(|e| eyre!("Failed to persist old Work: {}", e))?;
-                    }
-                    stores.write_works()?.insert(old_id.clone(), work);
-                    Ok::<(), eyre::Error>(())
-                })();
-                if let Err(e) = res {
-                    warn!("double-write: failed to create old Work: {}", e);
-                    continue;
+                if let Some(store_arc) = &stores.store {
+                    store_arc
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .create(work.clone())
+                        .map_err(|e| eyre!("failed to persist old Work: {}", e))?;
                 }
+                stores.write_works()?.insert(old_id.clone(), work);
                 old_id
             }
             DocKind::Plan => continue,
         };
         doc_to_old.insert(child.id.clone(), old_id);
     }
+    Ok(())
 }
 
 /// Extract the plan title from the first `# ` heading line in the markdown.
@@ -781,5 +761,74 @@ mod tests {
 
         let docs = stores.read_docs().unwrap();
         assert!(docs.contains_key(&id));
+    }
+
+    // --- double_write_old_records ---
+
+    #[test]
+    fn test_double_write_returns_err_when_child_file_missing() {
+        // If a child doc references a markdown file that doesn't exist on disk,
+        // double_write_old_records must return Err (not silently skip).
+        let dir = TestDir::new("double-write-missing-file");
+        let mut stores = crate::daemon::context::Stores::new();
+        stores.config.project.repo_path = dir.to_path_buf();
+        let stores = std::sync::Arc::new(stores);
+
+        let plan_markdown = "# My Plan\n\n## Summary\n\nDo stuff.\n";
+        let plan_doc = Doc::new(DocKind::Plan, None, "My Plan".to_string(), "plan.md".to_string());
+
+        // Child references a file that doesn't exist in the run_dir
+        let mut child = Doc::new(
+            DocKind::Spec,
+            Some(plan_doc.id.clone()),
+            "Spec One".to_string(),
+            "spec-one.md".to_string(), // file is not created on disk
+        );
+        child.parent_id = Some(plan_doc.id.clone());
+
+        let run_dir = dir.to_path_buf();
+        let result = double_write_old_records(&stores, &plan_doc, plan_markdown, &[child], &run_dir);
+
+        assert!(result.is_err(), "expected Err when child file is missing");
+    }
+
+    // --- single coordinator invariant (Phase 2) ---
+
+    #[tokio::test]
+    async fn test_two_doc_accepts_start_only_one_coordinator() {
+        // Two sequential doc.accept calls should result in exactly one non-terminal
+        // coordinator session: the second call detects the running coordinator via the
+        // atomic pool check and returns coordinator_already_running=true.
+        let dir = TestDir::new("doc-accept-single-coord");
+        let mut stores = crate::daemon::context::Stores::new();
+        stores.config.project.repo_path = dir.to_path_buf();
+        let stores = std::sync::Arc::new(stores);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let md = "# Plan A\n\n## Summary\n\nFirst plan.";
+        let req1 = DaemonRequest::new(1, "doc.accept", json!({ "markdown": md, "skip_decompose": true }));
+        let resp1 = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req1).await;
+        assert!(!resp1.is_error(), "first accept should succeed");
+        let r1 = resp1.result.unwrap();
+        assert!(!r1["coordinator_already_running"].as_bool().unwrap_or(true));
+
+        let md2 = "# Plan B\n\n## Summary\n\nSecond plan.";
+        let req2 = DaemonRequest::new(2, "doc.accept", json!({ "markdown": md2, "skip_decompose": true }));
+        let resp2 = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req2).await;
+        assert!(!resp2.is_error(), "second accept should also succeed");
+        let r2 = resp2.result.unwrap();
+        assert!(
+            r2["coordinator_already_running"].as_bool().unwrap_or(false),
+            "second call must see coordinator_already_running=true"
+        );
+
+        // Exactly one coordinator session in a non-terminal state
+        let sessions = stores.read_agent_sessions().unwrap();
+        let coordinator_count = sessions
+            .values()
+            .filter(|s| s.agent_type == crate::agents::AgentKind::Coordinator && !s.status().is_terminal())
+            .count();
+        assert_eq!(coordinator_count, 1, "exactly one coordinator must be running");
     }
 }
