@@ -124,7 +124,7 @@ impl Bundle {
     }
 
     pub fn new(work_id: String, base_tick_id: Option<String>, branch_name: String, claims: Vec<String>) -> Self {
-        log::debug!("Bundle::new(work_id={}, branch_name={})", work_id, branch_name);
+        tracing::debug!("Bundle::new(work_id={}, branch_name={})", work_id, branch_name);
         let now = id::now_millis();
         Self {
             id: id::generate_id("bd"),

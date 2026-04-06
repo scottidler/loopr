@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use log::{debug, info};
 use tokio::sync::broadcast;
+use tracing::{debug, info};
 
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
@@ -243,7 +243,7 @@ pub(super) fn handle_chat_submit(
                     ));
                 }
                 Err(e) => {
-                    log::error!("chat task failed: {}", e);
+                    tracing::error!("chat task failed: {}", e);
                     // Store error as system message
                     if let Ok(mut sessions) = stores_clone.chat_sessions.write()
                         && let Some(history) = sessions.get_mut(&session_id_clone)

@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use eyre::eyre;
-use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use crate::agents::AgentSession;
 use crate::domain::bundle::{Bundle, BundleStatus};
@@ -34,7 +34,7 @@ pub(super) fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
             .unwrap_or("unknown");
         let version_match = client_version == server_version;
         if !version_match {
-            log::warn!(
+            tracing::warn!(
                 "Client version mismatch: client={}, server={}",
                 client_version,
                 server_version
@@ -73,7 +73,7 @@ pub(super) fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> Da
             match store.install_git_hooks() {
                 Ok(()) => true,
                 Err(e) => {
-                    log::warn!("Failed to install git hooks (non-fatal): {}", e);
+                    tracing::warn!("Failed to install git hooks (non-fatal): {}", e);
                     false
                 }
             }

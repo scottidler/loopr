@@ -1,6 +1,6 @@
 use eyre::Result;
-use log::{debug, info};
 use tokio::sync::broadcast;
+use tracing::{debug, info};
 
 use crate::agents::llm_client::AgentLlmClient;
 use crate::ipc::protocol::DaemonEvent;

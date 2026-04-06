@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{debug, info, warn};
 use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
 
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;

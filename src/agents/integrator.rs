@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::error;
+use tracing::error;
 
 use crate::agents::{Agent, AgentContext, AgentKind};
 use crate::config::IntegratorConfig;
@@ -1074,7 +1074,7 @@ impl IntegratorAgent {
 /// Gap #14: Merge bundle branches into the integration branch.
 /// Returns the HEAD SHA after all merges succeed.
 fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]) -> Result<String> {
-    log::debug!(
+    tracing::debug!(
         "merge_bundle_branches(repo={}, branches={:?})",
         repo_path.display(),
         bundle_branches,

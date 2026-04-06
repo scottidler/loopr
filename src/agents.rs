@@ -31,8 +31,8 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use eyre::Result;
-use log::{debug, error, info, trace, warn};
 use tokio::sync::broadcast;
+use tracing::{debug, error, info, trace, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::cache::ReadCache;

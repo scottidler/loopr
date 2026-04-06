@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use eyre::eyre;
-use log::debug;
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::role::Role;
@@ -200,7 +200,7 @@ pub(super) fn handle_bundle_create(
                     .map(|p| p.as_str())
                     .collect();
                 if !violations.is_empty() {
-                    log::warn!(
+                    tracing::warn!(
                         "Bundle {} touches files outside Work {}'s resource_tags: {:?}. Allowed: {:?}",
                         bundle.id,
                         work_id,

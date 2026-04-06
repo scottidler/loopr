@@ -1,7 +1,7 @@
 use eyre::{Result, eyre};
-use log::warn;
 use reqwest::Client;
 use serde::Deserialize;
+use tracing::warn;
 
 use crate::config::ClarityGateConfig;
 

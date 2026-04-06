@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use eyre::{Result, bail, eyre};
-use log::{debug, warn};
+use tracing::{debug, warn};
 
 use crate::agents::error::AgentError;
 

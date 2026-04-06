@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use eyre::{bail, eyre};
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -587,7 +587,7 @@ async fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
     match client.call(&prompt).await {
         Ok(response) => response.trim().to_lowercase() == "brief",
         Err(e) => {
-            log::warn!("Tier classification failed, defaulting to Full: {}", e);
+            tracing::warn!("Tier classification failed, defaulting to Full: {}", e);
             false
         }
     }

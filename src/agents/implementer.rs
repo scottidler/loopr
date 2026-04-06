@@ -90,7 +90,7 @@ fn normalize_action_keys(response: &str) -> String {
 /// Parse the LLM response into a list of agent actions.
 /// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
 pub fn parse_actions(response: &str, prefix: &str) -> Result<Vec<AgentAction>> {
-    log::debug!("{} parse_actions(response_len={})", prefix, response.len());
+    tracing::debug!("{} parse_actions(response_len={})", prefix, response.len());
     // Strip markdown fences before any parsing attempts
     let stripped = strip_markdown_fences(response);
     // Normalize "type" → "action" before any parsing attempts
@@ -149,7 +149,7 @@ pub fn is_correctable_error(error: &str) -> bool {
 
 /// Build a focused state summary for the implementer: previous bundle rejection, active locks, sibling agents.
 pub fn build_implementer_summary(stores: &Stores, work_id: &str, prefix: &str) -> String {
-    log::debug!("{} build_implementer_summary(work_id={})", prefix, work_id);
+    tracing::debug!("{} build_implementer_summary(work_id={})", prefix, work_id);
     use crate::domain::bundle::BundleStatus;
     use crate::domain::lock::LockStatus;
 
@@ -441,7 +441,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
 
 /// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
 fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, prefix: &str) -> Option<String> {
-    log::debug!("{} drain_tick_published()", prefix);
+    tracing::debug!("{} drain_tick_published()", prefix);
     let mut latest_tick_id: Option<String> = None;
     loop {
         match event_rx.try_recv() {

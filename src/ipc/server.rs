@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 
 use futures::SinkExt;
 use futures::future::BoxFuture;
-use log::debug;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
 use tokio_util::codec::Framed;
+use tracing::debug;
 
 use super::codec::ndjson_codec;
 use super::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};

@@ -70,7 +70,7 @@ pub struct Learning {
 
 impl Learning {
     pub fn new(source_id: String, scope: LearningScope, content: String) -> Self {
-        log::debug!("Learning::new(source_id={}, scope={})", source_id, scope);
+        tracing::debug!("Learning::new(source_id={}, scope={})", source_id, scope);
         let now = id::now_millis();
         Self {
             id: id::generate_id("ln"),

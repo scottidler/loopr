@@ -3,10 +3,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, RwLock as StdRwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
 use paste::paste;
 use taskstore::Store;
 use tokio::sync::{RwLock, broadcast};
+use tracing::{debug, info, warn};
 
 use tokio::task::JoinHandle;
 
@@ -251,7 +251,7 @@ impl Stores {
 /// Record an agent event in the per-session ring buffer.
 pub fn record_agent_event(stores: &Stores, session_id: &str, event: &AgentEvent) {
     let Ok(mut events) = stores.write_agent_events() else {
-        log::error!("agent_events lock poisoned, dropping event for session {session_id}");
+        tracing::error!("agent_events lock poisoned, dropping event for session {session_id}");
         return;
     };
     let ring = events

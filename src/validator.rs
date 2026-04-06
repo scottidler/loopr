@@ -2,7 +2,7 @@ pub mod client;
 pub mod prompts;
 
 use eyre::{Context, Result};
-use log::{debug, info};
+use tracing::{debug, info};
 
 use crate::config::ValidatorConfig;
 use crate::domain::validation::{IssueSeverity, ValidationIssue, ValidationReport, ValidationVerdict};

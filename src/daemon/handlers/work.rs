@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use eyre::eyre;
-use log::debug;
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use crate::domain::bundle::BundleStatus;
 use crate::domain::plan::HierarchyStatus;
@@ -166,14 +166,14 @@ pub(super) fn handle_work_create(
             for dep_id in &dependencies {
                 if dep_id.starts_with("batch:") {
                     // Batch references (e.g., "batch:0") can't be resolved here — skip with warning
-                    log::warn!(
+                    tracing::warn!(
                         "Work creation: batch dependency '{}' cannot be resolved at handler level, skipping",
                         dep_id
                     );
                 } else if works.contains_key(dep_id) {
                     valid_deps.push(dep_id.clone());
                 } else {
-                    log::warn!("Work creation: dependency '{}' not found, skipping", dep_id);
+                    tracing::warn!("Work creation: dependency '{}' not found, skipping", dep_id);
                 }
             }
             valid_deps
@@ -450,7 +450,7 @@ pub(super) fn handle_work_transition(
         ));
 
         if is_override {
-            log::warn!(
+            tracing::warn!(
                 "OVERRIDE: Work {} transitioned {:?} → {:?} by Coordinator (reason: {})",
                 id,
                 from,

@@ -14,8 +14,8 @@ pub use util::resolve_worktree_base;
 use std::sync::Arc;
 
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
 use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
 
 use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::daemon::context::Stores;

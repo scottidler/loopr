@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use eyre::eyre;
 use futures::future::BoxFuture;
-use log::{debug, error, info, warn};
 use tokio::net::UnixListener;
 use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
 use crate::agents::AgentStatus;
 use crate::config::Config;
@@ -136,14 +136,19 @@ pub fn ensure_daemon(config: &Config, log_level: Option<&str>) -> eyre::Result<(
 
     // === Grandchild (daemon) only from here ===
     let session_id = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let log_path = match crate::setup_logging(config, log_level, Some(&session_id)) {
-        Ok(p) => p,
+    // Guard must stay alive for the entire daemon lifetime to keep the log writer flushed.
+    let log_handle = match crate::setup_logging(config, log_level, Some(&session_id)) {
+        Ok(h) => h,
         Err(e) => {
             eprintln!("daemon: failed to setup logging: {e}");
             std::process::exit(1);
         }
     };
-    let session_dir = log_path.parent().map(std::path::PathBuf::from).unwrap_or_default();
+    let session_dir = log_handle
+        .log_path
+        .parent()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
 
     info!(
         "Daemon started via double-fork (session: {}, pid: {})",
@@ -509,7 +514,7 @@ async fn accept_loop(
                         });
                     }
                     Err(e) => {
-                        log::error!("Failed to accept connection: {}", e);
+                        tracing::error!("Failed to accept connection: {}", e);
                     }
                 }
             }

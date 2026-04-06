@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{debug, error, info, warn};
 use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};

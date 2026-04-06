@@ -626,7 +626,7 @@ impl Default for Config {
 impl Config {
     /// Load configuration with fallback chain
     pub fn load(config_path: Option<&PathBuf>) -> Result<Self> {
-        log::debug!("Config::load(config_path={:?})", config_path);
+        tracing::debug!("Config::load(config_path={:?})", config_path);
         // If explicit config path provided, try to load it
         if let Some(path) = config_path {
             return Self::load_from_file(path).context(format!("Failed to load config from {}", path.display()));
@@ -640,7 +640,7 @@ impl Config {
                 match Self::load_from_file(&primary_config) {
                     Ok(config) => return Ok(config),
                     Err(e) => {
-                        log::warn!("Failed to load config from {}: {}", primary_config.display(), e);
+                        tracing::warn!("Failed to load config from {}: {}", primary_config.display(), e);
                     }
                 }
             }
@@ -653,23 +653,23 @@ impl Config {
             match Self::load_from_file(&fallback_config) {
                 Ok(config) => return Ok(config),
                 Err(e) => {
-                    log::warn!("Failed to load config from {}: {}", fallback_config.display(), e);
+                    tracing::warn!("Failed to load config from {}: {}", fallback_config.display(), e);
                 }
             }
         }
 
         // No config file found, use defaults
-        log::info!("No config file found, using defaults");
+        tracing::info!("No config file found, using defaults");
         Ok(Self::default())
     }
 
     fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        log::debug!("Config::load_from_file(path={})", path.as_ref().display());
+        tracing::debug!("Config::load_from_file(path={})", path.as_ref().display());
         let content = fs::read_to_string(&path).context("Failed to read config file")?;
 
         let config: Self = serde_yaml::from_str(&content).context("Failed to parse config file")?;
 
-        log::info!("Loaded config from: {}", path.as_ref().display());
+        tracing::info!("Loaded config from: {}", path.as_ref().display());
         Ok(config)
     }
 }

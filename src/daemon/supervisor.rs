@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use log::{info, warn};
 use serde_json::json;
 use tokio::sync::broadcast;
+use tracing::{info, warn};
 
 use crate::agents::{AgentEvent, AgentKind, AgentStatus};
 use crate::config::IntegratorConfig;

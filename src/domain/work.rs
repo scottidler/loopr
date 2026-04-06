@@ -105,7 +105,7 @@ impl Work {
     }
 
     pub fn new(parent_id: String, title: String, description: String) -> Self {
-        log::debug!("Work::new(parent_id={}, title={})", parent_id, title);
+        tracing::debug!("Work::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("wk"),

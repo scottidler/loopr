@@ -213,7 +213,7 @@ pub(super) async fn handle_commit(
         }
         in_scope
     } else {
-        log::warn!("commit with no paths and no resource_tags, falling back to -A");
+        tracing::warn!("commit with no paths and no resource_tags, falling back to -A");
         vec!["-A".to_string()]
     };
 

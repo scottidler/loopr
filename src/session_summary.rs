@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use log::info;
+use tracing::info;
 
 /// Generate a session summary from the session log file.
 /// Parses `[transition]`, `[agent_status]`, `[agent:*] tool_result`, and error-level lines.

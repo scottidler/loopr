@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use log::warn;
+use tracing::warn;
 
 use crate::agents::AgentSession;
 use crate::domain::bundle::Bundle;
@@ -27,7 +27,7 @@ pub async fn try_connect(socket_path: &Path) -> Option<(IpcClient, String)> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     if !version_match {
-        log::warn!(
+        tracing::warn!(
             "Daemon version mismatch, refusing connection (ours={}, theirs={:?})",
             crate::version(),
             resp.result.as_ref().and_then(|r| r.get("server_version")),

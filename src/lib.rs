@@ -31,18 +31,30 @@ pub mod test_util;
 mod tests;
 
 use std::fs;
+use std::path::PathBuf;
+
+use eyre::Context;
+use log::LevelFilter;
+use tracing::info;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::layer::SubscriberExt;
+
+use crate::config::Config;
 
 /// Build-time version from `git describe --tags --always`.
 /// This is the single source of truth for version identity across TUI and daemon.
 pub fn version() -> &'static str {
     env!("GIT_DESCRIBE")
 }
-use std::path::PathBuf;
 
-use eyre::Context;
-use log::{LevelFilter, info};
-
-use crate::config::Config;
+/// Handle returned from `setup_logging`. The `guard` field must remain alive
+/// for the duration of the process - dropping it flushes the non-blocking
+/// writer and stops log output.
+pub struct LogHandle {
+    pub log_path: PathBuf,
+    /// Must not be dropped before end of process.
+    pub guard: WorkerGuard,
+}
 
 /// Resolve the effective log level from the config < env < CLI hierarchy.
 ///
@@ -98,7 +110,11 @@ fn parse_level_filter(s: &str) -> Option<LevelFilter> {
 /// directory at `~/.local/share/loopr/sessions/{session_id}/` with `loopr.log`
 /// inside it and updates the `latest` symlink. When None (TUI, one-shot CLI),
 /// writes to `~/.local/share/loopr/logs/loopr.log` as before.
-pub fn setup_logging(config: &Config, cli_log_level: Option<&str>, session_id: Option<&str>) -> eyre::Result<PathBuf> {
+pub fn setup_logging(
+    config: &Config,
+    cli_log_level: Option<&str>,
+    session_id: Option<&str>,
+) -> eyre::Result<LogHandle> {
     let base_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("loopr");
@@ -121,39 +137,51 @@ pub fn setup_logging(config: &Config, cli_log_level: Option<&str>, session_id: O
         log_dir.join("loopr.log")
     };
 
-    let target = Box::new(
-        fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_file)
-            .context("Failed to open log file")?,
-    );
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .context("Failed to open log file")?;
 
     let level = resolve_log_level(config, cli_log_level);
+    let tracing_level = to_tracing_level_filter(level);
 
-    env_logger::Builder::new()
-        .filter_level(level)
-        .target(env_logger::Target::Pipe(target))
-        .format(|buf, record| {
-            use std::io::Write;
-            let now = chrono::Local::now();
-            writeln!(
-                buf,
-                "[{} {:5} {}] {}",
-                now.format("%Y-%m-%d %H:%M:%S%.3f"),
-                record.level(),
-                record.target(),
-                record.args()
-            )
-        })
-        .init();
+    // Bridge: forwards `log` crate events from dependencies into the tracing subscriber.
+    tracing_log::LogTracer::init().ok();
+
+    let (non_blocking, guard) = tracing_appender::non_blocking(file);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false),
+        )
+        .with(tracing_level);
+
+    // `.ok()` prevents panic if called twice (e.g. in test harnesses).
+    tracing::subscriber::set_global_default(subscriber).ok();
 
     info!(
         "Logging initialized (level: {}), writing to: {}",
         level,
         log_file.display()
     );
-    Ok(log_file)
+    Ok(LogHandle {
+        log_path: log_file,
+        guard,
+    })
+}
+
+fn to_tracing_level_filter(level: LevelFilter) -> tracing_subscriber::filter::LevelFilter {
+    match level {
+        LevelFilter::Off => tracing_subscriber::filter::LevelFilter::OFF,
+        LevelFilter::Error => tracing_subscriber::filter::LevelFilter::ERROR,
+        LevelFilter::Warn => tracing_subscriber::filter::LevelFilter::WARN,
+        LevelFilter::Info => tracing_subscriber::filter::LevelFilter::INFO,
+        LevelFilter::Debug => tracing_subscriber::filter::LevelFilter::DEBUG,
+        LevelFilter::Trace => tracing_subscriber::filter::LevelFilter::TRACE,
+    }
 }
 
 #[allow(clippy::unwrap_used)]

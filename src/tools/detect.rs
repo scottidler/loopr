@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use log::debug;
+use tracing::debug;
 
 use crate::config::ToolEntry;
 

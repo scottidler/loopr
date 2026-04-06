@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eyre::{Context, Result};
-use log::debug;
+use tracing::debug;
 
 /// Maximum inline output size per stream (stdout/stderr) in bytes (~8K tokens).
 pub const MAX_INLINE_OUTPUT: usize = 32_000;

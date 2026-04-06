@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use eyre::eyre;
-use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;

@@ -2,9 +2,9 @@ use std::process::Command;
 use std::sync::Arc;
 
 use eyre::eyre;
-use log::debug;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;

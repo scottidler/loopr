@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eyre::{Result, eyre};
-use log::{debug, info, warn};
 use tokio::sync::Semaphore;
+use tracing::{debug, info, warn};
 
 use crate::tools::lane::{Lane, LanePolicy};
 use crate::tools::sandbox::{bwrap_command, detect_bwrap, log_bwrap_status};

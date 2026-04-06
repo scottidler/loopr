@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use crossterm::event::{Event, EventStream, KeyEventKind, MouseEventKind};
 use futures::StreamExt;
-use log::info;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::time::Interval;
+use tracing::info;
 
 use crate::agents::AgentEvent;
 use crate::ipc::client::IpcClient;
@@ -106,7 +106,7 @@ pub fn handle_daemon_event(app: &mut App, event: &DaemonEvent) {
         if is_final {
             let content = std::mem::take(&mut app.chat_response_buffer);
             if !content.is_empty() {
-                log::debug!("[chat] assistant: {} chars", content.len());
+                tracing::debug!("[chat] assistant: {} chars", content.len());
                 app.chat_history.push(ChatMessage::assistant(content));
             }
             let elapsed = app.chat_started_at.map(|t| t.elapsed()).unwrap_or_default();
@@ -262,7 +262,7 @@ pub async fn event_loop(
                     submit_text.clone()
                 };
 
-                log::debug!("[chat] user: {}", submit_text);
+                tracing::debug!("[chat] user: {}", submit_text);
 
                 let params = serde_json::json!({
                     "session_id": CHAT_SESSION_ID,

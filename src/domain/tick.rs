@@ -67,7 +67,7 @@ impl Tick {
     }
 
     pub fn new(number: u32) -> Self {
-        log::debug!("Tick::new(number={})", number);
+        tracing::debug!("Tick::new(number={})", number);
         let now = id::now_millis();
         Self {
             id: id::generate_id("tk"),

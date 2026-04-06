@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use eyre::Result;
-use log::debug;
+use tracing::debug;
 
 use crate::tools::lane::Lane;
 use crate::tools::router::LaneRouter;

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use log::{info, warn};
+use tracing::{info, warn};
 
 /// Detect if bubblewrap (bwrap) is available on this system.
 pub fn detect_bwrap() -> bool {

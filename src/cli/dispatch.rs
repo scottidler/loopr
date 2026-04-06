@@ -3,8 +3,8 @@ use std::path::Path;
 use eyre::{Context, Result, bail};
 
 const GOAL_POLL_INTERVAL_SECS: u64 = 5;
-use log::warn;
 use serde_json::json;
+use tracing::warn;
 
 use crate::clarity::{self, ClarityGate};
 use crate::config::ClarityGateConfig;
@@ -170,7 +170,7 @@ async fn run_headless(
         None => bail!("--plan <path.md> is required for headless mode"),
     };
 
-    log::debug!(
+    tracing::debug!(
         "run_headless: goal hint='{}' (ignored, title comes from plan .md)",
         goal
     );

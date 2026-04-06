@@ -129,7 +129,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 // Channel lagged: drain and continue — timeout ceiling is still running.
-                                log::debug!("event_rx lagged {} events during idle wait", n);
+                                tracing::debug!("event_rx lagged {} events during idle wait", n);
                             }
                             _ => {} // Irrelevant event; drain and continue.
                         }
@@ -240,7 +240,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             iteration, coord_state.fsm_state, assembled.token_estimate
         ));
 
-        log::debug!("[agent_status] {}: -> WaitingForLlm", self.ctx.session.id);
+        tracing::debug!("[agent_status] {}: -> WaitingForLlm", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::WaitingForLlm,
@@ -283,7 +283,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         };
         guard.reset_parse_failures();
 
-        log::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
+        tracing::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::Running,

@@ -10,8 +10,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use eyre::{Context, Result, bail};
-use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, trace, warn};
 
 use futures::future::{join_all, try_join_all};
 

@@ -50,7 +50,7 @@ impl Phase {
     }
 
     pub fn new(parent_id: String, title: String, description: String, order: u32) -> Self {
-        log::debug!("Phase::new(parent_id={}, title={}, order={})", parent_id, title, order);
+        tracing::debug!("Phase::new(parent_id={}, title={}, order={})", parent_id, title, order);
         let now = id::now_millis();
         Self {
             id: id::generate_id("ph"),

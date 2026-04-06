@@ -60,7 +60,7 @@ pub struct ReviewResult {
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
 pub fn parse_review_result(response: &str, prefix: &str) -> Result<ReviewResult> {
-    log::debug!("{} parse_review_result(response_len={})", prefix, response.len());
+    tracing::debug!("{} parse_review_result(response_len={})", prefix, response.len());
     if let Ok(result) = serde_json::from_str::<ReviewResult>(response) {
         return Ok(result);
     }

@@ -1,4 +1,4 @@
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentKind, AgentSession};
@@ -117,7 +117,7 @@ pub(super) fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, h
             if let Some(other) = lock.get("holder_id").and_then(|v| v.as_str())
                 && other != holder_id
             {
-                log::warn!(
+                tracing::warn!(
                     "advisory lock contention: {} already holds lock on {}, acquiring concurrent lock for {}",
                     other,
                     resource,

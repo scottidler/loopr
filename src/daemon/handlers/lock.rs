@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use eyre::eyre;
-use log::debug;
 use tokio::sync::broadcast;
+use tracing::debug;
 
 use crate::domain::lock::Lock;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};

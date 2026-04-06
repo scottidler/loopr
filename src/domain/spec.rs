@@ -47,7 +47,7 @@ impl Spec {
     }
 
     pub fn new(parent_id: String, title: String, description: String) -> Self {
-        log::debug!("Spec::new(parent_id={}, title={})", parent_id, title);
+        tracing::debug!("Spec::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("sp"),

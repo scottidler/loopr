@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use eyre::{Context, Result};
-use log::info;
+use tracing::info;
 
 use loopr::cli::{self, Cli, Command};
 use loopr::config::Config;
@@ -25,9 +25,9 @@ fn main() -> Result<()> {
         Some(Command::Daemon) => {
             // Explicit foreground daemon — create runtime directly
             let session_id = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-            let log_path = loopr::setup_logging(&config, cli_args.log_level.as_deref(), Some(&session_id))
+            let log_handle = loopr::setup_logging(&config, cli_args.log_level.as_deref(), Some(&session_id))
                 .context("Failed to setup logging")?;
-            let session_dir = log_path.parent().map(PathBuf::from).unwrap_or_default();
+            let session_dir = log_handle.log_path.parent().map(PathBuf::from).unwrap_or_default();
             info!("Starting daemon (session: {})", session_id);
             tokio::runtime::Runtime::new()
                 .context("Failed to create Tokio runtime")?
@@ -40,7 +40,8 @@ fn main() -> Result<()> {
             // ensure_daemon may double-fork — MUST happen before Tokio runtime
             daemon::ensure_daemon(&config, cli_args.log_level.as_deref())?;
             // Only the parent reaches here (grandchild diverges in ensure_daemon)
-            loopr::setup_logging(&config, cli_args.log_level.as_deref(), None).context("Failed to setup logging")?;
+            let _log_handle = loopr::setup_logging(&config, cli_args.log_level.as_deref(), None)
+                .context("Failed to setup logging")?;
             info!(
                 "Starting TUI, connecting to daemon at {}",
                 config.daemon.socket_path.display()
@@ -57,7 +58,9 @@ fn main() -> Result<()> {
         Some(ref cmd) => {
             // ensure_daemon may double-fork — MUST happen before Tokio runtime
             daemon::ensure_daemon(&config, cli_args.log_level.as_deref())?;
-            loopr::setup_logging(&config, cli_args.log_level.as_deref(), None).context("Failed to setup logging")?;
+            // Guard must stay alive until program exit to keep the log writer flushed.
+            let _log_handle = loopr::setup_logging(&config, cli_args.log_level.as_deref(), None)
+                .context("Failed to setup logging")?;
             info!("CLI command: {:?}", cmd);
             tokio::runtime::Runtime::new()
                 .context("Failed to create Tokio runtime")?

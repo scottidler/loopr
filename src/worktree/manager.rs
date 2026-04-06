@@ -1,7 +1,7 @@
-use log::debug;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::debug;
 
 /// Information about an active Git worktree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,7 +138,7 @@ impl WorktreeManager {
             && !o.status.success()
         {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            log::warn!("git worktree prune failed (non-fatal): {}", stderr.trim());
+            tracing::warn!("git worktree prune failed (non-fatal): {}", stderr.trim());
         }
 
         // create() may fail with GitCommand if the branch "agent/<work_id>" already

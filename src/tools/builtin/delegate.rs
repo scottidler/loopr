@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use log::debug;
 use serde_json::json;
+use tracing::debug;
 
 use crate::tools::agentic_loop::{AgenticLlm, run_tool_loop};
 use crate::tools::context::ToolContext;

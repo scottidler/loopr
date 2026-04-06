@@ -45,7 +45,7 @@ pub fn build_state_summary_with_sla(
     coord_state: Option<&CoordinatorState>,
     sla_config: Option<&crate::config::WorkSlaConfig>,
 ) -> String {
-    log::debug!("{} build_state_summary_with_sla()", prefix);
+    tracing::debug!("{} build_state_summary_with_sla()", prefix);
     let mut summary = String::with_capacity(4096);
 
     // Sections ordered most-actionable-first so truncation drops static info (Plans/Specs)
@@ -365,7 +365,7 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
                     if let Some(resolved_id) = batch_created_ids.get(idx) {
                         return resolved_id.clone();
                     }
-                    log::warn!(
+                    tracing::warn!(
                         "{} batch:{} out of range (only {} items created so far)",
                         prefix,
                         idx,
@@ -397,7 +397,7 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix:
     // Build resource_tags lookup for batch works
     let tag_map: HashMap<String, HashSet<String>> = {
         let Ok(works) = stores.read_works() else {
-            log::error!("works lock poisoned");
+            tracing::error!("works lock poisoned");
             return;
         };
         batch_created_ids
@@ -412,7 +412,7 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix:
 
     // Prune deps between batch works with disjoint resource_tags
     let Ok(mut works) = stores.write_works() else {
-        log::error!("works lock poisoned");
+        tracing::error!("works lock poisoned");
         return;
     };
     for wi_id in batch_created_ids {
@@ -434,7 +434,7 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix:
             });
             let pruned = before - wi.dependencies.len();
             if pruned > 0 {
-                log::info!("{} pruned {} independent dep(s) from '{}'", prefix, pruned, wi.title);
+                tracing::info!("{} pruned {} independent dep(s) from '{}'", prefix, pruned, wi.title);
             }
         }
     }
@@ -447,13 +447,13 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, p
         // L1: Clone-then-drop-then-persist to avoid deadlock and ensure TaskStore persistence
         let phase_to_persist = {
             let Ok(mut phases) = stores.write_phases() else {
-                log::error!("phases lock poisoned");
+                tracing::error!("phases lock poisoned");
                 return;
             };
             if let Some(phase) = phases.get_mut(phase_id) {
                 phase.force_status(HierarchyStatus::Complete);
                 phase.updated_at = crate::id::now_millis();
-                log::info!("{} Phase {} marked Complete (record status updated)", prefix, phase_id);
+                tracing::info!("{} Phase {} marked Complete (record status updated)", prefix, phase_id);
                 Some(phase.clone())
             } else {
                 None
@@ -464,7 +464,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, p
             && let Ok(mut s) = store.lock().map_err(|_| eyre!("lock poisoned"))
             && let Err(e) = s.update(phase)
         {
-            log::warn!("{} Failed to persist Phase complete status: {}", prefix, e);
+            tracing::warn!("{} Failed to persist Phase complete status: {}", prefix, e);
         }
     }
 }
@@ -531,7 +531,7 @@ fn load_or_create_coordinator_state(stores: &Stores) -> Option<CoordinatorState>
 /// Persist the CoordinatorState to both in-memory and TaskStore.
 fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
     let Ok(mut states) = stores.write_coordinator_states() else {
-        log::error!("coordinator_states lock poisoned");
+        tracing::error!("coordinator_states lock poisoned");
         return;
     };
     states.insert(state.id.clone(), state.clone());
@@ -552,7 +552,7 @@ fn apply_fsm_transition(
     prefix: &str,
 ) -> Option<IterationOutcome> {
     let old_state = coord_state.fsm_state;
-    log::info!(
+    tracing::info!(
         "{} {} -> {} (goal: {})",
         prefix,
         old_state,
@@ -568,7 +568,7 @@ fn apply_fsm_transition(
         }
         let next_phase = find_next_phase_to_activate(stores, coord_state);
         if let Some((phase_id, phase_title)) = next_phase {
-            log::info!("{} activating phase: {} ({})", prefix, phase_title, phase_id);
+            tracing::info!("{} activating phase: {} ({})", prefix, phase_title, phase_id);
             coord_state.current_phase_id = Some(phase_id);
             coord_state.phase_activated_at = Some(crate::id::now_millis());
             coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
@@ -622,7 +622,7 @@ fn sweep_integrated_to_done(
     bridge: &crate::agents::bridge::AgentIpcBridge,
     prefix: &str,
 ) {
-    log::debug!(
+    tracing::debug!(
         "{} sweep_integrated_to_done(fsm={:?}, phase={:?})",
         prefix,
         coord_state.fsm_state,
@@ -649,7 +649,7 @@ fn sweep_integrated_to_done(
 
     let integrated_ids: Vec<String> = {
         let Ok(works) = stores.read_works() else {
-            log::error!("works lock poisoned");
+            tracing::error!("works lock poisoned");
             return;
         };
         works
@@ -669,10 +669,10 @@ fn sweep_integrated_to_done(
         );
         if resp.is_error() {
             let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-            log::error!("{} failed to transition WI {} Integrated->Done: {}", prefix, wi_id, msg);
+            tracing::error!("{} failed to transition WI {} Integrated->Done: {}", prefix, wi_id, msg);
             continue;
         } else {
-            log::info!("{} Work {} transitioned Integrated -> Done", prefix, wi_id);
+            tracing::info!("{} Work {} transitioned Integrated -> Done", prefix, wi_id);
         }
     }
 }
@@ -1000,7 +1000,7 @@ fn check_fsm_transition(
     coord_state: &CoordinatorState,
     config: &CoordinatorConfig,
 ) -> Option<CoordinatorFsmState> {
-    log::debug!(
+    tracing::debug!(
         "check_fsm_transition(current={:?}, goal_id={}, plan_approved={})",
         coord_state.fsm_state,
         coord_state.goal_id,

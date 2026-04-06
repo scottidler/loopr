@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use log::{debug, warn};
+use tracing::{debug, warn};
 
 use crate::config::ToolEntry;
 use crate::tools::agentic_loop::AgenticLlm;

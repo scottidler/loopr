@@ -17,7 +17,7 @@ use crate::ipc::protocol::DaemonEvent;
 /// Validate that a path is safe for the Researcher to access.
 /// Delegates to the shared sandbox module with denylist enabled.
 pub fn validate_path(repo_root: &Path, relative: &str, prefix: &str) -> Result<PathBuf> {
-    log::debug!(
+    tracing::debug!(
         "{} validate_path(repo_root={}, relative={})",
         prefix,
         repo_root.display(),
@@ -28,7 +28,7 @@ pub fn validate_path(repo_root: &Path, relative: &str, prefix: &str) -> Result<P
 
 /// Build the Researcher system prompt with the query injected.
 fn build_system_prompt(query: &str, prefix: &str) -> String {
-    log::debug!("{} build_system_prompt(query_len={})", prefix, query.len());
+    tracing::debug!("{} build_system_prompt(query_len={})", prefix, query.len());
     crate::prompts::store().researcher.replace("{query}", query)
 }
 
@@ -40,7 +40,7 @@ pub async fn execute_search_code(
     search_path: Option<&str>,
     prefix: &str,
 ) -> Result<String> {
-    log::debug!(
+    tracing::debug!(
         "{} execute_search_code(pattern={}, glob={:?}, path={:?})",
         prefix,
         pattern,
@@ -126,7 +126,7 @@ pub async fn execute_search_files(
                 }
             }
             Err(e) => {
-                log::warn!("{} glob error: {}", prefix, e);
+                tracing::warn!("{} glob error: {}", prefix, e);
             }
         }
 
@@ -232,7 +232,7 @@ impl<L: LlmClient> ResearcherAgent<L> {
             iteration, assembled.token_estimate
         ));
 
-        log::debug!("[agent_status] {}: -> WaitingForLlm", self.ctx.session.id);
+        tracing::debug!("[agent_status] {}: -> WaitingForLlm", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::WaitingForLlm,
@@ -268,7 +268,7 @@ impl<L: LlmClient> ResearcherAgent<L> {
             }
         };
 
-        log::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
+        tracing::debug!("[agent_status] {}: -> Running (LLM complete)", self.ctx.session.id);
         let _ = self.ctx.event_tx.send(DaemonEvent::agent_status_changed(
             &self.ctx.session.id,
             AgentStatus::Running,

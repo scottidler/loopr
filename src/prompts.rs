@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::OnceLock;
 
-use log::info;
+use tracing::info;
 
 use crate::domain::bundle::BundleStatus;
 use crate::domain::plan::HierarchyStatus;

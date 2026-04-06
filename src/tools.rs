@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use eyre::{Result, eyre};
-use log::{debug, warn};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 use crate::config::ToolEntry;
 use crate::tools::spawn::{shell_command, spawn_with_process_group};

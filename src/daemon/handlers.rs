@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use log::trace;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tracing::trace;
 
 use crate::agents::AgentKind;
 use crate::config::IntegratorConfig;

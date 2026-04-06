@@ -204,7 +204,7 @@ pub fn doc_filename(kind: DocKind, title: &str, taken: &[String]) -> String {
     loop {
         let numbered = format!("{}-{}.md", base, n);
         if !taken.contains(&numbered) {
-            log::warn!(
+            tracing::warn!(
                 "doc filename collision: {} already taken, using {}",
                 candidate,
                 numbered

@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use log::{info, warn};
+use tracing::{info, warn};
 
 use crate::domain::bundle::BundleStatus;
 use crate::domain::plan::HierarchyStatus;

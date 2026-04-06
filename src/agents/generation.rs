@@ -53,7 +53,7 @@ pub fn build_work_prompt(
     plan_description: Option<&str>,
     guidance_section: Option<&str>,
 ) -> GenerationPrompt {
-    log::debug!(
+    tracing::debug!(
         "build_work_prompt(phase_id={}, existing_works={}, learnings={}, findings={})",
         phase.id,
         existing_works.len(),

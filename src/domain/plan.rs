@@ -73,7 +73,7 @@ impl fmt::Display for Tier {
 pub async fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) -> Tier {
     let prompt_template = crate::prompts::store().tier_gate.clone();
     if prompt_template.is_empty() {
-        log::warn!("tier-gate prompt is empty, defaulting to Full");
+        tracing::warn!("tier-gate prompt is empty, defaulting to Full");
         return Tier::Full;
     }
 
@@ -82,11 +82,11 @@ pub async fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmCl
     match client.call(&prompt).await {
         Ok(response) => match parse_tier(&response) {
             Some(tier) => {
-                log::info!("Tier classification: {:?} (plan={})", tier, plan.id);
+                tracing::info!("Tier classification: {:?} (plan={})", tier, plan.id);
                 tier
             }
             None => {
-                log::warn!(
+                tracing::warn!(
                     "Tier classification returned {:?}, retrying (plan={})",
                     response.trim(),
                     plan.id
@@ -95,7 +95,7 @@ pub async fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmCl
             }
         },
         Err(e) => {
-            log::warn!("Tier classification failed, defaulting to Full: {}", e);
+            tracing::warn!("Tier classification failed, defaulting to Full: {}", e);
             Tier::Full
         }
     }
@@ -119,11 +119,11 @@ async fn retry_tier(client: &crate::validator::client::LlmClient, bad_response: 
     match client.call(&correction).await {
         Ok(response) => match parse_tier(&response) {
             Some(tier) => {
-                log::info!("Tier classification on retry: {:?} (plan={})", tier, plan_id);
+                tracing::info!("Tier classification on retry: {:?} (plan={})", tier, plan_id);
                 tier
             }
             None => {
-                log::error!(
+                tracing::error!(
                     "Tier classification retry also returned {:?}, \
                      defaulting to Full (plan={})",
                     response.trim(),
@@ -133,7 +133,7 @@ async fn retry_tier(client: &crate::validator::client::LlmClient, bad_response: 
             }
         },
         Err(e) => {
-            log::error!("Tier classification retry failed, defaulting to Full: {}", e);
+            tracing::error!("Tier classification retry failed, defaulting to Full: {}", e);
             Tier::Full
         }
     }
@@ -180,7 +180,7 @@ impl Plan {
     }
 
     pub fn new(title: String, description: String, acceptance_criteria: String) -> Self {
-        log::debug!("Plan::new(title={})", title);
+        tracing::debug!("Plan::new(title={})", title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("pl"),

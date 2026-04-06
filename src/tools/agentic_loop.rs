@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::time::Instant;
 
-use log::debug;
 use tokio::sync::{broadcast, mpsc};
+use tracing::debug;
 
 use crate::agents::context::estimate_tokens;
 use crate::ipc::protocol::DaemonEvent;
@@ -199,7 +199,7 @@ async fn auto_compact<L: AgenticLlm>(llm: &L, system_prompt: &str, messages: &mu
             );
         }
         Err(e) => {
-            log::warn!("auto_compact: summarization failed ({}), falling back to truncation", e);
+            tracing::warn!("auto_compact: summarization failed ({}), falling back to truncation", e);
             fallback_truncate(messages, split);
             let tokens_after = estimate_tokens(system_prompt) + estimate_message_tokens(messages);
             debug!(

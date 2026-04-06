@@ -1,9 +1,9 @@
 use eyre::{Result, eyre};
-use log::{debug, info, trace, warn};
 use reqwest::Client;
 use std::future::Future;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
+use tracing::{debug, info, trace, warn};
 
 use crate::agents::implementer::{ChatMessage, LlmClient};
 use crate::agents::{AgentEvent, AgentStatus};
@@ -86,7 +86,7 @@ impl AgentLlmClient {
 
     /// Emit a status change event.
     fn emit_status(&self, status: AgentStatus) {
-        log::debug!("[agent_status] {}: -> {:?}", self.session_id, status);
+        tracing::debug!("[agent_status] {}: -> {:?}", self.session_id, status);
         let _ = self
             .event_tx
             .send(DaemonEvent::agent_status_changed(&self.session_id, status));

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use log::{debug, info, warn};
 use serde_json::json;
 use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
 
 use crate::config::ToolEntry;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
