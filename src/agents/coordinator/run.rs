@@ -112,20 +112,31 @@ impl<L: LlmClient> CoordinatorAgent<L> {
                 );
 
             if is_idle_waiting {
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(interval)) => {}
-                    event = event_rx.recv() => {
-                        match event {
+                // Use a timeout ceiling so Lagged events cannot cancel the sleep.
+                // Lagged drains the channel and continues the inner loop while the
+                // timeout counts down. An early wakeup on a relevant event breaks
+                // the inner loop, which resolves the future and the timeout returns Ok(()).
+                let _ = tokio::time::timeout(Duration::from_secs(interval), async {
+                    loop {
+                        match event_rx.recv().await {
                             Ok(ev) if is_coordinator_wakeup(&ev) => {
                                 self.ctx.info(&format!("early wake on: {}", ev.event));
+                                break;
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                // Daemon shutting down; let cancellation check on next iteration handle it.
+                                break;
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                self.ctx.warn(&format!("event_rx lagged {} events, continuing", n));
+                                // Channel lagged: drain and continue — timeout ceiling is still running.
+                                log::debug!("event_rx lagged {} events during idle wait", n);
                             }
-                            _ => {}
+                            _ => {} // Irrelevant event; drain and continue.
                         }
                     }
-                }
+                })
+                .await
+                .ok();
             } else {
                 tokio::time::sleep(Duration::from_secs(interval)).await;
             }
@@ -1031,5 +1042,101 @@ mod tests {
     fn test_no_wakeup_on_agent_timing_info() {
         let ev = crate::ipc::protocol::DaemonEvent::new("agent.timing_info", serde_json::json!({}));
         assert!(!super::is_coordinator_wakeup(&ev));
+    }
+
+    // --- idle wait robustness (Phase 3) ---
+
+    /// Verify that Lagged events do NOT shorten the idle wait timeout.
+    /// Under the old tokio::select! pattern, a Lagged result would cancel the sleep.
+    /// Under the new tokio::time::timeout pattern, Lagged drains the channel and
+    /// the inner loop continues while the outer ceiling counts down.
+    #[tokio::test]
+    async fn test_idle_wait_lagged_does_not_shorten_wait() {
+        use std::time::{Duration, Instant};
+        use tokio::sync::broadcast;
+
+        const INTERVAL_MS: u64 = 80;
+
+        // Capacity 1: sends beyond 1 are dropped, causing the subscriber to get Lagged.
+        let (tx, _) = broadcast::channel::<i32>(1);
+        let mut rx = tx.subscribe();
+
+        // Flood the channel to guarantee Lagged on the first recv()
+        let _ = tx.send(1);
+        let _ = tx.send(2);
+        let _ = tx.send(3);
+
+        let start = Instant::now();
+
+        // Run the same timeout pattern used in run_fsm_loop.
+        // Irrelevant events (including the flood above) do not break; only the
+        // timeout ceiling ends the wait. This mirrors the coordinator: only
+        // is_coordinator_wakeup events cause an early break.
+        let _ = tokio::time::timeout(Duration::from_millis(INTERVAL_MS), async {
+            loop {
+                match rx.recv().await {
+                    Ok(_) => {} // irrelevant event — drain and continue
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // Drain and continue — must not break here.
+                    }
+                }
+            }
+        })
+        .await
+        .ok();
+
+        let elapsed = start.elapsed();
+        // Allow a small margin for scheduling jitter.
+        assert!(
+            elapsed >= Duration::from_millis(INTERVAL_MS - 10),
+            "Lagged events must not shorten idle wait below interval (elapsed: {:?})",
+            elapsed
+        );
+    }
+
+    /// Verify that a relevant wakeup event causes the idle wait to exit early.
+    #[tokio::test]
+    async fn test_idle_wait_exits_early_on_wakeup_event() {
+        use std::time::{Duration, Instant};
+        use tokio::sync::broadcast;
+
+        const LONG_INTERVAL_MS: u64 = 5_000;
+        const WAKEUP_DELAY_MS: u64 = 30;
+
+        let (tx, _) = broadcast::channel::<crate::ipc::protocol::DaemonEvent>(16);
+        let mut rx = tx.subscribe();
+
+        // Send a wakeup event after a short delay from a background task.
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(WAKEUP_DELAY_MS)).await;
+            let _ = tx2.send(crate::ipc::protocol::DaemonEvent::new(
+                "decomposition.completed",
+                serde_json::json!({}),
+            ));
+        });
+
+        let start = Instant::now();
+
+        let result = tokio::time::timeout(Duration::from_millis(LONG_INTERVAL_MS), async {
+            loop {
+                match rx.recv().await {
+                    Ok(ev) if super::is_coordinator_wakeup(&ev) => break,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    _ => {}
+                }
+            }
+        })
+        .await;
+
+        let elapsed = start.elapsed();
+        assert!(result.is_ok(), "timeout should not have fired");
+        assert!(
+            elapsed < Duration::from_millis(LONG_INTERVAL_MS / 2),
+            "should have woken early (elapsed: {:?})",
+            elapsed
+        );
     }
 }
