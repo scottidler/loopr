@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use eyre::{Context, Result, bail};
 use log::{info, warn};
@@ -15,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::DecomposerConfig;
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
 use crate::validator::client::HttpClient;
+
+const LLM_CALL_TIMEOUT_SECS: u64 = 60;
 
 /// A single child document parsed from the LLM's JSON response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,7 +203,12 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
         ("anthropic-version", "2023-06-01"),
     ];
 
-    let response_text = http_client.post(api_url, &headers, &body).await?;
+    let response_text = tokio::time::timeout(
+        Duration::from_secs(LLM_CALL_TIMEOUT_SECS),
+        http_client.post(api_url, &headers, &body),
+    )
+    .await
+    .map_err(|_| eyre::eyre!("LLM call timed out after {}s", LLM_CALL_TIMEOUT_SECS))??;
 
     let response: serde_json::Value =
         serde_json::from_str(&response_text).context("Failed to parse LLM API response")?;
@@ -261,7 +269,12 @@ async fn call_llm_for_validation<H: HttpClient + Sync>(
         ("anthropic-version", "2023-06-01"),
     ];
 
-    let response_text = http_client.post(api_url, &headers, &body).await?;
+    let response_text = tokio::time::timeout(
+        Duration::from_secs(LLM_CALL_TIMEOUT_SECS),
+        http_client.post(api_url, &headers, &body),
+    )
+    .await
+    .map_err(|_| eyre::eyre!("LLM call timed out after {}s", LLM_CALL_TIMEOUT_SECS))??;
     let response: serde_json::Value = serde_json::from_str(&response_text)?;
 
     let text = response["content"]
@@ -319,7 +332,12 @@ async fn call_llm_for_children_raw<H: HttpClient + Sync>(
         ("anthropic-version", "2023-06-01"),
     ];
 
-    let response_text = http_client.post(api_url, &headers, &body).await?;
+    let response_text = tokio::time::timeout(
+        Duration::from_secs(LLM_CALL_TIMEOUT_SECS),
+        http_client.post(api_url, &headers, &body),
+    )
+    .await
+    .map_err(|_| eyre::eyre!("LLM call timed out after {}s", LLM_CALL_TIMEOUT_SECS))??;
     let response: serde_json::Value = serde_json::from_str(&response_text)?;
 
     let text = response["content"]
@@ -1123,6 +1141,53 @@ mod tests {
             beta.dependencies,
             vec![alpha.id.clone()],
             "Work Beta must resolve its cross-spec dependency to Work Alpha's ID"
+        );
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_decompose_into_times_out_slow_llm() {
+        // With start_paused=true, tokio's clock is virtual. The mock sleeps for 200s of
+        // virtual time; the 60s timeout fires first. The test runs in real milliseconds.
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-decompose-timeout");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(
+            dir.join("plan-timeout.md"),
+            "# Timeout Plan\n\n## Problem Statement\n\nTest.\n\n## Goals\n\nHang.",
+        )
+        .unwrap();
+
+        let parent = Doc::new(
+            DocKind::Plan,
+            None,
+            "Timeout Plan".to_string(),
+            "plan-timeout.md".to_string(),
+        );
+
+        struct SlowMockHttp;
+        impl HttpClient for SlowMockHttp {
+            async fn post(&self, _url: &str, _headers: &[(&str, &str)], _body: &str) -> Result<String> {
+                // Virtual sleep; tokio advances time, so the 60s timeout fires first
+                tokio::time::sleep(Duration::from_secs(200)).await;
+                Ok("never".to_string())
+            }
+        }
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let mut local_map = HashMap::new();
+        let result = decompose_into(&parent, DocKind::Spec, &dir, &config, &SlowMockHttp, &mut local_map).await;
+
+        assert!(result.is_err(), "expected timeout error, got: {:?}", result);
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            msg.contains("timed out") || msg.contains("Decomposition failed"),
+            "error should mention timeout: {msg}"
         );
 
         unsafe { std::env::remove_var(&env_key) };

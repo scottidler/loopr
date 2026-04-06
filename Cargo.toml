@@ -34,5 +34,8 @@ tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["codec"] }
 # Dependencies will be added via cargo add
 
+[dev-dependencies]
+tokio = { version = "1.49.0", features = ["test-util"] }
+
 [build-dependencies]
 # For build.rs if needed
