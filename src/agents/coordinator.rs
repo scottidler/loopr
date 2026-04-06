@@ -4,7 +4,6 @@ use std::time::Duration;
 use eyre::{Result, eyre};
 
 use crate::agents::AgentAction;
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::error::AgentErrorKind;
 use crate::agents::executor::{ActionResult, execute_action};
@@ -36,17 +35,17 @@ fn infer_action_level(action: &AgentAction) -> Option<&'static str> {
 ///
 /// Uses lock-snapshot pattern: acquires each lock briefly, clones/summarizes, releases.
 /// The summary is designed to fit within the Coordinator's state_summary token budget (3000 tokens).
-pub fn build_state_summary(stores: &Stores, agent_log: &AgentLogger) -> String {
-    build_state_summary_with_sla(stores, agent_log, None, None)
+pub fn build_state_summary(stores: &Stores, prefix: &str) -> String {
+    build_state_summary_with_sla(stores, prefix, None, None)
 }
 
 pub fn build_state_summary_with_sla(
     stores: &Stores,
-    agent_log: &AgentLogger,
+    prefix: &str,
     coord_state: Option<&CoordinatorState>,
     sla_config: Option<&crate::config::WorkSlaConfig>,
 ) -> String {
-    agent_log.debug("build_state_summary_with_sla()");
+    log::debug!("{} build_state_summary_with_sla()", prefix);
     let mut summary = String::with_capacity(4096);
 
     // Sections ordered most-actionable-first so truncation drops static info (Plans/Specs)
@@ -361,11 +360,7 @@ pub struct CoordinatorAgent<L: LlmClient> {
 
 /// Fix #2: Resolve batch:N dependency references in a CreateWork action.
 /// Returns Some(modified_action) if batch deps were resolved, None if no changes needed.
-fn resolve_batch_dependencies(
-    action: &AgentAction,
-    batch_created_ids: &[String],
-    agent_log: &AgentLogger,
-) -> Option<AgentAction> {
+fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String], prefix: &str) -> Option<AgentAction> {
     if let AgentAction::CreateWork {
         parent_id,
         title,
@@ -389,11 +384,12 @@ fn resolve_batch_dependencies(
                     if let Some(resolved_id) = batch_created_ids.get(idx) {
                         return resolved_id.clone();
                     }
-                    agent_log.warn(&format!(
-                        "batch:{} out of range (only {} items created so far)",
+                    log::warn!(
+                        "{} batch:{} out of range (only {} items created so far)",
+                        prefix,
                         idx,
                         batch_created_ids.len()
-                    ));
+                    );
                 }
                 dep.clone()
             })
@@ -414,7 +410,7 @@ fn resolve_batch_dependencies(
 
 /// Fix #6: Prune dependencies between batch-created works whose resource_tags don't overlap.
 /// Safety net for when the LLM creates linear chains between independent works.
-fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], agent_log: &AgentLogger) {
+fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix: &str) {
     let batch_set: HashSet<&str> = batch_created_ids.iter().map(|s| s.as_str()).collect();
 
     // Build resource_tags lookup for batch works
@@ -457,7 +453,7 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], agent_l
             });
             let pruned = before - wi.dependencies.len();
             if pruned > 0 {
-                agent_log.info(&format!("pruned {} independent dep(s) from '{}'", pruned, wi.title));
+                log::info!("{} pruned {} independent dep(s) from '{}'", prefix, pruned, wi.title);
             }
         }
     }
@@ -465,7 +461,7 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], agent_l
 
 /// Fix #12: Mark the Phase domain record as Complete before calling coord_state.complete_phase().
 /// This ensures the Phase record status and CoordinatorState are updated together.
-fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, agent_log: &AgentLogger) {
+fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, prefix: &str) {
     if let Some(ref phase_id) = coord_state.current_phase_id {
         // L1: Clone-then-drop-then-persist to avoid deadlock and ensure TaskStore persistence
         let phase_to_persist = {
@@ -476,7 +472,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
             if let Some(phase) = phases.get_mut(phase_id) {
                 phase.force_status(HierarchyStatus::Complete);
                 phase.updated_at = crate::id::now_millis();
-                agent_log.info(&format!("Phase {} marked Complete (record status updated)", phase_id));
+                log::info!("{} Phase {} marked Complete (record status updated)", prefix, phase_id);
                 Some(phase.clone())
             } else {
                 None
@@ -487,7 +483,7 @@ fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, a
             && let Ok(mut s) = store.lock().map_err(|_| eyre!("lock poisoned"))
             && let Err(e) = s.update(phase)
         {
-            agent_log.warn(&format!("Failed to persist Phase complete status: {}", e));
+            log::warn!("{} Failed to persist Phase complete status: {}", prefix, e);
         }
     }
 }
@@ -572,11 +568,12 @@ fn apply_fsm_transition(
     new_state: CoordinatorFsmState,
     coord_state: &mut CoordinatorState,
     stores: &Stores,
-    log: &AgentLogger,
+    prefix: &str,
 ) -> Option<IterationOutcome> {
     let old_state = coord_state.fsm_state;
     log::info!(
-        "[coordinator] {} -> {} (goal: {})",
+        "{} {} -> {} (goal: {})",
+        prefix,
         old_state,
         new_state,
         coord_state.goal_id
@@ -585,12 +582,12 @@ fn apply_fsm_transition(
     if new_state == CoordinatorFsmState::ActivatePhase {
         // If transitioning from PhaseGate, complete the previous phase
         if coord_state.current_phase_id.is_some() {
-            mark_phase_record_complete(stores, coord_state, log);
+            mark_phase_record_complete(stores, coord_state, prefix);
             coord_state.complete_phase();
         }
         let next_phase = find_next_phase_to_activate(stores, coord_state);
         if let Some((phase_id, phase_title)) = next_phase {
-            log.info(&format!("activating phase: {} ({})", phase_title, phase_id));
+            log::info!("{} activating phase: {} ({})", prefix, phase_title, phase_id);
             coord_state.current_phase_id = Some(phase_id);
             coord_state.phase_activated_at = Some(crate::id::now_millis());
             coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
@@ -613,7 +610,7 @@ fn apply_fsm_transition(
     } else if new_state == CoordinatorFsmState::GoalComplete {
         // Complete current phase if transitioning from PhaseGate
         if coord_state.current_phase_id.is_some() {
-            mark_phase_record_complete(stores, coord_state, log);
+            mark_phase_record_complete(stores, coord_state, prefix);
             coord_state.complete_phase();
         }
         coord_state.transition_to(CoordinatorFsmState::GoalComplete);
@@ -642,10 +639,11 @@ fn sweep_integrated_to_done(
     stores: &Stores,
     coord_state: &CoordinatorState,
     bridge: &crate::agents::bridge::AgentIpcBridge,
-    log: &AgentLogger,
+    prefix: &str,
 ) {
     log::debug!(
-        "sweep_integrated_to_done(fsm={:?}, phase={:?})",
+        "{} sweep_integrated_to_done(fsm={:?}, phase={:?})",
+        prefix,
         coord_state.fsm_state,
         coord_state.current_phase_id,
     );
@@ -690,10 +688,10 @@ fn sweep_integrated_to_done(
         );
         if resp.is_error() {
             let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-            log.error(&format!("failed to transition WI {} Integrated->Done: {}", wi_id, msg));
+            log::error!("{} failed to transition WI {} Integrated->Done: {}", prefix, wi_id, msg);
             continue;
         } else {
-            log.info(&format!("Work {} transitioned Integrated → Done", wi_id));
+            log::info!("{} Work {} transitioned Integrated -> Done", prefix, wi_id);
         }
     }
 }
@@ -748,7 +746,7 @@ fn phase_missing_test_tool(stores: &Stores, coord_state: &CoordinatorState) -> S
 
 /// Determine the FSM state footer -- state-specific instructions for the LLM.
 ///
-/// `goal`, `config`, and `agent_log` are retained in the signature for future use
+/// `goal` and `config` are retained in the signature for future use
 /// (e.g., re-decomposition prompts during ActivatePhase). The Planning branch no
 /// longer uses them because decomposition happens before the Coordinator starts.
 fn build_fsm_footer(
@@ -756,10 +754,10 @@ fn build_fsm_footer(
     coord_state: &CoordinatorState,
     goal: &str,
     config: &CoordinatorConfig,
-    agent_log: &AgentLogger,
+    prefix: &str,
 ) -> String {
     // Retained for ActivatePhase re-decomposition (future wiring)
-    let _ = (goal, config, agent_log);
+    let _ = (goal, config, prefix);
     match coord_state.fsm_state {
         CoordinatorFsmState::Interviewing => {
             // In Interviewing state, the Coordinator generates interview questions

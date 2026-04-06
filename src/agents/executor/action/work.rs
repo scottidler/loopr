@@ -14,7 +14,7 @@ pub(super) fn handle_create_work(
     dependencies: &[String],
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
+
     let resp = bridge.request(
         "work.create",
         serde_json::json!({
@@ -37,7 +37,7 @@ pub(super) fn handle_create_work(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    agent_log.info(&format!("CreateWork: {} (id: {}, deps: {:?})", title, id, dependencies));
+    ctx.info(&format!("CreateWork: {} (id: {}, deps: {:?})", title, id, dependencies));
     Ok(ActionResult::RecordCreated {
         collection: "works".to_string(),
         id,
@@ -47,7 +47,6 @@ pub(super) fn handle_create_work(
 /// Handle AssignAgent action.
 pub(super) fn handle_assign_agent(ctx: &AgentContext, agent_type_str: &str, target_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     // For implementer assignments, check dependencies and auto-transition work
     if agent_type_str == "implementer" {
@@ -119,7 +118,7 @@ pub(super) fn handle_assign_agent(ctx: &AgentContext, agent_type_str: &str, targ
                         msg
                     )));
                 }
-                agent_log.info(&format!(
+                ctx.info(&format!(
                     "AssignAgent: auto-transitioned work {} Draft->Ready->InProgress",
                     target_id
                 ));
@@ -137,7 +136,7 @@ pub(super) fn handle_assign_agent(ctx: &AgentContext, agent_type_str: &str, targ
                         msg
                     )));
                 }
-                agent_log.info(&format!(
+                ctx.info(&format!(
                     "AssignAgent: auto-transitioned work {} Ready->InProgress",
                     target_id
                 ));
@@ -194,7 +193,7 @@ pub(super) fn handle_assign_agent(ctx: &AgentContext, agent_type_str: &str, targ
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "AssignAgent: {} -> {} (session: {})",
         agent_type_str, target_id, session_id
     ));
@@ -207,7 +206,7 @@ pub(super) fn handle_assign_agent(ctx: &AgentContext, agent_type_str: &str, targ
 /// Handle SpawnResearcher action.
 pub(super) fn handle_spawn_researcher(ctx: &AgentContext, query: &str, scope_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
+
     let resp = bridge.request(
         "agent.start",
         serde_json::json!({
@@ -227,7 +226,7 @@ pub(super) fn handle_spawn_researcher(ctx: &AgentContext, query: &str, scope_id:
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "SpawnResearcher: {} (scope: {}, session: {})",
         query, scope_id, session_id
     ));
@@ -271,7 +270,6 @@ pub(super) fn handle_override_work(
     reason: &str,
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     // Guard: reject override-to-Ready if any bundle is Merged or Integrating
     if target_status == "Ready" {
@@ -292,7 +290,7 @@ pub(super) fn handle_override_work(
                  Do not retry this override - let the Integrator finish.",
                 work_id, bundle_id, status
             );
-            agent_log.warn(&format!("OverrideWork: {}", msg));
+            ctx.warn(&format!("OverrideWork: {}", msg));
             return Ok(ActionResult::ActionError(msg));
         }
     }
@@ -310,12 +308,12 @@ pub(super) fn handle_override_work(
         for sid in &active_sessions {
             let stop_resp = bridge.request("agent.stop", serde_json::json!({ "session_id": sid }));
             if stop_resp.is_error() {
-                agent_log.warn(&format!(
+                ctx.warn(&format!(
                     "OverrideWork: failed to stop session {}: {:?}",
                     sid, stop_resp.error
                 ));
             } else {
-                agent_log.info(&format!("OverrideWork: stopped session {}", sid));
+                ctx.info(&format!("OverrideWork: stopped session {}", sid));
             }
         }
     }
@@ -334,7 +332,7 @@ pub(super) fn handle_override_work(
 
     if resp.is_error() {
         let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        agent_log.warn(&format!(
+        ctx.warn(&format!(
             "OverrideWork: transition failed for {} (may have already recovered): {}",
             work_id, msg
         ));
@@ -357,12 +355,12 @@ pub(super) fn handle_override_work(
         for lid in &work_locks {
             let release_resp = bridge.request("lock.release", serde_json::json!({ "id": lid }));
             if release_resp.is_error() {
-                agent_log.warn(&format!(
+                ctx.warn(&format!(
                     "OverrideWork: failed to release lock {}: {:?}",
                     lid, release_resp.error
                 ));
             } else {
-                agent_log.info(&format!("OverrideWork: released lock {}", lid));
+                ctx.info(&format!("OverrideWork: released lock {}", lid));
             }
         }
     }
@@ -379,7 +377,7 @@ pub(super) fn handle_override_work(
         }),
     );
 
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "OverrideWork: {} -> {} (reason: {})",
         work_id, target_status, reason
     ));

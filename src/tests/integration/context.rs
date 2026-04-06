@@ -3,9 +3,6 @@
 use std::collections::HashMap;
 
 use crate::domain::learning::{Learning, LearningScope};
-use crate::test_util::TestDir;
-
-use super::fixtures::*;
 
 #[test]
 fn test_context_builder_role_filtering() {
@@ -69,42 +66,40 @@ fn test_researcher_path_sandboxing() {
     use std::path::Path;
 
     let repo_root = Path::new("/tmp/test-repo");
-    let _agent_dir = TestDir::new("loopr-intg-logger");
-    let agent_log = test_agent_logger(&_agent_dir);
 
     // Valid relative path
     assert!(
-        crate::agents::researcher::validate_path(repo_root, "src/main.rs", &agent_log).is_ok(),
+        crate::agents::researcher::validate_path(repo_root, "src/main.rs", "[test:test]").is_ok(),
         "relative path should be valid"
     );
 
     // Absolute path rejected
     assert!(
-        crate::agents::researcher::validate_path(repo_root, "/etc/passwd", &agent_log).is_err(),
+        crate::agents::researcher::validate_path(repo_root, "/etc/passwd", "[test:test]").is_err(),
         "absolute path should be rejected"
     );
 
     // Path traversal rejected
     assert!(
-        crate::agents::researcher::validate_path(repo_root, "../../../etc/passwd", &agent_log).is_err(),
+        crate::agents::researcher::validate_path(repo_root, "../../../etc/passwd", "[test:test]").is_err(),
         "traversal path should be rejected"
     );
 
     // Denied file patterns
     assert!(
-        crate::agents::researcher::validate_path(repo_root, ".env", &agent_log).is_err(),
+        crate::agents::researcher::validate_path(repo_root, ".env", "[test:test]").is_err(),
         ".env should be denied"
     );
     assert!(
-        crate::agents::researcher::validate_path(repo_root, "keys/server.key", &agent_log).is_err(),
+        crate::agents::researcher::validate_path(repo_root, "keys/server.key", "[test:test]").is_err(),
         "*.key should be denied"
     );
     assert!(
-        crate::agents::researcher::validate_path(repo_root, "certs/server.pem", &agent_log).is_err(),
+        crate::agents::researcher::validate_path(repo_root, "certs/server.pem", "[test:test]").is_err(),
         "*.pem should be denied"
     );
     assert!(
-        crate::agents::researcher::validate_path(repo_root, "credentials.json", &agent_log).is_err(),
+        crate::agents::researcher::validate_path(repo_root, "credentials.json", "[test:test]").is_err(),
         "credentials.* should be denied"
     );
 }

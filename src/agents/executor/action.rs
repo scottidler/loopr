@@ -24,8 +24,7 @@ pub async fn execute_action(
     worktree_path: &Path,
     work_id: Option<&str>,
 ) -> Result<ActionResult> {
-    let agent_log = &ctx.log;
-    agent_log.debug(&format!("execute_action(action={:?})", action));
+    ctx.debug(&format!("execute_action(action={:?})", action));
     match action {
         AgentAction::RunTool { tool, args } => tool::handle_run_tool(ctx, worktree_path, tool, args).await,
         AgentAction::RegisterTool {
@@ -146,12 +145,17 @@ pub async fn execute_action(
 
         // --- Researcher actions ---
         AgentAction::SearchCode { pattern, glob, path } => {
-            file::handle_search_code(worktree_path, agent_log, pattern, glob.as_deref(), path.as_deref()).await
+            let prefix = format!("[{}:{}]", ctx.session.agent_type, ctx.session.id);
+            file::handle_search_code(worktree_path, &prefix, pattern, glob.as_deref(), path.as_deref()).await
         }
         AgentAction::SearchFiles { pattern, path } => {
-            file::handle_search_files(worktree_path, agent_log, pattern, path.as_deref()).await
+            let prefix = format!("[{}:{}]", ctx.session.agent_type, ctx.session.id);
+            file::handle_search_files(worktree_path, &prefix, pattern, path.as_deref()).await
         }
-        AgentAction::ListDirectory { path } => file::handle_list_directory(worktree_path, agent_log, path).await,
+        AgentAction::ListDirectory { path } => {
+            let prefix = format!("[{}:{}]", ctx.session.agent_type, ctx.session.id);
+            file::handle_list_directory(worktree_path, &prefix, path).await
+        }
     }
 }
 

@@ -6,7 +6,6 @@ use eyre::{Result, eyre};
 
 use tokio::sync::broadcast;
 
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
@@ -90,8 +89,8 @@ fn normalize_action_keys(response: &str) -> String {
 
 /// Parse the LLM response into a list of agent actions.
 /// Tolerates prose before/after the JSON array — finds `[` and its matching `]`.
-pub fn parse_actions(response: &str, agent_log: &AgentLogger) -> Result<Vec<AgentAction>> {
-    agent_log.debug(&format!("parse_actions(response_len={})", response.len()));
+pub fn parse_actions(response: &str, prefix: &str) -> Result<Vec<AgentAction>> {
+    log::debug!("{} parse_actions(response_len={})", prefix, response.len());
     // Strip markdown fences before any parsing attempts
     let stripped = strip_markdown_fences(response);
     // Normalize "type" → "action" before any parsing attempts
@@ -149,8 +148,8 @@ pub fn is_correctable_error(error: &str) -> bool {
 }
 
 /// Build a focused state summary for the implementer: active locks and sibling agents.
-pub fn build_implementer_summary(stores: &Stores, work_id: &str, agent_log: &AgentLogger) -> String {
-    agent_log.debug(&format!("build_implementer_summary(work_id={})", work_id));
+pub fn build_implementer_summary(stores: &Stores, work_id: &str, prefix: &str) -> String {
+    log::debug!("{} build_implementer_summary(work_id={})", prefix, work_id);
     use crate::domain::lock::LockStatus;
 
     let mut summary = String::with_capacity(512);
@@ -240,7 +239,8 @@ impl<L: LlmClient> ImplementerAgent<L> {
             iteration,
             self.previous_summary.is_some()
         ));
-        let state_summary = build_implementer_summary(&self.ctx.stores, &self.work_id, &self.ctx.log);
+        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
+        let state_summary = build_implementer_summary(&self.ctx.stores, &self.work_id, &prefix);
         let assembled = ContextBuilder::new(&self.ctx.stores, Role::Implementer)
             .load_work_hierarchy(&self.work_id)?
             .with_guidance(&self.ctx.stores.guidance)
@@ -261,20 +261,13 @@ impl<L: LlmClient> ImplementerAgent<L> {
 
         let actions = loop {
             let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
-            self.ctx.log.write_iter_file(
-                iteration,
-                Some(&self.work_id),
-                &assembled.system_prompt,
-                &assembled.user_message,
-                &response,
-            );
             self.ctx.info(&format!(
                 "raw LLM response ({} chars): {}",
                 response.len(),
                 &response[..response.len().min(800)]
             ));
 
-            match parse_actions(&response, &self.ctx.log) {
+            match parse_actions(&response, &prefix) {
                 Ok(actions) => break actions,
                 Err(parse_err) => {
                     requeries += 1;
@@ -346,7 +339,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
                     )));
 
                     match self.llm.call_with_history(&assembled.system_prompt, &messages).await {
-                        Ok(corrected_response) => match parse_actions(&corrected_response, &self.ctx.log) {
+                        Ok(corrected_response) => match parse_actions(&corrected_response, &prefix) {
                             Ok(corrected_actions) => {
                                 // Execute corrected action(s)
                                 let mut corrected_result = ActionResult::ActionError(err_msg.clone());
@@ -428,8 +421,8 @@ impl<L: LlmClient> ImplementerAgent<L> {
 }
 
 /// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
-fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, agent_log: &AgentLogger) -> Option<String> {
-    agent_log.debug("drain_tick_published()");
+fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, prefix: &str) -> Option<String> {
+    log::debug!("{} drain_tick_published()", prefix);
     let mut latest_tick_id: Option<String> = None;
     loop {
         match event_rx.try_recv() {
@@ -451,6 +444,7 @@ fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, agent_l
 
 impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
     async fn run(&mut self) -> Result<()> {
+        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
         self.ctx.debug(&format!(
             "run(session_id={}, work_id={})",
             self.ctx.session.id, self.work_id
@@ -488,7 +482,7 @@ impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
             }
 
             // Check for staleness (tick.published events since last iteration)
-            let staleness_note = if let Some(new_tick_id) = drain_tick_published(&mut event_rx, &self.ctx.log) {
+            let staleness_note = if let Some(new_tick_id) = drain_tick_published(&mut event_rx, &prefix) {
                 self.ctx
                     .info(&format!("detected stale: new tick {} published", new_tick_id));
                 let _ = self.ctx.event_tx.send(DaemonEvent::agent_staleness_detected(

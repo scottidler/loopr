@@ -14,6 +14,25 @@ section "LOOPR E2E HEALTH CHECK"
 echo "Target : $TARGET"
 echo "Time   : $(date)"
 
+# Resolve actual session directory from agent_sessions.jsonl
+SESSION_ID=""
+if [ -f "$TARGET/.taskstore/agent_sessions.jsonl" ]; then
+    SESSION_ID=$(jq -r '.daemon_session_id // empty' "$TARGET/.taskstore/agent_sessions.jsonl" | tail -n 1)
+fi
+
+if [ -n "$SESSION_ID" ] && [ -d "$HOME/.local/share/loopr/sessions/$SESSION_ID" ]; then
+    SESSION_DIR="$HOME/.local/share/loopr/sessions/$SESSION_ID"
+else
+    # Fallback to latest session directory if not found in taskstore
+    SESSION_DIR=$(ls -td "$HOME/.local/share/loopr/sessions"/* 2>/dev/null | head -n 1)
+fi
+
+if [ -z "$SESSION_DIR" ]; then
+    warn "Could not locate a session directory in ~/.local/share/loopr/sessions/"
+else
+    ok "Found active session directory: $SESSION_DIR"
+fi
+
 # ── 1. Daemon Health ─────────────────────────────────────────────────────────
 section "1. Daemon Health"
 DAEMON_PROCS=$(ps aux | grep '[l]oopr' | grep 'daemon')
@@ -24,29 +43,40 @@ else
     alert "No daemon process found — orchestrator may have crashed or not started"
 fi
 
-DAEMON_LOG="$TARGET/daemon.log"
-echo
-echo "--- daemon.log (last 20 lines) ---"
-if [ -f "$DAEMON_LOG" ]; then
-    /usr/bin/tail -n 20 "$DAEMON_LOG"
-    if grep -qi "panic\|thread.*panicked\|SIGABRT" "$DAEMON_LOG"; then
-        alert "Panic detected in daemon.log!"
-    fi
-else
-    warn "daemon.log not found at $DAEMON_LOG"
-fi
+if [ -n "$SESSION_DIR" ]; then
+    DAEMON_LOG="$SESSION_DIR/loopr.log"
+    echo
+    echo "--- loopr.log (last 20 lines) ---"
+    if [ -f "$DAEMON_LOG" ]; then
+        /usr/bin/tail -n 20 "$DAEMON_LOG"
+        if grep -qi "panic\|thread.*panicked\|SIGABRT" "$DAEMON_LOG"; then
+            alert "Panic detected in loopr.log!"
+        fi
 
-DECOMPOSER_LOG=$(ls -t "$TARGET/agents/"decomposer-*.log 2>/dev/null | head -n 1)
-echo
-echo "--- decomposer log (last 20 lines) ---"
-if [ -n "$DECOMPOSER_LOG" ] && [ -f "$DECOMPOSER_LOG" ]; then
-    echo "Found log: $DECOMPOSER_LOG"
-    /usr/bin/tail -n 20 "$DECOMPOSER_LOG"
-    if grep -qi "error\|panic\|failed" "$DECOMPOSER_LOG"; then
-        warn "Errors detected in $DECOMPOSER_LOG!"
+        echo
+        echo "--- Recent errors and warnings ---"
+        grep -E ' ERROR | WARN ' "$DAEMON_LOG" | /usr/bin/tail -n 15 || ok "No errors or warnings found"
+
+        echo
+        echo "--- Decomposer activity (last 15 lines) ---"
+        if grep -q '\[decomposer:' "$DAEMON_LOG"; then
+            grep '\[decomposer:' "$DAEMON_LOG" | /usr/bin/tail -n 15
+        else
+            warn "No [decomposer:] lines found — decomposer may not have run yet"
+        fi
+
+        echo
+        echo "--- Coordinator activity (last 10 lines) ---"
+        if grep -q '\[coordinator:' "$DAEMON_LOG"; then
+            grep '\[coordinator:' "$DAEMON_LOG" | /usr/bin/tail -n 10
+        else
+            warn "No [coordinator:] lines found"
+        fi
+    else
+        warn "loopr.log not found at $DAEMON_LOG"
     fi
 else
-    warn "decomposer-*.log not found in $TARGET/agents/"
+    warn "Skipping log checks due to missing session directory."
 fi
 
 # ── 2. Git Worktree State ─────────────────────────────────────────────────────
@@ -163,6 +193,16 @@ if [ -f "$LEARNINGS" ]; then
     /usr/bin/tail -n 5 "$LEARNINGS" | jq -c '.'
 else
     warn "learnings.jsonl not found"
+fi
+
+# ── 7. Decomposed Docs ────────────────────────────────────────────────────────
+section "7. Generated Document Output State"
+LOOPR_RUNS="$TARGET/.loopr/runs"
+if [ -d "$LOOPR_RUNS" ]; then
+    echo "Found .loopr/runs/ docs. Total markdown files:"
+    find "$LOOPR_RUNS" -type f -name "*.md" | wc -l
+else
+    warn "No .loopr/runs/ directory found"
 fi
 
 echo

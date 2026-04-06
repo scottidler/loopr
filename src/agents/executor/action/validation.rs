@@ -6,7 +6,6 @@ use crate::agents::executor::result::ActionResult;
 /// Handle ValidateDocument action.
 pub(super) fn handle_validate_document(ctx: &AgentContext, collection: &str, id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     let resp = bridge.request(
         "validator.validate",
@@ -48,7 +47,7 @@ pub(super) fn handle_validate_document(ctx: &AgentContext, collection: &str, id:
                 .collect()
         })
         .unwrap_or_default();
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "ValidateDocument {}/{}: verdict={}, issues={}",
         collection,
         id,
@@ -69,7 +68,6 @@ pub(super) fn handle_evaluate_coverage(
     parent_id: &str,
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     let resp = bridge.request(
         "coverage.evaluate",
@@ -111,7 +109,7 @@ pub(super) fn handle_evaluate_coverage(
                 .collect()
         })
         .unwrap_or_default();
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "EvaluateCoverage {}/{}: verdict={}, gaps={}",
         parent_collection,
         parent_id,

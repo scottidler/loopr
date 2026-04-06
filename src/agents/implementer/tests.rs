@@ -1,7 +1,6 @@
 use std::future::Future;
 
 use super::*;
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentKind, AgentSession};
 use crate::config::{AgentRoleConfig, Config, ProjectConfig, ToolEntry};
@@ -100,17 +99,6 @@ fn get_work_id(stores: &Stores) -> String {
     stores.works.read().unwrap().keys().next().unwrap().clone()
 }
 
-fn test_agent_logger(dir: &Path) -> AgentLogger {
-    use crate::agents::AgentKind;
-    let file_path = dir.join("test-agent.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .unwrap();
-    AgentLogger::_new_for_test(AgentKind::Implementer, "test-session", file, file_path)
-}
-
 fn test_bridge_with_tx(stores: Arc<Stores>, dir: &Path) -> (AgentIpcBridge, broadcast::Sender<DaemonEvent>) {
     let (event_tx, _) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
@@ -128,7 +116,6 @@ fn test_implementer<L: LlmClient>(
 ) -> ImplementerAgent<L> {
     let wi_id = get_work_id(&stores);
     let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), dir);
-    let agent_log = test_agent_logger(dir);
     let tool_runner = stores.read_tool_runner().unwrap();
     let tool_executor = stores.read_tool_executor().unwrap();
 
@@ -150,7 +137,6 @@ fn test_implementer<L: LlmClient>(
         event_tx,
         tool_runner,
         tool_executor,
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     ImplementerAgent::new(ctx, llm, config, wi_id, dir.to_path_buf())
@@ -160,50 +146,40 @@ fn test_implementer<L: LlmClient>(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_direct_json() {
-    let dir = TestDir::new("loopr-impl-parse1");
-    let agent_log = test_agent_logger(&dir);
     let json = r#"[{"action": "done", "summary": "All done"}]"#;
-    let actions = parse_actions(json, &agent_log).unwrap();
+    let actions = parse_actions(json, "[test:test]").unwrap();
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::Done { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_wrapped_in_code_block() {
-    let dir = TestDir::new("loopr-impl-parse2");
-    let agent_log = test_agent_logger(&dir);
     let response = "Here are the actions:\n```json\n[{\"action\": \"done\", \"summary\": \"done\"}]\n```";
-    let actions = parse_actions(response, &agent_log).unwrap();
+    let actions = parse_actions(response, "[test:test]").unwrap();
     assert_eq!(actions.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_multiple() {
-    let dir = TestDir::new("loopr-impl-parse3");
-    let agent_log = test_agent_logger(&dir);
     let json = r#"[
             {"action": "write_file", "path": "src/foo.rs", "content": "fn foo() {}"},
             {"action": "run_tool", "tool": "test", "args": []},
             {"action": "done", "summary": "Implemented foo"}
         ]"#;
-    let actions = parse_actions(json, &agent_log).unwrap();
+    let actions = parse_actions(json, "[test:test]").unwrap();
     assert_eq!(actions.len(), 3);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_invalid() {
-    let dir = TestDir::new("loopr-impl-parse4");
-    let agent_log = test_agent_logger(&dir);
     let bad = "This is not JSON at all";
-    assert!(parse_actions(bad, &agent_log).is_err());
+    assert!(parse_actions(bad, "[test:test]").is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_empty_array() {
-    let dir = TestDir::new("loopr-impl-parse5");
-    let agent_log = test_agent_logger(&dir);
     let json = "[]";
-    let actions = parse_actions(json, &agent_log).unwrap();
+    let actions = parse_actions(json, "[test:test]").unwrap();
     assert!(actions.is_empty());
 }
 
@@ -244,29 +220,23 @@ async fn test_strip_markdown_fences_prose_not_fenced() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_fenced_empty_array() {
-    let dir = TestDir::new("loopr-impl-parse-fenced-empty");
-    let agent_log = test_agent_logger(&dir);
     let response = "```json\n[]\n```";
-    let actions = parse_actions(response, &agent_log).unwrap();
+    let actions = parse_actions(response, "[test:test]").unwrap();
     assert!(actions.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_fenced_non_empty_array() {
-    let dir = TestDir::new("loopr-impl-parse-fenced-nonempty");
-    let agent_log = test_agent_logger(&dir);
     let response = "```json\n[{\"action\": \"done\", \"summary\": \"All done\"}]\n```";
-    let actions = parse_actions(response, &agent_log).unwrap();
+    let actions = parse_actions(response, "[test:test]").unwrap();
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::Done { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_prose_then_fenced_empty_array() {
-    let dir = TestDir::new("loopr-impl-parse-prose-fenced");
-    let agent_log = test_agent_logger(&dir);
     let response = "Nothing to do right now. The workers are handling it.\n\n```json\n[]\n```";
-    let actions = parse_actions(response, &agent_log).unwrap();
+    let actions = parse_actions(response, "[test:test]").unwrap();
     assert!(actions.is_empty());
 }
 
@@ -457,40 +427,32 @@ async fn test_system_prompt_contains_key_instructions() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_empty() {
-    let dir = TestDir::new("loopr-impl-drain1");
-    let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     drop(tx);
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert!(result.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_finds_tick() {
-    let dir = TestDir::new("loopr-impl-drain2");
-    let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::tick_published("tick-42", "abc123"));
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert_eq!(result, Some("tick-42".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_returns_latest() {
-    let dir = TestDir::new("loopr-impl-drain3");
-    let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::tick_published("tick-1", "aaa"));
     let _ = tx.send(DaemonEvent::tick_published("tick-2", "bbb"));
     let _ = tx.send(DaemonEvent::tick_published("tick-3", "ccc"));
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert_eq!(result, Some("tick-3".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_ignores_other_events() {
-    let dir = TestDir::new("loopr-impl-drain4");
-    let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
     let _ = tx.send(DaemonEvent::transition_completed(
@@ -500,19 +462,17 @@ async fn test_drain_tick_published_ignores_other_events() {
         "proposed",
         "implementer",
     ));
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert!(result.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_mixed_events() {
-    let dir = TestDir::new("loopr-impl-drain5");
-    let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
     let _ = tx.send(DaemonEvent::tick_published("tick-5", "sha5"));
     let _ = tx.send(DaemonEvent::record_updated("bundle", "b-1"));
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert_eq!(result, Some("tick-5".to_string()));
 }
 
@@ -552,7 +512,7 @@ async fn test_run_implementer_detects_staleness() {
     let stores = setup_stores(&dir);
     let wi_id = get_work_id(&stores);
     let (bridge, event_tx) = test_bridge_with_tx(stores.clone(), &dir);
-    let agent_log = test_agent_logger(&dir);
+
     let mut config = AgentRoleConfig::default_implementer();
     config.max_iterations = 3;
 
@@ -597,7 +557,6 @@ async fn test_run_implementer_detects_staleness() {
         event_tx,
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     let mut agent = ImplementerAgent::new(ctx, llm, config, wi_id, dir.to_path_buf());
@@ -635,39 +594,33 @@ async fn test_action_results_accumulate() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_skips_malformed_in_fallback() {
-    let dir = TestDir::new("loopr-impl-parse6");
-    let agent_log = test_agent_logger(&dir);
     // Array with one valid and one malformed action — fallback should skip the bad one
     let json = r#"[
             {"action": "done", "summary": "All good"},
             {"action": "totally_bogus", "invalid_field": 42}
         ]"#;
-    let actions = parse_actions(json, &agent_log).unwrap();
+    let actions = parse_actions(json, "[test:test]").unwrap();
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::Done { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_normalizes_type_to_action() {
-    let dir = TestDir::new("loopr-impl-parse7");
-    let agent_log = test_agent_logger(&dir);
     // LLMs sometimes use "type" instead of "action" as the discriminant key
     let json = r#"[{"type": "read_file", "path": "src/main.rs"}]"#;
-    let actions = parse_actions(json, &agent_log).unwrap();
+    let actions = parse_actions(json, "[test:test]").unwrap();
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_parse_actions_normalizes_type_in_prose() {
-    let dir = TestDir::new("loopr-impl-parse8");
-    let agent_log = test_agent_logger(&dir);
     let response = r#"I'll read the file first.
 
 ```json
 [{"type": "read_file", "path": "Cargo.toml"}]
 ```"#;
-    let actions = parse_actions(response, &agent_log).unwrap();
+    let actions = parse_actions(response, "[test:test]").unwrap();
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], AgentAction::ReadFile { .. }));
 }
@@ -679,8 +632,8 @@ async fn test_build_implementer_summary_empty_locks_and_siblings() {
     let wi_id = get_work_id(&stores);
 
     // No active locks, no sibling agents — summary should be empty
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_implementer_summary(&stores, &wi_id, &agent_log);
+
+    let summary = build_implementer_summary(&stores, &wi_id, "[test:test]");
     assert!(summary.is_empty(), "expected empty summary, got: {}", summary);
 }
 
@@ -734,21 +687,17 @@ async fn test_action_error_breaks_batch_before_done() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_closed_channel() {
-    let dir = TestDir::new("loopr-impl-drain6");
-    let agent_log = test_agent_logger(&dir);
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
     // Send a tick, then close
     let _ = tx.send(DaemonEvent::tick_published("tick-closed", "sha"));
     drop(tx);
     // Should still find the tick before hitting Closed
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert_eq!(result, Some("tick-closed".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_drain_tick_published_lagged_channel() {
-    let dir = TestDir::new("loopr-impl-drain7");
-    let agent_log = test_agent_logger(&dir);
     // Create a very small buffer so sending more messages than capacity causes lag
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(2);
     // Send 4 messages to overflow the buffer of 2 — receiver will lag
@@ -757,7 +706,7 @@ async fn test_drain_tick_published_lagged_channel() {
     let _ = tx.send(DaemonEvent::record_created("x", "3"));
     let _ = tx.send(DaemonEvent::tick_published("tick-lagged", "sha"));
     // drain should recover from lag and find the tick
-    let result = drain_tick_published(&mut rx, &agent_log);
+    let result = drain_tick_published(&mut rx, "[test:test]");
     assert_eq!(result, Some("tick-lagged".to_string()));
 }
 
@@ -972,8 +921,7 @@ async fn test_build_implementer_summary_with_locks_and_siblings() {
         .unwrap()
         .insert(session.id.clone(), session);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_implementer_summary(&stores, &wi_id, &agent_log);
+    let summary = build_implementer_summary(&stores, &wi_id, "[test:test]");
     assert!(summary.contains("### Active Locks"), "should contain locks section");
     assert!(summary.contains("src/main.rs"), "should contain lock resource");
     assert!(

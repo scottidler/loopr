@@ -24,7 +24,6 @@ use std::sync::Arc;
 use eyre::{bail, eyre};
 use log::{debug, info, warn};
 
-use crate::agents::agent_logger::AgentLogger;
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -269,24 +268,17 @@ pub(super) async fn accept_plan_markdown(
         let dc = stores.config.decomposer.clone();
 
         tokio::spawn(async move {
-            // Dedicated per-run log file for the decomposer background task.
-            // Writes to {session_dir}/agents/decomposer-{goal_id}.log so heavy LLM
-            // transcripts stay out of the main daemon log.
-            let decomposer_log =
-                AgentLogger::for_component("decomposer", &goal_id_bg, stores_bg.session_dir.as_deref());
+            let decomposer_prefix = format!("[decomposer:{}]", goal_id_bg);
             let brief = classify_brief(&stores_bg, &markdown_bg).await;
-            match &decomposer_log {
-                Ok(log) => log.info(&format!("starting decomposition (brief={})", brief)),
-                Err(_) => info!("doc entry (bg): starting decomposition (brief={})", brief),
-            }
+            info!("{} starting decomposition (brief={})", decomposer_prefix, brief);
             let client = ReqwestClient::new();
             match decompose_hierarchy(&plan_doc_bg, &run_dir_bg, &dc, &client, brief).await {
                 Ok((child_docs, partial_err)) => {
                     let child_count = child_docs.len();
-                    match &decomposer_log {
-                        Ok(log) => log.info(&format!("decomposition produced {} child docs", child_count)),
-                        Err(_) => info!("doc entry (bg): decomposition produced {} child docs", child_count),
-                    }
+                    info!(
+                        "{} decomposition produced {} child docs",
+                        decomposer_prefix, child_count
+                    );
                     match double_write_old_records(&stores_bg, &plan_doc_bg, &markdown_bg, &child_docs, &run_dir_bg) {
                         Ok(()) => {
                             for child in child_docs {
@@ -321,10 +313,7 @@ pub(super) async fn accept_plan_markdown(
                             }
                         }
                         Err(e) => {
-                            match &decomposer_log {
-                                Ok(log) => log.warn(&format!("persist failed: {}", e)),
-                                Err(_) => warn!("doc entry (bg): persist failed: {}", e),
-                            }
+                            warn!("{} persist failed: {}", decomposer_prefix, e);
                             if let Ok(mut states) = stores_bg.write_coordinator_states()
                                 && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
                             {
@@ -344,10 +333,7 @@ pub(super) async fn accept_plan_markdown(
                     }
                 }
                 Err(e) => {
-                    match &decomposer_log {
-                        Ok(log) => log.warn(&format!("decomposition failed: {}", e)),
-                        Err(_) => warn!("doc entry (bg): decomposition failed: {}", e),
-                    }
+                    warn!("{} decomposition failed: {}", decomposer_prefix, e);
                     if let Ok(mut states) = stores_bg.write_coordinator_states()
                         && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
                     {

@@ -2,10 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eyre::{Result, eyre};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use tokio::sync::broadcast;
 
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
 use crate::agents::{coordinator, implementer, integrator, researcher, reviewer};
@@ -99,15 +98,8 @@ pub async fn run_agent_task(
     let cleanup_mgr = worktree_mgr.clone();
     let cleanup_key = worktree_key.clone();
 
-    // Create per-agent logger
-    let agent_log = match AgentLogger::new(agent_type, &session_id, stores.session_dir.as_deref()) {
-        Ok(al) => al,
-        Err(e) => {
-            error!("Agent {} failed to create logger: {}", session_id, e);
-            return;
-        }
-    };
-    agent_log.info(&format!("Agent task started: {} ({})", session_id, agent_type));
+    let prefix = format!("[{}:{}]", agent_type, session_id);
+    info!("{} Agent task started", prefix);
 
     // Create the in-process IPC bridge for this agent
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
@@ -120,7 +112,7 @@ pub async fn run_agent_task(
         };
         if let Some(session) = sessions.get_mut(&session_id) {
             if let Err(e) = session.transition_to(AgentStatus::Running) {
-                agent_log.error(&format!("failed to start: {}", e));
+                error!("{} failed to start: {}", prefix, e);
                 return;
             }
             persist_session(&stores, session);
@@ -139,13 +131,13 @@ pub async fn run_agent_task(
         AgentKind::Chat => None,
     };
 
-    let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx, &agent_log);
+    let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx);
 
     let result = if let Some(secs) = timeout_secs {
         match tokio::time::timeout(Duration::from_secs(secs), loop_future).await {
             Ok(inner) => inner,
             Err(_) => {
-                agent_log.warn(&format!("session timeout after {}s", secs));
+                warn!("{} session timeout after {}s", prefix, secs);
                 Err(eyre!("session timed out after {}s", secs))
             }
         }
@@ -163,18 +155,18 @@ pub async fn run_agent_task(
                 serde_json::json!({ "id": wi_id, "target_status": target_status, "role": "implementer" }),
             );
             if resp.is_error() {
-                agent_log.warn(&format!(
-                    "failed to transition work {} -> {}: {:?}",
-                    wi_id, target_status, resp.error
-                ));
+                warn!(
+                    "{} failed to transition work {} -> {}: {:?}",
+                    prefix, wi_id, target_status, resp.error
+                );
             } else {
-                agent_log.info(&format!("transitioned work {} -> {}", wi_id, target_status));
+                info!("{} transitioned work {} -> {}", prefix, wi_id, target_status);
             }
         } else {
-            agent_log.info(&format!(
-                "skipping work handback for {} - sibling implementer still active",
-                wi_id
-            ));
+            info!(
+                "{} skipping work handback for {} - sibling implementer still active",
+                prefix, wi_id
+            );
         }
     }
 
@@ -183,15 +175,15 @@ pub async fn run_agent_task(
         && let Some(session) = sessions.get(&session_id)
         && let Some(ref wi_id) = session.work_id
     {
-        release_agent_locks(&bridge, wi_id, &agent_log);
+        release_agent_locks(&bridge, wi_id, &prefix);
     }
 
     // Clean up worktree after agent loop exits (only for non-thinking-plane agents)
     if let Some(ref key) = cleanup_key {
         if let Err(e) = cleanup_mgr.cleanup(key) {
-            agent_log.warn(&format!("worktree cleanup failed (key={}): {}", key, e));
+            warn!("{} worktree cleanup failed (key={}): {}", prefix, key, e);
         } else {
-            agent_log.info(&format!("worktree cleaned up (key={})", key));
+            info!("{} worktree cleaned up (key={})", prefix, key);
         }
     }
 
@@ -199,7 +191,7 @@ pub async fn run_agent_task(
     let terminal_status = match result {
         Ok(_) => AgentStatus::Completed,
         Err(ref e) => {
-            agent_log.warn(&format!("failed: {}", e));
+            warn!("{} failed: {}", prefix, e);
             AgentStatus::Failed
         }
     };
@@ -211,7 +203,7 @@ pub async fn run_agent_task(
         };
         if let Some(session) = sessions.get_mut(&session_id) {
             if let Err(e) = session.transition_to(terminal_status) {
-                agent_log.error(&format!("failed to transition to {:?}: {}", terminal_status, e));
+                error!("{} failed to transition to {:?}: {}", prefix, terminal_status, e);
                 return;
             }
             if let Err(ref e) = result {
@@ -263,7 +255,7 @@ pub async fn run_agent_task(
         if let Ok(Some(mut store_guard)) = stores.lock_store() {
             let _ = store_guard.create(learning);
         }
-        agent_log.info(&format!("created failure learning {} on '{}'", learning_id, wi_title));
+        info!("{} created failure learning {} on '{}'", prefix, learning_id, wi_title);
     }
 
     debug!("[agent_status] {}: -> {:?} (terminal)", session_id, terminal_status);
@@ -274,7 +266,7 @@ pub async fn run_agent_task(
         let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, terminal_status));
     }
 
-    agent_log.info(&format!("task finished -> {:?}", terminal_status));
+    info!("{} task finished -> {:?}", prefix, terminal_status);
 }
 
 /// Agent loop - dispatches to the appropriate agent implementation based on type.
@@ -284,20 +276,16 @@ pub(super) async fn run_agent_loop(
     stores: &Arc<Stores>,
     bridge: &AgentIpcBridge,
     event_tx: &broadcast::Sender<DaemonEvent>,
-    agent_log: &AgentLogger,
 ) -> Result<()> {
-    agent_log.debug(&format!(
-        "run_agent_loop(session_id={}, agent_type={})",
-        session_id, agent_type
-    ));
+    debug!("[{}:{}] run_agent_loop()", agent_type, session_id);
     // Verify the bridge works by checking system status
     let status_resp = bridge.request("system.status", serde_json::json!(null));
     if status_resp.is_error() {
         return Err(eyre!("bridge health check failed: {:?}", status_resp.error));
     }
-    agent_log.info("Bridge health check passed");
+    info!("[{}:{}] Bridge health check passed", agent_type, session_id);
 
-    let mut ctx = AgentContext::from_session_id(session_id, agent_type, stores.clone(), event_tx.clone())?;
+    let mut ctx = AgentContext::from_session_id(session_id, stores.clone(), event_tx.clone())?;
 
     // Per-session tool resolution: 3-layer priority stack
     //   Layer 1: config tools (from loopr.yml)
@@ -310,11 +298,13 @@ pub(super) async fn run_agent_loop(
         drop(runtime_tools);
         ctx.tool_runner = Arc::new(crate::tools::ToolRunner::new(&resolved));
         ctx.tool_executor = Arc::new(crate::tools::ToolExecutor::standard(&resolved));
-        agent_log.info(&format!(
-            "Session tool executor: {} tools (resolved from {})",
+        info!(
+            "[{}:{}] Session tool executor: {} tools (resolved from {})",
+            agent_type,
+            session_id,
             ctx.tool_executor.available_tools().len(),
             wt_path
-        ));
+        );
     }
 
     let (result, iteration) = match agent_type {

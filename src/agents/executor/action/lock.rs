@@ -6,7 +6,6 @@ use crate::agents::executor::result::ActionResult;
 /// Handle AcquireLock action.
 pub(super) fn handle_acquire_lock(ctx: &AgentContext, resource: &str, holder_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     // Check if there's already an active lock on this resource
     let check_resp = bridge.request(
@@ -54,7 +53,7 @@ pub(super) fn handle_acquire_lock(ctx: &AgentContext, resource: &str, holder_id:
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "Lock acquired: {} on '{}' for {}",
         lock_id, resource, holder_id
     ));
@@ -64,13 +63,12 @@ pub(super) fn handle_acquire_lock(ctx: &AgentContext, resource: &str, holder_id:
 /// Handle ReleaseLock action.
 pub(super) fn handle_release_lock(ctx: &AgentContext, lock_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     let resp = bridge.request("lock.release", serde_json::json!({ "id": lock_id }));
     if resp.is_error() {
         return Err(eyre!("lock.release failed: {:?}", resp.error));
     }
-    agent_log.info(&format!("Lock released: {}", lock_id));
+    ctx.info(&format!("Lock released: {}", lock_id));
     Ok(ActionResult::LockReleased(lock_id.to_string()))
 }
 

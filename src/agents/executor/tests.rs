@@ -1,5 +1,4 @@
 #![allow(unused_imports, dead_code)]
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentContext, AgentKind, AgentSession};
 use crate::config::{Config, ProjectConfig, ToolEntry};
@@ -12,17 +11,6 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use taskstore::Store;
 use tokio::sync::broadcast;
-
-pub(crate) fn test_agent_logger(dir: &Path) -> AgentLogger {
-    use crate::agents::AgentKind;
-    let file_path = dir.join("test-executor.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .unwrap();
-    AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
-}
 
 pub(crate) fn test_stores(dir: &Path) -> Arc<Stores> {
     let config = Config {
@@ -48,7 +36,6 @@ pub(crate) fn test_agent_context(
     let (event_tx, event_rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(dir);
     let session = AgentSession::new(agent_type, "test-model".into());
     let ctx = AgentContext {
         session,
@@ -57,7 +44,6 @@ pub(crate) fn test_agent_context(
         event_tx,
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     (ctx, event_rx)
@@ -73,7 +59,6 @@ pub(crate) fn test_agent_context_with_tools(
     let (event_tx, _) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(dir);
     let session = AgentSession::new(agent_type, "test-model".into());
     AgentContext {
         session,
@@ -82,7 +67,6 @@ pub(crate) fn test_agent_context_with_tools(
         event_tx,
         tool_runner: Arc::new(ToolRunner::new(tool_entries)),
         tool_executor: Arc::new(crate::tools::ToolExecutor::standard(tool_entries)),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     }
 }
@@ -97,7 +81,6 @@ pub(crate) fn test_agent_context_with_config(
     let (event_tx, _) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, config);
-    let agent_log = test_agent_logger(dir);
     let session = AgentSession::new(agent_type, "test-model".into());
     AgentContext {
         session,
@@ -106,7 +89,6 @@ pub(crate) fn test_agent_context_with_config(
         event_tx,
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     }
 }

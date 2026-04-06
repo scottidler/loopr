@@ -59,8 +59,8 @@ pub struct ReviewResult {
 
 /// Parse the LLM response into a ReviewResult.
 /// Extracts the first JSON object found in the response text.
-pub fn parse_review_result(response: &str, log: &crate::agents::agent_logger::AgentLogger) -> Result<ReviewResult> {
-    log.debug(&format!("parse_review_result(response_len={})", response.len()));
+pub fn parse_review_result(response: &str, prefix: &str) -> Result<ReviewResult> {
+    log::debug!("{} parse_review_result(response_len={})", prefix, response.len());
     if let Ok(result) = serde_json::from_str::<ReviewResult>(response) {
         return Ok(result);
     }
@@ -132,15 +132,8 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
 
             loop {
                 let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
-                self.ctx.log.write_iter_file(
-                    requeries,
-                    Some(&self.bundle_id),
-                    &assembled.system_prompt,
-                    &assembled.user_message,
-                    &response,
-                );
-
-                match parse_review_result(&response, &self.ctx.log) {
+                let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
+                match parse_review_result(&response, &prefix) {
                     Ok(result) => break result,
                     Err(parse_err) => {
                         requeries += 1;
@@ -315,7 +308,6 @@ mod tests {
     use super::*;
     use eyre::eyre;
 
-    use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::{AgentContext, AgentKind, AgentSession};
     use crate::config::{AgentRoleConfig, Config, ProjectConfig};
@@ -461,21 +453,10 @@ mod tests {
         (Arc::new(stores), bundle_id)
     }
 
-    fn test_agent_logger(dir: &Path) -> AgentLogger {
-        let file_path = dir.join("test-reviewer.log");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-            .unwrap();
-        AgentLogger::_new_for_test(AgentKind::Reviewer, "test-session", file, file_path)
-    }
-
     fn test_reviewer<L: LlmClient>(dir: &Path, stores: Arc<Stores>, bundle_id: &str, llm: L) -> ReviewerAgent<L> {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-        let agent_log = test_agent_logger(dir);
         let mut session = AgentSession::new(AgentKind::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id.to_string());
         stores
@@ -491,7 +472,6 @@ mod tests {
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
-            log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         ReviewerAgent::new(ctx, llm, config).unwrap()
@@ -579,38 +559,30 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_parse_review_result_direct_json() {
-        let dir = TestDir::new("loopr-rev-parse1");
-        let agent_log = test_agent_logger(&dir);
         let json = r#"{"verdict": "approve", "issues": [], "summary": "All good"}"#;
-        let result = parse_review_result(json, &agent_log).unwrap();
+        let result = parse_review_result(json, "[test:test]").unwrap();
         assert_eq!(result.verdict, ReviewVerdict::Approve);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_parse_review_result_wrapped_in_code_block() {
-        let dir = TestDir::new("loopr-rev-parse2");
-        let agent_log = test_agent_logger(&dir);
         let response =
             "Here is my review:\n```json\n{\"verdict\": \"approve\", \"issues\": [], \"summary\": \"LGTM\"}\n```";
-        let result = parse_review_result(response, &agent_log).unwrap();
+        let result = parse_review_result(response, "[test:test]").unwrap();
         assert_eq!(result.verdict, ReviewVerdict::Approve);
         assert_eq!(result.summary, "LGTM");
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_parse_review_result_invalid() {
-        let dir = TestDir::new("loopr-rev-parse3");
-        let agent_log = test_agent_logger(&dir);
         let bad = "This is not JSON at all";
-        assert!(parse_review_result(bad, &agent_log).is_err());
+        assert!(parse_review_result(bad, "[test:test]").is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_parse_review_result_wrong_schema() {
-        let dir = TestDir::new("loopr-rev-parse4");
-        let agent_log = test_agent_logger(&dir);
         let json = r#"{"wrong": "schema"}"#;
-        assert!(parse_review_result(json, &agent_log).is_err());
+        assert!(parse_review_result(json, "[test:test]").is_err());
     }
 
     // --- context builder integration tests ---
@@ -715,7 +687,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-        let agent_log = test_agent_logger(&dir);
+
         let session = AgentSession::new(AgentKind::Reviewer, "test".into());
         // No bundle_id set
         let ctx = AgentContext {
@@ -725,7 +697,6 @@ mod tests {
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
-            log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         let llm = MockReviewLlm::new("{}");

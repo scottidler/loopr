@@ -31,16 +31,6 @@ pub(super) fn test_stores() -> Arc<Stores> {
     Arc::new(Stores::new())
 }
 
-pub(super) fn test_agent_logger(dir: &std::path::Path) -> crate::agents::agent_logger::AgentLogger {
-    let file_path = dir.join("test-integration.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .unwrap();
-    crate::agents::agent_logger::AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
-}
-
 pub(super) fn test_event_tx() -> broadcast::Sender<DaemonEvent> {
     let (tx, _) = broadcast::channel(64);
     tx
@@ -58,7 +48,6 @@ pub(super) fn test_agent_context(
     stores: &Arc<Stores>,
     bridge: crate::agents::bridge::AgentIpcBridge,
     tx: broadcast::Sender<DaemonEvent>,
-    agent_log: crate::agents::agent_logger::AgentLogger,
 ) -> crate::agents::AgentContext {
     let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
     crate::agents::AgentContext {
@@ -68,7 +57,6 @@ pub(super) fn test_agent_context(
         event_tx: tx,
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     }
 }

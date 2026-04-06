@@ -11,7 +11,6 @@ pub(super) fn handle_propose_plan(
     acceptance_criteria: &str,
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     // Create Plan as Draft via bridge
     let resp = bridge.request(
@@ -37,7 +36,7 @@ pub(super) fn handle_propose_plan(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    agent_log.info(&format!("ProposePlan: created draft plan {}", plan_id));
+    ctx.info(&format!("ProposePlan: created draft plan {}", plan_id));
     Ok(ActionResult::RecordCreated {
         collection: "plans".to_string(),
         id: plan_id,
@@ -53,7 +52,6 @@ pub(super) fn handle_revise_parent(
     diagnostic: &str,
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     // Transition parent back to Draft
     let transition_resp = bridge.request(
@@ -99,7 +97,7 @@ pub(super) fn handle_revise_parent(
         }),
     );
 
-    agent_log.info(&format!(
+    ctx.info(&format!(
         "ReviseParent {}/{}: reason={}, diagnostic={}",
         collection, id, reason, diagnostic
     ));
@@ -112,7 +110,6 @@ pub(super) fn handle_revise_parent(
 /// Handle InterviewQuestion action.
 pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     let interview_mode = bridge.config().agents.coordinator.interview_mode;
     if interview_mode == crate::config::InterviewMode::Auto {
@@ -154,7 +151,7 @@ pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]
                 .unwrap_or_else(|| "interview auto-respond failed".to_string());
             return Ok(ActionResult::ActionError(msg));
         }
-        agent_log.info(&format!(
+        ctx.info(&format!(
             "InterviewQuestion: auto-answered {} question(s)",
             questions.len()
         ));
@@ -176,7 +173,7 @@ pub(super) fn handle_interview_question(ctx: &AgentContext, questions: &[String]
                 .unwrap_or_else(|| "interview question failed".to_string());
             return Ok(ActionResult::ActionError(msg));
         }
-        agent_log.info(&format!("InterviewQuestion: {} questions sent", questions.len()));
+        ctx.info(&format!("InterviewQuestion: {} questions sent", questions.len()));
         Ok(ActionResult::Done(format!(
             "sent {} interview question(s)",
             questions.len()

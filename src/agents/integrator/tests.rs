@@ -1,5 +1,4 @@
 use super::*;
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentContext, AgentKind, AgentSession, AgentStatus};
 use crate::config::{Config, ProjectConfig};
@@ -30,16 +29,6 @@ fn test_stores(dir: &std::path::Path) -> Arc<Stores> {
     Arc::new(stores)
 }
 
-fn test_agent_logger(dir: &std::path::Path) -> AgentLogger {
-    let file_path = dir.join("test-integrator.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .unwrap();
-    AgentLogger::_new_for_test(AgentKind::Integrator, "test-session", file, file_path)
-}
-
 fn test_config() -> IntegratorConfig {
     IntegratorConfig {
         validation_commands: vec!["true".to_string()],
@@ -63,7 +52,7 @@ fn test_integrator(dir: &std::path::Path, stores: Arc<Stores>, intg_config: Inte
     let (event_tx, _) = broadcast::channel(64);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(dir);
+
     let session = AgentSession::new(AgentKind::Integrator, "model".into());
     stores
         .agent_sessions
@@ -77,7 +66,7 @@ fn test_integrator(dir: &std::path::Path, stores: Arc<Stores>, intg_config: Inte
         event_tx,
         tool_runner: Arc::new(ToolRunner::new(&[])),
         tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
-        log: agent_log,
+
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     IntegratorAgent::new(ctx, intg_config)
@@ -92,7 +81,7 @@ fn test_integrator_with_stores_config(
     let (event_tx, _) = broadcast::channel(64);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(dir);
+
     let session = AgentSession::new(AgentKind::Integrator, "model".into());
     stores
         .agent_sessions
@@ -106,7 +95,7 @@ fn test_integrator_with_stores_config(
         event_tx: event_tx.clone(),
         tool_runner: Arc::new(ToolRunner::new(&[])),
         tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
-        log: agent_log,
+
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     (IntegratorAgent::new(ctx, intg_config), event_tx)

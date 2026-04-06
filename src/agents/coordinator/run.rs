@@ -154,25 +154,26 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         let config = &self.config;
         let bridge = &self.ctx.bridge;
         let iteration = self.iteration;
+        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
         // Check for FSM state transitions before the iteration
         if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
             self.ctx
-                .info(&format!("FSM transition: {} → {}", coord_state.fsm_state, new_state));
-            if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &self.ctx.log) {
+                .info(&format!("FSM transition: {} -> {}", coord_state.fsm_state, new_state));
+            if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &prefix) {
                 return Ok(outcome);
             }
         }
 
         // Deterministic: transition Integrated Works to Done before consulting the LLM.
-        sweep_integrated_to_done(stores, coord_state, bridge, &self.ctx.log);
+        sweep_integrated_to_done(stores, coord_state, bridge, &prefix);
 
         // Re-check FSM after sweep — if all Works are now Done, advance immediately.
         if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
             self.ctx.info(&format!(
-                "FSM transition (post-sweep): {} → {}",
+                "FSM transition (post-sweep): {} -> {}",
                 coord_state.fsm_state, new_state
             ));
-            if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &self.ctx.log) {
+            if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &prefix) {
                 return Ok(outcome);
             }
         }
@@ -200,7 +201,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
 
         let state_summary = build_state_summary_with_sla(
             stores,
-            &self.ctx.log,
+            &prefix,
             Some(coord_state),
             Some(&stores.config.strategy.work_sla),
         );
@@ -215,7 +216,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         };
 
         // Build FSM-aware footer
-        let footer = build_fsm_footer(stores, coord_state, &goal, config, &self.ctx.log);
+        let footer = build_fsm_footer(stores, coord_state, &goal, config, &prefix);
 
         // Add FSM state context to state summary
         let fsm_context = format!(
@@ -252,20 +253,13 @@ impl<L: LlmClient> CoordinatorAgent<L> {
 
         let mut actions = loop {
             let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
-            self.ctx.log.write_iter_file(
-                iteration,
-                None,
-                &assembled.system_prompt,
-                &assembled.user_message,
-                &response,
-            );
             self.ctx.info(&format!(
                 "raw LLM response ({} chars): {}",
                 response.len(),
                 &response[..response.len().min(800)]
             ));
 
-            match implementer::parse_actions(&response, &self.ctx.log) {
+            match implementer::parse_actions(&response, &prefix) {
                 Ok(actions) => break actions,
                 Err(parse_err) => {
                     requeries += 1;
@@ -325,7 +319,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             }
 
             // Fix #2: Resolve batch:N dependencies before executing CreateWork
-            let resolved_action = resolve_batch_dependencies(action, &batch_created_ids, &self.ctx.log);
+            let resolved_action = resolve_batch_dependencies(action, &batch_created_ids, &prefix);
             let action_ref = resolved_action.as_ref().unwrap_or(action);
 
             // Error classification: check if the most recent failed session for this
@@ -617,7 +611,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
 
         // Fix #6: Prune independent deps after batch Work creation
         if !batch_created_ids.is_empty() {
-            prune_independent_deps(stores, &batch_created_ids, &self.ctx.log);
+            prune_independent_deps(stores, &batch_created_ids, &prefix);
         }
 
         // Persist state after each iteration

@@ -1,5 +1,4 @@
 pub mod action;
-pub mod agent_logger;
 pub mod bridge;
 pub mod cache;
 pub mod context;
@@ -32,10 +31,9 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use eyre::Result;
-use log::warn;
+use log::{debug, error, info, trace, warn};
 use tokio::sync::broadcast;
 
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::cache::ReadCache;
 use crate::daemon::context::Stores;
@@ -61,7 +59,6 @@ pub struct AgentContext {
     pub event_tx: broadcast::Sender<DaemonEvent>,
     pub tool_runner: Arc<ToolRunner>,
     pub tool_executor: Arc<ToolExecutor>,
-    pub log: AgentLogger,
     pub read_cache: Mutex<ReadCache>,
 }
 
@@ -69,7 +66,6 @@ impl AgentContext {
     /// Create an AgentContext by cloning the session from stores.
     pub fn from_session_id(
         session_id: &str,
-        agent_type: AgentKind,
         stores: Arc<Stores>,
         event_tx: broadcast::Sender<DaemonEvent>,
     ) -> eyre::Result<Self> {
@@ -90,7 +86,6 @@ impl AgentContext {
             ),
             stores.config.clone(),
         );
-        let log = AgentLogger::new(agent_type, session_id, stores.session_dir.as_deref())?;
 
         Ok(Self {
             session,
@@ -99,7 +94,6 @@ impl AgentContext {
             event_tx,
             tool_runner: stores.read_tool_runner()?,
             tool_executor: stores.read_tool_executor()?,
-            log,
             read_cache: Mutex::new(ReadCache::default()),
         })
     }
@@ -117,19 +111,19 @@ impl AgentContext {
     }
 
     pub fn trace(&self, msg: &str) {
-        self.log.trace(msg)
+        trace!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
     }
     pub fn info(&self, msg: &str) {
-        self.log.info(msg)
+        info!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
     }
     pub fn warn(&self, msg: &str) {
-        self.log.warn(msg)
+        warn!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
     }
     pub fn debug(&self, msg: &str) {
-        self.log.debug(msg)
+        debug!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
     }
     pub fn error(&self, msg: &str) {
-        self.log.error(msg)
+        error!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
     }
 
     /// Check if this agent's session has been cancelled.
@@ -173,7 +167,6 @@ mod tests {
     use tokio::sync::broadcast;
 
     use super::*;
-    use crate::agents::agent_logger::AgentLogger;
     use crate::agents::bridge::AgentIpcBridge;
     use crate::agents::cache::ReadCache;
     use crate::test_util::TestDir;
@@ -183,16 +176,6 @@ mod tests {
 
     fn make_test_dir(label: &str) -> TestDir {
         TestDir::new(&format!("loopr-mod-{label}"))
-    }
-
-    fn test_agent_logger(dir: &Path) -> AgentLogger {
-        let file_path = dir.join("test-mod.log");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-            .unwrap();
-        AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
     }
 
     fn test_stores_with_dir(dir: &Path) -> Arc<crate::daemon::context::Stores> {
@@ -219,7 +202,6 @@ mod tests {
         let (event_tx, event_rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-        let agent_log = test_agent_logger(dir);
         let session = AgentSession::new(agent_type, "test-model".into());
         let ctx = AgentContext {
             session,
@@ -228,7 +210,6 @@ mod tests {
             event_tx,
             tool_runner: stores.read_tool_runner().unwrap(),
             tool_executor: stores.read_tool_executor().unwrap(),
-            log: agent_log,
             read_cache: Mutex::new(ReadCache::default()),
         };
         (ctx, event_rx)
@@ -251,7 +232,7 @@ mod tests {
             .insert(session_id.clone(), session);
 
         let (event_tx, _event_rx) = broadcast::channel(16);
-        let ctx = AgentContext::from_session_id(&session_id, AgentKind::Implementer, stores.clone(), event_tx);
+        let ctx = AgentContext::from_session_id(&session_id, stores.clone(), event_tx);
         assert!(ctx.is_ok());
         let ctx = ctx.unwrap();
         assert_eq!(ctx.session.id, session_id);
@@ -264,7 +245,7 @@ mod tests {
         let stores = test_stores_with_dir(&dir);
 
         let (event_tx, _event_rx) = broadcast::channel(16);
-        let result = AgentContext::from_session_id("nonexistent", AgentKind::Coordinator, stores, event_tx);
+        let result = AgentContext::from_session_id("nonexistent", stores, event_tx);
         let err_msg = result.err().expect("expected Err").to_string();
         assert!(
             err_msg.contains("session not found"),
@@ -278,18 +259,11 @@ mod tests {
         let stores = test_stores_with_dir(&dir);
         let (ctx, _rx) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
 
-        // These should not panic -- they delegate to AgentLogger
+        // These should not panic - they call standard log macros with [component:id] prefix
         ctx.info("info message");
         ctx.warn("warn message");
         ctx.debug("debug message");
         ctx.error("error message");
-
-        // Verify messages were written to the log file
-        let log_content = std::fs::read_to_string(ctx.log.file_path()).unwrap();
-        assert!(log_content.contains("info message"));
-        assert!(log_content.contains("warn message"));
-        assert!(log_content.contains("debug message"));
-        assert!(log_content.contains("error message"));
     }
 
     #[test]

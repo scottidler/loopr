@@ -241,13 +241,13 @@ pub(super) async fn handle_commit(
 /// Handle SearchCode action.
 pub(super) async fn handle_search_code(
     worktree_path: &Path,
-    agent_log: &crate::agents::agent_logger::AgentLogger,
+    prefix: &str,
     pattern: &str,
     glob: Option<&str>,
     path: Option<&str>,
 ) -> Result<ActionResult> {
     let repo_root = worktree_path; // For Researcher, worktree_path is the repo root
-    match crate::agents::researcher::execute_search_code(repo_root, pattern, glob, path, agent_log).await {
+    match crate::agents::researcher::execute_search_code(repo_root, pattern, glob, path, prefix).await {
         Ok(output) => Ok(ActionResult::FileRead(output)),
         Err(e) => Ok(ActionResult::ActionError(e.to_string())),
     }
@@ -256,25 +256,21 @@ pub(super) async fn handle_search_code(
 /// Handle SearchFiles action.
 pub(super) async fn handle_search_files(
     worktree_path: &Path,
-    agent_log: &crate::agents::agent_logger::AgentLogger,
+    prefix: &str,
     pattern: &str,
     path: Option<&str>,
 ) -> Result<ActionResult> {
     let repo_root = worktree_path;
-    match crate::agents::researcher::execute_search_files(repo_root, pattern, path, agent_log).await {
+    match crate::agents::researcher::execute_search_files(repo_root, pattern, path, prefix).await {
         Ok(output) => Ok(ActionResult::FileRead(output)),
         Err(e) => Ok(ActionResult::ActionError(e.to_string())),
     }
 }
 
 /// Handle ListDirectory action.
-pub(super) async fn handle_list_directory(
-    worktree_path: &Path,
-    agent_log: &crate::agents::agent_logger::AgentLogger,
-    path: &str,
-) -> Result<ActionResult> {
+pub(super) async fn handle_list_directory(worktree_path: &Path, prefix: &str, path: &str) -> Result<ActionResult> {
     let repo_root = worktree_path;
-    match crate::agents::researcher::execute_list_directory(repo_root, path, agent_log).await {
+    match crate::agents::researcher::execute_list_directory(repo_root, path, prefix).await {
         Ok(output) => Ok(ActionResult::FileRead(output)),
         Err(e) => Ok(ActionResult::ActionError(e.to_string())),
     }

@@ -18,7 +18,7 @@ pub(super) async fn handle_propose_bundle(
     noop_reason: Option<&str>,
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
+
     let is_noop = noop_reason.is_some();
     let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
 
@@ -35,7 +35,7 @@ pub(super) async fn handle_propose_bundle(
         if let Ok(output) = status_output {
             let status = String::from_utf8_lossy(&output.stdout);
             if !status.trim().is_empty() {
-                agent_log.warn(&format!(
+                ctx.warn(&format!(
                     "Rejected noop bundle: worktree has uncommitted changes:\n{}",
                     status.trim()
                 ));
@@ -73,11 +73,11 @@ pub(super) async fn handle_propose_bundle(
             let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty_files, &resource_tags);
 
             if resource_tags.is_empty() && !in_scope.is_empty() {
-                agent_log.warn("Work has no resource_tags, staging all non-artifact dirty files");
+                ctx.warn("Work has no resource_tags, staging all non-artifact dirty files");
             }
 
             if !out_of_scope.is_empty() {
-                agent_log.info(&format!("Loose files (not in scope): {:?}", out_of_scope));
+                ctx.info(&format!("Loose files (not in scope): {:?}", out_of_scope));
                 loose_files = out_of_scope;
             }
 
@@ -98,10 +98,10 @@ pub(super) async fn handle_propose_bundle(
                         .await;
                     match commit_out {
                         Ok(out) if out.status.success() => {
-                            agent_log.info("Auto-committed in-scope changes before propose_bundle");
+                            ctx.info("Auto-committed in-scope changes before propose_bundle");
                         }
                         _ => {
-                            agent_log.info("No pending changes to auto-commit before propose_bundle");
+                            ctx.info("No pending changes to auto-commit before propose_bundle");
                         }
                     }
                 }
@@ -113,7 +113,7 @@ pub(super) async fn handle_propose_bundle(
     // WorktreeManager::create() which uses format!("agent/{}", work_id).
     // For noop bundles, use empty branch_name (Integrator skips merge).
     let branch_name = if is_noop {
-        agent_log.info(&format!("Noop bundle: {}", noop_reason.unwrap_or("(no reason)")));
+        ctx.info(&format!("Noop bundle: {}", noop_reason.unwrap_or("(no reason)")));
         String::new()
     } else {
         format!("agent/{}", wi_id)
@@ -155,7 +155,7 @@ pub(super) async fn handle_propose_bundle(
         vec![]
     };
     if !touched_paths.is_empty() {
-        agent_log.info(&format!("Touched paths: {:?}", touched_paths));
+        ctx.info(&format!("Touched paths: {:?}", touched_paths));
     }
 
     // Fix #1: Resolve base_tick_id from latest Published Tick
@@ -189,7 +189,7 @@ pub(super) async fn handle_propose_bundle(
         if let Some(ref err) = resp.error
             && err.code == -32002
         {
-            agent_log.warn(&format!(
+            ctx.warn(&format!(
                 "Bundle stale ({}), retrying with fresh base_tick_id",
                 err.message
             ));
@@ -211,7 +211,6 @@ pub(super) async fn handle_propose_bundle(
 /// Handle TriageBundle action.
 pub(super) fn handle_triage_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     if !bundle_id.starts_with("bd-") {
         return Ok(ActionResult::ActionError(format!(
@@ -255,14 +254,13 @@ pub(super) fn handle_triage_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
         let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
         return Ok(ActionResult::ActionError(format!("triage_bundle failed: {}", msg)));
     }
-    agent_log.info(&format!("TriageBundle: {} -> Triaged", bundle_id));
+    ctx.info(&format!("TriageBundle: {} -> Triaged", bundle_id));
     Ok(ActionResult::Transitioned(format!("bundle/{} -> Triaged", bundle_id)))
 }
 
 /// Handle AcceptBundle action.
 pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
-    let agent_log = &ctx.log;
 
     if !bundle_id.starts_with("bd-") {
         return Ok(ActionResult::ActionError(format!(
@@ -306,7 +304,7 @@ pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
         let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
         return Ok(ActionResult::ActionError(format!("accept_bundle failed: {}", msg)));
     }
-    agent_log.info(&format!("AcceptBundle: {} -> Accepted", bundle_id));
+    ctx.info(&format!("AcceptBundle: {} -> Accepted", bundle_id));
     Ok(ActionResult::Transitioned(format!("bundle/{} -> Accepted", bundle_id)))
 }
 

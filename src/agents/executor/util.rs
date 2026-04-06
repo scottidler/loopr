@@ -1,6 +1,5 @@
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{AgentKind, AgentSession};
 use crate::daemon::context::Stores;
@@ -145,7 +144,7 @@ pub(super) fn auto_acquire_write_lock(bridge: &AgentIpcBridge, resource: &str, h
 }
 
 /// Release all advisory locks held by a given holder (work ID). Called at agent exit.
-pub(super) fn release_agent_locks(bridge: &AgentIpcBridge, holder_id: &str, agent_log: &AgentLogger) {
+pub(super) fn release_agent_locks(bridge: &AgentIpcBridge, holder_id: &str, prefix: &str) {
     let resp = bridge.request(
         "lock.list",
         serde_json::json!({ "holder_id": holder_id, "active_only": true }),
@@ -157,7 +156,7 @@ pub(super) fn release_agent_locks(bridge: &AgentIpcBridge, holder_id: &str, agen
             }
         }
         if !locks.is_empty() {
-            agent_log.info(&format!("released {} advisory lock(s)", locks.len()));
+            info!("{} released {} advisory lock(s)", prefix, locks.len());
         }
     }
 }
@@ -177,7 +176,7 @@ pub(super) fn persist_session(stores: &Stores, session: &AgentSession) {
 #[cfg(test)]
 mod tests {
     use crate::agents::bridge::AgentIpcBridge;
-    use crate::agents::executor::tests::{test_agent_logger, test_stores};
+    use crate::agents::executor::tests::test_stores;
     use crate::agents::{AgentKind, AgentSession, AgentStatus};
     use crate::domain::bundle::BundleStatus;
     use crate::domain::tick::TickStatus;
@@ -373,8 +372,6 @@ mod tests {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
-        let agent_log = test_agent_logger(&dir);
-
         bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/a.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),
@@ -390,7 +387,7 @@ mod tests {
         );
         assert_eq!(check.result.as_ref().unwrap().as_array().unwrap().len(), 2);
 
-        release_agent_locks(&bridge, "wi-rel", &agent_log);
+        release_agent_locks(&bridge, "wi-rel", "[test:test-session]");
 
         let after = bridge.request(
             "lock.list",

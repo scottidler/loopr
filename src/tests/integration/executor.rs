@@ -19,8 +19,7 @@ async fn test_coordinator_creates_work_via_executor() {
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
     let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
-    let agent_log = test_agent_logger(&dir);
-    let ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
+    let ctx = test_agent_context(&stores, bridge, tx.clone());
 
     let (plan_id, spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
 
@@ -120,8 +119,7 @@ async fn test_coordinator_triage_accept_bundle_via_executor() {
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
     // TriageBundle via executor
-    let agent_log = test_agent_logger(&dir);
-    let ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
+    let ctx = test_agent_context(&stores, bridge, tx.clone());
     let triage_result = execute_action(
         &AgentAction::TriageBundle {
             bundle_id: bundle_id.clone(),

@@ -4,7 +4,6 @@ use eyre::{Result, eyre};
 
 const SEARCH_SUBPROCESS_TIMEOUT_SECS: u64 = 30;
 
-use crate::agents::agent_logger::AgentLogger;
 use crate::agents::context::ContextBuilder;
 use crate::agents::executor::{ActionResult, execute_action};
 use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
@@ -17,18 +16,19 @@ use crate::ipc::protocol::DaemonEvent;
 
 /// Validate that a path is safe for the Researcher to access.
 /// Delegates to the shared sandbox module with denylist enabled.
-pub fn validate_path(repo_root: &Path, relative: &str, agent_log: &AgentLogger) -> Result<PathBuf> {
-    agent_log.debug(&format!(
-        "validate_path(repo_root={}, relative={})",
+pub fn validate_path(repo_root: &Path, relative: &str, prefix: &str) -> Result<PathBuf> {
+    log::debug!(
+        "{} validate_path(repo_root={}, relative={})",
+        prefix,
         repo_root.display(),
         relative
-    ));
+    );
     sandbox::validate_sandboxed_path(repo_root, relative, true)
 }
 
 /// Build the Researcher system prompt with the query injected.
-fn build_system_prompt(query: &str, agent_log: &AgentLogger) -> String {
-    agent_log.debug(&format!("build_system_prompt(query_len={})", query.len()));
+fn build_system_prompt(query: &str, prefix: &str) -> String {
+    log::debug!("{} build_system_prompt(query_len={})", prefix, query.len());
     crate::prompts::store().researcher.replace("{query}", query)
 }
 
@@ -38,14 +38,17 @@ pub async fn execute_search_code(
     pattern: &str,
     glob_filter: Option<&str>,
     search_path: Option<&str>,
-    agent_log: &AgentLogger,
+    prefix: &str,
 ) -> Result<String> {
-    agent_log.debug(&format!(
-        "execute_search_code(pattern={}, glob={:?}, path={:?})",
-        pattern, glob_filter, search_path
-    ));
+    log::debug!(
+        "{} execute_search_code(pattern={}, glob={:?}, path={:?})",
+        prefix,
+        pattern,
+        glob_filter,
+        search_path
+    );
     let search_dir = match search_path {
-        Some(p) => validate_path(repo_root, p, agent_log)?,
+        Some(p) => validate_path(repo_root, p, prefix)?,
         None => repo_root.to_path_buf(),
     };
 
@@ -100,10 +103,10 @@ pub async fn execute_search_files(
     repo_root: &Path,
     pattern: &str,
     search_path: Option<&str>,
-    agent_log: &AgentLogger,
+    prefix: &str,
 ) -> Result<String> {
     let search_dir = match search_path {
-        Some(p) => validate_path(repo_root, p, agent_log)?,
+        Some(p) => validate_path(repo_root, p, prefix)?,
         None => repo_root.to_path_buf(),
     };
 
@@ -117,13 +120,13 @@ pub async fn execute_search_files(
                 if let Ok(rel) = matched_path.strip_prefix(repo_root) {
                     let rel_str: std::borrow::Cow<'_, str> = rel.to_string_lossy();
                     // Apply denylist
-                    if validate_path(repo_root, &rel_str, agent_log).is_ok() {
+                    if validate_path(repo_root, &rel_str, prefix).is_ok() {
                         results.push(rel_str.to_string());
                     }
                 }
             }
             Err(e) => {
-                agent_log.warn(&format!("glob error: {}", e));
+                log::warn!("{} glob error: {}", prefix, e);
             }
         }
 
@@ -141,8 +144,8 @@ pub async fn execute_search_files(
 }
 
 /// Execute a ListDirectory action: list files in a directory.
-pub async fn execute_list_directory(repo_root: &Path, path: &str, agent_log: &AgentLogger) -> Result<String> {
-    let dir = validate_path(repo_root, path, agent_log)?;
+pub async fn execute_list_directory(repo_root: &Path, path: &str, prefix: &str) -> Result<String> {
+    let dir = validate_path(repo_root, path, prefix)?;
 
     if !dir.is_dir() {
         return Err(eyre!("not a directory: {}", path));
@@ -206,8 +209,9 @@ impl<L: LlmClient> ResearcherAgent<L> {
     }
 
     async fn run_iteration(&self, iteration: u32, guard: &mut Lifeguard) -> Result<IterationOutcome> {
+        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
         let query = self.ctx.session.query.as_deref().unwrap_or("(no query specified)");
-        let system_prompt = build_system_prompt(query, &self.ctx.log);
+        let system_prompt = build_system_prompt(query, &prefix);
 
         let builder = ContextBuilder::new(&self.ctx.stores, Role::Researcher).with_guidance(&self.ctx.stores.guidance);
 
@@ -241,15 +245,7 @@ impl<L: LlmClient> ResearcherAgent<L> {
 
         let actions = loop {
             let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
-            self.ctx.log.write_iter_file(
-                iteration,
-                self.ctx.session.target_id.as_deref(),
-                &assembled.system_prompt,
-                &assembled.user_message,
-                &response,
-            );
-
-            match implementer::parse_actions(&response, &self.ctx.log) {
+            match implementer::parse_actions(&response, &prefix) {
                 Ok(actions) => break actions,
                 Err(parse_err) => {
                     requeries += 1;
@@ -303,25 +299,22 @@ impl<L: LlmClient> ResearcherAgent<L> {
 
             let result = match action {
                 AgentAction::SearchCode { pattern, glob, path } => {
-                    match execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref(), &self.ctx.log).await
-                    {
+                    match execute_search_code(repo_root, pattern, glob.as_deref(), path.as_deref(), &prefix).await {
                         Ok(output) => ActionResult::FileRead(output),
                         Err(e) => ActionResult::ActionError(e.to_string()),
                     }
                 }
                 AgentAction::SearchFiles { pattern, path } => {
-                    match execute_search_files(repo_root, pattern, path.as_deref(), &self.ctx.log).await {
+                    match execute_search_files(repo_root, pattern, path.as_deref(), &prefix).await {
                         Ok(output) => ActionResult::FileRead(output),
                         Err(e) => ActionResult::ActionError(e.to_string()),
                     }
                 }
-                AgentAction::ListDirectory { path } => {
-                    match execute_list_directory(repo_root, path, &self.ctx.log).await {
-                        Ok(output) => ActionResult::FileRead(output),
-                        Err(e) => ActionResult::ActionError(e.to_string()),
-                    }
-                }
-                AgentAction::ReadFile { path, .. } => match validate_path(repo_root, path, &self.ctx.log) {
+                AgentAction::ListDirectory { path } => match execute_list_directory(repo_root, path, &prefix).await {
+                    Ok(output) => ActionResult::FileRead(output),
+                    Err(e) => ActionResult::ActionError(e.to_string()),
+                },
+                AgentAction::ReadFile { path, .. } => match validate_path(repo_root, path, &prefix) {
                     Ok(full_path) => match tokio::fs::read_to_string(&full_path).await {
                         Ok(content) => {
                             let lines: Vec<&str> = content.lines().take(2000).collect();
@@ -511,21 +504,10 @@ mod tests {
         Arc::new(stores)
     }
 
-    fn test_agent_logger(dir: &Path) -> AgentLogger {
-        let file_path = dir.join("test-researcher.log");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file_path)
-            .unwrap();
-        AgentLogger::_new_for_test(AgentKind::Researcher, "test-session", file, file_path)
-    }
-
     fn test_researcher_agent<L: LlmClient>(dir: &Path, stores: Arc<Stores>, llm: L) -> ResearcherAgent<L> {
         let (event_tx, _) = broadcast::channel(64);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-        let agent_log = test_agent_logger(dir);
         let config = AgentRoleConfig::default_researcher();
         let mut session = AgentSession::new(AgentKind::Researcher, "test".into());
         session.query = Some("test query".into());
@@ -541,7 +523,6 @@ mod tests {
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
-            log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         ResearcherAgent::new(ctx, llm, config)
@@ -553,18 +534,16 @@ mod tests {
     fn test_validate_path_relative_ok() {
         let dir = TestDir::new("loopr-res-pathok");
         std::fs::write(dir.join("test.rs"), "fn main() {}").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "test.rs", &agent_log);
+        let result = validate_path(&dir, "test.rs", "[test:test]");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_path_rejects_absolute() {
         let dir = TestDir::new("loopr-res-pathabs");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "/etc/passwd", &agent_log);
+        let result = validate_path(&dir, "/etc/passwd", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("absolute"));
     }
@@ -572,9 +551,8 @@ mod tests {
     #[test]
     fn test_validate_path_rejects_env_file() {
         let dir = TestDir::new("loopr-res-pathenv");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, ".env", &agent_log);
+        let result = validate_path(&dir, ".env", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("security policy"));
     }
@@ -582,9 +560,8 @@ mod tests {
     #[test]
     fn test_validate_path_rejects_key_file() {
         let dir = TestDir::new("loopr-res-pathkey");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "server.key", &agent_log);
+        let result = validate_path(&dir, "server.key", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("security policy"));
     }
@@ -592,9 +569,8 @@ mod tests {
     #[test]
     fn test_validate_path_rejects_pem_file() {
         let dir = TestDir::new("loopr-res-pathpem");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "cert.pem", &agent_log);
+        let result = validate_path(&dir, "cert.pem", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("security policy"));
     }
@@ -602,9 +578,8 @@ mod tests {
     #[test]
     fn test_validate_path_rejects_credentials() {
         let dir = TestDir::new("loopr-res-pathcred");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "credentials.json", &agent_log);
+        let result = validate_path(&dir, "credentials.json", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("security policy"));
     }
@@ -612,9 +587,8 @@ mod tests {
     #[test]
     fn test_validate_path_rejects_secret_file() {
         let dir = TestDir::new("loopr-res-pathsec");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "my_secret_config.yml", &agent_log);
+        let result = validate_path(&dir, "my_secret_config.yml", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("security policy"));
     }
@@ -624,10 +598,9 @@ mod tests {
         let dir = TestDir::new("loopr-res-pathnorm");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/main.rs"), "fn main() {}").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        assert!(validate_path(&dir, "src/main.rs", &agent_log).is_ok());
-        assert!(validate_path(&dir, "Cargo.toml", &agent_log).is_ok());
+        assert!(validate_path(&dir, "src/main.rs", "[test:test]").is_ok());
+        assert!(validate_path(&dir, "Cargo.toml", "[test:test]").is_ok());
     }
 
     // --- System prompt tests ---
@@ -641,9 +614,7 @@ mod tests {
     #[test]
     fn test_build_system_prompt_injects_query() {
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-res-sysprompt");
-        let agent_log = test_agent_logger(&dir);
-        let prompt = build_system_prompt("Find all error handling patterns", &agent_log);
+        let prompt = build_system_prompt("Find all error handling patterns", "[test:test]");
         assert!(prompt.contains("Find all error handling patterns"));
         assert!(!prompt.contains("{query}"));
     }
@@ -712,9 +683,8 @@ mod tests {
         let dir = TestDir::new("loopr-res-sc");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/test.rs"), "fn hello_world() {}\nfn goodbye() {}").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_search_code(&dir, "hello_world", Some("*.rs"), Some("src"), &agent_log).await;
+        let result = execute_search_code(&dir, "hello_world", Some("*.rs"), Some("src"), "[test:test]").await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("hello_world"));
@@ -725,9 +695,8 @@ mod tests {
         let dir = TestDir::new("loopr-res-scnone");
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/test.rs"), "fn main() {}").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_search_code(&dir, "nonexistent_pattern_xyz", None, Some("src"), &agent_log).await;
+        let result = execute_search_code(&dir, "nonexistent_pattern_xyz", None, Some("src"), "[test:test]").await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("No matches"));
     }
@@ -738,9 +707,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("src/foo.rs"), "").unwrap();
         std::fs::write(dir.join("src/bar.rs"), "").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_search_files(&dir, "*.rs", Some("src"), &agent_log).await;
+        let result = execute_search_files(&dir, "*.rs", Some("src"), "[test:test]").await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("foo.rs") || output.contains("bar.rs"));
@@ -749,9 +717,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_search_files_no_matches() {
         let dir = TestDir::new("loopr-res-sfnone");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_search_files(&dir, "*.xyz", None, &agent_log).await;
+        let result = execute_search_files(&dir, "*.xyz", None, "[test:test]").await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("No files found"));
     }
@@ -762,9 +729,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("mydir")).unwrap();
         std::fs::write(dir.join("mydir/a.txt"), "").unwrap();
         std::fs::write(dir.join("mydir/b.txt"), "").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_list_directory(&dir, "mydir", &agent_log).await;
+        let result = execute_list_directory(&dir, "mydir", "[test:test]").await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("a.txt"));
@@ -775,9 +741,8 @@ mod tests {
     async fn test_execute_list_directory_not_a_dir() {
         let dir = TestDir::new("loopr-res-ldfile");
         std::fs::write(dir.join("file.txt"), "").unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_list_directory(&dir, "file.txt", &agent_log).await;
+        let result = execute_list_directory(&dir, "file.txt", "[test:test]").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a directory"));
     }
@@ -831,7 +796,7 @@ mod tests {
         let (event_tx, _) = broadcast::channel(64);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-        let agent_log = test_agent_logger(&dir);
+
         let mut config = AgentRoleConfig::default_researcher();
         config.max_iterations = 3;
         let mut session = AgentSession::new(AgentKind::Researcher, "test".into());
@@ -848,7 +813,6 @@ mod tests {
             event_tx,
             tool_runner: Arc::new(ToolRunner::new(&[])),
             tool_executor: Arc::new(crate::tools::ToolExecutor::standard(&[])),
-            log: agent_log,
             read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
         };
         let mut agent = ResearcherAgent::new(ctx, llm, config);
@@ -932,9 +896,8 @@ mod tests {
     #[test]
     fn test_validate_path_rejects_parent_dir() {
         let dir = TestDir::new("loopr-res-parent");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "../etc/passwd", &agent_log);
+        let result = validate_path(&dir, "../etc/passwd", "[test:test]");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("path traversal"));
     }
@@ -943,9 +906,8 @@ mod tests {
     fn test_validate_path_nonexistent_file_in_repo() {
         // A nonexistent file that is within the repo root should be accepted
         let dir = TestDir::new("loopr-res-nonexist");
-        let agent_log = test_agent_logger(&dir);
 
-        let result = validate_path(&dir, "src/does_not_exist.rs", &agent_log);
+        let result = validate_path(&dir, "src/does_not_exist.rs", "[test:test]");
         assert!(result.is_ok());
         // The path should be within the repo root
         let full = result.unwrap();
@@ -955,13 +917,12 @@ mod tests {
     #[tokio::test]
     async fn test_execute_search_code_truncation_over_100_lines() {
         let dir = TestDir::new("loopr-res-sc-trunc");
-        let agent_log = test_agent_logger(&dir);
 
         // Create a file with 150 lines that all match
         let content: String = (0..150).map(|i| format!("fn match_line_{i}() {{}}\n")).collect();
         std::fs::write(dir.join("big.rs"), &content).unwrap();
 
-        let result = execute_search_code(&dir, "match_line", None, None, &agent_log)
+        let result = execute_search_code(&dir, "match_line", None, None, "[test:test]")
             .await
             .unwrap();
         // Should be truncated — 100 lines + truncation message
@@ -973,14 +934,13 @@ mod tests {
     #[tokio::test]
     async fn test_execute_search_files_truncation_at_200() {
         let dir = TestDir::new("loopr-res-sf-trunc");
-        let agent_log = test_agent_logger(&dir);
 
         // Create 210 files
         for i in 0..210 {
             std::fs::write(dir.join(format!("file_{i:03}.txt")), "").unwrap();
         }
 
-        let result = execute_search_files(&dir, "*.txt", None, &agent_log).await.unwrap();
+        let result = execute_search_files(&dir, "*.txt", None, "[test:test]").await.unwrap();
         // Should have truncation
         assert!(result.contains("truncated"));
         // Should have at most 201 lines (200 files + truncation message)
@@ -992,9 +952,8 @@ mod tests {
     async fn test_execute_list_directory_empty_dir() {
         let dir = TestDir::new("loopr-res-ld-empty");
         std::fs::create_dir_all(dir.join("emptydir")).unwrap();
-        let agent_log = test_agent_logger(&dir);
 
-        let result = execute_list_directory(&dir, "emptydir", &agent_log).await.unwrap();
+        let result = execute_list_directory(&dir, "emptydir", "[test:test]").await.unwrap();
         assert_eq!(result, "(empty directory)");
     }
 
@@ -1003,14 +962,13 @@ mod tests {
         let dir = TestDir::new("loopr-res-ld-trunc");
         let sub = dir.join("bigdir");
         std::fs::create_dir_all(&sub).unwrap();
-        let agent_log = test_agent_logger(&dir);
 
         // Create 510 files
         for i in 0..510 {
             std::fs::write(sub.join(format!("entry_{i:04}.txt")), "").unwrap();
         }
 
-        let result = execute_list_directory(&dir, "bigdir", &agent_log).await.unwrap();
+        let result = execute_list_directory(&dir, "bigdir", "[test:test]").await.unwrap();
         assert!(result.contains("truncated"));
         // Sort happens after truncation; entries are capped at 501 (500 + truncation marker)
         let line_count = result.lines().count();

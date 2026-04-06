@@ -41,9 +41,7 @@ async fn test_coordinator_state_summary_multi_record() {
         .insert(session.id.clone(), session);
 
     // Build state summary (used by Coordinator to understand current state)
-    let _agent_dir = TestDir::new("loopr-intg-logger");
-    let agent_log = test_agent_logger(&_agent_dir);
-    let summary = crate::agents::coordinator::build_state_summary(&stores, &agent_log);
+    let summary = crate::agents::coordinator::build_state_summary(&stores, "[coordinator:test]");
     assert!(summary.contains("Test Plan"), "summary should include plan");
     assert!(summary.contains("WI-1"), "summary should include work item");
     assert!(summary.contains("implementer"), "summary should include agent session");
@@ -151,8 +149,7 @@ async fn test_coordinator_assigns_implementer_completes() {
         agent_type: "implementer".to_string(),
         target_id: wi_id.clone(),
     };
-    let agent_log = test_agent_logger(&dir);
-    let assign_ctx = test_agent_context(&stores, bridge, tx.clone(), agent_log);
+    let assign_ctx = test_agent_context(&stores, bridge, tx.clone());
     let _ = crate::agents::executor::execute_action(&assign_action, &assign_ctx, &dir, None).await;
 
     // Verify work item is now InProgress
@@ -186,18 +183,6 @@ async fn test_coordinator_assigns_implementer_completes() {
     }
 
     let llm = PipelineLlm;
-    let log_file_path = dir.join("test-pipeline.log");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_file_path)
-        .unwrap();
-    let agent_log = crate::agents::agent_logger::AgentLogger::_new_for_test(
-        AgentKind::Implementer,
-        "test-pipeline",
-        log_file,
-        log_file_path,
-    );
     let config = crate::config::AgentRoleConfig::default_implementer();
     let mut session = crate::agents::AgentSession::new(AgentKind::Implementer, "test".into());
     session.work_id = Some(wi_id.clone());
@@ -215,7 +200,6 @@ async fn test_coordinator_assigns_implementer_completes() {
         event_tx: tx.clone(),
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     let agent = implementer::ImplementerAgent::new(ctx, llm, config, wi_id.clone(), dir.to_path_buf());

@@ -16,6 +16,8 @@ use std::sync::Mutex as StdMutex;
 use taskstore::Store;
 use tokio::sync::broadcast;
 
+const TEST_PREFIX: &str = "[coordinator:test]";
+
 /// Mock LLM client for testing.
 pub(crate) struct MockLlm {
     responses: StdMutex<Vec<String>>,
@@ -61,17 +63,6 @@ pub(crate) fn test_stores(dir: &std::path::Path) -> Arc<Stores> {
     Arc::new(stores)
 }
 
-pub(crate) fn test_agent_logger(dir: &std::path::Path) -> AgentLogger {
-    use crate::agents::AgentKind;
-    let file_path = dir.join("test-coordinator.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .unwrap();
-    AgentLogger::_new_for_test(AgentKind::Coordinator, "test-session", file, file_path)
-}
-
 /// Build a CoordinatorAgent for testing with the given stores and LLM responses.
 pub(crate) fn test_coordinator(
     dir: &std::path::Path,
@@ -83,7 +74,6 @@ pub(crate) fn test_coordinator(
     let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(dir);
     let ctx = AgentContext {
         session,
         stores: stores.clone(),
@@ -91,7 +81,6 @@ pub(crate) fn test_coordinator(
         event_tx,
         tool_runner: stores.read_tool_runner().unwrap(),
         tool_executor: stores.read_tool_executor().unwrap(),
-        log: agent_log,
         read_cache: std::sync::Mutex::new(crate::agents::cache::ReadCache::default()),
     };
     let llm = MockLlm::new(responses);
@@ -112,8 +101,7 @@ async fn test_build_state_summary_empty() {
     let dir = TestDir::new("loopr-coord-empty");
     let stores = test_stores(&dir);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("No active records"));
 }
 
@@ -126,8 +114,7 @@ async fn test_build_state_summary_with_plan() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Plans"));
     assert!(summary.contains("Test Plan"));
     assert!(summary.contains("draft"));
@@ -142,8 +129,7 @@ async fn test_build_state_summary_excludes_completed() {
     plan.force_status(HierarchyStatus::Complete);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(!summary.contains("Done Plan"));
     assert!(summary.contains("No active records"));
 }
@@ -156,8 +142,7 @@ async fn test_build_state_summary_with_works() {
     let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Works"));
     assert!(summary.contains("Add auth"));
 }
@@ -171,8 +156,7 @@ async fn test_build_state_summary_with_bundles() {
     let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Proposed Bundles (use triage_bundle)"));
     assert!(summary.contains("Proposed"));
     assert!(!summary.contains("### Reviewed Bundles"));
@@ -188,8 +172,7 @@ async fn test_build_state_summary_with_reviewed_bundles() {
     bundle.force_status(BundleStatus::Reviewed);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Reviewed Bundles (use accept_bundle)"));
     assert!(!summary.contains("### Proposed Bundles"));
 }
@@ -206,8 +189,7 @@ async fn test_build_state_summary_with_active_sessions() {
         .unwrap()
         .insert(session.id.clone(), session);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Active Agents"));
     assert!(summary.contains("implementer"));
 }
@@ -220,8 +202,7 @@ async fn test_build_state_summary_with_locks() {
     let lock = Lock::new("src/main.rs".into(), "wi-1".into(), "coordinator".into());
     stores.locks.write().unwrap().insert(lock.id.clone(), lock);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Active Locks"));
     assert!(summary.contains("src/main.rs"));
 }
@@ -239,8 +220,7 @@ async fn test_build_state_summary_excludes_terminal_sessions() {
         .unwrap()
         .insert(session.id.clone(), session);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(!summary.contains("### Active Agents"));
 }
 
@@ -255,8 +235,7 @@ async fn test_build_state_summary_works_before_plans() {
     let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
 
     let works_pos = summary.find("### Works").expect("Works section missing");
     let plans_pos = summary.find("### Plans").expect("Plans section missing");
@@ -277,8 +256,7 @@ async fn test_build_state_summary_excludes_done_works() {
     wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(!summary.contains("Done Work"));
 }
 
@@ -291,8 +269,7 @@ async fn test_build_state_summary_excludes_merged_bundles_from_active() {
     bundle.force_status(BundleStatus::Merged);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     // Merged bundles should NOT appear in the "### Bundles" section (non-terminal only)
     assert!(!summary.contains("### Bundles\n"));
 }
@@ -412,8 +389,7 @@ async fn test_build_state_summary_comprehensive() {
     let tick = Tick::new(1);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(summary.contains("### Plans"));
     assert!(summary.contains("### Specs"));
     assert!(summary.contains("### Phases"));
@@ -1182,9 +1158,13 @@ async fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
     let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
 
-    let log = test_agent_logger(&dir);
     // No phases in stores — find_next_phase_to_activate returns None
-    apply_fsm_transition(CoordinatorFsmState::ActivatePhase, &mut coord_state, &stores, &log);
+    apply_fsm_transition(
+        CoordinatorFsmState::ActivatePhase,
+        &mut coord_state,
+        &stores,
+        TEST_PREFIX,
+    );
 
     assert_eq!(coord_state.fsm_state, CoordinatorFsmState::GoalComplete);
     let goals = stores.coordinator_goals.read().unwrap();
@@ -1371,8 +1351,7 @@ async fn test_mark_phase_record_complete() {
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.current_phase_id = Some(phase_id.clone());
 
-    let agent_log = test_agent_logger(&dir);
-    mark_phase_record_complete(&stores, &coord_state, &agent_log);
+    mark_phase_record_complete(&stores, &coord_state, TEST_PREFIX);
 
     let phases = stores.phases.read().unwrap();
     let updated = phases.get(&phase_id).unwrap();
@@ -1383,8 +1362,6 @@ async fn test_mark_phase_record_complete() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_resolve_batch_deps_resolves_batch_0() {
-    let dir = TestDir::new("loopr-coord-batch0");
-    let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string(), "wi-bbb".to_string()];
     let action = AgentAction::CreateWork {
         parent_id: "phase-1".into(),
@@ -1394,7 +1371,7 @@ async fn test_resolve_batch_deps_resolves_batch_0() {
         acceptance_criteria: vec![],
         dependencies: vec!["batch:0".to_string()],
     };
-    let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
+    let resolved = resolve_batch_dependencies(&action, &batch_ids, TEST_PREFIX);
     assert!(resolved.is_some());
     if let Some(AgentAction::CreateWork { dependencies, .. }) = resolved {
         assert_eq!(dependencies, vec!["wi-aaa".to_string()]);
@@ -1403,8 +1380,6 @@ async fn test_resolve_batch_deps_resolves_batch_0() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_resolve_batch_deps_out_of_range() {
-    let dir = TestDir::new("loopr-coord-batchoor");
-    let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
     let action = AgentAction::CreateWork {
         parent_id: "phase-1".into(),
@@ -1414,7 +1389,7 @@ async fn test_resolve_batch_deps_out_of_range() {
         acceptance_criteria: vec![],
         dependencies: vec!["batch:5".to_string()],
     };
-    let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
+    let resolved = resolve_batch_dependencies(&action, &batch_ids, TEST_PREFIX);
     assert!(resolved.is_some());
     // Out of range falls through — keeps the original "batch:5" string
     if let Some(AgentAction::CreateWork { dependencies, .. }) = resolved {
@@ -1424,8 +1399,6 @@ async fn test_resolve_batch_deps_out_of_range() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_resolve_batch_deps_no_batch_refs() {
-    let dir = TestDir::new("loopr-coord-batchnone");
-    let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
     let action = AgentAction::CreateWork {
         parent_id: "phase-1".into(),
@@ -1435,17 +1408,15 @@ async fn test_resolve_batch_deps_no_batch_refs() {
         acceptance_criteria: vec![],
         dependencies: vec!["wi-existing".to_string()],
     };
-    let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
+    let resolved = resolve_batch_dependencies(&action, &batch_ids, TEST_PREFIX);
     assert!(resolved.is_none(), "no batch refs should return None");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_resolve_batch_deps_non_create_action() {
-    let dir = TestDir::new("loopr-coord-batchnoncreate");
-    let agent_log = test_agent_logger(&dir);
     let batch_ids = vec!["wi-aaa".to_string()];
     let action = AgentAction::Done { summary: "done".into() };
-    let resolved = resolve_batch_dependencies(&action, &batch_ids, &agent_log);
+    let resolved = resolve_batch_dependencies(&action, &batch_ids, TEST_PREFIX);
     assert!(resolved.is_none(), "non-CreateWork should return None");
 }
 
@@ -1455,7 +1426,6 @@ async fn test_resolve_batch_deps_non_create_action() {
 async fn test_prune_independent_deps_removes_disjoint() {
     let dir = TestDir::new("loopr-coord-prune1");
     let stores = test_stores(&dir);
-    let agent_log = test_agent_logger(&dir);
 
     // Create two works with non-overlapping resource_tags — dep should be pruned
     let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
@@ -1470,7 +1440,7 @@ async fn test_prune_independent_deps_removes_disjoint() {
     stores.works.write().unwrap().insert(a_id.clone(), wi_a);
     stores.works.write().unwrap().insert(b_id.clone(), wi_b);
 
-    prune_independent_deps(&stores, &[a_id.clone(), b_id.clone()], &agent_log);
+    prune_independent_deps(&stores, &[a_id.clone(), b_id.clone()], TEST_PREFIX);
 
     let works = stores.works.read().unwrap();
     assert!(works[&b_id].dependencies.is_empty(), "disjoint dep should be pruned");
@@ -1480,7 +1450,6 @@ async fn test_prune_independent_deps_removes_disjoint() {
 async fn test_prune_independent_deps_keeps_overlapping() {
     let dir = TestDir::new("loopr-coord-prune2");
     let stores = test_stores(&dir);
-    let agent_log = test_agent_logger(&dir);
 
     // Both works touch src/main.rs — dep should be kept
     let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
@@ -1495,7 +1464,7 @@ async fn test_prune_independent_deps_keeps_overlapping() {
     stores.works.write().unwrap().insert(a_id.clone(), wi_a);
     stores.works.write().unwrap().insert(b_id.clone(), wi_b);
 
-    prune_independent_deps(&stores, &[a_id.clone(), b_id.clone()], &agent_log);
+    prune_independent_deps(&stores, &[a_id.clone(), b_id.clone()], TEST_PREFIX);
 
     let works = stores.works.read().unwrap();
     assert_eq!(works[&b_id].dependencies, vec![a_id], "overlapping dep should be kept");
@@ -1505,7 +1474,6 @@ async fn test_prune_independent_deps_keeps_overlapping() {
 async fn test_prune_independent_deps_keeps_external() {
     let dir = TestDir::new("loopr-coord-prune3");
     let stores = test_stores(&dir);
-    let agent_log = test_agent_logger(&dir);
 
     // wi_b depends on an external work (not in batch) — should be kept regardless
     let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
@@ -1520,7 +1488,7 @@ async fn test_prune_independent_deps_keeps_external() {
     stores.works.write().unwrap().insert(a_id.clone(), wi_a);
     stores.works.write().unwrap().insert(b_id.clone(), wi_b);
 
-    prune_independent_deps(&stores, &[a_id, b_id.clone()], &agent_log);
+    prune_independent_deps(&stores, &[a_id, b_id.clone()], TEST_PREFIX);
 
     let works = stores.works.read().unwrap();
     assert_eq!(
@@ -1534,10 +1502,9 @@ async fn test_prune_independent_deps_keeps_external() {
 async fn test_prune_independent_deps_empty_batch() {
     let dir = TestDir::new("loopr-coord-prune4");
     let stores = test_stores(&dir);
-    let agent_log = test_agent_logger(&dir);
 
     // Empty batch — no-op
-    prune_independent_deps(&stores, &[], &agent_log);
+    prune_independent_deps(&stores, &[], TEST_PREFIX);
 }
 
 // --- Fix #5: build_phase_status dependency info tests ---
@@ -1692,8 +1659,7 @@ async fn test_build_state_summary_includes_recently_merged_bundles() {
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(
         summary.contains("Recently Merged Bundles"),
         "should include recently merged bundles section: {}",
@@ -1718,8 +1684,7 @@ async fn test_build_state_summary_excludes_merged_when_wi_done() {
     bundle.force_status(BundleStatus::Merged);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(
         !summary.contains("Recently Merged Bundles"),
         "should NOT include merged bundles when WI is Done: {}",
@@ -1746,8 +1711,7 @@ async fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() 
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(
         summary.contains("Rejected Bundles"),
         "should include rejected bundles section: {}",
@@ -1781,8 +1745,7 @@ async fn test_build_state_summary_rejected_bundle_includes_verification_reason()
     bundle.verification = "Rejected: missing error handling".to_string();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(
         summary.contains("missing error handling"),
         "should include rejection reason from verification: {}",
@@ -1805,8 +1768,7 @@ async fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
     // verification left empty
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(
         summary.contains("bundle was rejected by reviewer"),
         "should use fallback reason when verification is empty: {}",
@@ -1829,8 +1791,7 @@ async fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
     bundle.force_status(BundleStatus::Rejected);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
-    let agent_log = test_agent_logger(&dir);
-    let summary = build_state_summary(&stores, &agent_log);
+    let summary = build_state_summary(&stores, TEST_PREFIX);
     assert!(
         !summary.contains("Rejected Bundles"),
         "should NOT show rejected bundles when work is not InReview: {}",
@@ -1862,9 +1823,8 @@ async fn test_sweep_integrated_to_done_transitions_works() {
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(&dir);
 
-    sweep_integrated_to_done(&stores, &coord_state, &bridge, &agent_log);
+    sweep_integrated_to_done(&stores, &coord_state, &bridge, TEST_PREFIX);
 
     // Verify the Work is now Done
     let works = stores.works.read().unwrap();
@@ -1893,9 +1853,8 @@ async fn test_sweep_noop_when_no_integrated_works() {
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(&dir);
 
-    sweep_integrated_to_done(&stores, &coord_state, &bridge, &agent_log);
+    sweep_integrated_to_done(&stores, &coord_state, &bridge, TEST_PREFIX);
 
     // Work should still be Draft (unchanged by sweep)
     let works = stores.works.read().unwrap();
@@ -1928,7 +1887,6 @@ async fn test_sweep_then_fsm_advances_to_phase_gate() {
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
     let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
-    let agent_log = test_agent_logger(&dir);
 
     // Before sweep: FSM should NOT advance (Works are Integrated, not terminal)
     let config = CoordinatorConfig::default();
@@ -1939,7 +1897,7 @@ async fn test_sweep_then_fsm_advances_to_phase_gate() {
     );
 
     // Run sweep
-    sweep_integrated_to_done(&stores, &coord_state, &bridge, &agent_log);
+    sweep_integrated_to_done(&stores, &coord_state, &bridge, TEST_PREFIX);
 
     // After sweep: FSM should advance to PhaseGate (all Works now Done)
     assert_eq!(
