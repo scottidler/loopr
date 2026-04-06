@@ -352,6 +352,7 @@ async fn decompose_into<H: HttpClient + Sync>(
     run_dir: &Path,
     config: &DecomposerConfig,
     http_client: &H,
+    global_title_to_id: &mut HashMap<String, String>,
 ) -> Result<Vec<Doc>> {
     info!("decompose: {} {} -> {}s", parent.kind, parent.id, target_kind);
 
@@ -418,21 +419,29 @@ async fn decompose_into<H: HttpClient + Sync>(
         docs.push((doc, child.title.clone(), child.dependencies.clone()));
     }
 
-    // Resolve title-based dependencies to Doc IDs
-    let title_to_id: HashMap<String, String> = docs
+    // Resolve title-based dependencies to Doc IDs.
+    // Build the local sibling map first, then merge into the global map so that
+    // future decompose_into calls can resolve cross-scope references.
+    let local_title_to_id: HashMap<String, String> = docs
         .iter()
         .map(|(doc, title, _)| (title.clone(), doc.id.clone()))
         .collect();
+
+    global_title_to_id.extend(local_title_to_id.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     let mut final_docs: Vec<Doc> = Vec::new();
     for (mut doc, _, dep_titles) in docs {
         doc.dependencies = dep_titles
             .iter()
             .filter_map(|title| {
-                title_to_id.get(title).cloned().or_else(|| {
-                    warn!("dependency '{}' not found among siblings", title);
-                    None
-                })
+                local_title_to_id
+                    .get(title)
+                    .or_else(|| global_title_to_id.get(title))
+                    .cloned()
+                    .or_else(|| {
+                        warn!("dependency '{}' not found in plan scope", title);
+                        None
+                    })
             })
             .collect();
         final_docs.push(doc);
@@ -460,6 +469,7 @@ async fn decompose_into<H: HttpClient + Sync>(
 /// Decompose a single parent Doc into child Docs using the natural child kind.
 ///
 /// Thin wrapper around `decompose_into` that computes the child kind from the parent.
+/// Uses an isolated local title map (no cross-scope resolution).
 pub async fn decompose<H: HttpClient + Sync>(
     parent: &Doc,
     run_dir: &Path,
@@ -467,13 +477,15 @@ pub async fn decompose<H: HttpClient + Sync>(
     http_client: &H,
 ) -> Result<Vec<Doc>> {
     let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
-    decompose_into(parent, ck, run_dir, config, http_client).await
+    let mut local_map = HashMap::new();
+    decompose_into(parent, ck, run_dir, config, http_client, &mut local_map).await
 }
 
 /// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
 ///
-/// This is the entry point for plan activation. It calls `decompose()` at each
-/// level, validates, ratifies bottom-up, and returns all created Docs.
+/// This is the entry point for plan activation. It calls `decompose_into()` at each
+/// level with a shared `global_title_to_id` map so that Works in Spec B can resolve
+/// dependencies on Works in Spec A even though they were decomposed in separate calls.
 ///
 /// In Brief mode (plan has no contracts), skips Spec and Phase levels
 /// and decomposes Plan directly into Works.
@@ -485,18 +497,51 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     brief: bool,
 ) -> Result<Vec<Doc>> {
     let mut all_docs = Vec::new();
+    let mut global_title_to_id: HashMap<String, String> = HashMap::new();
 
     if brief {
         // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
-        let works = decompose_into(plan, DocKind::Work, run_dir, config, http_client).await?;
+        let works = decompose_into(
+            plan,
+            DocKind::Work,
+            run_dir,
+            config,
+            http_client,
+            &mut global_title_to_id,
+        )
+        .await?;
         all_docs.extend(works);
     } else {
         // Full mode: Plan -> Specs -> Phases -> Works
-        let specs = decompose(plan, run_dir, config, http_client).await?;
+        let specs = decompose_into(
+            plan,
+            DocKind::Spec,
+            run_dir,
+            config,
+            http_client,
+            &mut global_title_to_id,
+        )
+        .await?;
         for spec in &specs {
-            let phases = decompose(spec, run_dir, config, http_client).await?;
+            let phases = decompose_into(
+                spec,
+                DocKind::Phase,
+                run_dir,
+                config,
+                http_client,
+                &mut global_title_to_id,
+            )
+            .await?;
             for phase in &phases {
-                let works = decompose(phase, run_dir, config, http_client).await?;
+                let works = decompose_into(
+                    phase,
+                    DocKind::Work,
+                    run_dir,
+                    config,
+                    http_client,
+                    &mut global_title_to_id,
+                )
+                .await?;
                 all_docs.extend(works);
             }
             all_docs.extend(phases);
@@ -941,13 +986,144 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock)
+        let mut local_map = HashMap::new();
+        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock, &mut local_map)
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert!(result[0].id.starts_with("wk-"));
         assert_eq!(result[0].parent_id.as_deref(), Some(parent.id.as_str()));
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test]
+    async fn test_decompose_hierarchy_cross_scope_dependency_resolved() {
+        // Verify that decompose_hierarchy threads a single global_title_to_id map across
+        // all decompose_into calls so that a Work in Spec B can reference a Work in Spec A.
+        //
+        // This tests the public API (decompose_hierarchy), not the internal loop directly.
+        // If decompose_hierarchy reinitialised the map per-spec, Work Beta's dependency
+        // would be silently dropped and this test would fail.
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-decompose-hierarchy-cross");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(
+            dir.join("plan-cross-scope.md"),
+            "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify global map.",
+        )
+        .unwrap();
+        let plan = Doc::new(
+            DocKind::Plan,
+            None,
+            "Cross-Scope Plan".to_string(),
+            "plan-cross-scope.md".to_string(),
+        );
+
+        let valid_json = r#"{"valid": true, "issues": []}"#;
+        let ratify_json = r#"{"passed": true, "issues": []}"#;
+
+        // LLM response sequence (consumed LIFO - last element in Vec is first consumed):
+        // Call 1:  decompose plan -> [Spec A, Spec B]
+        // Call 2:  validate Spec A
+        // Call 3:  validate Spec B
+        // Call 4:  decompose Spec A -> [Phase A]
+        // Call 5:  validate Phase A
+        // Call 6:  decompose Phase A -> [Work Alpha]
+        // Call 7:  validate Work Alpha
+        // Call 8:  decompose Spec B -> [Phase B]
+        // Call 9:  validate Phase B
+        // Call 10: decompose Phase B -> [Work Beta] (depends on Work Alpha)
+        // Call 11: validate Work Beta
+        // Calls 12-16: ratify Plan, Spec A, Spec B, Phase A, Phase B (order non-deterministic)
+        let specs_json = serde_json::json!([
+            {"title": "Spec A", "content": "# Spec A\n\n## Overview\n\nFirst spec.", "dependencies": []},
+            {"title": "Spec B", "content": "# Spec B\n\n## Overview\n\nSecond spec.", "dependencies": []}
+        ])
+        .to_string();
+        let phases_a_json = serde_json::json!([
+            {"title": "Phase A", "content": "# Phase A\n\n## Overview\n\nFirst phase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_a_json = serde_json::json!([
+            {
+                "title": "Work Alpha",
+                "content": "# Work\n\n## Description\n\nDo alpha.\n\n## Acceptance Criteria\n\nassert alpha_done()\n\n## Dependencies\n\nNone",
+                "dependencies": []
+            }
+        ])
+        .to_string();
+        let phases_b_json = serde_json::json!([
+            {"title": "Phase B", "content": "# Phase B\n\n## Overview\n\nSecond phase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_b_json = serde_json::json!([
+            {
+                "title": "Work Beta",
+                "content": "# Work\n\n## Description\n\nDo beta.\n\n## Acceptance Criteria\n\nassert beta_done()\n\n## Dependencies\n\nWork Alpha",
+                "dependencies": ["Work Alpha"]
+            }
+        ])
+        .to_string();
+
+        let mk = |text: &str| serde_json::json!({"content": [{"type": "text", "text": text}]}).to_string();
+
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                // Ratifications 12-16 (5 groups, order non-deterministic so all same)
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                mk(ratify_json),
+                // Call 11: validate Work Beta
+                mk(valid_json),
+                // Call 10: decompose Phase B -> [Work Beta]
+                mk(&works_b_json),
+                // Call 9: validate Phase B
+                mk(valid_json),
+                // Call 8: decompose Spec B -> [Phase B]
+                mk(&phases_b_json),
+                // Call 7: validate Work Alpha
+                mk(valid_json),
+                // Call 6: decompose Phase A -> [Work Alpha]
+                mk(&works_a_json),
+                // Call 5: validate Phase A
+                mk(valid_json),
+                // Call 4: decompose Spec A -> [Phase A]
+                mk(&phases_a_json),
+                // Call 3: validate Spec B
+                mk(valid_json),
+                // Call 2: validate Spec A
+                mk(valid_json),
+                // Call 1: decompose plan -> [Spec A, Spec B]
+                mk(&specs_json),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let all_docs = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+
+        // Find Work Alpha and Work Beta in the results
+        let alpha = all_docs
+            .iter()
+            .find(|d| d.title == "Work Alpha")
+            .expect("Work Alpha not found");
+        let beta = all_docs
+            .iter()
+            .find(|d| d.title == "Work Beta")
+            .expect("Work Beta not found");
+
+        assert_eq!(
+            beta.dependencies,
+            vec![alpha.id.clone()],
+            "Work Beta must resolve its cross-spec dependency to Work Alpha's ID"
+        );
 
         unsafe { std::env::remove_var(&env_key) };
     }
