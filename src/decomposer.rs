@@ -19,7 +19,7 @@ use crate::config::DecomposerConfig;
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
 use crate::validator::client::HttpClient;
 
-const LLM_CALL_TIMEOUT_SECS: u64 = 60;
+const LLM_CALL_TIMEOUT_SECS: u64 = 180;
 
 /// A single child document parsed from the LLM's JSON response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,9 +242,14 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
         other => bail!("Unsupported LLM provider: {}", other),
     };
 
+    // Tool-use generation needs more tokens than validation: use at least 8192 so the
+    // structured `children` array isn't truncated before all entries are written.
+    const MIN_GENERATION_TOKENS: u32 = 8192;
+    let generation_tokens = config.max_tokens.max(MIN_GENERATION_TOKENS);
+
     let request = serde_json::json!({
         "model": config.model,
-        "max_tokens": config.max_tokens,
+        "max_tokens": generation_tokens,
         "temperature": config.temperature,
         "tools": [decomposition_tool_schema()],
         "tool_choice": {"type": "tool", "name": "submit_decomposition"},
@@ -268,6 +273,28 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
     let response: serde_json::Value =
         serde_json::from_str(&response_text).context("Failed to parse LLM API response")?;
 
+    // Surface API-level errors before trying to parse content
+    if let Some(err) = response.get("error") {
+        let snippet: String = response_text.chars().take(500).collect();
+        bail!("Anthropic API error: {} (raw: {})", err, snippet);
+    }
+
+    let stop_reason = response.get("stop_reason").and_then(|v| v.as_str()).unwrap_or("unknown");
+    debug!(
+        "call_llm_for_children: response stop_reason={} content_len={}",
+        stop_reason,
+        response["content"].as_array().map(|a| a.len()).unwrap_or(0)
+    );
+
+    // Fail fast: if the model hit max_tokens, the tool input was truncated and input:{} is empty.
+    if stop_reason == "max_tokens" {
+        bail!(
+            "decomposition hit max_tokens ({} tokens) - tool input was truncated; \
+             increase decomposer.max_tokens in config",
+            generation_tokens
+        );
+    }
+
     // Tool-use response: extract the `input.children` from the tool_use block.
     // Fall back to text parsing if the model didn't use the tool (e.g., provider quirk).
     let children = if let Some(tool_input) = response["content"]
@@ -281,12 +308,13 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
     } else {
         // Fallback: the model returned text instead of a tool call.
         // Strip markdown fences and parse as JSON array.
-        warn!("call_llm_for_children: model did not use tool, falling back to text parsing");
+        let snippet: String = response_text.chars().take(800).collect();
+        warn!("call_llm_for_children: model did not use tool, falling back to text parsing (response: {})", snippet);
         let text = response["content"]
             .as_array()
-            .and_then(|blocks| blocks.first())
+            .and_then(|blocks| blocks.iter().find(|b| b["type"].as_str() == Some("text")))
             .and_then(|b| b["text"].as_str())
-            .ok_or_else(|| eyre::eyre!("LLM returned neither tool_use nor text content"))?;
+            .ok_or_else(|| eyre::eyre!("LLM returned neither tool_use nor text content (response: {})", snippet))?;
 
         let json_text = text
             .trim()
