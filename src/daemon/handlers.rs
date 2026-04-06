@@ -211,7 +211,16 @@ pub async fn dispatch(
 
     // Gap #29: Post-dispatch auto-start hook (only on successful transitions)
     if !resp.is_error() {
-        auto_start_agents(stores, event_tx, worktree_mgr, integrator_config, &method, &params).await;
+        auto_start_agents(
+            stores,
+            event_tx,
+            worktree_mgr,
+            integrator_config,
+            &method,
+            &params,
+            &resp,
+        )
+        .await;
     }
 
     resp
@@ -225,6 +234,7 @@ async fn auto_start_agents(
     integrator_config: &IntegratorConfig,
     method: &str,
     params: &serde_json::Value,
+    resp: &crate::ipc::protocol::DaemonResponse,
 ) {
     if method == "work.transition"
         && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
@@ -242,6 +252,27 @@ async fn auto_start_agents(
         );
         let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
     }
+
+    // Fix 7: Auto-triage: when a bundle is created (starts in Proposed), immediately
+    // dispatch Proposed -> Triaged deterministically without LLM involvement.
+    // The existing Triaged hook below will then auto-spawn the reviewer.
+    if method == "bundle.create"
+        && stores.config.agents.auto_start_reviewer
+        && let Some(bid) = resp.result.as_ref().and_then(|r| r.get("id")).and_then(|v| v.as_str())
+        && bid.starts_with("bd-")
+    {
+        let triage_req = DaemonRequest::new(
+            0,
+            "bundle.transition",
+            json!({
+                "id": bid,
+                "target_status": "Triaged",
+                "role": "coordinator",
+            }),
+        );
+        let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, triage_req)).await;
+    }
+
     if method == "bundle.transition"
         && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
         && target.parse::<crate::domain::bundle::BundleStatus>().ok()
@@ -570,5 +601,195 @@ pub(crate) mod tests {
         assert_eq!(max_pool_for(AgentKind::Coordinator, &config), 1);
         assert_eq!(max_pool_for(AgentKind::Researcher, &config), 4);
         assert_eq!(max_pool_for(AgentKind::Integrator, &config), 1);
+    }
+
+    // --- Fix 7: Auto-triage tests ---
+
+    /// Helper to build stores with auto_start_reviewer=true and a full hierarchy.
+    async fn setup_stores_with_bundle_parent() -> (TestDir, Arc<Stores>, String) {
+        let (dir, stores) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let ic = test_integrator_config();
+
+        // Plan
+        let plan_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Test Plan"})),
+        )
+        .await;
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Spec
+        let spec_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Test Spec"})),
+        )
+        .await;
+        let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Phase
+        let phase_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                3,
+                "phase.create",
+                json!({"parent_id": spec_id, "title": "Test Phase", "number": 1}),
+            ),
+        )
+        .await;
+        let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Work (with AC so it auto-promotes to Ready)
+        let work_resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                4,
+                "work.create",
+                json!({"parent_id": phase_id, "title": "Test Work", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
+        )
+        .await;
+        let work_id = work_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Enable auto_start_reviewer in stores config
+        let mut config = stores.config.clone();
+        config.agents.auto_start_reviewer = true;
+        let mut new_stores = Stores::new();
+        new_stores.config = config;
+        new_stores.store = stores.store.clone();
+        // Copy data from old stores
+        *new_stores.plans.write().unwrap() = stores.plans.read().unwrap().clone();
+        *new_stores.specs.write().unwrap() = stores.specs.read().unwrap().clone();
+        *new_stores.phases.write().unwrap() = stores.phases.read().unwrap().clone();
+        *new_stores.works.write().unwrap() = stores.works.read().unwrap().clone();
+        let new_stores = Arc::new(new_stores);
+
+        (dir, new_stores, work_id)
+    }
+
+    #[tokio::test]
+    async fn test_bundle_create_auto_triages_when_auto_start_reviewer() {
+        let (dir, stores, work_id) = setup_stores_with_bundle_parent().await;
+        let tx = test_event_tx();
+        let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let ic = test_integrator_config();
+
+        // Create a bundle - auto-triage should fire immediately
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                10,
+                "bundle.create",
+                json!({"work_id": work_id, "branch_name": "agent/test", "claims": ["test claim"]}),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error(), "bundle.create should succeed: {:?}", resp.error);
+        let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Bundle should now be Triaged (auto-triage fired in auto_start_agents)
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.get(&bundle_id).expect("bundle should exist");
+        assert_eq!(
+            bundle.status(),
+            crate::domain::bundle::BundleStatus::Triaged,
+            "bundle should be auto-triaged to Triaged after creation"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_create_no_auto_triage_when_disabled() {
+        // auto_start_reviewer defaults to false, so no auto-triage should happen
+        let (dir, stores_with_ts) = test_stores_with_taskstore();
+        let tx = test_event_tx();
+        let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
+        let ic = test_integrator_config();
+
+        // Create hierarchy
+        let plan_resp = dispatch(
+            &stores_with_ts,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
+        )
+        .await;
+        let plan_id = plan_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        let spec_resp = dispatch(
+            &stores_with_ts,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"})),
+        )
+        .await;
+        let spec_id = spec_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        let phase_resp = dispatch(
+            &stores_with_ts,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                3,
+                "phase.create",
+                json!({"parent_id": spec_id, "title": "Phase", "number": 1}),
+            ),
+        )
+        .await;
+        let phase_id = phase_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+        let work_resp = dispatch(
+            &stores_with_ts,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                4,
+                "work.create",
+                json!({"parent_id": phase_id, "title": "Work", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            ),
+        )
+        .await;
+        let work_id = work_resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Create bundle with auto_start_reviewer=false (default)
+        let resp = dispatch(
+            &stores_with_ts,
+            &tx,
+            &wm,
+            &ic,
+            DaemonRequest::new(
+                10,
+                "bundle.create",
+                json!({"work_id": work_id, "branch_name": "agent/test", "claims": ["claim"]}),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error());
+        let bundle_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // Bundle should remain Proposed (no auto-triage)
+        let bundles = stores_with_ts.bundles.read().unwrap();
+        let bundle = bundles.get(&bundle_id).expect("bundle should exist");
+        assert_eq!(
+            bundle.status(),
+            crate::domain::bundle::BundleStatus::Proposed,
+            "bundle should remain Proposed when auto_start_reviewer is false"
+        );
     }
 }

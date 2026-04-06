@@ -177,7 +177,54 @@ pub fn extract_acceptance_criteria(content: &str) -> Vec<String> {
     criteria
 }
 
-/// Call the LLM and parse the response as a JSON array of ChildEntry.
+/// Tool schema for structured decomposition output (Fix 8).
+/// Forces the LLM to emit child documents as structured JSON via tool-use,
+/// eliminating manual JSON parsing and markdown fence stripping.
+fn decomposition_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "name": "submit_decomposition",
+        "description": "Submit the decomposed child documents. Call this exactly once with all children.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "array",
+                    "description": "The decomposed child documents",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Title of the child document"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Full markdown content of the child document"
+                            },
+                            "dependencies": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "IDs of sibling documents this document depends on"
+                            },
+                            "acceptance_criteria": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Acceptance criteria assertions for this document"
+                            }
+                        },
+                        "required": ["title", "content"]
+                    }
+                }
+            },
+            "required": ["children"]
+        }
+    })
+}
+
+/// Call the LLM using tool-use structured output and return child entries.
+///
+/// Uses Claude's tool-use API so the model fills in a schema natively, eliminating
+/// manual JSON parsing and markdown fence stripping that caused parse failures.
 async fn call_llm_for_children<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
@@ -199,6 +246,8 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
         "model": config.model,
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
+        "tools": [decomposition_tool_schema()],
+        "tool_choice": {"type": "tool", "name": "submit_decomposition"},
         "messages": [{"role": "user", "content": prompt}]
     });
 
@@ -219,22 +268,36 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
     let response: serde_json::Value =
         serde_json::from_str(&response_text).context("Failed to parse LLM API response")?;
 
-    let text = response["content"]
+    // Tool-use response: extract the `input.children` from the tool_use block.
+    // Fall back to text parsing if the model didn't use the tool (e.g., provider quirk).
+    let children = if let Some(tool_input) = response["content"]
         .as_array()
-        .and_then(|blocks| blocks.first())
-        .and_then(|b| b["text"].as_str())
-        .ok_or_else(|| eyre::eyre!("LLM returned no text content"))?;
+        .and_then(|blocks| blocks.iter().find(|b| b["type"].as_str() == Some("tool_use")))
+        .and_then(|b| b.get("input"))
+        .and_then(|input| input.get("children"))
+    {
+        serde_json::from_value::<Vec<ChildEntry>>(tool_input.clone())
+            .context("Failed to parse tool_use input.children as child documents")?
+    } else {
+        // Fallback: the model returned text instead of a tool call.
+        // Strip markdown fences and parse as JSON array.
+        warn!("call_llm_for_children: model did not use tool, falling back to text parsing");
+        let text = response["content"]
+            .as_array()
+            .and_then(|blocks| blocks.first())
+            .and_then(|b| b["text"].as_str())
+            .ok_or_else(|| eyre::eyre!("LLM returned neither tool_use nor text content"))?;
 
-    // Strip markdown code fences if present
-    let json_text = text
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+        let json_text = text
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
 
-    let children: Vec<ChildEntry> =
-        serde_json::from_str(json_text).context("Failed to parse LLM output as JSON array of child documents")?;
+        serde_json::from_str::<Vec<ChildEntry>>(json_text)
+            .context("Failed to parse LLM text output as JSON array of child documents")?
+    };
 
     if children.is_empty() {
         bail!("LLM produced zero child documents");

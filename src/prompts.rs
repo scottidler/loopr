@@ -294,7 +294,6 @@ mod tests {
             "acquire_lock",
             "release_lock",
             "validate_document",
-            "triage_bundle",
             "accept_bundle",
             "transition",
             "create_learning",
@@ -315,6 +314,11 @@ mod tests {
         assert!(
             !p.contains("create_phase"),
             "coordinator.pmt must not contain create_phase"
+        );
+        // triage_bundle removed: bundles are now auto-triaged by the daemon (Fix 7)
+        assert!(
+            !p.contains("\"triage_bundle\""),
+            "coordinator.pmt must not contain triage_bundle - triage is now automatic"
         );
         // Key rules
         assert!(p.contains("Create ALL Works for a Phase in a single batch"));

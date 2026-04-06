@@ -182,6 +182,26 @@ pub(super) fn handle_agent_start(
                 }
             }
 
+            // Reviewer dedup by bundle_id (Fix 7: prevent double-spawn on auto-triage race)
+            if agent_type == AgentKind::Reviewer
+                && let Some(bid) = session.bundle_id.as_deref()
+            {
+                let has_existing = sessions.values().any(|s| {
+                    s.agent_type == AgentKind::Reviewer
+                        && !s.status().is_terminal()
+                        && s.bundle_id.as_deref() == Some(bid)
+                });
+                if has_existing {
+                    return Ok(DaemonResponse::err(
+                        req.id,
+                        RpcError::precondition_failed(&format!(
+                            "non-terminal Reviewer session already exists for bundle_id '{}'",
+                            bid
+                        )),
+                    ));
+                }
+            }
+
             // Persist to TaskStore while holding the sessions lock (write-ordering rule:
             // TaskStore write must happen before in-memory insert, both under the same lock).
             if let Some(store) = &stores.store

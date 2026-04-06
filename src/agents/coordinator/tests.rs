@@ -152,13 +152,17 @@ async fn test_build_state_summary_with_bundles() {
     let dir = TestDir::new("loopr-coord-bun");
     let stores = test_stores(&dir);
 
-    // Proposed bundle
+    // Proposed bundle - since triage is now automatic, the coordinator does NOT see
+    // Proposed bundles in its state summary (they're auto-triaged by the daemon).
     let bundle = Bundle::new("wi-1".into(), None, "branch-1".into(), vec!["claims".into()]);
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
     let summary = build_state_summary(&stores, TEST_PREFIX);
-    assert!(summary.contains("### Proposed Bundles (use triage_bundle)"));
-    assert!(summary.contains("Proposed"));
+    // Proposed bundles section removed: coordinator no longer needs to triage manually
+    assert!(
+        !summary.contains("### Proposed Bundles"),
+        "coordinator should not see Proposed bundles: triage is now automatic"
+    );
     assert!(!summary.contains("### Reviewed Bundles"));
 }
 

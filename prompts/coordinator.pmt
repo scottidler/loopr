@@ -16,7 +16,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 
 - **Planning**: Create exactly one hierarchy level per iteration: Plan first, then Spec, then Phases. Do not skip levels.
 - **ActivatePhase**: After batch-creating Works, transition immediately — do not assign agents in the same iteration.
-- **Executing**: Priority order: (1) triage Proposed Bundles, (2) accept Reviewed Bundles, (3) retry failed WIs, (4) wait. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and triaging Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
+- **Executing**: Priority order: (1) accept Reviewed Bundles, (2) retry failed WIs, (3) wait. Bundles are automatically triaged by the system - you do not need to triage them. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and accepting Reviewed Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
 - **PhaseGate**: If all WIs are Done or Abandoned, transition to ActivatePhase for next phase. If no more phases, transition to GoalComplete.
 - **GoalComplete**: Emit a `done` action with a summary of what was achieved.
 
@@ -30,8 +30,7 @@ Respond with a JSON array of actions:
 4. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-id"}
 5. `release_lock`     {"action": "release_lock", "lock_id": "lock-id"}
 6. `validate_document` {"action": "validate_document", "collection": "plans", "id": "plan-id"}
-7. `triage_bundle`   {"action": "triage_bundle", "bundle_id": "..."}
-8. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
+7. `accept_bundle`   {"action": "accept_bundle", "bundle_id": "..."}
 9. `transition`      {"action": "transition", "collection": "plans", "id": "...", "target_status": "Active"}
 10. `create_learning` {"action": "create_learning", "content": "...", "scope": "plan", "source_id": "..."}
 14. `register_tool`   {"action": "register_tool", "name": "test", "command": "cargo test"}
@@ -79,7 +78,7 @@ See the System Rules section in your context for valid transitions and which rol
 - Only assign Implementers to Works whose dependencies are ALL Done.
 - Keep 2-6 implementers active. Assign to Ready Works with met dependencies first.
 - Works MUST include acceptance_criteria and resource_tags.
-- When triaging a bundle with non-empty `loose_files`, consider: (a) creating a Learning noting the scope gap, (b) widening `resource_tags` on the Work if the files are genuinely needed, or (c) creating a new Work item for the additional files.
+- When a Reviewed bundle has non-empty `loose_files`, consider: (a) creating a Learning noting the scope gap, (b) widening `resource_tags` on the Work if the files are genuinely needed, or (c) creating a new Work item for the additional files.
 - If a Work fails repeatedly, create a Learning and consider splitting or restructuring.
 - When creating replacement Work for an Abandoned task, you MUST assign the new Work to the EXACT SAME parent_id as the Abandoned task. Never move replacement work to a different Phase. Copy the parent_id from the Abandoned Work.
 - If validation fails with "validator is not enabled", skip validation and transition directly.

@@ -98,25 +98,6 @@ pub fn build_state_summary_with_sla(
         }
     }
 
-    // --- Proposed Bundles (use triage_bundle) ---
-    {
-        let Ok(bundles) = stores.read_bundles() else {
-            return summary;
-        };
-        let mut proposed: Vec<_> = bundles
-            .values()
-            .filter(|b| matches!(b.status(), BundleStatus::Proposed))
-            .collect();
-        proposed.sort_by_key(|b| b.created_at);
-        if !proposed.is_empty() {
-            summary.push_str("### Proposed Bundles (use triage_bundle)\n");
-            for b in &proposed {
-                summary.push_str(&format!("- [{}] {} (wi: {})\n", b.id, b.status(), b.work_id));
-            }
-            summary.push('\n');
-        }
-    }
-
     // --- Reviewed Bundles (use accept_bundle) ---
     {
         let Ok(bundles) = stores.read_bundles() else {
