@@ -30,7 +30,7 @@ use crate::config::{IntegratorConfig, InterviewMode, ValidatorConfig};
 use crate::daemon::context::Stores;
 use crate::decomposer::{decompose_hierarchy, extract_acceptance_criteria};
 use crate::domain::coordinator_goal::CoordinatorGoal;
-use crate::domain::coordinator_state::CoordinatorState;
+use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::doc::{Doc, DocKind, create_run_dir, write_doc_file};
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus};
@@ -159,6 +159,13 @@ pub(super) async fn handle_doc_inject(
 }
 
 /// Shared entry pipeline: write plan.md, create Doc, optionally decompose, start Coordinator.
+///
+/// When `skip_decompose=false`: creates the plan Doc, spawns decomposition in a background
+/// task, creates the goal in `Decomposing` state, starts the coordinator, and returns
+/// immediately. `child_count` is `null` in the response - it will be available via the
+/// `decomposition.completed` event.
+///
+/// When `skip_decompose=true`: behaves synchronously (used in tests).
 pub(super) async fn accept_plan_markdown(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -187,31 +194,6 @@ pub(super) async fn accept_plan_markdown(
 
     // Persist the plan Doc
     persist_doc(stores, plan_doc.clone(), event_tx)?;
-
-    let child_count;
-    if skip_decompose {
-        info!("doc entry: skip_decompose=true, skipping Decomposer");
-        child_count = 0;
-    } else {
-        let dc = &stores.config.decomposer;
-        let client = ReqwestClient::new();
-
-        let brief = classify_brief(stores, &markdown).await;
-        info!("doc entry: starting decomposition (brief={})", brief);
-
-        let child_docs = decompose_hierarchy(&plan_doc, &run_dir, dc, &client, brief)
-            .await
-            .map_err(|e| eyre!("Decomposition failed: {}", e))?;
-
-        child_count = child_docs.len();
-        info!("doc entry: decomposition produced {} child docs", child_count);
-
-        double_write_old_records(stores, &plan_doc, &markdown, &child_docs, &run_dir);
-
-        for child in child_docs {
-            persist_doc(stores, child, event_tx)?;
-        }
-    }
 
     // Deactivate any existing active CoordinatorGoals
     {
@@ -244,8 +226,12 @@ pub(super) async fn accept_plan_markdown(
     stores.write_coordinator_goals()?.insert(goal_id.clone(), goal);
     let _ = event_tx.send(DaemonEvent::record_created("coordinator_goal", &goal_id));
 
-    // Pre-create CoordinatorState (InterviewMode::Skip -> starts at Planning)
-    {
+    let child_count_for_response;
+    if skip_decompose {
+        info!("doc entry: skip_decompose=true, skipping Decomposer");
+        child_count_for_response = Some(0usize);
+
+        // Pre-create CoordinatorState starting at Planning (synchronous path, no decomposition)
         let coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Skip);
         let cs_id = coord_state.id.clone();
         if let Some(store_arc) = &stores.store {
@@ -255,6 +241,59 @@ pub(super) async fn accept_plan_markdown(
                 .create(coord_state.clone());
         }
         stores.write_coordinator_states()?.insert(cs_id, coord_state);
+    } else {
+        child_count_for_response = None;
+
+        // Pre-create CoordinatorState in Decomposing: the coordinator must not advance to
+        // Planning until the background decomposition task has persisted all child docs.
+        let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Skip);
+        coord_state.fsm_state = CoordinatorFsmState::Decomposing;
+        let cs_id = coord_state.id.clone();
+        if let Some(store_arc) = &stores.store {
+            let _ = store_arc
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(coord_state.clone());
+        }
+        stores.write_coordinator_states()?.insert(cs_id, coord_state);
+
+        // Spawn background decomposition task
+        let stores_bg = Arc::clone(stores);
+        let event_tx_bg = event_tx.clone();
+        let plan_doc_bg = plan_doc.clone();
+        let run_dir_bg = run_dir.clone();
+        let markdown_bg = markdown.clone();
+        let goal_id_bg = goal_id.clone();
+        let dc = stores.config.decomposer.clone();
+
+        tokio::spawn(async move {
+            let brief = classify_brief(&stores_bg, &markdown_bg).await;
+            info!("doc entry (bg): starting decomposition (brief={})", brief);
+            let client = ReqwestClient::new();
+            match decompose_hierarchy(&plan_doc_bg, &run_dir_bg, &dc, &client, brief).await {
+                Ok(child_docs) => {
+                    let child_count = child_docs.len();
+                    info!("doc entry (bg): decomposition produced {} child docs", child_count);
+                    double_write_old_records(&stores_bg, &plan_doc_bg, &markdown_bg, &child_docs, &run_dir_bg);
+                    for child in child_docs {
+                        if let Err(e) = persist_doc(&stores_bg, child, &event_tx_bg) {
+                            warn!("doc entry (bg): failed to persist child doc: {}", e);
+                        }
+                    }
+                    let _ = event_tx_bg.send(DaemonEvent::new(
+                        "decomposition.completed",
+                        json!({ "goal_id": goal_id_bg, "child_count": child_count }),
+                    ));
+                }
+                Err(e) => {
+                    warn!("doc entry (bg): decomposition failed: {}", e);
+                    let _ = event_tx_bg.send(DaemonEvent::new(
+                        "decomposition.failed",
+                        json!({ "goal_id": goal_id_bg, "error": e.to_string() }),
+                    ));
+                }
+            }
+        });
     }
 
     // Start the Coordinator agent
@@ -286,7 +325,7 @@ pub(super) async fn accept_plan_markdown(
         json!({
             "doc_id": plan_doc_id,
             "run_dir": run_dir.to_string_lossy(),
-            "child_count": child_count,
+            "child_count": child_count_for_response,
             "goal_id": goal_id,
             "coordinator_session_id": coordinator_session_id,
             "coordinator_already_running": coordinator_already_running,
@@ -600,9 +639,70 @@ mod tests {
         assert_eq!(goals.len(), 1);
         assert!(goals.values().next().unwrap().active);
 
-        // CoordinatorState created
+        // CoordinatorState created and starts in Planning (skip_decompose=true path)
         let states = stores.read_coordinator_states().unwrap();
         assert_eq!(states.len(), 1);
+        let state = states.values().next().unwrap();
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
+    }
+
+    #[tokio::test]
+    async fn test_doc_accept_skip_decompose_child_count_zero() {
+        // skip_decompose=true must return child_count=0 (not null) so callers can assert on it.
+        let dir = TestDir::new("doc-accept-cc-test");
+        let mut stores = crate::daemon::context::Stores::new();
+        stores.config.project.repo_path = dir.to_path_buf();
+        let stores = std::sync::Arc::new(stores);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            1,
+            "doc.accept",
+            json!({ "markdown": "# Plan\n\n## Summary\n\nThing.", "skip_decompose": true }),
+        );
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        assert!(!resp.is_error());
+        let result = resp.result.unwrap();
+        assert_eq!(result["child_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_doc_accept_no_skip_sets_decomposing_state() {
+        // When skip_decompose is NOT set, CoordinatorState must start in Decomposing.
+        // (Actual LLM decomposition does not run in this test because no API key is configured.)
+        let dir = TestDir::new("doc-accept-decomposing-test");
+        let mut stores = crate::daemon::context::Stores::new();
+        stores.config.project.repo_path = dir.to_path_buf();
+        let stores = std::sync::Arc::new(stores);
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+
+        let req = DaemonRequest::new(
+            1,
+            "doc.accept",
+            // skip_decompose not set → background task spawned, state starts Decomposing
+            json!({ "markdown": "# Plan\n\n## Summary\n\nThing." }),
+        );
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        // The handler returns immediately even though decomposition is running in background.
+        assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
+        let result = resp.result.unwrap();
+        // child_count is null for the async path
+        assert!(
+            result["child_count"].is_null(),
+            "child_count should be null for async path"
+        );
+
+        // CoordinatorState must be in Decomposing
+        let states = stores.read_coordinator_states().unwrap();
+        assert_eq!(states.len(), 1);
+        let state = states.values().next().unwrap();
+        assert_eq!(
+            state.fsm_state,
+            CoordinatorFsmState::Decomposing,
+            "async path must start in Decomposing state"
+        );
     }
 
     // --- doc.inject handler ---

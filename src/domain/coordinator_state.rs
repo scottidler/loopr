@@ -20,6 +20,8 @@ pub struct InterviewExchange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoordinatorFsmState {
     Interviewing,
+    /// Waiting for background decomposition to complete before advancing to Planning.
+    Decomposing,
     Planning,
     ActivatePhase,
     Executing,
@@ -35,7 +37,10 @@ impl CoordinatorFsmState {
 
 impl std::fmt::Display for CoordinatorFsmState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            CoordinatorFsmState::Decomposing => write!(f, "Decomposing"),
+            other => write!(f, "{:?}", other),
+        }
     }
 }
 
@@ -317,6 +322,7 @@ mod tests {
 
     #[test]
     fn test_fsm_state_display() {
+        assert_eq!(CoordinatorFsmState::Decomposing.to_string(), "Decomposing");
         assert_eq!(CoordinatorFsmState::Planning.to_string(), "Planning");
         assert_eq!(CoordinatorFsmState::ActivatePhase.to_string(), "ActivatePhase");
         assert_eq!(CoordinatorFsmState::Executing.to_string(), "Executing");
@@ -326,11 +332,22 @@ mod tests {
 
     #[test]
     fn test_fsm_state_is_terminal() {
+        assert!(!CoordinatorFsmState::Decomposing.is_terminal());
         assert!(!CoordinatorFsmState::Planning.is_terminal());
         assert!(!CoordinatorFsmState::ActivatePhase.is_terminal());
         assert!(!CoordinatorFsmState::Executing.is_terminal());
         assert!(!CoordinatorFsmState::PhaseGate.is_terminal());
         assert!(CoordinatorFsmState::GoalComplete.is_terminal());
+    }
+
+    #[test]
+    fn test_fsm_state_decomposing_serde_roundtrip() {
+        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Skip);
+        state.fsm_state = CoordinatorFsmState::Decomposing;
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: CoordinatorState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.fsm_state, CoordinatorFsmState::Decomposing);
+        assert!(!restored.fsm_state.is_terminal());
     }
 
     #[test]

@@ -772,6 +772,9 @@ fn build_fsm_footer(
              Respond with a JSON array of actions."
                 .to_string()
         }
+        CoordinatorFsmState::Decomposing => "Background decomposition is in progress. \
+             Respond with: [{\"action\": \"done\", \"summary\": \"Waiting for decomposition to complete\"}]"
+            .to_string(),
         CoordinatorFsmState::Planning => {
             // Decomposition is handled by the Decomposer before the Coordinator starts.
             // The Planning state is a transient pass-through: the hierarchy already exists.
@@ -1032,6 +1035,15 @@ fn check_fsm_transition(
             } else {
                 None
             }
+        }
+        CoordinatorFsmState::Decomposing => {
+            // Advance to Planning once the background decomposition task has persisted phases.
+            let plan = generation::find_active_plan(stores)?;
+            let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+            let has_phases = specs
+                .iter()
+                .any(|s| !generation::find_active_phases_for_spec(stores, &s.id).is_empty());
+            if has_phases { Some(CoordinatorFsmState::Planning) } else { None }
         }
         CoordinatorFsmState::Planning => {
             // Decomposition is complete before the Coordinator starts.

@@ -3,12 +3,17 @@ use tokio::sync::broadcast;
 use super::*;
 
 /// Events that indicate meaningful state change the coordinator must respond to.
-/// Work and Bundle status transitions, new Work records, and published ticks all
-/// require coordinator attention. Agent status events are excluded - too noisy.
+/// Work and Bundle status transitions, new Work records, published ticks, and
+/// decomposition completion/failure all require coordinator attention.
+/// Agent status events are excluded - too noisy.
 fn is_coordinator_wakeup(ev: &DaemonEvent) -> bool {
     matches!(
         ev.event.as_str(),
-        "transition.completed" | "record.created" | "tick.published"
+        "transition.completed"
+            | "record.created"
+            | "tick.published"
+            | "decomposition.completed"
+            | "decomposition.failed"
     )
 }
 
@@ -100,7 +105,10 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             let is_idle_waiting = matches!(&outcome, Ok(IterationOutcome::Done(_)))
                 && matches!(
                     coord_state.fsm_state,
-                    CoordinatorFsmState::Planning | CoordinatorFsmState::ActivatePhase | CoordinatorFsmState::PhaseGate
+                    CoordinatorFsmState::Decomposing
+                        | CoordinatorFsmState::Planning
+                        | CoordinatorFsmState::ActivatePhase
+                        | CoordinatorFsmState::PhaseGate
                 );
 
             if is_idle_waiting {
@@ -156,6 +164,15 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             if let Some(outcome) = apply_fsm_transition(new_state, coord_state, stores, &self.ctx.log) {
                 return Ok(outcome);
             }
+        }
+
+        // Decomposing: background task is still running; do not call the LLM.
+        // The event-driven wake in run_fsm_loop will re-enter this iteration when
+        // decomposition.completed or decomposition.failed is emitted.
+        if coord_state.fsm_state == CoordinatorFsmState::Decomposing {
+            return Ok(IterationOutcome::Done(
+                "waiting for decomposition to complete".to_string(),
+            ));
         }
 
         // Check if any phases have completed (all Works Done) — legacy helper
