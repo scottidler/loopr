@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use eyre::{Result, eyre};
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::agents::bridge::AgentIpcBridge;
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
@@ -19,6 +19,7 @@ use super::util::{determine_work_handback, persist_session, release_agent_locks,
 ///
 /// Currently implements a minimal lifecycle: Starting -> Running -> Completed/Failed.
 /// Phase 2 will add the full Implementer/Reviewer loops with LLM calls.
+#[instrument(skip_all, fields(session_id = %session_id, agent_type = %agent_type))]
 pub async fn run_agent_task(
     session_id: String,
     agent_type: AgentKind,

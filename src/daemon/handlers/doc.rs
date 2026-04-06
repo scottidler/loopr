@@ -22,7 +22,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use eyre::{bail, eyre};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -50,6 +50,7 @@ use super::common::persist_doc;
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
+#[instrument(skip_all)]
 pub(super) async fn handle_doc_accept(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -99,6 +100,7 @@ pub(super) async fn handle_doc_accept(
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
+#[instrument(skip_all)]
 pub(super) async fn handle_doc_inject(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,

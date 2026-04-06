@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use futures::future::{join_all, try_join_all};
 
@@ -225,6 +225,7 @@ fn decomposition_tool_schema() -> serde_json::Value {
 ///
 /// Uses Claude's tool-use API so the model fills in a schema natively, eliminating
 /// manual JSON parsing and markdown fence stripping that caused parse failures.
+#[instrument(skip_all)]
 async fn call_llm_for_children<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
@@ -342,6 +343,7 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
 }
 
 /// Call the LLM for validation and parse result.
+#[instrument(skip_all)]
 async fn call_llm_for_validation<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
@@ -402,6 +404,7 @@ async fn call_llm_for_validation<H: HttpClient + Sync>(
 }
 
 /// Call the LLM for ratification and parse result.
+#[instrument(skip_all)]
 async fn call_llm_for_ratification<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
@@ -417,6 +420,7 @@ async fn call_llm_for_ratification<H: HttpClient + Sync>(
 }
 
 /// Raw LLM call that returns text (shared helper).
+#[instrument(skip_all)]
 async fn call_llm_for_children_raw<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
@@ -480,6 +484,7 @@ async fn call_llm_for_children_raw<H: HttpClient + Sync>(
 ///
 /// Uses staging: child files are written to a temp directory first, then
 /// moved to the run directory only if all validation passes.
+#[instrument(skip_all)]
 async fn decompose_into<H: HttpClient + Sync>(
     parent: &Doc,
     target_kind: DocKind,
@@ -618,6 +623,7 @@ async fn decompose_into<H: HttpClient + Sync>(
 ///
 /// Thin wrapper around `decompose_into` that computes the child kind from the parent.
 /// Uses an isolated local title map (no cross-scope resolution).
+#[instrument(skip_all)]
 pub async fn decompose<H: HttpClient + Sync>(
     parent: &Doc,
     run_dir: &Path,
@@ -642,6 +648,7 @@ pub async fn decompose<H: HttpClient + Sync>(
 /// Returns `(docs, partial_err)`. When `partial_err` is `Some`, one or more spec
 /// branches failed but the successful branches' docs are still returned. Ratification
 /// is skipped on partial failure. The caller is responsible for persisting partial_err.
+#[instrument(skip_all)]
 pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
     run_dir: &Path,
@@ -748,6 +755,7 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
 
 /// Decompose one spec into phases + works, with phases' work-decompositions running concurrently.
 /// Returns (phases + works, merged title-to-id map for this branch).
+#[instrument(skip_all)]
 async fn decompose_spec_branch<H: HttpClient + Sync>(
     spec: &Doc,
     run_dir: &Path,
@@ -786,6 +794,7 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
 }
 
 /// Decompose one phase into works, returning the works and the local title-to-id map.
+#[instrument(skip_all)]
 async fn decompose_phase_branch<H: HttpClient + Sync>(
     phase: &Doc,
     run_dir: &Path,
@@ -827,6 +836,7 @@ fn resolve_cross_branch_deps(docs: &mut [Doc], global_map: &HashMap<String, Stri
 }
 
 /// Bottom-up ratification of the decomposition hierarchy.
+#[instrument(skip_all)]
 async fn ratify_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
     all_docs: &[Doc],

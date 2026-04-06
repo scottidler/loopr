@@ -4,7 +4,7 @@ use std::sync::Arc;
 use eyre::eyre;
 use serde_json::json;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;
@@ -262,6 +262,7 @@ pub(super) fn handle_integrator_publish(
 
 // --- Validator handlers ---
 
+#[instrument(skip_all)]
 pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_async_handler!(req.id, {
         debug!("handle_validator_validate()");
@@ -375,6 +376,7 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
 
 // --- Coverage Evaluator handler ---
 
+#[instrument(skip_all)]
 pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_async_handler!(req.id, {
         debug!("handle_coverage_evaluate()");

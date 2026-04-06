@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::domain::bundle::BundleStatus;
 use crate::domain::plan::HierarchyStatus;
@@ -39,6 +39,7 @@ pub(super) fn detect_dependency_cycle(works: &HashMap<String, Work>, new_id: &st
     false
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_work_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -230,6 +231,7 @@ pub(super) fn handle_work_create(
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_work_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_work_get()");
@@ -315,6 +317,7 @@ pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_work_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -472,6 +475,7 @@ pub(super) fn handle_work_transition(
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_work_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,

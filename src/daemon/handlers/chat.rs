@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use tracing::{debug, info};
+use tracing::{debug, info, instrument};
 
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
@@ -79,6 +79,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
 
 /// Handle chat.submit - send a user message and start/resume the Chat agentic loop.
 /// Spawns a daemon-side Tokio task running run_tool_loop with per-iteration checkpointing.
+#[instrument(skip_all)]
 pub(super) fn handle_chat_submit(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -288,6 +289,7 @@ pub(super) fn handle_chat_submit(
 
 /// Handle chat.attach — subscribe to a running Chat session's event stream + rehydrate history.
 /// Returns full message array + current status.
+#[instrument(skip_all)]
 pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_chat_attach()");
@@ -321,6 +323,7 @@ pub(super) fn handle_chat_attach(stores: &Arc<Stores>, req: DaemonRequest) -> Da
 }
 
 /// Handle chat.history — read-only history fetch (no event subscription).
+#[instrument(skip_all)]
 pub(super) fn handle_chat_history(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
         debug!("handle_chat_history()");

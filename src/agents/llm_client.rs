@@ -3,7 +3,7 @@ use reqwest::Client;
 use std::future::Future;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::agents::implementer::{ChatMessage, LlmClient};
 use crate::agents::{AgentEvent, AgentStatus};
@@ -94,6 +94,7 @@ impl AgentLlmClient {
 
     /// Call the Anthropic Messages API with SSE streaming and multi-turn message history.
     /// Returns the accumulated full response text.
+    #[instrument(skip_all)]
     async fn call_streaming_with_messages(&self, system_prompt: &str, messages: &[ChatMessage]) -> Result<String> {
         let api_messages: Vec<serde_json::Value> = messages
             .iter()
@@ -150,12 +151,14 @@ impl AgentLlmClient {
 
     /// Call the Anthropic Messages API with SSE streaming (single user message).
     /// Delegates to `call_streaming_with_messages`.
+    #[instrument(skip_all)]
     async fn call_streaming(&self, system_prompt: &str, user_message: &str) -> Result<String> {
         self.call_streaming_with_messages(system_prompt, &[ChatMessage::user(user_message)])
             .await
     }
 
     /// Read an SSE stream from the response and accumulate text.
+    #[instrument(skip_all)]
     async fn read_sse_stream(&self, response: reqwest::Response) -> Result<String> {
         use futures::StreamExt;
 
@@ -239,6 +242,7 @@ impl AgenticLlm for AgentLlmClient {
     /// Tool input JSON is buffered silently until `content_block_stop`, then assembled
     /// into complete `ContentBlock::ToolUse` entries. Returns the same atomic
     /// `(Vec<ContentBlock>, Option<StopReason>)` that `run_tool_loop` expects.
+    #[instrument(skip_all)]
     async fn complete(
         &self,
         system_prompt: &str,
@@ -365,6 +369,7 @@ impl AgentLlmClient {
     /// - Tool input_json deltas are buffered silently, parsed on `content_block_stop`,
     ///   and assembled into `ContentBlock::ToolUse`.
     /// - `message_delta` with `stop_reason` is captured for the return value.
+    #[instrument(skip_all)]
     async fn read_sse_content_blocks(
         &self,
         response: reqwest::Response,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -12,6 +12,7 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+#[instrument(skip_all)]
 pub(super) fn handle_agent_start(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -238,6 +239,7 @@ pub(super) fn handle_agent_start(
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_agent_stop(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -328,6 +330,7 @@ pub(super) fn handle_agent_stop(
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_agent_pause(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -388,6 +391,7 @@ pub(super) fn handle_agent_pause(
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_agent_resume(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
