@@ -19,6 +19,19 @@ target_validation_commands() {
 CMDS
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "cargo test"
+    timeout_secs: 120
+    worktree: true
+  - name: "fmt"
+    command: "cargo fmt"
+    timeout_secs: 30
+    worktree: true
+TOOLS
+}
+
 target_goal() {
     echo "Add a --version flag to this CLI that prints the crate version from CARGO_PKG_VERSION to stdout."
 }

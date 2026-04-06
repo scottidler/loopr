@@ -192,6 +192,10 @@ scaffold
 
 CONFIG="${TARGET}/loopr.yml"
 VALIDATION_CMDS="$(target_validation_commands)"
+TARGET_TOOLS_YAML=""
+if declare -f target_tools >/dev/null 2>&1; then
+    TARGET_TOOLS_YAML="$(target_tools)"
+fi
 {
 cat <<YAML
 log_level: debug
@@ -207,6 +211,12 @@ agents:
   pull_based_workers: true
   coordinator:
     interview_mode: skip
+YAML
+if [[ -n "${TARGET_TOOLS_YAML}" ]]; then
+    echo "  tools:"
+    echo "${TARGET_TOOLS_YAML}" | sed 's/^/  /'
+fi
+cat <<YAML
 
 integrator:
   enabled: true

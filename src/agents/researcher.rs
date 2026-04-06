@@ -209,7 +209,7 @@ impl<L: LlmClient> ResearcherAgent<L> {
     }
 
     async fn run_iteration(&self, iteration: u32, guard: &mut Lifeguard) -> Result<IterationOutcome> {
-        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
+        let prefix = self.ctx.log_prefix();
         let query = self.ctx.session.query.as_deref().unwrap_or("(no query specified)");
         let system_prompt = build_system_prompt(query, &prefix);
 

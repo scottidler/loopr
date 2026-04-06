@@ -31,7 +31,7 @@ pub(super) fn handle_coordinator_get_goal(stores: &Arc<Stores>, req: DaemonReque
 
 pub(super) fn handle_coordinator_get_state(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_coordinator_get_state()");
+        log::trace!("handle_coordinator_get_state()");
         let states = stores.read_coordinator_states()?;
         // Find the state for the active goal (or any non-terminal state)
         let active = states.values().find(|s| !s.fsm_state.is_terminal());

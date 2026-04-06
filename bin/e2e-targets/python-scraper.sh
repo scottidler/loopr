@@ -141,6 +141,19 @@ target_validation_commands() {
 CMDS
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "docker compose run --rm test"
+    timeout_secs: 300
+    worktree: true
+  - name: "fmt"
+    command: "echo 'no local fmt; Docker validates'"
+    timeout_secs: 5
+    worktree: false
+TOOLS
+}
+
 target_goal() {
     echo "Build an HTML link harvester in Python. It reads all .html files from an 'input/' directory, extracts every <a href> link (href + link text + source filename), stores results in SQLite, and writes a markdown report to 'report.md' showing: total links found, unique domains, and top 10 domains by link count (descending). HTML fixtures are pre-provided in input/. Use only stdlib (html.parser, sqlite3, urllib.parse) plus beautifulsoup4 if needed. Include a pytest test suite in test_scraper.py. Validate with: docker compose run --rm test."
 }

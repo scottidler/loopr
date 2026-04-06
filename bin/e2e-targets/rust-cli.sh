@@ -60,6 +60,19 @@ target_validation_commands() {
 CMDS
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "cargo test"
+    timeout_secs: 120
+    worktree: true
+  - name: "fmt"
+    command: "cargo fmt"
+    timeout_secs: 30
+    worktree: true
+TOOLS
+}
+
 target_goal() {
     echo "Build a 'notes' CLI tool in Rust with subcommands: add, list, get, delete, search. Store notes in SQLite (rusqlite with bundled feature). Use clap (derive) for CLI. Note schema: id (INTEGER PRIMARY KEY AUTOINCREMENT), title (TEXT NOT NULL), content (TEXT default ''), tags (TEXT default ''). Database path via --db flag (default: notes.db). Include unit tests in src/db.rs and CLI integration tests in tests/cli.rs. Validate with: cargo test."
 }

@@ -197,6 +197,19 @@ target_validation_commands() {
     true
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "build"
+    command: "npm run build"
+    timeout_secs: 120
+    worktree: true
+  - name: "lint"
+    command: "npm run lint"
+    timeout_secs: 60
+    worktree: true
+TOOLS
+}
+
 target_goal() {
     echo "Build a React todo web application using Vite and Tailwind CSS. The app should support: add, list, toggle done, delete, and filter (all/active/done) todos. Persist todos to localStorage. All React code goes in src/App.tsx. Style with Tailwind utility classes. The app must compile with npm run build."
 }

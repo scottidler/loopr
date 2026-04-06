@@ -145,15 +145,15 @@ pub async fn execute_action(
 
         // --- Researcher actions ---
         AgentAction::SearchCode { pattern, glob, path } => {
-            let prefix = format!("[{}:{}]", ctx.session.agent_type, ctx.session.id);
+            let prefix = ctx.log_prefix();
             file::handle_search_code(worktree_path, &prefix, pattern, glob.as_deref(), path.as_deref()).await
         }
         AgentAction::SearchFiles { pattern, path } => {
-            let prefix = format!("[{}:{}]", ctx.session.agent_type, ctx.session.id);
+            let prefix = ctx.log_prefix();
             file::handle_search_files(worktree_path, &prefix, pattern, path.as_deref()).await
         }
         AgentAction::ListDirectory { path } => {
-            let prefix = format!("[{}:{}]", ctx.session.agent_type, ctx.session.id);
+            let prefix = ctx.log_prefix();
             file::handle_list_directory(worktree_path, &prefix, path).await
         }
     }

@@ -154,7 +154,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         let config = &self.config;
         let bridge = &self.ctx.bridge;
         let iteration = self.iteration;
-        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
+        let prefix = self.ctx.log_prefix();
         // Check for FSM state transitions before the iteration
         if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
             self.ctx

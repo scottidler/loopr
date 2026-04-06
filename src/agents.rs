@@ -110,20 +110,32 @@ impl AgentContext {
         }
     }
 
+    /// Build the log prefix including agent type, optional work/bundle ID, and session ID.
+    /// Format: `[implementer:wk-xxxxx:ag-yyyyy]` or `[reviewer:bd-xxxxx:ag-yyyyy]` or `[coordinator:ag-yyyyy]`.
+    pub fn log_prefix(&self) -> String {
+        if let Some(ref work_id) = self.session.work_id {
+            format!("[{}:{}:{}]", self.session.agent_type, work_id, self.session.id)
+        } else if let Some(ref bundle_id) = self.session.bundle_id {
+            format!("[{}:{}:{}]", self.session.agent_type, bundle_id, self.session.id)
+        } else {
+            format!("[{}:{}]", self.session.agent_type, self.session.id)
+        }
+    }
+
     pub fn trace(&self, msg: &str) {
-        trace!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
+        trace!("{} {}", self.log_prefix(), msg);
     }
     pub fn info(&self, msg: &str) {
-        info!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
+        info!("{} {}", self.log_prefix(), msg);
     }
     pub fn warn(&self, msg: &str) {
-        warn!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
+        warn!("{} {}", self.log_prefix(), msg);
     }
     pub fn debug(&self, msg: &str) {
-        debug!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
+        debug!("{} {}", self.log_prefix(), msg);
     }
     pub fn error(&self, msg: &str) {
-        error!("[{}:{}] {}", self.session.agent_type, self.session.id, msg);
+        error!("{} {}", self.log_prefix(), msg);
     }
 
     /// Check if this agent's session has been cancelled.

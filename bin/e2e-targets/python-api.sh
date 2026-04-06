@@ -112,6 +112,19 @@ target_validation_commands() {
 CMDS
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "docker compose run --rm test"
+    timeout_secs: 300
+    worktree: true
+  - name: "fmt"
+    command: "echo 'no local fmt; Docker validates'"
+    timeout_secs: 5
+    worktree: false
+TOOLS
+}
+
 target_goal() {
     echo "Build a bookmarks REST API with FastAPI and SQLite. Endpoints: GET /health, GET /bookmarks, POST /bookmarks, GET /bookmarks/{id}, PUT /bookmarks/{id}, DELETE /bookmarks/{id}. Bookmark: id (int, auto), title (str), url (str), tags (str, comma-separated, default ''). Read database path from DATABASE_PATH env var, default 'data/bookmarks.db'. Include a pytest test suite in test_api.py. Validate with: docker compose run --rm test."
 }

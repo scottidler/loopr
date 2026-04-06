@@ -61,6 +61,15 @@ target_validation_commands() {
     true
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "python -m pytest -v"
+    timeout_secs: 60
+    worktree: true
+TOOLS
+}
+
 target_goal() {
     echo "Build a Python command-line todo application. The app should support: add, list, done, and delete commands. Persist todos to a JSON file. Include proper error handling and tests using pytest."
 }

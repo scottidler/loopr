@@ -132,7 +132,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
 
             loop {
                 let response = self.llm.call_with_history(&assembled.system_prompt, &messages).await?;
-                let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
+                let prefix = self.ctx.log_prefix();
                 match parse_review_result(&response, &prefix) {
                     Ok(result) => break result,
                     Err(parse_err) => {

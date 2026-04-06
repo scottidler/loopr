@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use log::debug;
+use log::trace;
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -125,7 +125,7 @@ pub async fn dispatch(
     integrator_config: &IntegratorConfig,
     req: DaemonRequest,
 ) -> DaemonResponse {
-    debug!("dispatch(method={})", req.method);
+    trace!("dispatch(method={})", req.method);
     let method = req.method.clone();
     let params = req.params.clone();
     let resp = match req.method.as_str() {

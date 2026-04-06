@@ -209,6 +209,15 @@ target_validation_commands() {
     true
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "lua test_todo.lua"
+    timeout_secs: 30
+    worktree: true
+TOOLS
+}
+
 target_goal() {
     echo "Build a Lua command-line todo application. The app should support: add, list, done, and delete commands. Persist todos to a JSON file using pure Lua (no external dependencies). Include tests in test_todo.lua that verify all operations. Entry point is cli.lua, core logic in todo.lua."
 }

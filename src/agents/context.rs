@@ -263,6 +263,8 @@ pub struct ContextBuilder<'a> {
     guidance_text: Option<String>,
     iteration: Option<u32>,
     footer: Option<String>,
+    /// Agent log prefix for use in truncation warnings (e.g. "[implementer:wk-xxx:ag-yyy]").
+    log_prefix: Option<String>,
 }
 
 impl std::fmt::Debug for ContextBuilder<'_> {
@@ -304,7 +306,14 @@ impl<'a> ContextBuilder<'a> {
             guidance_text: None,
             iteration: None,
             footer: None,
+            log_prefix: None,
         }
+    }
+
+    /// Set the agent log prefix for use in truncation warnings.
+    pub fn with_log_prefix(mut self, prefix: String) -> Self {
+        self.log_prefix = Some(prefix);
+        self
     }
 
     /// Load the work hierarchy: Brief (Work -> Plan) or Full (Work -> Phase -> Spec -> Plan).
@@ -599,8 +608,14 @@ impl<'a> ContextBuilder<'a> {
             }
             hierarchy.push('\n');
 
-            if estimate_tokens(&hierarchy) > self.budget.hierarchy {
-                warn!("Hierarchy section exceeds token budget, truncating");
+            let hierarchy_tokens = estimate_tokens(&hierarchy);
+            if hierarchy_tokens > self.budget.hierarchy {
+                let dropped = hierarchy_tokens.saturating_sub(self.budget.hierarchy);
+                let prefix = self.log_prefix.as_deref().unwrap_or("");
+                warn!(
+                    "{} Hierarchy section truncated: {} tokens > {} budget, dropped {} tokens",
+                    prefix, hierarchy_tokens, self.budget.hierarchy, dropped
+                );
                 msg.push_str(&truncate_prose(&hierarchy, self.budget.hierarchy));
             } else {
                 msg.push_str(&hierarchy);
@@ -675,8 +690,14 @@ impl<'a> ContextBuilder<'a> {
                 bundle_sec.push_str("```\n\n");
             }
 
-            if estimate_tokens(&bundle_sec) > self.budget.work_target {
-                warn!("Bundle section exceeds token budget, truncating");
+            let bundle_tokens = estimate_tokens(&bundle_sec);
+            if bundle_tokens > self.budget.work_target {
+                let dropped = bundle_tokens.saturating_sub(self.budget.work_target);
+                let prefix = self.log_prefix.as_deref().unwrap_or("");
+                warn!(
+                    "{} Bundle section truncated: {} tokens > {} budget, dropped {} tokens",
+                    prefix, bundle_tokens, self.budget.work_target, dropped
+                );
                 msg.push_str(&truncate_prose(&bundle_sec, self.budget.work_target));
             } else {
                 msg.push_str(&bundle_sec);
@@ -726,8 +747,14 @@ impl<'a> ContextBuilder<'a> {
             && self.budget.state_summary > 0
         {
             msg.push_str("## State Summary\n\n");
-            if estimate_tokens(summary) > self.budget.state_summary {
-                warn!("State summary exceeds token budget, truncating");
+            let state_tokens = estimate_tokens(summary);
+            if state_tokens > self.budget.state_summary {
+                let dropped = state_tokens.saturating_sub(self.budget.state_summary);
+                let prefix = self.log_prefix.as_deref().unwrap_or("");
+                warn!(
+                    "{} State summary truncated: {} tokens > {} budget, dropped {} tokens",
+                    prefix, state_tokens, self.budget.state_summary, dropped
+                );
                 msg.push_str(&truncate_prose(summary, self.budget.state_summary));
             } else {
                 msg.push_str(summary);
@@ -747,8 +774,14 @@ impl<'a> ContextBuilder<'a> {
             && self.budget.previous_summary > 0
         {
             msg.push_str("## Previous Iteration Summary\n\n");
-            if estimate_tokens(summary) > self.budget.previous_summary {
-                warn!("Previous summary exceeds token budget, truncating from head");
+            let prev_tokens = estimate_tokens(summary);
+            if prev_tokens > self.budget.previous_summary {
+                let dropped = prev_tokens.saturating_sub(self.budget.previous_summary);
+                let prefix = self.log_prefix.as_deref().unwrap_or("");
+                warn!(
+                    "{} Previous summary truncated: {} tokens > {} budget, dropped {} tokens",
+                    prefix, prev_tokens, self.budget.previous_summary, dropped
+                );
                 msg.push_str(&truncate_from_head(summary, self.budget.previous_summary));
             } else {
                 msg.push_str(summary);

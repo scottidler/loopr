@@ -135,6 +135,19 @@ target_validation_commands() {
 CMDS
 }
 
+target_tools() {
+    cat <<'TOOLS'
+  - name: "test"
+    command: "docker compose run --rm test"
+    timeout_secs: 300
+    worktree: true
+  - name: "fmt"
+    command: "echo 'no local fmt; Docker validates'"
+    timeout_secs: 5
+    worktree: false
+TOOLS
+}
+
 target_goal() {
     echo "Build a notes REST API with Express and SQLite (better-sqlite3). Endpoints: GET /health, GET /notes, POST /notes, GET /notes/:id, PUT /notes/:id, DELETE /notes/:id. Note: id (int, auto), title (str), content (str, default ''), tags (str, comma-separated, default ''). Read database path from DATABASE_PATH env var, default 'data/notes.db'. Include Jest + supertest tests in test/notes.test.js. Validate with: docker compose run --rm test."
 }

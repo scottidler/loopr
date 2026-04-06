@@ -239,7 +239,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
             iteration,
             self.previous_summary.is_some()
         ));
-        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
+        let prefix = self.ctx.log_prefix();
         let state_summary = build_implementer_summary(&self.ctx.stores, &self.work_id, &prefix);
         let assembled = ContextBuilder::new(&self.ctx.stores, Role::Implementer)
             .load_work_hierarchy(&self.work_id)?
@@ -250,6 +250,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
             .with_previous_summary(self.previous_summary.clone())
             .with_staleness_note(staleness_note)
             .with_iteration(iteration)
+            .with_log_prefix(prefix.clone())
             .with_footer("Implement the Work described above. Respond with a JSON array of actions.".into())
             .build(&crate::prompts::store().implementer)?;
 
@@ -444,12 +445,12 @@ fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, prefix:
 
 impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
     async fn run(&mut self) -> Result<()> {
-        let prefix = format!("[{}:{}]", self.ctx.session.agent_type, self.ctx.session.id);
         self.ctx.debug(&format!(
             "run(session_id={}, work_id={})",
             self.ctx.session.id, self.work_id
         ));
 
+        let prefix = self.ctx.log_prefix();
         let max_iterations = self.config.max_iterations;
         let mut event_rx = self.ctx.event_tx.subscribe();
         let mut guard = Lifeguard::new();
