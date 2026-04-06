@@ -65,8 +65,8 @@ async fn test_coordinator_creates_work_via_executor() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_coordinator_triage_accept_bundle_via_executor() {
-    // Create hierarchy + bundle -> TriageBundle -> AcceptBundle through executor
+async fn test_coordinator_accept_bundle_via_executor() {
+    // Create hierarchy + bundle -> (triage via daemon) -> AcceptBundle through executor
     use crate::domain::bundle::BundleStatus;
 
     let dir = TestDir::new("loopr-e2e-triage");
@@ -118,22 +118,12 @@ async fn test_coordinator_triage_accept_bundle_via_executor() {
     .await;
     let bundle_id = bundle["id"].as_str().unwrap().to_string();
 
-    // TriageBundle via executor
+    // Triage is now automatic via daemon auto_start_agents (Fix 7).
+    // In tests the daemon hook doesn't fire, so triage directly via bridge.
     let ctx = test_agent_context(&stores, bridge, tx.clone());
-    let triage_result = execute_action(
-        &AgentAction::TriageBundle {
-            bundle_id: bundle_id.clone(),
-        },
-        &ctx,
-        &dir,
-        None,
-    )
-    .await
-    .unwrap();
-    assert!(
-        matches!(triage_result, ActionResult::Transitioned(ref s) if s.contains("Triaged")),
-        "expected Transitioned(Triaged), got: {:?}",
-        triage_result
+    ctx.bridge.request(
+        "bundle.transition",
+        serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
     );
 
     // Verify bundle is Triaged

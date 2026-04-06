@@ -154,9 +154,6 @@ pub enum AgentAction {
     ReleaseLock {
         lock_id: String,
     },
-    TriageBundle {
-        bundle_id: String,
-    },
     AcceptBundle {
         bundle_id: String,
     },
@@ -449,16 +446,6 @@ mod tests {
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, AgentAction::ReleaseLock { .. }));
-    }
-
-    #[test]
-    fn test_agent_action_triage_bundle_serde() {
-        let action = AgentAction::TriageBundle {
-            bundle_id: "b-1".to_string(),
-        };
-        let json = serde_json::to_string(&action).unwrap();
-        let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, AgentAction::TriageBundle { .. }));
     }
 
     #[test]

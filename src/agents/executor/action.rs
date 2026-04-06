@@ -135,7 +135,6 @@ pub async fn execute_action(
         } => record::handle_revise_parent(ctx, collection, id, reason, diagnostic),
         AgentAction::AcquireLock { resource, holder_id } => lock::handle_acquire_lock(ctx, resource, holder_id),
         AgentAction::ReleaseLock { lock_id } => lock::handle_release_lock(ctx, lock_id),
-        AgentAction::TriageBundle { bundle_id } => bundle::handle_triage_bundle(ctx, bundle_id),
         AgentAction::AcceptBundle { bundle_id } => bundle::handle_accept_bundle(ctx, bundle_id),
         AgentAction::OverrideWork {
             work_id,

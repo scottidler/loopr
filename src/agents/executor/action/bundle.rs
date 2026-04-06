@@ -208,56 +208,6 @@ pub(super) async fn handle_propose_bundle(
     Ok(ActionResult::BundleProposed(description.to_string()))
 }
 
-/// Handle TriageBundle action.
-pub(super) fn handle_triage_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
-    let bridge = &ctx.bridge;
-
-    if !bundle_id.starts_with("bd-") {
-        return Ok(ActionResult::ActionError(format!(
-            "triage_bundle: '{}' is not a bundle ID (expected bd-* prefix). Use the bundle ID, not the work ID.",
-            bundle_id
-        )));
-    }
-    // Pre-flight status guard: only Proposed bundles can be triaged
-    let bundles = bridge.stores().read_bundles()?;
-    match bundles.get(bundle_id) {
-        None => {
-            return Ok(ActionResult::ActionError(format!(
-                "triage_bundle: bundle {} not found",
-                bundle_id
-            )));
-        }
-        Some(bundle) if bundle.status() != BundleStatus::Proposed => {
-            let hint = match bundle.status() {
-                BundleStatus::Reviewed => "Use accept_bundle instead.",
-                _ => "No triage action needed.",
-            };
-            return Ok(ActionResult::ActionError(format!(
-                "triage_bundle: bundle {} is {} not Proposed. {}",
-                bundle_id,
-                bundle.status(),
-                hint
-            )));
-        }
-        _ => {}
-    }
-    drop(bundles);
-    let resp = bridge.request(
-        "bundle.transition",
-        serde_json::json!({
-            "id": bundle_id,
-            "target_status": "Triaged",
-            "role": "coordinator",
-        }),
-    );
-    if resp.is_error() {
-        let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-        return Ok(ActionResult::ActionError(format!("triage_bundle failed: {}", msg)));
-    }
-    ctx.info(&format!("TriageBundle: {} -> Triaged", bundle_id));
-    Ok(ActionResult::Transitioned(format!("bundle/{} -> Triaged", bundle_id)))
-}
-
 /// Handle AcceptBundle action.
 pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
@@ -279,7 +229,7 @@ pub(super) fn handle_accept_bundle(ctx: &AgentContext, bundle_id: &str) -> Resul
         }
         Some(bundle) if !matches!(bundle.status(), BundleStatus::Triaged | BundleStatus::Reviewed) => {
             let hint = match bundle.status() {
-                BundleStatus::Proposed => "Use triage_bundle first.",
+                BundleStatus::Proposed => "Bundle is still being triaged by the system.",
                 _ => "No accept action needed.",
             };
             return Ok(ActionResult::ActionError(format!(
@@ -435,35 +385,6 @@ mod tests {
     // --- Group C: Agent management + domain actions ---
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_execute_triage_bundle() {
-        let dir = TestDir::new("loopr-exec-triage");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-
-        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
-
-        let bundle_resp = ctx.bridge.request(
-            "bundle.create",
-            serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/test",
-                "description": "Test bundle",
-            }),
-        );
-        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
-
-        let action = AgentAction::TriageBundle {
-            bundle_id: bundle_id.clone(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::Transitioned(ref msg) if msg.contains("Triaged")),
-            "expected Transitioned to Triaged, got: {:?}",
-            result
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_accept_bundle() {
         let dir = TestDir::new("loopr-exec-accept");
         let stores = test_stores(&dir);
@@ -501,40 +422,6 @@ mod tests {
     }
 
     // --- Group D: Lifecycle paths ---
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_execute_triage_bundle_full() {
-        let dir = TestDir::new("loopr-exec-triagefull");
-        let stores = test_stores(&dir);
-
-        let action = AgentAction::TriageBundle {
-            bundle_id: "bd-nonexistent".to_string(),
-        };
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not found")),
-            "expected not-found error, got: {:?}",
-            result
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_execute_triage_bundle_rejects_work_id() {
-        let dir = TestDir::new("loopr-exec-triage-wkid");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-
-        let action = AgentAction::TriageBundle {
-            bundle_id: "wk-12345".to_string(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("not a bundle ID")),
-            "expected prefix validation error, got: {:?}",
-            result
-        );
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_execute_accept_bundle_rejects_work_id() {
@@ -576,45 +463,8 @@ mod tests {
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use triage_bundle first")),
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("being triaged by the system")),
             "expected corrective hint for Proposed bundle, got: {:?}",
-            result
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_triage_bundle_rejects_reviewed_bundle() {
-        let dir = TestDir::new("loopr-exec-triage-rev");
-        let stores = test_stores(&dir);
-        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
-
-        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
-
-        let bundle_resp = ctx.bridge.request(
-            "bundle.create",
-            serde_json::json!({
-                "work_id": wi_id,
-                "branch_name": "feature/triage-rev",
-                "description": "Triage reviewed test",
-            }),
-        );
-        let bundle_id = bundle_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
-        ctx.bridge.request(
-            "bundle.transition",
-            serde_json::json!({"id": bundle_id, "target_status": "Triaged", "role": "coordinator"}),
-        );
-        ctx.bridge.request(
-            "bundle.transition",
-            serde_json::json!({"id": bundle_id, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
-        );
-
-        let action = AgentAction::TriageBundle {
-            bundle_id: bundle_id.clone(),
-        };
-        let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
-        assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use accept_bundle instead")),
-            "expected corrective hint for Reviewed bundle, got: {:?}",
             result
         );
     }
@@ -642,7 +492,7 @@ mod tests {
         };
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
         assert!(
-            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("Use triage_bundle first")),
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("being triaged by the system")),
             "expected corrective hint for Proposed bundle, got: {:?}",
             result
         );
