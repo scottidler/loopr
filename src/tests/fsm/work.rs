@@ -192,6 +192,8 @@ fn wrong_role_abandoned() {
 
 #[test]
 fn skip_states_rejected() {
+    // (WorkStatus::Ready, WorkStatus::Done) is intentionally absent: Ready->Done(Coordinator)
+    // is now valid as the pre-flight AC short-circuit path.
     let skip_pairs = [
         (WorkStatus::Draft, WorkStatus::InProgress),
         (WorkStatus::Draft, WorkStatus::InReview),
@@ -199,7 +201,6 @@ fn skip_states_rejected() {
         (WorkStatus::Draft, WorkStatus::Done),
         (WorkStatus::Ready, WorkStatus::InReview),
         (WorkStatus::Ready, WorkStatus::Integrated),
-        (WorkStatus::Ready, WorkStatus::Done),
         (WorkStatus::Blocked, WorkStatus::InProgress),
         (WorkStatus::Blocked, WorkStatus::InReview),
         (WorkStatus::Blocked, WorkStatus::Integrated),
@@ -213,6 +214,22 @@ fn skip_states_rejected() {
             let r = from.validate_transition(*to, *role);
             assert_invalid(format!("{:?}", from), format!("{:?} ({:?})", to, role), &r);
         }
+    }
+}
+
+#[test]
+fn valid_ready_to_done_coordinator() {
+    // Pre-flight AC short-circuit: Coordinator can mark work Done without implementing
+    let r = WorkStatus::Ready.validate_transition(WorkStatus::Done, Role::Coordinator);
+    assert_valid("Ready", "Done (Coordinator)", &r);
+}
+
+#[test]
+fn wrong_role_ready_to_done() {
+    // Only Coordinator can use the pre-flight short-circuit
+    for role in [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator] {
+        let r = WorkStatus::Ready.validate_transition(WorkStatus::Done, role);
+        assert_invalid("Ready", format!("Done ({:?})", role), &r);
     }
 }
 

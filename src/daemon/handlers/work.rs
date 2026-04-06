@@ -1189,7 +1189,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_work_transition_invalid_skip_state() {
+    async fn test_work_transition_ready_to_done_coordinator() {
+        // Ready -> Done(Coordinator) is valid: pre-flight AC check short-circuit path
         let stores = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
@@ -1209,19 +1210,48 @@ mod tests {
         .await;
         let wi_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
 
-        // Try Ready -> Done (invalid: must go through InProgress, InReview, Integrated)
+        // Ready -> Done(Coordinator) must succeed (pre-flight AC short-circuit)
         let req = DaemonRequest::new(
             31,
             "work.transition",
-            json!({
-                "id": wi_id,
-                "target_status": "Done",
-                "role": "coordinator"
-            , "assignee": "agent-1"}),
+            json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
-        assert!(resp.is_error());
-        assert_eq!(resp.error.unwrap().code, -32000);
+        assert!(
+            !resp.is_error(),
+            "Ready->Done(Coordinator) should succeed: {:?}",
+            resp.error
+        );
+
+        // Draft -> Done is still invalid (skip state)
+        // Create another work without AC to test a still-invalid transition (Draft -> Done)
+        let create_resp2 = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                32,
+                "work.create",
+                json!({"parent_id": phase_id, "title": "WI2", "resource_tags": ["src/"]}),
+            ),
+        )
+        .await;
+        assert!(
+            !create_resp2.is_error(),
+            "WI2 create should succeed: {:?}",
+            create_resp2.error
+        );
+        let wi2_id = create_resp2.result.unwrap()["id"].as_str().unwrap().to_string();
+
+        // WI2 starts in Draft. Draft -> Done is still invalid.
+        let req2 = DaemonRequest::new(
+            33,
+            "work.transition",
+            json!({"id": wi2_id, "target_status": "Done", "role": "coordinator"}),
+        );
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
+        assert!(resp2.is_error(), "Draft->Done should still fail");
     }
 
     #[tokio::test]

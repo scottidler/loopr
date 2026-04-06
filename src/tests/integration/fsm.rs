@@ -28,8 +28,8 @@ async fn test_work_fsm_enforcement_via_dispatch() {
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
-    // Invalid: Ready -> Done (must go through InProgress first)
-    let code = dispatch_err(
+    // Valid: Ready -> Done(Coordinator) is the pre-flight AC short-circuit path
+    dispatch_ok(
         &stores,
         &tx,
         &wm,
@@ -38,11 +38,27 @@ async fn test_work_fsm_enforcement_via_dispatch() {
         json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
     )
     .await;
-    assert_ne!(code, 0, "should reject invalid transition");
 
-    // Verify state unchanged (auto-promoted to Ready since acceptance_criteria present)
+    // Verify state is now Done
     let wis = stores.works.read().unwrap();
-    assert_eq!(wis[&wi_id].status(), crate::domain::work::WorkStatus::Ready);
+    assert_eq!(wis[&wi_id].status(), crate::domain::work::WorkStatus::Done);
+    drop(wis);
+
+    // Verify at the FSM level that Ready -> Integrated is still invalid
+    use crate::domain::role::Role;
+    use crate::domain::work::WorkStatus;
+    assert!(
+        WorkStatus::Ready
+            .validate_transition(WorkStatus::Integrated, Role::Coordinator)
+            .is_err(),
+        "Ready->Integrated should still be an invalid skip state"
+    );
+    assert!(
+        WorkStatus::Ready
+            .validate_transition(WorkStatus::InReview, Role::Coordinator)
+            .is_err(),
+        "Ready->InReview should still be an invalid skip state"
+    );
 }
 
 #[tokio::test]

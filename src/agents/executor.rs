@@ -22,6 +22,97 @@ use crate::daemon::context::Stores;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
 
+/// Pre-flight acceptance-criteria check.
+///
+/// Reads the files listed in `work.resource_tags`, presents their contents
+/// alongside `work.acceptance_criteria`, and asks haiku whether the current
+/// code already satisfies all of them.
+///
+/// Returns `Some(true)` if AC are satisfied, `Some(false)` if not, and `None`
+/// if the check cannot run (empty resource_tags, empty AC, missing files, or
+/// API error). The caller treats `None` as "fall through to implementer".
+async fn preflight_ac_check(stores: &Arc<Stores>, work_id: &str) -> Option<bool> {
+    debug!("preflight_ac_check(work_id={})", work_id);
+
+    let (resource_tags, acceptance_criteria) = {
+        let works = stores.read_works().ok()?;
+        let work = works.get(work_id)?;
+        if work.resource_tags.is_empty() || work.acceptance_criteria.is_empty() {
+            debug!("preflight_ac_check: skipping {} (no resource_tags or AC)", work_id);
+            return None;
+        }
+        (work.resource_tags.clone(), work.acceptance_criteria.clone())
+    };
+
+    let repo_path = stores.config.project.repo_path.clone();
+    let mut file_contents: Vec<(String, String)> = Vec::new();
+    for tag in &resource_tags {
+        let path = repo_path.join(tag.trim_start_matches("./"));
+        match std::fs::read_to_string(&path) {
+            Ok(content) => file_contents.push((tag.clone(), content)),
+            Err(e) => debug!("preflight_ac_check: could not read {}: {}", tag, e),
+        }
+    }
+    if file_contents.is_empty() {
+        debug!("preflight_ac_check: skipping {} (no files readable)", work_id);
+        return None;
+    }
+
+    let api_key_env = &stores.config.agents.implementer.api_key_env;
+    let api_key = std::env::var(api_key_env).ok()?;
+
+    let mut prompt = String::from(
+        "Do the following files already satisfy ALL of the acceptance criteria listed below?\n\n\
+         Answer with exactly one word: YES or NO.\n\n\
+         ## Acceptance Criteria\n\n",
+    );
+    for ac in &acceptance_criteria {
+        prompt.push_str(&format!("- {}\n", ac));
+    }
+    prompt.push_str("\n## Current File Contents\n");
+    for (path, content) in &file_contents {
+        let truncated = &content[..content.len().min(4000)];
+        prompt.push_str(&format!("\n### `{}`\n```\n{}\n```\n", path, truncated));
+    }
+
+    let body = serde_json::json!({
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 16,
+        "temperature": 0.0,
+        "messages": [{"role": "user", "content": prompt}],
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+
+    if !response.status().is_success() {
+        warn!("preflight_ac_check: API returned {}", response.status());
+        return None;
+    }
+
+    let resp_body: serde_json::Value = response.json().await.ok()?;
+    let text = resp_body
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|block| block.get("text"))
+        .and_then(|t| t.as_str())?
+        .trim()
+        .to_uppercase();
+
+    info!("preflight_ac_check(work_id={}): response={:?}", work_id, text);
+    Some(text.starts_with("YES"))
+}
+
 /// Run a single Work item through the full Implementer lifecycle.
 ///
 /// This is the entry point for pull-based workers. It:
@@ -41,14 +132,40 @@ pub async fn run_single_work(
 ) -> Result<()> {
     info!("Worker {} attempting Work {}", worker_id, work_id);
 
-    // Step 1: Transition Work Ready -> InProgress.
-    // Use the bridge to go through the handler (FSM validation + persistence).
     let bridge = crate::agents::bridge::AgentIpcBridge::new(
         stores.clone(),
         event_tx.clone(),
         worktree_mgr.clone(),
         stores.config.clone(),
     );
+
+    // Pre-flight acceptance-criteria check (Fix 6).
+    // If the current repo already satisfies the work's AC, short-circuit to Done.
+    if let Some(true) = preflight_ac_check(stores, work_id).await {
+        info!(
+            "Worker {} pre-flight PASS: Work {} AC already satisfied, marking Done",
+            worker_id, work_id
+        );
+        let done_resp = bridge.request(
+            "work.transition",
+            serde_json::json!({
+                "id": work_id,
+                "target_status": "Done",
+                "role": "coordinator",
+            }),
+        );
+        if done_resp.is_error() {
+            info!(
+                "Worker {} pre-flight Done transition failed (contention): {:?}",
+                worker_id,
+                done_resp.error.as_ref().map(|e| &e.message)
+            );
+        }
+        return Ok(());
+    }
+
+    // Step 1: Transition Work Ready -> InProgress.
+    // Use the bridge to go through the handler (FSM validation + persistence).
     let transition_resp = bridge.request(
         "work.transition",
         serde_json::json!({

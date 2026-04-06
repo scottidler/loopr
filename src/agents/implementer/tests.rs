@@ -1381,3 +1381,89 @@ async fn test_tool_error_correction_parse_failure_on_corrected_response() {
         );
     }
 }
+
+// --- build_implementer_summary rejection reason injection tests ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_implementer_summary_no_bundles() {
+    let dir = TestDir::new("loopr-impl-sum-no-bundles");
+    let stores = setup_stores(&dir);
+    let wi_id = get_work_id(&stores);
+
+    let summary = build_implementer_summary(&stores, &wi_id, "[test]");
+    assert!(
+        !summary.contains("Previous Bundle Rejected"),
+        "should have no rejection section when no bundles exist"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_implementer_summary_with_rejected_bundle() {
+    use crate::domain::bundle::{Bundle, BundleStatus};
+
+    let dir = TestDir::new("loopr-impl-sum-rejected");
+    let stores = setup_stores(&dir);
+    let wi_id = get_work_id(&stores);
+
+    // Create a rejected bundle with a verification reason
+    let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test-branch".into(), vec!["claim".into()]);
+    bundle.force_status(BundleStatus::Rejected);
+    bundle.verification = "Rejected: missing POST /bookmarks endpoint".to_string();
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let summary = build_implementer_summary(&stores, &wi_id, "[test]");
+    assert!(
+        summary.contains("Previous Bundle Rejected"),
+        "should include rejection section: {}",
+        summary
+    );
+    assert!(
+        summary.contains("missing POST /bookmarks endpoint"),
+        "should include rejection reason: {}",
+        summary
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_implementer_summary_ignores_other_work_bundles() {
+    use crate::domain::bundle::{Bundle, BundleStatus};
+
+    let dir = TestDir::new("loopr-impl-sum-other");
+    let stores = setup_stores(&dir);
+    let wi_id = get_work_id(&stores);
+
+    // Create a rejected bundle for a DIFFERENT work item
+    let mut bundle = Bundle::new("wk-other-work".into(), None, "agent/other".into(), vec![]);
+    bundle.force_status(BundleStatus::Rejected);
+    bundle.verification = "Rejected: wrong work".to_string();
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let summary = build_implementer_summary(&stores, &wi_id, "[test]");
+    assert!(
+        !summary.contains("Previous Bundle Rejected"),
+        "should not include rejection from a different work: {}",
+        summary
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_build_implementer_summary_ignores_bundle_without_verification() {
+    use crate::domain::bundle::{Bundle, BundleStatus};
+
+    let dir = TestDir::new("loopr-impl-sum-no-verif");
+    let stores = setup_stores(&dir);
+    let wi_id = get_work_id(&stores);
+
+    // Rejected bundle but no verification text
+    let mut bundle = Bundle::new(wi_id.clone(), None, "agent/test".into(), vec![]);
+    bundle.force_status(BundleStatus::Rejected);
+    // verification is empty
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let summary = build_implementer_summary(&stores, &wi_id, "[test]");
+    assert!(
+        !summary.contains("Previous Bundle Rejected"),
+        "should not show rejection section if verification is empty: {}",
+        summary
+    );
+}

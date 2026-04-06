@@ -147,12 +147,30 @@ pub fn is_correctable_error(error: &str) -> bool {
         || error.contains("path traversal")
 }
 
-/// Build a focused state summary for the implementer: active locks and sibling agents.
+/// Build a focused state summary for the implementer: previous bundle rejection, active locks, sibling agents.
 pub fn build_implementer_summary(stores: &Stores, work_id: &str, prefix: &str) -> String {
     log::debug!("{} build_implementer_summary(work_id={})", prefix, work_id);
+    use crate::domain::bundle::BundleStatus;
     use crate::domain::lock::LockStatus;
 
     let mut summary = String::with_capacity(512);
+
+    // Most recently rejected bundle for this work (Fix 5: rejection reason injection).
+    // Gives the implementer context on why its previous attempt was rejected.
+    {
+        let Ok(bundles) = stores.read_bundles() else {
+            return summary;
+        };
+        let rejected = bundles
+            .values()
+            .filter(|b| b.work_id == work_id && b.status() == BundleStatus::Rejected && !b.verification.is_empty())
+            .max_by_key(|b| b.updated_at);
+        if let Some(bundle) = rejected {
+            summary.push_str("### Previous Bundle Rejected\n\n");
+            summary.push_str(&bundle.verification);
+            summary.push_str("\n\n");
+        }
+    }
 
     // Active locks on resources
     {

@@ -11,7 +11,12 @@ use crate::id;
 pub enum WorkStatus {
     #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
     Draft,
-    #[transitions(InProgress(Coordinator), Blocked(Coordinator), Abandoned(Coordinator))]
+    #[transitions(
+        InProgress(Coordinator),
+        Blocked(Coordinator),
+        Abandoned(Coordinator),
+        Done(Coordinator)
+    )]
     Ready,
     #[transitions(Blocked, InReview(Implementer), Abandoned(Coordinator))]
     #[overrides(Ready(Coordinator), InReview(Coordinator))]
@@ -246,6 +251,26 @@ mod tests {
             WorkStatus::Ready
                 .validate_transition(WorkStatus::InProgress, Role::Coordinator)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_valid_ready_to_done_coordinator() {
+        assert!(
+            WorkStatus::Ready
+                .validate_transition(WorkStatus::Done, Role::Coordinator)
+                .is_ok(),
+            "Coordinator should be able to short-circuit Ready->Done for pre-flight AC pass"
+        );
+    }
+
+    #[test]
+    fn test_invalid_ready_to_done_wrong_role() {
+        assert!(
+            WorkStatus::Ready
+                .validate_transition(WorkStatus::Done, Role::Implementer)
+                .is_err(),
+            "Only Coordinator can short-circuit Ready->Done"
         );
     }
 
