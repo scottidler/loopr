@@ -370,38 +370,51 @@ pub(super) async fn accept_plan_markdown(
 ///
 /// Returns `Err` on any failure; the caller must treat a failed double-write as
 /// `decomposition.failed` so the coordinator never gets stuck in `Decomposing`.
-fn double_write_old_records(
-    stores: &Arc<Stores>,
+/// A fully-built old-format record ready for store insertion.
+enum OldRecord {
+    Plan(Plan),
+    Spec(Spec),
+    Phase(Phase),
+    Work(Work),
+}
+
+impl OldRecord {
+    fn old_id(&self) -> &str {
+        match self {
+            OldRecord::Plan(r) => &r.id,
+            OldRecord::Spec(r) => &r.id,
+            OldRecord::Phase(r) => &r.id,
+            OldRecord::Work(r) => &r.id,
+        }
+    }
+}
+
+/// Build all old-format records in memory (Phase A of double_write_old_records).
+///
+/// Pure computation: reads markdown files, constructs Plan/Spec/Phase/Work values,
+/// resolves parent IDs. Returns Err immediately if any file is missing or a parent
+/// reference cannot be resolved. No DB writes happen in this function.
+fn build_all_old_records(
     plan_doc: &Doc,
     plan_markdown: &str,
     child_docs: &[Doc],
     run_dir: &Path,
-) -> eyre::Result<()> {
+) -> eyre::Result<Vec<OldRecord>> {
+    let mut records: Vec<OldRecord> = Vec::new();
+    let mut doc_to_old: HashMap<String, String> = HashMap::new();
+
     let title = extract_plan_title(plan_markdown);
     let ac_joined = plan_doc.acceptance_criteria.join("\n");
-
-    // Create old Plan record
     let mut old_plan = Plan::new(title, plan_markdown.to_string(), ac_joined);
     old_plan.force_status(PlanStatus::Active);
     let old_plan_id = old_plan.id.clone();
-
-    if let Some(store_arc) = &stores.store {
-        store_arc
-            .lock()
-            .map_err(|_| eyre!("taskstore lock poisoned"))?
-            .create(old_plan.clone())
-            .map_err(|e| eyre!("failed to persist old Plan: {}", e))?;
-    }
-    stores.write_plans()?.insert(old_plan_id.clone(), old_plan);
-
-    let mut doc_to_old: HashMap<String, String> = HashMap::new();
     doc_to_old.insert(plan_doc.id.clone(), old_plan_id);
+    records.push(OldRecord::Plan(old_plan));
 
-    // Sort by kind so parents are always created before children
+    // Process specs before phases before works so parent records exist first.
     let specs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
     let phases: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
     let works: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
-
     let mut phase_counters: HashMap<String, u32> = HashMap::new();
 
     for child in specs.iter().chain(phases.iter()).chain(works.iter()) {
@@ -411,25 +424,15 @@ fn double_write_old_records(
         let Some(old_parent_id) = doc_to_old.get(doc_parent_id).cloned() else {
             bail!("double-write: no old record for parent Doc {}", doc_parent_id);
         };
-
         let content = std::fs::read_to_string(run_dir.join(&child.markdown))
             .map_err(|e| eyre!("double-write: failed to read {}: {}", child.markdown, e))?;
         let child_title = child.title.clone();
 
-        let old_id = match child.kind {
+        let record = match child.kind {
             DocKind::Spec => {
                 let mut spec = Spec::new(old_parent_id, child_title, content);
                 spec.force_status(SpecStatus::Active);
-                let old_id = spec.id.clone();
-                if let Some(store_arc) = &stores.store {
-                    store_arc
-                        .lock()
-                        .map_err(|_| eyre!("taskstore lock poisoned"))?
-                        .create(spec.clone())
-                        .map_err(|e| eyre!("failed to persist old Spec: {}", e))?;
-                }
-                stores.write_specs()?.insert(old_id.clone(), spec);
-                old_id
+                OldRecord::Spec(spec)
             }
             DocKind::Phase => {
                 let order = phase_counters.entry(doc_parent_id.clone()).or_insert(0);
@@ -437,16 +440,7 @@ fn double_write_old_records(
                 *order += 1;
                 let mut phase = Phase::new(old_parent_id, child_title, content, current_order);
                 phase.force_status(PhaseStatus::Active);
-                let old_id = phase.id.clone();
-                if let Some(store_arc) = &stores.store {
-                    store_arc
-                        .lock()
-                        .map_err(|_| eyre!("taskstore lock poisoned"))?
-                        .create(phase.clone())
-                        .map_err(|e| eyre!("failed to persist old Phase: {}", e))?;
-                }
-                stores.write_phases()?.insert(old_id.clone(), phase);
-                old_id
+                OldRecord::Phase(phase)
             }
             DocKind::Work => {
                 let mut work = Work::new(old_parent_id, child_title, content);
@@ -457,21 +451,68 @@ fn double_write_old_records(
                     .iter()
                     .filter_map(|dep_doc_id| doc_to_old.get(dep_doc_id).cloned())
                     .collect();
-                let old_id = work.id.clone();
-                if let Some(store_arc) = &stores.store {
-                    store_arc
-                        .lock()
-                        .map_err(|_| eyre!("taskstore lock poisoned"))?
-                        .create(work.clone())
-                        .map_err(|e| eyre!("failed to persist old Work: {}", e))?;
-                }
-                stores.write_works()?.insert(old_id.clone(), work);
-                old_id
+                OldRecord::Work(work)
             }
             DocKind::Plan => continue,
         };
-        doc_to_old.insert(child.id.clone(), old_id);
+        doc_to_old.insert(child.id.clone(), record.old_id().to_string());
+        records.push(record);
     }
+
+    Ok(records)
+}
+
+fn double_write_old_records(
+    stores: &Arc<Stores>,
+    plan_doc: &Doc,
+    plan_markdown: &str,
+    child_docs: &[Doc],
+    run_dir: &Path,
+) -> eyre::Result<()> {
+    // Phase A: build all records in memory; fails fast before any DB write
+    let records = build_all_old_records(plan_doc, plan_markdown, child_docs, run_dir)?;
+
+    // Phase B: hold the TaskStore lock for the entire batch so no concurrent reader
+    // observes a half-written hierarchy during the write window
+    if let Some(store_arc) = &stores.store {
+        let mut store = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+        for record in &records {
+            match record {
+                OldRecord::Plan(r) => store
+                    .create(r.clone())
+                    .map_err(|e| eyre!("failed to persist old Plan: {}", e))?,
+                OldRecord::Spec(r) => store
+                    .create(r.clone())
+                    .map_err(|e| eyre!("failed to persist old Spec: {}", e))?,
+                OldRecord::Phase(r) => store
+                    .create(r.clone())
+                    .map_err(|e| eyre!("failed to persist old Phase: {}", e))?,
+                OldRecord::Work(r) => store
+                    .create(r.clone())
+                    .map_err(|e| eyre!("failed to persist old Work: {}", e))?,
+            };
+        }
+        // lock drops here
+    }
+
+    // Phase C: update in-memory maps
+    for record in records {
+        match record {
+            OldRecord::Plan(r) => {
+                stores.write_plans()?.insert(r.id.clone(), r);
+            }
+            OldRecord::Spec(r) => {
+                stores.write_specs()?.insert(r.id.clone(), r);
+            }
+            OldRecord::Phase(r) => {
+                stores.write_phases()?.insert(r.id.clone(), r);
+            }
+            OldRecord::Work(r) => {
+                stores.write_works()?.insert(r.id.clone(), r);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -809,6 +850,77 @@ mod tests {
         let result = double_write_old_records(&stores, &plan_doc, plan_markdown, &[child], &run_dir);
 
         assert!(result.is_err(), "expected Err when child file is missing");
+    }
+
+    #[test]
+    fn test_build_all_old_records_fails_on_missing_parent() {
+        // A child doc whose parent_id is not in the plan hierarchy must cause
+        // build_all_old_records to return Err before any DB write occurs.
+        let dir = TestDir::new("double-write-missing-parent");
+
+        let plan_markdown = "# Test Plan\n\n## Summary\n\nDo stuff.\n";
+        let plan_doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan.md".to_string());
+
+        // Child has an unknown parent_id (not the plan's id)
+        let mut child = Doc::new(
+            DocKind::Spec,
+            Some("unknown-parent-id".to_string()),
+            "Orphan Spec".to_string(),
+            "orphan.md".to_string(),
+        );
+        child.parent_id = Some("unknown-parent-id".to_string());
+        std::fs::write(dir.join("orphan.md"), "# Orphan").unwrap();
+
+        let result = build_all_old_records(&plan_doc, plan_markdown, &[child], &dir);
+
+        assert!(result.is_err(), "expected Err for missing parent reference");
+        let msg = format!("{}", result.err().unwrap());
+        assert!(
+            msg.contains("no old record for parent Doc"),
+            "error should mention missing parent: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_double_write_no_interleaved_reads_on_failure() {
+        // When build_all_old_records fails (child file missing), double_write_old_records
+        // must return Err without having written any record to the store or in-memory maps.
+        let dir = TestDir::new("double-write-atomic");
+        let mut stores_inner = crate::daemon::context::Stores::new();
+        stores_inner.config.project.repo_path = dir.to_path_buf();
+        let stores = std::sync::Arc::new(stores_inner);
+
+        let plan_markdown = "# Atomic Plan\n\n## Summary\n\nDo stuff.\n";
+        let plan_doc = Doc::new(DocKind::Plan, None, "Atomic Plan".to_string(), "plan.md".to_string());
+
+        // One valid spec (file present) and one invalid spec (file missing)
+        let mut good_spec = Doc::new(
+            DocKind::Spec,
+            Some(plan_doc.id.clone()),
+            "Good Spec".to_string(),
+            "good.md".to_string(),
+        );
+        good_spec.parent_id = Some(plan_doc.id.clone());
+        std::fs::write(dir.join("good.md"), "# Good Spec").unwrap();
+
+        let mut bad_spec = Doc::new(
+            DocKind::Spec,
+            Some(plan_doc.id.clone()),
+            "Bad Spec".to_string(),
+            "bad.md".to_string(), // file intentionally missing
+        );
+        bad_spec.parent_id = Some(plan_doc.id.clone());
+
+        let result = double_write_old_records(&stores, &plan_doc, plan_markdown, &[good_spec, bad_spec], &dir);
+
+        // Must fail (Phase A detected the missing file before any DB write)
+        assert!(result.is_err(), "expected Err when a child file is missing");
+
+        // In-memory store must be empty (no partial write)
+        let plans = stores.read_plans().unwrap();
+        assert!(plans.is_empty(), "no Plan should be in memory after Phase A failure");
+        let specs = stores.read_specs().unwrap();
+        assert!(specs.is_empty(), "no Spec should be in memory after Phase A failure");
     }
 
     // --- single coordinator invariant (Phase 2) ---
