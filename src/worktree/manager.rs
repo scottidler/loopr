@@ -134,11 +134,11 @@ impl WorktreeManager {
             .args(["worktree", "prune"])
             .current_dir(&self.repo_path)
             .output();
-        if let Ok(o) = &prune_out {
-            if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                log::warn!("git worktree prune failed (non-fatal): {}", stderr.trim());
-            }
+        if let Ok(o) = &prune_out
+            && !o.status.success()
+        {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            log::warn!("git worktree prune failed (non-fatal): {}", stderr.trim());
         }
 
         // create() may fail with GitCommand if the branch "agent/<work_id>" already

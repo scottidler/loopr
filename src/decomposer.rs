@@ -279,7 +279,10 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
         bail!("Anthropic API error: {} (raw: {})", err, snippet);
     }
 
-    let stop_reason = response.get("stop_reason").and_then(|v| v.as_str()).unwrap_or("unknown");
+    let stop_reason = response
+        .get("stop_reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
     debug!(
         "call_llm_for_children: response stop_reason={} content_len={}",
         stop_reason,
@@ -309,7 +312,10 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
         // Fallback: the model returned text instead of a tool call.
         // Strip markdown fences and parse as JSON array.
         let snippet: String = response_text.chars().take(800).collect();
-        warn!("call_llm_for_children: model did not use tool, falling back to text parsing (response: {})", snippet);
+        warn!(
+            "call_llm_for_children: model did not use tool, falling back to text parsing (response: {})",
+            snippet
+        );
         let text = response["content"]
             .as_array()
             .and_then(|blocks| blocks.iter().find(|b| b["type"].as_str() == Some("text")))
