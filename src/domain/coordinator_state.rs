@@ -58,6 +58,10 @@ pub struct CoordinatorState {
     #[serde(default)]
     pub work_first_assigned_at: HashMap<String, i64>,
     pub phase_activated_at: Option<i64>,
+    /// Error message from the most recent decomposition failure. When set, the coordinator
+    /// transitions to NeedsHelp instead of busy-polling. Cleared on re-decompose.
+    #[serde(default)]
+    pub decomposition_error: Option<String>,
     /// Decomposition attempt count per parent ID.
     /// Tracks how many times coverage evaluation has failed for children of a parent.
     #[serde(default)]
@@ -103,6 +107,7 @@ impl CoordinatorState {
             work_attempts: HashMap::new(),
             work_first_assigned_at: HashMap::new(),
             phase_activated_at: None,
+            decomposition_error: None,
             decomposition_attempts: HashMap::new(),
             bubble_up_count: 0,
             researcher_spawns: HashMap::new(),

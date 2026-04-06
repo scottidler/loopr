@@ -2079,3 +2079,63 @@ async fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
     let warning = phase_missing_test_tool(&stores, &coord_state);
     assert!(warning.is_empty(), "no warning when test tool is registered");
 }
+
+// --- decomposition_error FSM tests ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_iteration_decomposing_with_error_returns_need_help() {
+    // When coord_state.fsm_state == Decomposing and decomposition_error is set,
+    // run_iteration must return NeedHelp without calling the LLM.
+    let dir = TestDir::new("loopr-coord-decomp-err");
+    let stores = test_stores(&dir);
+    let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
+
+    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Skip);
+    coord_state.fsm_state = CoordinatorFsmState::Decomposing;
+    coord_state.decomposition_error = Some("spec 'Database Layer': Failed to parse LLM output".into());
+
+    let mut guard = Lifeguard::new();
+    let result = agent.run_iteration(&mut coord_state, &mut guard).await;
+
+    assert!(result.is_ok());
+    match result.unwrap() {
+        IterationOutcome::NeedHelp(msg) => {
+            assert!(
+                msg.contains("Background decomposition failed"),
+                "NeedHelp message should reference decomposition failure, got: {msg}"
+            );
+            assert!(
+                msg.contains("Database Layer"),
+                "NeedHelp message should contain the error text, got: {msg}"
+            );
+        }
+        other => panic!("expected NeedHelp, got: {:?}", other),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_iteration_decomposing_without_error_returns_done_waiting() {
+    // When coord_state.fsm_state == Decomposing and decomposition_error is None
+    // (decomposition still in progress), run_iteration must return Done("waiting...").
+    let dir = TestDir::new("loopr-coord-decomp-wait");
+    let stores = test_stores(&dir);
+    let agent = test_coordinator(&dir, &stores, vec![], CoordinatorConfig::default());
+
+    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Skip);
+    coord_state.fsm_state = CoordinatorFsmState::Decomposing;
+    // decomposition_error is None by default
+
+    let mut guard = Lifeguard::new();
+    let result = agent.run_iteration(&mut coord_state, &mut guard).await;
+
+    assert!(result.is_ok());
+    match result.unwrap() {
+        IterationOutcome::Done(msg) => {
+            assert!(
+                msg.contains("waiting for decomposition"),
+                "Done message should say waiting for decomposition, got: {msg}"
+            );
+        }
+        other => panic!("expected Done(waiting...), got: {:?}", other),
+    }
+}

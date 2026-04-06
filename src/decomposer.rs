@@ -13,7 +13,7 @@ use eyre::{Context, Result, bail};
 use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
-use futures::future::try_join_all;
+use futures::future::{join_all, try_join_all};
 
 use crate::config::DecomposerConfig;
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
@@ -535,19 +535,23 @@ pub async fn decompose<H: HttpClient + Sync>(
 /// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
 ///
 /// This is the entry point for plan activation. Specs are decomposed concurrently
-/// (try_join_all), each spec's phases are also concurrent within the spec branch.
+/// (join_all), each spec's phases are also concurrent within the spec branch.
 /// After all branches complete, a post-merge pass resolves cross-spec/cross-phase
 /// dependencies that could not be resolved during parallel execution.
 ///
 /// In Brief mode (plan has no contracts), skips Spec and Phase levels
 /// and decomposes Plan directly into Works.
+///
+/// Returns `(docs, partial_err)`. When `partial_err` is `Some`, one or more spec
+/// branches failed but the successful branches' docs are still returned. Ratification
+/// is skipped on partial failure. The caller is responsible for persisting partial_err.
 pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
     run_dir: &Path,
     config: &DecomposerConfig,
     http_client: &H,
     brief: bool,
-) -> Result<Vec<Doc>> {
+) -> Result<(Vec<Doc>, Option<String>)> {
     debug!(
         "decompose_hierarchy: plan={} title={:?} brief={} run_dir={}",
         plan.id,
@@ -574,12 +578,40 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
         // Decompose each spec branch concurrently.
         // Each branch returns (docs, local_title_to_id). Branches are polled on the
         // same async task (no tokio::spawn) so no Send bound is needed.
+        // Use join_all instead of try_join_all so completed branches are not discarded
+        // when a sibling fails.
         let spec_futures: Vec<_> = specs
             .iter()
             .map(|spec| decompose_spec_branch(spec, run_dir, config, http_client))
             .collect();
-        let branch_results = try_join_all(spec_futures).await?;
-        info!("decompose_hierarchy: all {} spec branches complete", specs.len());
+        let branch_results_raw = join_all(spec_futures).await;
+
+        let mut branch_results: Vec<(Vec<Doc>, HashMap<String, String>)> = Vec::new();
+        let mut branch_error: Option<String> = None;
+
+        for (spec, result) in specs.iter().zip(branch_results_raw) {
+            match result {
+                Ok(branch) => branch_results.push(branch),
+                Err(e) => {
+                    warn!(
+                        "decompose_hierarchy: spec branch {} '{}' failed: {}",
+                        spec.id, spec.title, e
+                    );
+                    branch_error = Some(format!("spec '{}': {}", spec.title, e));
+                }
+            }
+        }
+
+        if branch_error.is_none() {
+            info!("decompose_hierarchy: all {} spec branches complete", specs.len());
+        } else {
+            info!(
+                "decompose_hierarchy: {}/{} spec branches succeeded, {} failed",
+                branch_results.len(),
+                specs.len(),
+                specs.len() - branch_results.len()
+            );
+        }
 
         // Merge all branch title maps into a single global map for post-pass resolution.
         let mut global_title_to_id = spec_map;
@@ -593,6 +625,17 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
         }
         all_docs.extend(specs);
         resolve_cross_branch_deps(&mut all_docs, &global_title_to_id);
+
+        if let Some(err) = branch_error {
+            // Partial success: persist completed branches but skip ratification
+            // (ratification requires a complete hierarchy).
+            info!(
+                "decompose_hierarchy: partial failure plan={} total_docs={}",
+                plan.id,
+                all_docs.len()
+            );
+            return Ok((all_docs, Some(err)));
+        }
     }
 
     info!(
@@ -603,7 +646,7 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     // Hierarchical ratification (bottom-up, sequential by design)
     ratify_hierarchy(plan, &all_docs, run_dir, config, http_client).await?;
 
-    Ok(all_docs)
+    Ok((all_docs, None))
 }
 
 /// Decompose one spec into phases + works, with phases' work-decompositions running concurrently.
@@ -1243,7 +1286,12 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let all_docs = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (all_docs, partial_err) = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        assert!(
+            partial_err.is_none(),
+            "expected no partial failure, got: {:?}",
+            partial_err
+        );
 
         // Find Work Alpha and Work Beta in the results
         let alpha = all_docs
@@ -1346,7 +1394,12 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let all_docs = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (all_docs, partial_err) = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        assert!(
+            partial_err.is_none(),
+            "expected no partial failure, got: {:?}",
+            partial_err
+        );
 
         let specs: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
         let phases: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
@@ -1434,7 +1487,12 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let all_docs = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (all_docs, partial_err) = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        assert!(
+            partial_err.is_none(),
+            "expected no partial failure, got: {:?}",
+            partial_err
+        );
 
         let alpha = all_docs
             .iter()
@@ -1496,6 +1554,107 @@ mod tests {
         assert!(
             msg.contains("timed out") || msg.contains("Decomposition failed"),
             "error should mention timeout: {msg}"
+        );
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test]
+    async fn test_decompose_hierarchy_partial_failure_persists_successful_branches() {
+        // When one spec branch fails and another succeeds, decompose_hierarchy must return
+        // the successful branch's docs and a Some(error) partial failure message.
+        // The caller is then responsible for persisting the partial error.
+        crate::prompts::init_defaults();
+        let dir = TestDir::new("loopr-partial-failure");
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        std::fs::write(
+            dir.join("plan-partial.md"),
+            "# Partial Plan\n\n## Problem Statement\n\nTwo tracks, one fails.\n\n## Goals\n\nSurvive.",
+        )
+        .unwrap();
+        let plan = Doc::new(
+            DocKind::Plan,
+            None,
+            "Partial Plan".to_string(),
+            "plan-partial.md".to_string(),
+        );
+
+        let valid_json = r#"{"valid": true, "issues": []}"#;
+
+        let specs_json = serde_json::json!([
+            {"title": "Good Track", "content": "# Good Track\n\n## Overview\n\nWill succeed.", "dependencies": []},
+            {"title": "Bad Track", "content": "# Bad Track\n\n## Overview\n\nWill fail.", "dependencies": []}
+        ])
+        .to_string();
+        let phases_one = serde_json::json!([
+            {"title": "Good Phase", "content": "# Good Phase\n\n## Overview\n\nOne phase.", "dependencies": []}
+        ])
+        .to_string();
+        let works_one = serde_json::json!([
+            {"title": "Good Work", "content": "# Work\n\n## Description\n\nDo good.\n\n## Acceptance Criteria\n\nassert good()\n\n## Dependencies\n\nNone", "dependencies": []}
+        ])
+        .to_string();
+
+        let mk = |text: &str| serde_json::json!({"content": [{"type": "text", "text": text}]}).to_string();
+
+        // Responses are popped LIFO (last = first consumed). Execution order:
+        // 1. decompose plan -> specs
+        // 2. validate Good Track (from plan decompose)
+        // 3. validate Bad Track (from plan decompose)
+        // 4. decompose Good Track -> phases (spec 1 branch runs first)
+        // 5. validate Good Phase
+        // 6. decompose Good Phase -> works
+        // 7. validate Good Work
+        // 8. Bad Track branch calls decompose -> mock empty -> error
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                mk(valid_json),  // #7 validate Good Work (consumed last)
+                mk(&works_one),  // #6 decompose Good Phase -> works
+                mk(valid_json),  // #5 validate Good Phase
+                mk(&phases_one), // #4 decompose Good Track -> phases
+                mk(valid_json),  // #3 validate Bad Track (from plan decompose)
+                mk(valid_json),  // #2 validate Good Track (from plan decompose)
+                mk(&specs_json), // #1 decompose plan -> specs (consumed first)
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result = decompose_hierarchy(&plan, &dir, &config, &mock, false).await;
+        assert!(result.is_ok(), "decompose_hierarchy should succeed with partial docs");
+
+        let (all_docs, partial_err) = result.unwrap();
+
+        // partial_err must be set - Bad Track branch failed
+        assert!(partial_err.is_some(), "expected partial_err to be set, got None");
+        let err_msg = partial_err.unwrap();
+        assert!(
+            err_msg.contains("Bad Track"),
+            "partial_err should name the failed spec, got: {err_msg}"
+        );
+
+        // Good Track's docs must be present
+        assert!(!all_docs.is_empty(), "should have docs from the successful branch");
+        let phases: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
+        let works: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
+        assert_eq!(
+            phases.len(),
+            1,
+            "expected 1 phase from Good Track, got {}",
+            phases.len()
+        );
+        assert_eq!(works.len(), 1, "expected 1 work from Good Track, got {}", works.len());
+
+        // The Good Track spec itself is also in all_docs (returned by decompose_into(plan, Spec))
+        let specs: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
+        assert_eq!(
+            specs.len(),
+            2,
+            "both specs should be present (even failed one from plan decompose), got {}",
+            specs.len()
         );
 
         unsafe { std::env::remove_var(&env_key) };

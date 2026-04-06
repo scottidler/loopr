@@ -181,6 +181,12 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         // The event-driven wake in run_fsm_loop will re-enter this iteration when
         // decomposition.completed or decomposition.failed is emitted.
         if coord_state.fsm_state == CoordinatorFsmState::Decomposing {
+            if let Some(err) = &coord_state.decomposition_error {
+                return Ok(IterationOutcome::NeedHelp(format!(
+                    "Background decomposition failed: {}",
+                    err
+                )));
+            }
             return Ok(IterationOutcome::Done(
                 "waiting for decomposition to complete".to_string(),
             ));

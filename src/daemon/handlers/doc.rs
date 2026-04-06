@@ -281,7 +281,7 @@ pub(super) async fn accept_plan_markdown(
             }
             let client = ReqwestClient::new();
             match decompose_hierarchy(&plan_doc_bg, &run_dir_bg, &dc, &client, brief).await {
-                Ok(child_docs) => {
+                Ok((child_docs, partial_err)) => {
                     let child_count = child_docs.len();
                     match &decomposer_log {
                         Ok(log) => log.info(&format!("decomposition produced {} child docs", child_count)),
@@ -294,15 +294,47 @@ pub(super) async fn accept_plan_markdown(
                                     warn!("doc entry (bg): failed to persist child doc: {}", e);
                                 }
                             }
-                            let _ = event_tx_bg.send(DaemonEvent::new(
-                                "decomposition.completed",
-                                json!({ "goal_id": goal_id_bg, "child_count": child_count }),
-                            ));
+                            if let Some(err) = partial_err {
+                                // Partial success: some spec branches failed. Persist completed
+                                // docs (done above) but signal failure so coordinator surfaces
+                                // NeedsHelp instead of busy-polling.
+                                if let Ok(mut states) = stores_bg.write_coordinator_states()
+                                    && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
+                                {
+                                    cs.decomposition_error = Some(err.clone());
+                                    cs.updated_at = crate::id::now_millis();
+                                    if let Some(store_arc) = &stores_bg.store
+                                        && let Ok(mut store) = store_arc.lock()
+                                    {
+                                        let _ = store.update(cs.clone());
+                                    }
+                                }
+                                let _ = event_tx_bg.send(DaemonEvent::new(
+                                    "decomposition.failed",
+                                    json!({ "goal_id": goal_id_bg, "error": err }),
+                                ));
+                            } else {
+                                let _ = event_tx_bg.send(DaemonEvent::new(
+                                    "decomposition.completed",
+                                    json!({ "goal_id": goal_id_bg, "child_count": child_count }),
+                                ));
+                            }
                         }
                         Err(e) => {
                             match &decomposer_log {
                                 Ok(log) => log.warn(&format!("persist failed: {}", e)),
                                 Err(_) => warn!("doc entry (bg): persist failed: {}", e),
+                            }
+                            if let Ok(mut states) = stores_bg.write_coordinator_states()
+                                && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
+                            {
+                                cs.decomposition_error = Some(e.to_string());
+                                cs.updated_at = crate::id::now_millis();
+                                if let Some(store_arc) = &stores_bg.store
+                                    && let Ok(mut store) = store_arc.lock()
+                                {
+                                    let _ = store.update(cs.clone());
+                                }
                             }
                             let _ = event_tx_bg.send(DaemonEvent::new(
                                 "decomposition.failed",
@@ -315,6 +347,17 @@ pub(super) async fn accept_plan_markdown(
                     match &decomposer_log {
                         Ok(log) => log.warn(&format!("decomposition failed: {}", e)),
                         Err(_) => warn!("doc entry (bg): decomposition failed: {}", e),
+                    }
+                    if let Ok(mut states) = stores_bg.write_coordinator_states()
+                        && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
+                    {
+                        cs.decomposition_error = Some(e.to_string());
+                        cs.updated_at = crate::id::now_millis();
+                        if let Some(store_arc) = &stores_bg.store
+                            && let Ok(mut store) = store_arc.lock()
+                        {
+                            let _ = store.update(cs.clone());
+                        }
                     }
                     let _ = event_tx_bg.send(DaemonEvent::new(
                         "decomposition.failed",
