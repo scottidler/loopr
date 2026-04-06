@@ -32,10 +32,7 @@ fn test_strategy_knobs_defaults() {
 fn test_agents_disabled_by_default() {
     let config = Config::default();
 
-    assert!(
-        !config.agents.auto_start_coordinator,
-        "coordinator should not auto-start by default"
-    );
+    assert!(!config.agents.enabled, "agents should be disabled by default");
     assert!(!config.integrator.enabled, "integrator should be disabled by default");
 }
 

@@ -275,26 +275,9 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     info!("Daemon listening on {}", ipc_server.socket_path().display());
     let event_tx = ctx.read().await.event_tx.clone();
 
-    // Gap #31: Auto-start coordinator at daemon startup
+    // Auto-start Integrator when enabled
     {
         let c = ctx.read().await;
-        if c.config.agents.auto_start_coordinator {
-            let start_req = crate::ipc::protocol::DaemonRequest::new(
-                0,
-                "agent.start",
-                serde_json::json!({ "agent_type": "coordinator" }),
-            );
-            let _ = crate::daemon::handlers::dispatch(
-                &c.stores,
-                &c.event_tx,
-                &c.worktree_manager,
-                &c.config.integrator,
-                start_req,
-            )
-            .await;
-            info!("Auto-started Coordinator agent");
-        }
-        // Auto-start Integrator when enabled
         if c.config.integrator.enabled {
             let start_req = crate::ipc::protocol::DaemonRequest::new(
                 0,

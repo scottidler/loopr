@@ -301,7 +301,6 @@ pub struct AgentConfig {
     pub enabled: bool,
     pub auto_start_implementer: bool,
     pub auto_start_reviewer: bool,
-    pub auto_start_coordinator: bool,
     /// When true, persistent worker pool pulls Ready Works instead of
     /// push-based AssignAgent. Default false (feature flag).
     pub pull_based_workers: bool,
@@ -320,7 +319,6 @@ impl Default for AgentConfig {
             enabled: false,
             auto_start_implementer: false,
             auto_start_reviewer: false,
-            auto_start_coordinator: false,
             pull_based_workers: false,
             worker_pool_size: 2,
             implementer: AgentRoleConfig::default_implementer(),
@@ -739,7 +737,6 @@ mod tests {
         assert!(!ac.enabled);
         assert!(!ac.auto_start_implementer);
         assert!(!ac.auto_start_reviewer);
-        assert!(!ac.auto_start_coordinator);
     }
 
     #[test]
@@ -989,7 +986,6 @@ stale_policy: replan_at_safe_point
     fn test_agent_config_has_coordinator() {
         let ac = AgentConfig::default();
         assert_eq!(ac.coordinator.role.max_pool, 1);
-        assert!(!ac.auto_start_coordinator);
     }
 
     #[test]

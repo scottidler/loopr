@@ -182,19 +182,21 @@ pub(super) fn handle_agent_start(
                 }
             }
 
-            // Insert session while still holding write lock (atomic check-and-create)
+            // Persist to TaskStore while holding the sessions lock (write-ordering rule:
+            // TaskStore write must happen before in-memory insert, both under the same lock).
+            if let Some(store) = &stores.store
+                && let Err(e) = store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create(session.clone())
+            {
+                return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
+            }
+
+            // In-memory insert only after durable write succeeds
             sessions.insert(id.clone(), session.clone());
         }
 
-        // Persist to TaskStore (outside lock - TaskStore has its own synchronization)
-        if let Some(store) = &stores.store
-            && let Err(e) = store
-                .lock()
-                .map_err(|_| eyre!("taskstore lock poisoned"))?
-                .create(session.clone())
-        {
-            return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
-        }
         let _ = event_tx.send(DaemonEvent::record_created("agent_session", &id));
         debug!("[agent_status] {}: -> Starting (type={:?})", id, agent_type);
         let _ = event_tx.send(DaemonEvent::agent_status_changed(&id, AgentStatus::Starting));

@@ -204,7 +204,6 @@ agents:
   enabled: true
   auto_start_implementer: true
   auto_start_reviewer: true
-  auto_start_coordinator: true
   pull_based_workers: true
   coordinator:
     interview_mode: skip

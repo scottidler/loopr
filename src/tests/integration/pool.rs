@@ -47,6 +47,52 @@ async fn test_pool_exhaustion_multi_type() {
 }
 
 #[tokio::test]
+async fn test_agent_start_pool_check_atomic_under_lock() {
+    // Two sequential agent.start calls through the dispatch path: first succeeds,
+    // second is rejected by the pool check. Verifies that the in-memory check and
+    // store write both happen under the same lock so no phantom session slips through.
+    let stores = test_stores();
+    let tx = test_event_tx();
+    let wm = test_worktree_mgr();
+    let ic = test_integrator_config();
+
+    let resp = dispatch_ok(
+        &stores,
+        &tx,
+        &wm,
+        &ic,
+        "agent.start",
+        json!({"agent_type": "coordinator"}),
+    )
+    .await;
+    assert!(resp["id"].as_str().is_some(), "first start should succeed");
+
+    let code = dispatch_err(
+        &stores,
+        &tx,
+        &wm,
+        &ic,
+        "agent.start",
+        json!({"agent_type": "coordinator"}),
+    )
+    .await;
+    assert_eq!(code, -32004, "second start must be rejected with pool_exhausted");
+}
+
+#[test]
+fn test_no_auto_start_coordinator_on_daemon_boot() {
+    // Fresh Stores (the state a daemon begins with before any IPC) must have
+    // zero coordinator sessions — the auto_start_coordinator rogue path is gone.
+    let stores = test_stores();
+    let sessions = stores.agent_sessions.read().unwrap();
+    let coordinator_count = sessions
+        .values()
+        .filter(|s| s.agent_type == crate::agents::AgentKind::Coordinator)
+        .count();
+    assert_eq!(coordinator_count, 0, "no coordinator should exist in fresh stores");
+}
+
+#[tokio::test]
 async fn test_pool_allows_after_terminal_session() {
     let stores = test_stores();
     let tx = test_event_tx();

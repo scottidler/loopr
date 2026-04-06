@@ -70,8 +70,8 @@ impl DaemonHandle {
     /// Spawn a fresh daemon in `temp_dir` and wait for its socket to appear.
     ///
     /// The config overrides socket_path, pid_path, and repo_path to the temp
-    /// directory. `auto_start_coordinator` and pull-based workers remain off
-    /// (Config::default) so the test drives startup explicitly via `agent.start`.
+    /// directory. Pull-based workers remain off (Config::default) so the test
+    /// drives startup explicitly via `agent.start`.
     pub async fn spawn(temp_dir: TempTestDir) -> Result<Self> {
         // Initialize prompts before starting daemon tasks
         loopr::prompts::init_defaults();
