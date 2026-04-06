@@ -2,8 +2,8 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-06
-**Status:** Draft
-**Review Passes Completed:** 4/5
+**Status:** In Review
+**Review Passes Completed:** 5/5
 
 ## Summary
 
@@ -79,7 +79,7 @@ No domain changes. The only new runtime artifact is a `WorkerGuard` from `tracin
 ```rust
 pub struct LogHandle {
     pub log_path: PathBuf,
-    pub guard: WorkerGuard,  // must not be dropped; public to satisfy dead_code lint
+    pub guard: WorkerGuard,  // must not be dropped before end of process; public field to keep it accessible and lint-clean
 }
 ```
 
