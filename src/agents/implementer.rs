@@ -314,7 +314,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
             // Lifeguard: check for repeated identical actions
             let action_hash = lifeguard::hash_action(action);
             if let Verdict::Escalate(reason) = guard.check_action(action_hash) {
-                self.ctx.warn(&format!("lifeguard: {}", reason));
+                self.ctx.trace(&format!("lifeguard: {}", reason));
                 return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
             }
 
@@ -378,7 +378,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
                         self.ctx.warn(&w);
                     }
                     if let Verdict::Escalate(reason) = verdict {
-                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        self.ctx.trace(&format!("lifeguard: {}", reason));
                         return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
                     }
                     ActionResult::ActionError(err_msg)
@@ -533,7 +533,7 @@ impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
                 Err(e) => {
                     // Lifeguard: track parse failures
                     if let Verdict::Escalate(reason) = guard.record_parse_failure() {
-                        self.ctx.warn(&format!("lifeguard: {}", reason));
+                        self.ctx.trace(&format!("lifeguard: {}", reason));
                         return Err(eyre!("lifeguard: {}", reason));
                     }
                     self.ctx.warn(&format!("iteration {} failed (will retry): {}", i, e));

@@ -23,6 +23,8 @@ use std::sync::Arc;
 
 use eyre::{bail, eyre};
 use log::{debug, info, warn};
+
+use crate::agents::agent_logger::AgentLogger;
 use serde_json::json;
 use tokio::sync::broadcast;
 
@@ -267,13 +269,24 @@ pub(super) async fn accept_plan_markdown(
         let dc = stores.config.decomposer.clone();
 
         tokio::spawn(async move {
+            // Dedicated per-run log file for the decomposer background task.
+            // Writes to {session_dir}/agents/decomposer-{goal_id}.log so heavy LLM
+            // transcripts stay out of the main daemon log.
+            let decomposer_log =
+                AgentLogger::for_component("decomposer", &goal_id_bg, stores_bg.session_dir.as_deref());
             let brief = classify_brief(&stores_bg, &markdown_bg).await;
-            info!("doc entry (bg): starting decomposition (brief={})", brief);
+            match &decomposer_log {
+                Ok(log) => log.info(&format!("starting decomposition (brief={})", brief)),
+                Err(_) => info!("doc entry (bg): starting decomposition (brief={})", brief),
+            }
             let client = ReqwestClient::new();
             match decompose_hierarchy(&plan_doc_bg, &run_dir_bg, &dc, &client, brief).await {
                 Ok(child_docs) => {
                     let child_count = child_docs.len();
-                    info!("doc entry (bg): decomposition produced {} child docs", child_count);
+                    match &decomposer_log {
+                        Ok(log) => log.info(&format!("decomposition produced {} child docs", child_count)),
+                        Err(_) => info!("doc entry (bg): decomposition produced {} child docs", child_count),
+                    }
                     match double_write_old_records(&stores_bg, &plan_doc_bg, &markdown_bg, &child_docs, &run_dir_bg) {
                         Ok(()) => {
                             for child in child_docs {
@@ -287,7 +300,10 @@ pub(super) async fn accept_plan_markdown(
                             ));
                         }
                         Err(e) => {
-                            warn!("doc entry (bg): persist failed: {}", e);
+                            match &decomposer_log {
+                                Ok(log) => log.warn(&format!("persist failed: {}", e)),
+                                Err(_) => warn!("doc entry (bg): persist failed: {}", e),
+                            }
                             let _ = event_tx_bg.send(DaemonEvent::new(
                                 "decomposition.failed",
                                 json!({ "goal_id": goal_id_bg, "error": e.to_string() }),
@@ -296,7 +312,10 @@ pub(super) async fn accept_plan_markdown(
                     }
                 }
                 Err(e) => {
-                    warn!("doc entry (bg): decomposition failed: {}", e);
+                    match &decomposer_log {
+                        Ok(log) => log.warn(&format!("decomposition failed: {}", e)),
+                        Err(_) => warn!("doc entry (bg): decomposition failed: {}", e),
+                    }
                     let _ = event_tx_bg.send(DaemonEvent::new(
                         "decomposition.failed",
                         json!({ "goal_id": goal_id_bg, "error": e.to_string() }),

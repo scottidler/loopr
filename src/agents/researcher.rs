@@ -291,7 +291,7 @@ impl<L: LlmClient> ResearcherAgent<L> {
             // Lifeguard: check for repeated identical actions
             let action_hash = lifeguard::hash_action(action);
             if let Verdict::Escalate(reason) = guard.check_action(action_hash) {
-                self.ctx.warn(&format!("lifeguard: {}", reason));
+                self.ctx.trace(&format!("lifeguard: {}", reason));
                 return Ok(IterationOutcome::NeedHelp(format!("lifeguard: {}", reason)));
             }
 

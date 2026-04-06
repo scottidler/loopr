@@ -5,25 +5,32 @@ use std::sync::Mutex;
 
 use crate::agents::AgentKind;
 
-/// Per-agent logger that writes to both a dedicated log file and the main daemon log.
+/// Per-agent (or per-component) logger that writes to both a dedicated log file and the
+/// main daemon log.
 ///
-/// When a session directory is provided, writes to `{session_dir}/agents/{type}-{id}.log`.
-/// Falls back to `~/.local/share/loopr/logs/agents/agent-{type}-{id}.log` otherwise.
+/// When a session directory is provided, writes to `{session_dir}/agents/{name}-{id}.log`.
+/// Falls back to `~/.local/share/loopr/logs/agents/{name}-{id}.log` otherwise.
 ///
-/// Every log method writes a formatted line to the per-agent file AND calls
-/// the corresponding `log::*!` macro with a `[session_id]` prefix.
+/// Every log method writes a formatted line to the per-component file AND calls
+/// the corresponding `log::*!` macro with a `[name:id]` prefix.
 pub struct AgentLogger {
     session_id: String,
-    agent_type: AgentKind,
+    component: String,
     writer: Mutex<BufWriter<File>>,
     file_path: PathBuf,
 }
 
 impl AgentLogger {
-    /// Create a new AgentLogger, opening the per-agent log file.
+    /// Create a new AgentLogger for an agent type.
     /// When `session_dir` is provided, writes to `{session_dir}/agents/`.
     /// Otherwise falls back to the legacy path.
     pub fn new(agent_type: AgentKind, session_id: &str, session_dir: Option<&Path>) -> eyre::Result<Self> {
+        Self::for_component(&agent_type.to_string(), session_id, session_dir)
+    }
+
+    /// Create a logger for a named subsystem (e.g. "decomposer") that is not a full agent.
+    /// The log file will be `{session_dir}/agents/{name}-{id}.log`.
+    pub fn for_component(name: &str, id: &str, session_dir: Option<&Path>) -> eyre::Result<Self> {
         let log_dir = if let Some(dir) = session_dir {
             dir.join("agents")
         } else {
@@ -36,14 +43,14 @@ impl AgentLogger {
 
         fs::create_dir_all(&log_dir)?;
 
-        let file_name = format!("{}-{}.log", agent_type, session_id);
+        let file_name = format!("{}-{}.log", name, id);
         let file_path = log_dir.join(&file_name);
 
         let file = OpenOptions::new().create(true).append(true).open(&file_path)?;
 
         Ok(Self {
-            session_id: session_id.to_string(),
-            agent_type,
+            session_id: id.to_string(),
+            component: name.to_string(),
             writer: Mutex::new(BufWriter::new(file)),
             file_path,
         })
@@ -54,7 +61,7 @@ impl AgentLogger {
     pub fn _new_for_test(agent_type: AgentKind, session_id: &str, file: File, file_path: PathBuf) -> Self {
         Self {
             session_id: session_id.to_string(),
-            agent_type,
+            component: agent_type.to_string(),
             writer: Mutex::new(BufWriter::new(file)),
             file_path,
         }
@@ -65,24 +72,30 @@ impl AgentLogger {
         &self.file_path
     }
 
+    /// Trace-level log: only goes to the main log, not the per-component file.
+    /// Use for hot-path messages that would otherwise flood the component log.
+    pub fn trace(&self, msg: &str) {
+        log::trace!("[{}:{}] {}", self.component, self.session_id, msg);
+    }
+
     pub fn debug(&self, msg: &str) {
         self.write_line("DEBUG", msg);
-        log::debug!("[{}:{}] {}", self.agent_type, self.session_id, msg);
+        log::debug!("[{}:{}] {}", self.component, self.session_id, msg);
     }
 
     pub fn info(&self, msg: &str) {
         self.write_line("INFO", msg);
-        log::info!("[{}:{}] {}", self.agent_type, self.session_id, msg);
+        log::info!("[{}:{}] {}", self.component, self.session_id, msg);
     }
 
     pub fn warn(&self, msg: &str) {
         self.write_line("WARN", msg);
-        log::warn!("[{}:{}] {}", self.agent_type, self.session_id, msg);
+        log::warn!("[{}:{}] {}", self.component, self.session_id, msg);
     }
 
     pub fn error(&self, msg: &str) {
         self.write_line("ERROR", msg);
-        log::error!("[{}:{}] {}", self.agent_type, self.session_id, msg);
+        log::error!("[{}:{}] {}", self.component, self.session_id, msg);
     }
 
     /// Write a per-iteration conversation file alongside the agent log.
@@ -103,10 +116,10 @@ impl AgentLogger {
         let work_line = work_id.unwrap_or("(none)");
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
         let content = format!(
-            "# Agent: {}-{}\n# Type: {:?}\n# Work: {}\n# Iteration: {}\n# Timestamp: {}\n\n## System Prompt\n{}\n\n## User Message\n{}\n\n## Response\n{}\n",
-            self.agent_type,
+            "# Agent: {}-{}\n# Type: {}\n# Work: {}\n# Iteration: {}\n# Timestamp: {}\n\n## System Prompt\n{}\n\n## User Message\n{}\n\n## Response\n{}\n",
+            self.component,
             self.session_id,
-            self.agent_type,
+            self.component,
             work_line,
             iteration,
             now,
@@ -117,7 +130,7 @@ impl AgentLogger {
         if let Err(e) = fs::write(&iter_path, content.as_bytes()) {
             log::warn!(
                 "[{}:{}] failed to write iter file {}: {}",
-                self.agent_type,
+                self.component,
                 self.session_id,
                 iter_path.display(),
                 e
@@ -138,7 +151,7 @@ impl AgentLogger {
             "[{} {:5} agent:{}:{}] {}\n",
             now.format("%Y-%m-%d %H:%M:%S%.3f"),
             level,
-            self.agent_type,
+            self.component,
             self.session_id,
             msg
         );
@@ -166,7 +179,7 @@ mod tests {
 
         let logger = AgentLogger {
             session_id: "test123".to_string(),
-            agent_type,
+            component: agent_type.to_string(),
             writer: Mutex::new(BufWriter::new(file)),
             file_path,
         };
