@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::instrument;
 
 use crate::domain::learning::{Learning, LearningScope};
 use crate::domain::role::Role;
@@ -12,13 +12,13 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+#[instrument(skip_all, fields(source_id = ?req.params.get("source_id"), scope = ?req.params.get("scope")))]
 pub(super) fn handle_learning_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_create()");
         let source_id = req
             .params
             .get("source_id")
@@ -102,9 +102,9 @@ pub(super) fn handle_learning_create(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -141,9 +141,9 @@ pub(super) fn handle_learning_get(stores: &Arc<Stores>, req: DaemonRequest) -> D
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_list()");
         // Optionally filter by scope
         let scope_filter: Option<LearningScope> = req
             .params
@@ -205,13 +205,13 @@ pub(super) fn handle_learning_list(stores: &Arc<Stores>, req: DaemonRequest) -> 
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_reinforce(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_reinforce()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -247,13 +247,13 @@ pub(super) fn handle_learning_reinforce(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_contradict(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_contradict()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -292,13 +292,13 @@ pub(super) fn handle_learning_contradict(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_promote(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_promote()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -334,13 +334,13 @@ pub(super) fn handle_learning_promote(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_demote(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_demote()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -376,13 +376,13 @@ pub(super) fn handle_learning_demote(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_learning_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_learning_update()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

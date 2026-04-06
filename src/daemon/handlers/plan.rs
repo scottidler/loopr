@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::domain::plan::{HierarchyStatus, Plan, PlanStatus};
 use crate::domain::role::Role;
@@ -15,13 +15,13 @@ use super::{parse_optional_param, parse_required_param};
 
 use super::common::check_validation_gate;
 
+#[instrument(skip_all, fields(title = ?req.params.get("title")))]
 pub(super) fn handle_plan_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_plan_create()");
         let title = req
             .params
             .get("title")
@@ -84,9 +84,9 @@ pub(super) fn handle_plan_create(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_plan_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -123,9 +123,9 @@ pub(super) fn handle_plan_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_plan_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_plan_list()");
         // Try TaskStore first, fall back to HashMap
         if let Some(store) = &stores.store {
             match store
@@ -154,13 +154,13 @@ pub(super) fn handle_plan_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
 pub(super) fn handle_plan_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_plan_transition()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -261,13 +261,13 @@ pub(super) fn handle_plan_transition(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_plan_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_plan_update()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

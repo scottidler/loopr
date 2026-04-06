@@ -468,7 +468,7 @@ async fn call_llm_for_children_raw<H: HttpClient + Sync>(
 ///
 /// Uses staging: child files are written to a temp directory first, then
 /// moved to the run directory only if all validation passes.
-#[instrument(skip_all, fields(parent_id = %parent.id, parent_kind = %parent.kind, target_kind = %target_kind))]
+#[instrument(skip_all, fields(parent_id = %parent.id, parent_kind = %parent.kind, parent_title = ?parent.title, target_kind = %target_kind))]
 async fn decompose_into<H: HttpClient + Sync>(
     parent: &Doc,
     target_kind: DocKind,
@@ -599,7 +599,7 @@ async fn decompose_into<H: HttpClient + Sync>(
 ///
 /// Thin wrapper around `decompose_into` that computes the child kind from the parent.
 /// Uses an isolated local title map (no cross-scope resolution).
-#[instrument(skip_all, fields(parent_id = %parent.id, parent_kind = %parent.kind))]
+#[instrument(skip_all, fields(parent_id = %parent.id, parent_kind = %parent.kind, parent_title = ?parent.title))]
 pub async fn decompose<H: HttpClient + Sync>(
     parent: &Doc,
     run_dir: &Path,
@@ -624,7 +624,7 @@ pub async fn decompose<H: HttpClient + Sync>(
 /// Returns `(docs, partial_err)`. When `partial_err` is `Some`, one or more spec
 /// branches failed but the successful branches' docs are still returned. Ratification
 /// is skipped on partial failure. The caller is responsible for persisting partial_err.
-#[instrument(skip_all, fields(plan_id = %plan.id, brief = %brief, run_dir = %run_dir.display()))]
+#[instrument(skip_all, fields(plan_id = %plan.id, plan_title = ?plan.title, brief = %brief, run_dir = %run_dir.display()))]
 pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
     run_dir: &Path,
@@ -710,7 +710,7 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
 
 /// Decompose one spec into phases + works, with phases' work-decompositions running concurrently.
 /// Returns (phases + works, merged title-to-id map for this branch).
-#[instrument(skip_all, fields(spec_id = %spec.id))]
+#[instrument(skip_all, fields(spec_id = %spec.id, spec_title = ?spec.title))]
 async fn decompose_spec_branch<H: HttpClient + Sync>(
     spec: &Doc,
     run_dir: &Path,
@@ -744,7 +744,7 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
 }
 
 /// Decompose one phase into works, returning the works and the local title-to-id map.
-#[instrument(skip_all, fields(phase_id = %phase.id))]
+#[instrument(skip_all, fields(phase_id = %phase.id, phase_title = ?phase.title))]
 async fn decompose_phase_branch<H: HttpClient + Sync>(
     phase: &Doc,
     run_dir: &Path,

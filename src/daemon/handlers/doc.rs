@@ -50,7 +50,7 @@ use super::common::persist_doc;
 ///
 /// Optional params:
 /// - `skip_decompose` (bool, default false): skip the Decomposer (useful in tests)
-#[instrument(skip_all, fields(skip_decompose = ?req.params.get("skip_decompose")))]
+#[instrument(skip_all, fields(skip_decompose = ?req.params.get("skip_decompose"), markdown_len = req.params.get("markdown").and_then(|v| v.as_str()).map(|s| s.len())))]
 pub(super) async fn handle_doc_accept(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,

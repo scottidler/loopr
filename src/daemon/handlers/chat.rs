@@ -79,7 +79,7 @@ pub(super) fn build_orchestration_status(stores: &Arc<Stores>) -> String {
 
 /// Handle chat.submit - send a user message and start/resume the Chat agentic loop.
 /// Spawns a daemon-side Tokio task running run_tool_loop with per-iteration checkpointing.
-#[instrument(skip_all, fields(session_id = ?req.params.get("session_id"), funnel_state = ?req.params.get("funnel_state")))]
+#[instrument(skip_all, fields(session_id = ?req.params.get("session_id"), funnel_state = ?req.params.get("funnel_state"), message_len = req.params.get("message").and_then(|v| v.as_str()).map(|s| s.len())))]
 pub(super) fn handle_chat_submit(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,

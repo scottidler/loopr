@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::instrument;
 
 use crate::domain::lock::Lock;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -11,13 +11,13 @@ use taskstore::{Filter, FilterOp, IndexValue};
 
 use crate::daemon::context::Stores;
 
+#[instrument(skip_all, fields(resource = ?req.params.get("resource"), holder_id = ?req.params.get("holder_id")))]
 pub(super) fn handle_lock_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_lock_create()");
         let resource = req
             .params
             .get("resource")
@@ -108,9 +108,9 @@ pub(super) fn handle_lock_create(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_lock_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -147,9 +147,9 @@ pub(super) fn handle_lock_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_lock_list()");
         // Optionally filter by resource
         let resource_filter = req
             .params
@@ -223,13 +223,13 @@ pub(super) fn handle_lock_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_lock_release(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_lock_release()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -272,13 +272,13 @@ pub(super) fn handle_lock_release(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_lock_expire(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_lock_expire()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

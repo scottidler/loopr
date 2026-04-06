@@ -3,7 +3,7 @@ use std::sync::Arc;
 use eyre::eyre;
 use serde_json::json;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::instrument;
 
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
@@ -11,6 +11,7 @@ use crate::worktree::manager::WorktreeManager;
 use crate::daemon::context::Stores;
 use crate::domain::work::Work;
 
+#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
 pub(super) fn handle_worktree_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -18,7 +19,6 @@ pub(super) fn handle_worktree_create(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_worktree_create()");
         let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
@@ -80,9 +80,9 @@ pub(super) fn handle_worktree_create(
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_worktree_list(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_worktree_list()");
         match worktree_mgr.list() {
             Ok(worktrees) => match serde_json::to_value(&worktrees) {
                 Ok(v) => Ok(DaemonResponse::ok(req.id, v)),
@@ -93,6 +93,7 @@ pub(super) fn handle_worktree_list(worktree_mgr: &WorktreeManager, req: DaemonRe
     })
 }
 
+#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
 pub(super) fn handle_worktree_cleanup(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -100,7 +101,6 @@ pub(super) fn handle_worktree_cleanup(
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_worktree_cleanup()");
         let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
@@ -148,9 +148,9 @@ pub(super) fn handle_worktree_cleanup(
     })
 }
 
+#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
 pub(super) fn handle_worktree_refresh(worktree_mgr: &WorktreeManager, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_worktree_refresh()");
         let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{info, instrument, warn};
 
 use crate::config::ToolEntry;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -12,14 +12,13 @@ use crate::daemon::context::Stores;
 
 /// Register a runtime tool discovered by an agent. This is Layer 2 in the resolution stack.
 /// Runtime tools are session-scoped and not persisted.
+#[instrument(skip_all, fields(name = ?req.params.get("name")))]
 pub(super) fn handle_tools_register(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_tools_register()");
-
         let name = req
             .params
             .get("name")

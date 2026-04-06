@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::HierarchyStatus;
@@ -17,13 +17,13 @@ use crate::daemon::context::Stores;
 use super::common::check_validation_gate;
 use super::{parse_optional_param, parse_required_param};
 
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
 pub(super) fn handle_phase_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_phase_create()");
         let parent_id = match req.params.get("parent_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
@@ -115,9 +115,9 @@ pub(super) fn handle_phase_create(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_phase_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -154,9 +154,9 @@ pub(super) fn handle_phase_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
 pub(super) fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_phase_list()");
         let parent_id_filter = req.params.get("parent_id").and_then(|v| v.as_str());
 
         // Try TaskStore first, fall back to HashMap
@@ -200,13 +200,13 @@ pub(super) fn handle_phase_list(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
 pub(super) fn handle_phase_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_phase_transition()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -307,13 +307,13 @@ pub(super) fn handle_phase_transition(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_phase_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_phase_update()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::domain::role::Role;
 use crate::domain::tick::{Tick, TickStatus};
@@ -15,13 +15,13 @@ use crate::daemon::context::Stores;
 
 use super::{parse_optional_param, parse_required_param};
 
+#[instrument(skip_all, fields(number = ?req.params.get("number")))]
 pub(super) fn handle_tick_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_tick_create()");
         // Singleton guard: at most one non-terminal Tick at a time
         {
             let ticks = stores.read_ticks()?;
@@ -69,9 +69,9 @@ pub(super) fn handle_tick_create(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_tick_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -108,9 +108,9 @@ pub(super) fn handle_tick_get(stores: &Arc<Stores>, req: DaemonRequest) -> Daemo
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_tick_list()");
         // Optionally filter by status
         let status_filter: Option<TickStatus> = req
             .params
@@ -158,13 +158,13 @@ pub(super) fn handle_tick_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
 pub(super) fn handle_tick_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_tick_transition()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -259,13 +259,13 @@ pub(super) fn handle_tick_transition(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_tick_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_tick_update()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

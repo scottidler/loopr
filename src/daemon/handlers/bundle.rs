@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::{debug, instrument};
 
 use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::role::Role;
@@ -27,13 +27,13 @@ pub(super) fn find_latest_published_tick(stores: &Arc<Stores>) -> Option<Tick> {
         .cloned()
 }
 
+#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
 pub(super) fn handle_bundle_create(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_bundle_create()");
         let work_id = match req.params.get("work_id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => {
@@ -245,9 +245,9 @@ pub(super) fn handle_bundle_create(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_bundle_get()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -284,9 +284,9 @@ pub(super) fn handle_bundle_get(stores: &Arc<Stores>, req: DaemonRequest) -> Dae
     })
 }
 
+#[instrument(skip_all, fields(work_id = ?req.params.get("work_id")))]
 pub(super) fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_bundle_list()");
         let wi_filter = req.params.get("work_id").and_then(|v| v.as_str());
 
         // Try TaskStore first, fall back to HashMap
@@ -330,13 +330,13 @@ pub(super) fn handle_bundle_list(stores: &Arc<Stores>, req: DaemonRequest) -> Da
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
 pub(super) fn handle_bundle_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_bundle_transition()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),
@@ -479,13 +479,13 @@ pub(super) fn handle_bundle_transition(
     })
 }
 
+#[instrument(skip_all, fields(id = ?req.params.get("id")))]
 pub(super) fn handle_bundle_update(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_bundle_update()");
         let id = match req.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id.to_string(),
             None => return Ok(DaemonResponse::err(req.id, RpcError::invalid_params("id is required"))),

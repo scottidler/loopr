@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use eyre::eyre;
 use serde_json::json;
 use tokio::sync::broadcast;
-use tracing::debug;
+use tracing::instrument;
 
 use crate::agents::AgentSession;
 use crate::domain::bundle::{Bundle, BundleStatus};
@@ -23,9 +23,9 @@ use taskstore::Record;
 
 use crate::daemon::context::Stores;
 
+#[instrument(skip_all)]
 pub(super) fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_handshake()");
         let server_version = crate::version();
         let client_version = req
             .params
@@ -54,9 +54,9 @@ pub(super) fn handle_handshake(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_system_init()");
         let store_arc = match &stores.store {
             Some(s) => s,
             None => {
@@ -101,9 +101,9 @@ pub(super) fn handle_system_init(stores: &Arc<Stores>, req: DaemonRequest) -> Da
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_status()");
         let plans = stores.read_plans()?.len();
         let specs = stores.read_specs()?.len();
         let phases = stores.read_phases()?.len();
@@ -220,18 +220,18 @@ pub(super) fn handle_status(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonR
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_shutdown(event_tx: &broadcast::Sender<DaemonEvent>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_shutdown()");
         // Broadcast a shutdown event so the accept loop can pick it up
         let _ = event_tx.send(DaemonEvent::new("system.shutdown", json!({})));
         Ok(DaemonResponse::ok(req.id, json!({ "status": "shutting_down" })))
     })
 }
 
+#[instrument(skip_all)]
 pub(super) fn handle_recover(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
     try_handler!(req.id, {
-        debug!("handle_recover()");
         let was_degraded = stores.degraded.swap(false, Ordering::Relaxed);
         Ok(DaemonResponse::ok(
             req.id,
