@@ -116,6 +116,9 @@ impl AgentContext {
         }
     }
 
+    pub fn trace(&self, msg: &str) {
+        self.log.trace(msg)
+    }
     pub fn info(&self, msg: &str) {
         self.log.info(msg)
     }
