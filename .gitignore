@@ -41,6 +41,9 @@ examples/_test_broken/
 .gitattributes
 .env
 
+# Generated markdown docs emitted by loopr daemon (target repo output)
+docs/loopr/
+
 # Log files
 *.log
 
