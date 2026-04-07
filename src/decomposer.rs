@@ -1,12 +1,11 @@
-//! Standalone plan decomposer: takes a Doc, calls an LLM, validates output,
-//! writes child .md files, creates child Doc records, and returns.
+//! Standalone plan decomposer: receives plan markdown as a string, calls an LLM,
+//! and builds the full Plan/Spec/Phase/Work hierarchy in memory.
 //!
 //! This is a system call (function), NOT an agent. It has no session, FSM, or
 //! iteration loop. The Coordinator invokes it before execution begins, and can
 //! re-invoke it for targeted re-decomposition during execution.
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Duration;
 
 use eyre::{Context, Result, bail};
@@ -17,7 +16,7 @@ use futures::future::{join_all, try_join_all};
 
 use crate::config::DecomposerConfig;
 use crate::domain::criteria::AcceptanceCriteria;
-use crate::domain::doc::{Doc, DocKind, write_doc_file};
+use crate::domain::doc::DocKind;
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus};
 use crate::domain::spec::{Spec, SpecStatus};
@@ -35,6 +34,22 @@ pub struct ChildEntry {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
+}
+
+/// In-memory child record produced by decompose_into.
+///
+/// Replaces the old `Doc` intermediary + file round-trip. Content lives here
+/// in memory until `persist_hierarchy` writes it to JSONL and docs/loopr/.
+#[derive(Debug)]
+struct ChildRecord {
+    id: String,
+    kind: DocKind,
+    parent_id: Option<String>,
+    title: String,
+    content: String,
+    dependencies: Vec<String>,
+    unresolved_dep_titles: Vec<String>,
+    acceptance_criteria: Vec<String>,
 }
 
 /// Result of a template validation call.
@@ -57,16 +72,6 @@ pub struct RatifyResult {
 pub struct RatifyIssue {
     pub child: String,
     pub issue: String,
-}
-
-/// The child DocKind produced when decomposing a given kind.
-fn child_kind(parent_kind: DocKind) -> Option<DocKind> {
-    match parent_kind {
-        DocKind::Plan => Some(DocKind::Spec),
-        DocKind::Spec => Some(DocKind::Phase),
-        DocKind::Phase => Some(DocKind::Work),
-        DocKind::Work => None,
-    }
 }
 
 /// Build the decomposition prompt: template instructions + parent content.
@@ -465,30 +470,21 @@ async fn call_llm_for_children_raw<H: HttpClient + Sync>(
     Ok(json_text.to_string())
 }
 
-/// Internal decomposition core: produce `target_kind` children from `parent`.
+/// Internal decomposition core: produce `target_kind` children from a parent document.
 ///
-/// Reads the parent's .md content, calls the LLM, validates each child,
-/// detects dependency cycles, writes child .md files to the run directory,
-/// and returns the child Doc records.
-///
-/// Uses staging: child files are written to a temp directory first, then
-/// moved to the run directory only if all validation passes.
-#[instrument(skip_all, fields(parent_id = %parent.id, parent_kind = %parent.kind, parent_title = ?parent.title, target_kind = %target_kind))]
+/// All I/O is in-memory. The parent content is passed as a `&str`; child content lives
+/// in the returned `Vec<ChildRecord>`. No files are written.
+#[instrument(skip_all, fields(parent_id = %parent_id, target_kind = %target_kind))]
 async fn decompose_into<H: HttpClient + Sync>(
-    parent: &Doc,
+    parent_content: &str,
+    parent_id: &str,
     target_kind: DocKind,
-    run_dir: &Path,
     config: &DecomposerConfig,
     http_client: &H,
     global_title_to_id: &mut HashMap<String, String>,
-) -> Result<Vec<Doc>> {
-    // Read parent content
-    let parent_path = run_dir.join(&parent.markdown);
-    let parent_content = std::fs::read_to_string(&parent_path)
-        .context(format!("Failed to read parent doc: {}", parent_path.display()))?;
-
+) -> Result<Vec<ChildRecord>> {
     // Build prompt and call LLM
-    let prompt = build_decompose_prompt(target_kind, &parent_content)?;
+    let prompt = build_decompose_prompt(target_kind, parent_content)?;
     let children = match call_llm_for_children(http_client, config, &prompt).await {
         Ok(c) => c,
         Err(e) => {
@@ -508,7 +504,6 @@ async fn decompose_into<H: HttpClient + Sync>(
         match call_llm_for_validation(http_client, config, &validate_prompt).await {
             Ok(result) if !result.valid => {
                 warn!("Validation failed for '{}': {:?}", child.title, result.issues);
-                // Could retry here, but design says one retry at decompose level
             }
             Err(e) => {
                 warn!("Validation call failed for '{}': {}", child.title, e);
@@ -526,49 +521,45 @@ async fn decompose_into<H: HttpClient + Sync>(
         .collect();
     detect_cycles(&dep_graph)?;
 
-    // Stage: write .md files and create Doc records.
-    // Each decompose_into call uses a unique staging dir (parent.id suffix) so that
-    // concurrent calls on the same run_dir do not conflict.
-    let staging_dir = run_dir.join(format!(".staging-{}", parent.id));
-    std::fs::create_dir_all(&staging_dir)?;
-
-    let mut docs = Vec::new();
-    let mut taken: Vec<String> = Vec::new();
+    // Build in-memory ChildRecords, assigning domain IDs upfront.
+    let mut records: Vec<(ChildRecord, Vec<String>)> = Vec::new();
 
     for child in &children {
-        let filename = write_doc_file(&staging_dir, target_kind, &child.title, &child.content, &taken)?;
-        taken.push(filename.clone());
-
-        let mut doc = Doc::new(target_kind, Some(parent.id.clone()), child.title.clone(), filename);
-
-        doc.acceptance_criteria = if child.acceptance_criteria.is_empty() && target_kind == DocKind::Work {
+        let id = crate::id::generate_id(target_kind.id_prefix());
+        let ac = if child.acceptance_criteria.is_empty() && target_kind == DocKind::Work {
             extract_acceptance_criteria(&child.content)
         } else {
             child.acceptance_criteria.clone()
         };
 
-        docs.push((doc, child.title.clone(), child.dependencies.clone()));
+        records.push((
+            ChildRecord {
+                id,
+                kind: target_kind,
+                parent_id: Some(parent_id.to_string()),
+                title: child.title.clone(),
+                content: child.content.clone(),
+                dependencies: Vec::new(),
+                unresolved_dep_titles: Vec::new(),
+                acceptance_criteria: ac,
+            },
+            child.dependencies.clone(),
+        ));
     }
 
-    // Resolve title-based dependencies to Doc IDs.
-    // Build the local sibling map first, then merge into the global map so that
-    // future decompose_into calls can resolve cross-scope references.
-    let local_title_to_id: HashMap<String, String> = docs
-        .iter()
-        .map(|(doc, title, _)| (title.clone(), doc.id.clone()))
-        .collect();
-
+    // Build the local sibling title-to-id map, then merge into the global map.
+    let local_title_to_id: HashMap<String, String> =
+        records.iter().map(|(r, _)| (r.title.clone(), r.id.clone())).collect();
     global_title_to_id.extend(local_title_to_id.iter().map(|(k, v)| (k.clone(), v.clone())));
 
-    let mut final_docs: Vec<Doc> = Vec::new();
-    for (mut doc, _, dep_titles) in docs {
+    let mut final_records: Vec<ChildRecord> = Vec::new();
+    for (mut record, dep_titles) in records {
         let mut resolved = Vec::new();
         let mut unresolved = Vec::new();
         for title in &dep_titles {
             if let Some(id) = local_title_to_id.get(title).or_else(|| global_title_to_id.get(title)) {
                 resolved.push(id.clone());
             } else {
-                // Stash unresolved titles for the post-merge cross-spec resolution pass.
                 warn!(
                     "dependency '{}' not yet resolvable, deferring to post-merge pass",
                     title
@@ -576,100 +567,83 @@ async fn decompose_into<H: HttpClient + Sync>(
                 unresolved.push(title.clone());
             }
         }
-        doc.dependencies = resolved;
-        doc.unresolved_dep_titles = unresolved;
-        final_docs.push(doc);
+        record.dependencies = resolved;
+        record.unresolved_dep_titles = unresolved;
+        final_records.push(record);
     }
-
-    // Flush staging to run directory
-    for entry in std::fs::read_dir(&staging_dir)? {
-        let entry = entry?;
-        let dest = run_dir.join(entry.file_name());
-        std::fs::rename(entry.path(), dest)?;
-    }
-    std::fs::remove_dir(&staging_dir)?;
 
     info!(
-        "done parent={} ({}) -> {} {}(s) produced",
-        parent.id,
-        parent.kind,
-        final_docs.len(),
+        "done parent={} -> {} {}(s) produced",
+        parent_id,
+        final_records.len(),
         target_kind
     );
 
-    Ok(final_docs)
+    Ok(final_records)
 }
 
-/// Decompose a single parent Doc into child Docs using the natural child kind.
+/// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works, entirely in memory.
 ///
-/// Thin wrapper around `decompose_into` that computes the child kind from the parent.
-/// Uses an isolated local title map (no cross-scope resolution).
-#[instrument(skip_all, fields(parent_id = %parent.id, parent_kind = %parent.kind, parent_title = ?parent.title))]
-pub async fn decompose<H: HttpClient + Sync>(
-    parent: &Doc,
-    run_dir: &Path,
-    config: &DecomposerConfig,
-    http_client: &H,
-) -> Result<Vec<Doc>> {
-    let ck = child_kind(parent.kind).ok_or_else(|| eyre::eyre!("cannot decompose a {} document", parent.kind))?;
-    let mut local_map = HashMap::new();
-    decompose_into(parent, ck, run_dir, config, http_client, &mut local_map).await
-}
-
-/// Decompose a full hierarchy: Plan -> Specs -> Phases -> Works.
+/// This is the entry point for plan activation. Receives plan markdown as a string.
+/// Specs are decomposed concurrently (join_all), each spec's phases are also concurrent
+/// within the spec branch. After all branches complete, a post-merge pass resolves
+/// cross-spec/cross-phase dependencies.
 ///
-/// This is the entry point for plan activation. Specs are decomposed concurrently
-/// (join_all), each spec's phases are also concurrent within the spec branch.
-/// After all branches complete, a post-merge pass resolves cross-spec/cross-phase
-/// dependencies that could not be resolved during parallel execution.
+/// In Brief mode (plan has no contracts), skips Spec and Phase levels and decomposes
+/// Plan directly into Works.
 ///
-/// In Brief mode (plan has no contracts), skips Spec and Phase levels
-/// and decomposes Plan directly into Works.
-///
-/// Returns `(hierarchy, child_docs, partial_err)`.
+/// Returns `(hierarchy, partial_err)`.
 ///
 /// `hierarchy` contains typed Plan/Spec/Phase/Work domain records ready for persistence.
-/// `child_docs` are the raw Doc records still needed for ingestion tracking (`persist_doc`).
 /// `partial_err`: when `Some`, one or more spec branches failed but successful branches
 /// are still returned. Ratification is skipped on partial failure.
-#[instrument(skip_all, fields(plan_id = %plan.id, plan_title = ?plan.title, brief = %brief, run_dir = %run_dir.display()))]
+#[instrument(skip_all, fields(brief = %brief))]
 pub async fn decompose_hierarchy<H: HttpClient + Sync>(
-    plan: &Doc,
-    run_dir: &Path,
+    plan_markdown: &str,
     config: &DecomposerConfig,
     http_client: &H,
     brief: bool,
-) -> Result<(DecomposedHierarchy, Vec<Doc>, Option<String>)> {
-    // Read plan markdown now - needed for Plan.description in docs_to_hierarchy.
-    let plan_path = run_dir.join(&plan.markdown);
-    let plan_markdown = std::fs::read_to_string(&plan_path)
-        .context(format!("Failed to read plan markdown: {}", plan_path.display()))?;
+) -> Result<(DecomposedHierarchy, Option<String>)> {
+    let plan_title = extract_title_from_markdown(plan_markdown);
+    let plan_ac = AcceptanceCriteria(extract_acceptance_criteria(plan_markdown));
+    let plan_id = crate::id::generate_id("pl");
 
-    let mut all_docs = Vec::new();
+    let mut all_records: Vec<ChildRecord> = Vec::new();
 
     if brief {
         // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
         let mut local_map = HashMap::new();
-        let works = decompose_into(plan, DocKind::Work, run_dir, config, http_client, &mut local_map).await?;
-        all_docs.extend(works);
+        let works = decompose_into(
+            plan_markdown,
+            &plan_id,
+            DocKind::Work,
+            config,
+            http_client,
+            &mut local_map,
+        )
+        .await?;
+        all_records.extend(works);
     } else {
         // Full mode: Plan -> Specs (sequential) -> Phases + Works (parallel per spec)
         let mut spec_map = HashMap::new();
-        let specs = decompose_into(plan, DocKind::Spec, run_dir, config, http_client, &mut spec_map).await?;
+        let specs = decompose_into(
+            plan_markdown,
+            &plan_id,
+            DocKind::Spec,
+            config,
+            http_client,
+            &mut spec_map,
+        )
+        .await?;
         info!("{} specs produced, starting parallel spec branches", specs.len());
 
-        // Decompose each spec branch concurrently.
-        // Each branch returns (docs, local_title_to_id). Branches are polled on the
-        // same async task (no tokio::spawn) so no Send bound is needed.
-        // Use join_all instead of try_join_all so completed branches are not discarded
-        // when a sibling fails.
         let spec_futures: Vec<_> = specs
             .iter()
-            .map(|spec| decompose_spec_branch(spec, run_dir, config, http_client))
+            .map(|spec| decompose_spec_branch(&spec.content, &spec.id, config, http_client))
             .collect();
         let branch_results_raw = join_all(spec_futures).await;
 
-        let mut branch_results: Vec<(Vec<Doc>, HashMap<String, String>)> = Vec::new();
+        let mut branch_results: Vec<(Vec<ChildRecord>, HashMap<String, String>)> = Vec::new();
         let mut branch_error: Option<String> = None;
 
         for (spec, result) in specs.iter().zip(branch_results_raw) {
@@ -699,99 +673,114 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
             global_title_to_id.extend(branch_map.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
 
-        // Collect all docs from all branches, then resolve cross-branch deps.
-        for (branch_docs, _) in branch_results {
-            all_docs.extend(branch_docs);
+        for (branch_records, _) in branch_results {
+            all_records.extend(branch_records);
         }
-        all_docs.extend(specs);
-        resolve_cross_branch_deps(&mut all_docs, &global_title_to_id);
+        all_records.extend(specs);
+        resolve_cross_branch_deps(&mut all_records, &global_title_to_id);
 
         if let Some(err) = branch_error {
-            // Partial success: convert to typed records and return with error.
-            // Ratification is skipped (requires a complete hierarchy).
-            info!("partial failure plan={} total_docs={}", plan.id, all_docs.len());
-            let hierarchy = docs_to_hierarchy(plan, &plan_markdown, &all_docs, run_dir)?;
-            return Ok((hierarchy, all_docs, Some(err)));
+            info!("partial failure plan={} total_records={}", plan_id, all_records.len());
+            let hierarchy = records_to_hierarchy(&plan_id, &plan_title, plan_markdown, plan_ac, &all_records)?;
+            return Ok((hierarchy, Some(err)));
         }
     }
 
-    info!("hierarchy complete plan={} total_docs={}", plan.id, all_docs.len());
-    // Hierarchical ratification (bottom-up, sequential by design)
-    ratify_hierarchy(plan, &all_docs, run_dir, config, http_client).await?;
+    info!(
+        "hierarchy complete plan={} total_records={}",
+        plan_id,
+        all_records.len()
+    );
+    ratify_hierarchy(&plan_id, plan_markdown, &all_records, config, http_client).await?;
 
-    let hierarchy = docs_to_hierarchy(plan, &plan_markdown, &all_docs, run_dir)?;
-    Ok((hierarchy, all_docs, None))
+    let hierarchy = records_to_hierarchy(&plan_id, &plan_title, plan_markdown, plan_ac, &all_records)?;
+    Ok((hierarchy, None))
 }
 
-/// Decompose one spec into phases + works, with phases' work-decompositions running concurrently.
+/// Decompose one spec into phases + works concurrently.
 /// Returns (phases + works, merged title-to-id map for this branch).
-#[instrument(skip_all, fields(spec_id = %spec.id, spec_title = ?spec.title))]
+#[instrument(skip_all, fields(spec_id = %spec_id))]
 async fn decompose_spec_branch<H: HttpClient + Sync>(
-    spec: &Doc,
-    run_dir: &Path,
+    spec_content: &str,
+    spec_id: &str,
     config: &DecomposerConfig,
     http_client: &H,
-) -> Result<(Vec<Doc>, HashMap<String, String>)> {
+) -> Result<(Vec<ChildRecord>, HashMap<String, String>)> {
     let mut branch_map = HashMap::new();
-    let phases = decompose_into(spec, DocKind::Phase, run_dir, config, http_client, &mut branch_map).await?;
+    let phases = decompose_into(
+        spec_content,
+        spec_id,
+        DocKind::Phase,
+        config,
+        http_client,
+        &mut branch_map,
+    )
+    .await?;
     debug!(
         "spec={} got {} phases, starting parallel phase branches",
-        spec.id,
+        spec_id,
         phases.len()
     );
 
-    // Decompose works for each phase concurrently within this spec branch.
     let phase_futures: Vec<_> = phases
         .iter()
-        .map(|phase| decompose_phase_branch(phase, run_dir, config, http_client))
+        .map(|phase| decompose_phase_branch(&phase.content, &phase.id, config, http_client))
         .collect();
     let phase_results = try_join_all(phase_futures).await?;
-    debug!("spec={} all phase branches complete", spec.id);
+    debug!("spec={} all phase branches complete", spec_id);
 
-    let mut all_docs = phases;
+    let mut all_records = phases;
     for (works, phase_map) in phase_results {
-        all_docs.extend(works);
+        all_records.extend(works);
         branch_map.extend(phase_map.into_iter());
     }
 
-    debug!("spec={} branch total docs={}", spec.id, all_docs.len());
-    Ok((all_docs, branch_map))
+    debug!("spec={} branch total records={}", spec_id, all_records.len());
+    Ok((all_records, branch_map))
 }
 
 /// Decompose one phase into works, returning the works and the local title-to-id map.
-#[instrument(skip_all, fields(phase_id = %phase.id, phase_title = ?phase.title))]
+#[instrument(skip_all, fields(phase_id = %phase_id))]
 async fn decompose_phase_branch<H: HttpClient + Sync>(
-    phase: &Doc,
-    run_dir: &Path,
+    phase_content: &str,
+    phase_id: &str,
     config: &DecomposerConfig,
     http_client: &H,
-) -> Result<(Vec<Doc>, HashMap<String, String>)> {
+) -> Result<(Vec<ChildRecord>, HashMap<String, String>)> {
     let mut phase_map = HashMap::new();
-    let works = decompose_into(phase, DocKind::Work, run_dir, config, http_client, &mut phase_map).await?;
-    debug!("phase={} got {} works", phase.id, works.len());
+    let works = decompose_into(
+        phase_content,
+        phase_id,
+        DocKind::Work,
+        config,
+        http_client,
+        &mut phase_map,
+    )
+    .await?;
+    debug!("phase={} got {} works", phase_id, works.len());
     Ok((works, phase_map))
 }
 
 /// After all parallel branches finish and maps are merged, resolve any dependency titles
-/// that were deferred because the referenced doc was being built in a sibling branch.
-fn resolve_cross_branch_deps(docs: &mut [Doc], global_map: &HashMap<String, String>) {
+/// that were deferred because the referenced record was being built in a sibling branch.
+fn resolve_cross_branch_deps(records: &mut [ChildRecord], global_map: &HashMap<String, String>) {
     debug!(
-        "resolve_cross_branch_deps: checking {} docs for unresolved deps",
-        docs.len()
+        "resolve_cross_branch_deps: checking {} records for unresolved deps",
+        records.len()
     );
-    for doc in docs.iter_mut() {
-        if doc.unresolved_dep_titles.is_empty() {
+    for record in records.iter_mut() {
+        if record.unresolved_dep_titles.is_empty() {
             continue;
         }
-        let pending = std::mem::take(&mut doc.unresolved_dep_titles);
+        let pending = std::mem::take(&mut record.unresolved_dep_titles);
         debug!(
-            "resolve_cross_branch_deps: doc={} has {} unresolved dep titles",
-            doc.id,
+            "resolve_cross_branch_deps: record={} has {} unresolved dep titles",
+            record.id,
             pending.len()
         );
         for title in pending {
             if let Some(id) = global_map.get(&title) {
-                doc.dependencies.push(id.clone());
+                record.dependencies.push(id.clone());
             } else {
                 warn!("cross-branch dep '{}' could not be resolved after merge", title);
             }
@@ -799,51 +788,45 @@ fn resolve_cross_branch_deps(docs: &mut [Doc], global_map: &HashMap<String, Stri
     }
 }
 
-/// Bottom-up ratification of the decomposition hierarchy.
-#[instrument(skip_all, fields(plan_id = %plan.id, doc_count = %all_docs.len()))]
+/// Bottom-up ratification of the decomposition hierarchy (in-memory).
+#[instrument(skip_all, fields(plan_id = %plan_id, record_count = %all_records.len()))]
 async fn ratify_hierarchy<H: HttpClient + Sync>(
-    plan: &Doc,
-    all_docs: &[Doc],
-    run_dir: &Path,
+    plan_id: &str,
+    plan_content: &str,
+    all_records: &[ChildRecord],
     config: &DecomposerConfig,
     http_client: &H,
 ) -> Result<()> {
-    // Group docs by parent_id
-    let mut children_of: HashMap<&str, Vec<&Doc>> = HashMap::new();
-    for doc in all_docs {
-        if let Some(ref pid) = doc.parent_id {
-            children_of.entry(pid.as_str()).or_default().push(doc);
+    // Build a content map: id -> content (includes the plan itself)
+    let mut content_map: HashMap<&str, &str> = HashMap::new();
+    content_map.insert(plan_id, plan_content);
+    for r in all_records {
+        content_map.insert(r.id.as_str(), r.content.as_str());
+    }
+
+    // Group records by parent_id
+    let mut children_of: HashMap<&str, Vec<&ChildRecord>> = HashMap::new();
+    for record in all_records {
+        if let Some(ref pid) = record.parent_id {
+            children_of.entry(pid.as_str()).or_default().push(record);
         }
     }
 
     // Ratify each parent-children group
     for (parent_id, children) in &children_of {
-        // Find the parent doc
-        let parent_doc = if *parent_id == plan.id {
-            plan
-        } else {
-            match all_docs.iter().find(|d| d.id == *parent_id) {
-                Some(d) => d,
-                None => continue,
-            }
+        let Some(parent_content) = content_map.get(parent_id) else {
+            continue;
         };
 
-        let parent_content = std::fs::read_to_string(run_dir.join(&parent_doc.markdown)).unwrap_or_default();
-
-        let child_pairs: Vec<(String, String)> = children
-            .iter()
-            .filter_map(|c| {
-                let content = std::fs::read_to_string(run_dir.join(&c.markdown)).ok()?;
-                Some((c.markdown.clone(), content))
-            })
-            .collect();
+        let child_pairs: Vec<(String, String)> =
+            children.iter().map(|c| (c.title.clone(), c.content.clone())).collect();
 
         if child_pairs.is_empty() {
             continue;
         }
 
         trace!("ratifying parent={} with {} children", parent_id, child_pairs.len());
-        let prompt = build_ratify_prompt(&parent_content, &child_pairs);
+        let prompt = build_ratify_prompt(parent_content, &child_pairs);
         match call_llm_for_ratification(http_client, config, &prompt).await {
             Ok(result) if !result.passed => {
                 warn!(
@@ -879,85 +862,75 @@ pub struct DecomposedHierarchy {
     pub works: Vec<Work>,
 }
 
-/// Convert the raw `Vec<Doc>` output of `decompose_hierarchy` into typed domain records.
+/// Convert in-memory `Vec<ChildRecord>` into typed domain records.
 ///
-/// Direct port of `build_all_old_records` from `handlers/doc.rs`. The caller passes
-/// `run_dir` so this function can read each child's markdown content from disk
-/// (the decomposer writes content to staging files; the `Doc.markdown` field names them).
-///
-/// Behaviors:
-/// - `Plan.description` = `plan_markdown` (the full plan markdown text)
-/// - `Plan` starts Active (coordinator begins executing immediately)
-/// - `Spec` and `Phase` start Active
-/// - `Work` starts Ready (first work is immediately eligible for assignment)
-/// - `Work.acceptance_criteria` comes from `Doc.acceptance_criteria`
-/// - `Work.dependencies` resolved from `doc_id -> domain_id` mapping
-/// - `Work.resource_tags` is empty (decomposer tool schema has no resource_tags field)
-fn docs_to_hierarchy(
-    plan_doc: &Doc,
+/// Builds Plan/Spec/Phase/Work using pre-assigned IDs from ChildRecord.
+/// The Plan is assigned the caller-generated plan_id. All records start Active/Ready
+/// immediately (coordinator begins executing after decomposition).
+fn records_to_hierarchy(
+    plan_id: &str,
+    plan_title: &str,
     plan_markdown: &str,
-    child_docs: &[Doc],
-    run_dir: &Path,
+    plan_ac: AcceptanceCriteria,
+    all_records: &[ChildRecord],
 ) -> Result<DecomposedHierarchy> {
-    use std::collections::HashMap;
+    // Map ChildRecord.id -> domain record id (they are the same in the new design).
+    // We still need a set of known IDs for Work dependency resolution.
+    let known_ids: std::collections::HashSet<&str> = all_records.iter().map(|r| r.id.as_str()).collect();
 
-    let mut doc_to_domain: HashMap<String, String> = HashMap::new();
-
-    let ac = AcceptanceCriteria(plan_doc.acceptance_criteria.clone());
-    let mut plan = Plan::new(plan_doc.title.clone(), plan_markdown.to_string(), ac);
+    let mut plan = Plan::new(plan_title.to_string(), plan_markdown.to_string(), plan_ac);
+    plan.id = plan_id.to_string();
     plan.force_status(PlanStatus::Active);
-    doc_to_domain.insert(plan_doc.id.clone(), plan.id.clone());
 
     let mut specs: Vec<Spec> = Vec::new();
     let mut phases: Vec<Phase> = Vec::new();
     let mut works: Vec<Work> = Vec::new();
 
-    let spec_docs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
-    let phase_docs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
-    let work_docs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
+    let spec_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Spec).collect();
+    let phase_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Phase).collect();
+    let work_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Work).collect();
 
-    // Process in dependency order: specs before phases before works
     let mut phase_counters: HashMap<String, u32> = HashMap::new();
 
-    for child in spec_docs.iter().chain(phase_docs.iter()).chain(work_docs.iter()) {
-        let Some(ref doc_parent_id) = child.parent_id else {
-            continue;
+    for child in spec_records
+        .iter()
+        .chain(phase_records.iter())
+        .chain(work_records.iter())
+    {
+        let parent_id = match &child.parent_id {
+            Some(pid) => pid.clone(),
+            None => continue,
         };
-        let Some(domain_parent_id) = doc_to_domain.get(doc_parent_id).cloned() else {
-            bail!("docs_to_hierarchy: no domain record for parent Doc {}", doc_parent_id);
-        };
-
-        let content = std::fs::read_to_string(run_dir.join(&child.markdown))
-            .map_err(|e| eyre::eyre!("docs_to_hierarchy: failed to read {}: {}", child.markdown, e))?;
 
         match child.kind {
             DocKind::Spec => {
-                let mut spec = Spec::new(domain_parent_id, child.title.clone(), content);
+                let mut spec = Spec::new(parent_id, child.title.clone(), child.content.clone());
+                spec.id = child.id.clone();
                 spec.force_status(SpecStatus::Active);
                 spec.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
-                doc_to_domain.insert(child.id.clone(), spec.id.clone());
                 specs.push(spec);
             }
             DocKind::Phase => {
-                let order = phase_counters.entry(doc_parent_id.clone()).or_insert(0);
+                let order = phase_counters.entry(parent_id.clone()).or_insert(0);
                 let current_order = *order;
                 *order += 1;
-                let mut phase = Phase::new(domain_parent_id, child.title.clone(), content, current_order);
+                let mut phase = Phase::new(parent_id, child.title.clone(), child.content.clone(), current_order);
+                phase.id = child.id.clone();
                 phase.force_status(PhaseStatus::Active);
                 phase.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
-                doc_to_domain.insert(child.id.clone(), phase.id.clone());
                 phases.push(phase);
             }
             DocKind::Work => {
-                let mut work = Work::new(domain_parent_id, child.title.clone(), content);
+                let mut work = Work::new(parent_id, child.title.clone(), child.content.clone());
+                work.id = child.id.clone();
                 work.force_status(WorkStatus::Ready);
                 work.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
                 work.dependencies = child
                     .dependencies
                     .iter()
-                    .filter_map(|dep_doc_id| doc_to_domain.get(dep_doc_id).cloned())
+                    .filter(|dep_id| known_ids.contains(dep_id.as_str()))
+                    .cloned()
                     .collect();
-                doc_to_domain.insert(child.id.clone(), work.id.clone());
                 works.push(work);
             }
             DocKind::Plan => continue,
@@ -972,11 +945,24 @@ fn docs_to_hierarchy(
     })
 }
 
+/// Extract the plan title from the first `# ` heading line in the markdown.
+fn extract_title_from_markdown(markdown: &str) -> String {
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if let Some(stripped) = trimmed.strip_prefix("# ") {
+            let title = stripped.trim();
+            if !title.is_empty() {
+                return title.to_string();
+            }
+        }
+    }
+    "Untitled Plan".to_string()
+}
+
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::TestDir;
 
     // --- detect_cycles ---
 
@@ -1069,28 +1055,6 @@ mod tests {
         assert!(criteria.is_empty());
     }
 
-    // --- child_kind ---
-
-    #[test]
-    fn test_child_kind_plan() {
-        assert_eq!(child_kind(DocKind::Plan), Some(DocKind::Spec));
-    }
-
-    #[test]
-    fn test_child_kind_spec() {
-        assert_eq!(child_kind(DocKind::Spec), Some(DocKind::Phase));
-    }
-
-    #[test]
-    fn test_child_kind_phase() {
-        assert_eq!(child_kind(DocKind::Phase), Some(DocKind::Work));
-    }
-
-    #[test]
-    fn test_child_kind_work() {
-        assert_eq!(child_kind(DocKind::Work), None);
-    }
-
     // --- ChildEntry serde ---
 
     #[test]
@@ -1143,20 +1107,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_plan_to_specs() {
+    async fn test_decompose_into_plan_to_specs() {
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-decompose-test");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        // Write parent .md
-        std::fs::write(
-            dir.join("plan-test.md"),
-            "# Plan\n\n## Problem Statement\n\nTest problem.\n\n## Goals\n\nTest goal.",
-        )
-        .unwrap();
-
-        let parent = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
+        let parent_content = "# Plan\n\n## Problem Statement\n\nTest problem.\n\n## Goals\n\nTest goal.";
+        let parent_id = crate::id::generate_id("pl");
 
         let children_json = serde_json::json!([
             {
@@ -1188,22 +1145,26 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose(&parent, &dir, &config, &mock).await.unwrap();
+        let mut global_map = HashMap::new();
+        let result = decompose_into(
+            parent_content,
+            &parent_id,
+            DocKind::Spec,
+            &config,
+            &mock,
+            &mut global_map,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].kind, DocKind::Spec);
         assert_eq!(result[1].kind, DocKind::Spec);
         assert!(result[0].id.starts_with("sp-"));
-        assert_eq!(result[0].parent_id.as_deref(), Some(parent.id.as_str()));
-
+        assert_eq!(result[0].parent_id.as_deref(), Some(parent_id.as_str()));
         // Second spec should depend on first
         assert_eq!(result[1].dependencies, vec![result[0].id.clone()]);
-
-        // Files should exist in run dir
-        assert!(dir.join(&result[0].markdown).exists());
-        assert!(dir.join(&result[1].markdown).exists());
-
-        // Staging dir should be cleaned up
-        assert!(!dir.join(".staging").exists());
+        // No files written
+        assert_eq!(result[0].content, "# Spec\n\n## Overview\n\nThe core implementation.");
 
         unsafe { std::env::remove_var(&env_key) };
     }
@@ -1211,12 +1172,11 @@ mod tests {
     #[tokio::test]
     async fn test_decompose_cycle_detection_fails() {
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-decompose-cycle");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(dir.join("plan-test.md"), "# Plan\n\nTest").unwrap();
-        let parent = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
+        let parent_content = "# Plan\n\nTest";
+        let parent_id = crate::id::generate_id("pl");
 
         // Circular dependencies
         let children_json = serde_json::json!([
@@ -1245,7 +1205,16 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose(&parent, &dir, &config, &mock).await;
+        let mut global_map = HashMap::new();
+        let result = decompose_into(
+            parent_content,
+            &parent_id,
+            DocKind::Spec,
+            &config,
+            &mock,
+            &mut global_map,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cycle"));
 
@@ -1253,19 +1222,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_work_extraction() {
+    async fn test_decompose_into_work_ac_extraction() {
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-decompose-work");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(dir.join("phase-test.md"), "# Phase\n\nTest phase").unwrap();
-        let parent = Doc::new(
-            DocKind::Phase,
-            Some("sp-abc12".to_string()),
-            "Test Phase".to_string(),
-            "phase-test.md".to_string(),
-        );
+        let parent_content = "# Phase\n\nTest phase";
+        let parent_id = crate::id::generate_id("ph");
 
         let children_json = serde_json::json!([
             {
@@ -1287,7 +1250,17 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose(&parent, &dir, &config, &mock).await.unwrap();
+        let mut global_map = HashMap::new();
+        let result = decompose_into(
+            parent_content,
+            &parent_id,
+            DocKind::Work,
+            &config,
+            &mock,
+            &mut global_map,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert_eq!(
@@ -1299,25 +1272,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_into_plan_to_works_brief() {
+    async fn test_decompose_into_brief_plan_to_works() {
         // Brief mode: decompose_into with DocKind::Work from a Plan parent
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-decompose-brief");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(
-            dir.join("plan-brief.md"),
-            "# Brief Plan\n\n## Problem Statement\n\nSmall task.\n\n## Goals\n\nDo it quickly.",
-        )
-        .unwrap();
-
-        let parent = Doc::new(
-            DocKind::Plan,
-            None,
-            "Brief Plan".to_string(),
-            "plan-brief.md".to_string(),
-        );
+        let parent_content = "# Brief Plan\n\n## Problem Statement\n\nSmall task.\n\n## Goals\n\nDo it quickly.";
+        let parent_id = crate::id::generate_id("pl");
 
         let children_json = serde_json::json!([
             {
@@ -1340,13 +1302,20 @@ mod tests {
         config.api_key_env = env_key.clone();
 
         let mut local_map = HashMap::new();
-        let result = decompose_into(&parent, DocKind::Work, &dir, &config, &mock, &mut local_map)
-            .await
-            .unwrap();
+        let result = decompose_into(
+            parent_content,
+            &parent_id,
+            DocKind::Work,
+            &config,
+            &mock,
+            &mut local_map,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert!(result[0].id.starts_with("wk-"));
-        assert_eq!(result[0].parent_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(result[0].parent_id.as_deref(), Some(parent_id.as_str()));
 
         unsafe { std::env::remove_var(&env_key) };
     }
@@ -1360,21 +1329,11 @@ mod tests {
         // If decompose_hierarchy reinitialised the map per-spec, Work Beta's dependency
         // would be silently dropped and this test would fail.
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-decompose-hierarchy-cross");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(
-            dir.join("plan-cross-scope.md"),
-            "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify global map.",
-        )
-        .unwrap();
-        let plan = Doc::new(
-            DocKind::Plan,
-            None,
-            "Cross-Scope Plan".to_string(),
-            "plan-cross-scope.md".to_string(),
-        );
+        let plan_markdown =
+            "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify global map.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
         let ratify_json = r#"{"passed": true, "issues": []}"#;
@@ -1460,15 +1419,13 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, _child_docs, partial_err) =
-            decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_none(),
             "expected no partial failure, got: {:?}",
             partial_err
         );
 
-        // Find Work Alpha and Work Beta in the domain records
         let alpha = hierarchy
             .works
             .iter()
@@ -1494,21 +1451,11 @@ mod tests {
         // Verify that decompose_hierarchy produces docs for ALL specs when specs are
         // decomposed in parallel. Two specs, each with one phase and one work.
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-parallel-specs");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(
-            dir.join("plan-parallel.md"),
-            "# Parallel Plan\n\n## Problem Statement\n\nTwo independent tracks.\n\n## Goals\n\nBoth must complete.",
-        )
-        .unwrap();
-        let plan = Doc::new(
-            DocKind::Plan,
-            None,
-            "Parallel Plan".to_string(),
-            "plan-parallel.md".to_string(),
-        );
+        let plan_markdown =
+            "# Parallel Plan\n\n## Problem Statement\n\nTwo independent tracks.\n\n## Goals\n\nBoth must complete.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
         let ratify_json = r#"{"passed": true, "issues": []}"#;
@@ -1571,8 +1518,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, _child_docs, partial_err) =
-            decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_none(),
             "expected no partial failure, got: {:?}",
@@ -1609,21 +1555,11 @@ mod tests {
         // This is identical in spirit to test_decompose_hierarchy_cross_scope_dependency_resolved
         // but explicitly targets the post-merge path (unresolved_dep_titles → dependencies).
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-parallel-cross-spec");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(
-            dir.join("plan-cross.md"),
-            "# Cross-Spec Plan\n\n## Problem Statement\n\nCross-spec dep test.\n\n## Goals\n\nBeta depends on Alpha.",
-        )
-        .unwrap();
-        let plan = Doc::new(
-            DocKind::Plan,
-            None,
-            "Cross-Spec Plan".to_string(),
-            "plan-cross.md".to_string(),
-        );
+        let plan_markdown =
+            "# Cross-Spec Plan\n\n## Problem Statement\n\nCross-spec dep test.\n\n## Goals\n\nBeta depends on Alpha.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
         let ratify_json = r#"{"passed": true, "issues": []}"#;
@@ -1677,8 +1613,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, _child_docs, partial_err) =
-            decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_none(),
             "expected no partial failure, got: {:?}",
@@ -1710,22 +1645,11 @@ mod tests {
         // With start_paused=true, tokio's clock is virtual. The mock sleeps for 200s of
         // virtual time; the 60s timeout fires first. The test runs in real milliseconds.
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-decompose-timeout");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(
-            dir.join("plan-timeout.md"),
-            "# Timeout Plan\n\n## Problem Statement\n\nTest.\n\n## Goals\n\nHang.",
-        )
-        .unwrap();
-
-        let parent = Doc::new(
-            DocKind::Plan,
-            None,
-            "Timeout Plan".to_string(),
-            "plan-timeout.md".to_string(),
-        );
+        let parent_content = "# Timeout Plan\n\n## Problem Statement\n\nTest.\n\n## Goals\n\nHang.";
+        let parent_id = crate::id::generate_id("pl");
 
         struct SlowMockHttp;
         impl HttpClient for SlowMockHttp {
@@ -1740,7 +1664,15 @@ mod tests {
         config.api_key_env = env_key.clone();
 
         let mut local_map = HashMap::new();
-        let result = decompose_into(&parent, DocKind::Spec, &dir, &config, &SlowMockHttp, &mut local_map).await;
+        let result = decompose_into(
+            parent_content,
+            &parent_id,
+            DocKind::Spec,
+            &config,
+            &SlowMockHttp,
+            &mut local_map,
+        )
+        .await;
 
         assert!(result.is_err(), "expected timeout error, got: {:?}", result);
         let msg = format!("{:?}", result.unwrap_err());
@@ -1758,21 +1690,10 @@ mod tests {
         // the successful branch's docs and a Some(error) partial failure message.
         // The caller is then responsible for persisting the partial error.
         crate::prompts::init_defaults();
-        let dir = TestDir::new("loopr-partial-failure");
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        std::fs::write(
-            dir.join("plan-partial.md"),
-            "# Partial Plan\n\n## Problem Statement\n\nTwo tracks, one fails.\n\n## Goals\n\nSurvive.",
-        )
-        .unwrap();
-        let plan = Doc::new(
-            DocKind::Plan,
-            None,
-            "Partial Plan".to_string(),
-            "plan-partial.md".to_string(),
-        );
+        let plan_markdown = "# Partial Plan\n\n## Problem Statement\n\nTwo tracks, one fails.\n\n## Goals\n\nSurvive.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
 
@@ -1816,10 +1737,10 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result = decompose_hierarchy(&plan, &dir, &config, &mock, false).await;
+        let result = decompose_hierarchy(plan_markdown, &config, &mock, false).await;
         assert!(result.is_ok(), "decompose_hierarchy should succeed with partial docs");
 
-        let (hierarchy, _child_docs, partial_err) = result.unwrap();
+        let (hierarchy, partial_err) = result.unwrap();
 
         // partial_err must be set - Bad Track branch failed
         assert!(partial_err.is_some(), "expected partial_err to be set, got None");
@@ -1854,56 +1775,62 @@ mod tests {
         unsafe { std::env::remove_var(&env_key) };
     }
 
-    // --- docs_to_hierarchy ---
+    // --- records_to_hierarchy ---
 
-    /// Build a minimal Doc set for testing: one Plan, one Spec, one Phase, one Work.
-    fn build_test_docs(dir: &TestDir) -> (Doc, String, Vec<Doc>) {
-        use crate::domain::doc::write_doc_file;
-        let plan_markdown = "# Test Plan\n\nA test plan.";
-        let spec_content = "Spec content";
-        let phase_content = "Phase content";
-        let work_content = "Work content";
+    fn build_test_records() -> (String, String, String, AcceptanceCriteria, Vec<ChildRecord>) {
+        let plan_id = crate::id::generate_id("pl");
+        let plan_title = "Test Plan".to_string();
+        let plan_markdown = "# Test Plan\n\nA test plan.\n\n## Acceptance Criteria\n\n- plan passes";
 
-        let plan_file = write_doc_file(dir, DocKind::Plan, "Test Plan", plan_markdown, &[]).unwrap();
-        let mut plan_doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), plan_file);
-        plan_doc.acceptance_criteria = vec!["plan passes".to_string()];
+        let spec_id = crate::id::generate_id("sp");
+        let phase_id = crate::id::generate_id("ph");
+        let work_id = crate::id::generate_id("wk");
 
-        let spec_file = write_doc_file(dir, DocKind::Spec, "Core Spec", spec_content, &[]).unwrap();
-        let mut spec_doc = Doc::new(
-            DocKind::Spec,
-            Some(plan_doc.id.clone()),
-            "Core Spec".to_string(),
-            spec_file,
-        );
-        spec_doc.acceptance_criteria = vec!["spec passes".to_string()];
+        let spec = ChildRecord {
+            id: spec_id.clone(),
+            kind: DocKind::Spec,
+            parent_id: Some(plan_id.clone()),
+            title: "Core Spec".to_string(),
+            content: "Spec content".to_string(),
+            dependencies: vec![],
+            unresolved_dep_titles: vec![],
+            acceptance_criteria: vec!["spec passes".to_string()],
+        };
+        let phase = ChildRecord {
+            id: phase_id.clone(),
+            kind: DocKind::Phase,
+            parent_id: Some(spec_id),
+            title: "Phase One".to_string(),
+            content: "Phase content".to_string(),
+            dependencies: vec![],
+            unresolved_dep_titles: vec![],
+            acceptance_criteria: vec!["phase passes".to_string()],
+        };
+        let work = ChildRecord {
+            id: work_id,
+            kind: DocKind::Work,
+            parent_id: Some(phase_id),
+            title: "Write tests".to_string(),
+            content: "Work content".to_string(),
+            dependencies: vec![],
+            unresolved_dep_titles: vec![],
+            acceptance_criteria: vec!["assert tests pass".to_string()],
+        };
 
-        let phase_file = write_doc_file(dir, DocKind::Phase, "Phase One", phase_content, &[]).unwrap();
-        let mut phase_doc = Doc::new(
-            DocKind::Phase,
-            Some(spec_doc.id.clone()),
-            "Phase One".to_string(),
-            phase_file,
-        );
-        phase_doc.acceptance_criteria = vec!["phase passes".to_string()];
-
-        let work_file = write_doc_file(dir, DocKind::Work, "Write tests", work_content, &[]).unwrap();
-        let mut work_doc = Doc::new(
-            DocKind::Work,
-            Some(phase_doc.id.clone()),
-            "Write tests".to_string(),
-            work_file,
-        );
-        work_doc.acceptance_criteria = vec!["assert tests pass".to_string()];
-
-        let child_docs = vec![spec_doc, phase_doc, work_doc];
-        (plan_doc, plan_markdown.to_string(), child_docs)
+        let ac = AcceptanceCriteria(vec!["plan passes".to_string()]);
+        (
+            plan_id,
+            plan_title,
+            plan_markdown.to_string(),
+            ac,
+            vec![spec, phase, work],
+        )
     }
 
     #[test]
-    fn test_docs_to_hierarchy_basic() {
-        let dir = TestDir::new("loopr-dth-basic");
-        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
-        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+    fn test_records_to_hierarchy_basic() {
+        let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
+        let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
 
         assert_eq!(h.plan.title, "Test Plan");
         assert_eq!(h.plan.description, plan_markdown);
@@ -1913,10 +1840,9 @@ mod tests {
     }
 
     #[test]
-    fn test_docs_to_hierarchy_plan_status_active() {
-        let dir = TestDir::new("loopr-dth-status");
-        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
-        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+    fn test_records_to_hierarchy_plan_status_active() {
+        let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
+        let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
 
         use crate::domain::plan::HierarchyStatus;
         assert_eq!(h.plan.status(), HierarchyStatus::Active);
@@ -1927,10 +1853,9 @@ mod tests {
     }
 
     #[test]
-    fn test_docs_to_hierarchy_acceptance_criteria_propagated() {
-        let dir = TestDir::new("loopr-dth-ac");
-        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
-        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+    fn test_records_to_hierarchy_ac_propagated() {
+        let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
+        let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
 
         assert_eq!(h.plan.acceptance_criteria.0, vec!["plan passes"]);
         assert_eq!(h.specs[0].acceptance_criteria.0, vec!["spec passes"]);
@@ -1939,95 +1864,124 @@ mod tests {
     }
 
     #[test]
-    fn test_docs_to_hierarchy_parent_ids_resolved() {
-        let dir = TestDir::new("loopr-dth-parents");
-        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
-        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+    fn test_records_to_hierarchy_parent_ids_resolved() {
+        let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
+        let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
 
-        // Spec parent = Plan id
         assert_eq!(h.specs[0].parent_id, h.plan.id);
-        // Phase parent = Spec id
         assert_eq!(h.phases[0].parent_id, h.specs[0].id);
-        // Work parent = Phase id
         assert_eq!(h.works[0].parent_id, h.phases[0].id);
     }
 
     #[test]
-    fn test_docs_to_hierarchy_work_dependency_resolved() {
-        use crate::domain::doc::write_doc_file;
-        let dir = TestDir::new("loopr-dth-deps");
+    fn test_records_to_hierarchy_work_dependency_resolved() {
+        let plan_id = crate::id::generate_id("pl");
+        let spec_id = crate::id::generate_id("sp");
+        let phase_id = crate::id::generate_id("ph");
+        let wa_id = crate::id::generate_id("wk");
+        let wb_id = crate::id::generate_id("wk");
 
-        let plan_markdown = "# Plan\n\nA plan.";
-        let plan_file = write_doc_file(&dir, DocKind::Plan, "Plan", plan_markdown, &[]).unwrap();
-        let plan_doc = Doc::new(DocKind::Plan, None, "Plan".to_string(), plan_file);
+        let records = vec![
+            ChildRecord {
+                id: spec_id.clone(),
+                kind: DocKind::Spec,
+                parent_id: Some(plan_id.clone()),
+                title: "Spec".to_string(),
+                content: "spec".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+            },
+            ChildRecord {
+                id: phase_id.clone(),
+                kind: DocKind::Phase,
+                parent_id: Some(spec_id),
+                title: "Phase".to_string(),
+                content: "phase".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+            },
+            ChildRecord {
+                id: wa_id.clone(),
+                kind: DocKind::Work,
+                parent_id: Some(phase_id.clone()),
+                title: "Work A".to_string(),
+                content: "wa content".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec!["assert a()".to_string()],
+            },
+            ChildRecord {
+                id: wb_id,
+                kind: DocKind::Work,
+                parent_id: Some(phase_id),
+                title: "Work B".to_string(),
+                content: "wb content".to_string(),
+                dependencies: vec![wa_id.clone()],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec!["assert b()".to_string()],
+            },
+        ];
 
-        let spec_file = write_doc_file(&dir, DocKind::Spec, "Spec", "spec", &[]).unwrap();
-        let spec_doc = Doc::new(DocKind::Spec, Some(plan_doc.id.clone()), "Spec".to_string(), spec_file);
-
-        let phase_file = write_doc_file(&dir, DocKind::Phase, "Phase", "phase", &[]).unwrap();
-        let phase_doc = Doc::new(
-            DocKind::Phase,
-            Some(spec_doc.id.clone()),
-            "Phase".to_string(),
-            phase_file,
-        );
-
-        // work_a has no deps; work_b depends on work_a (by Doc ID)
-        let wa_file = write_doc_file(&dir, DocKind::Work, "Work A", "wa content", &[]).unwrap();
-        let work_a = Doc::new(DocKind::Work, Some(phase_doc.id.clone()), "Work A".to_string(), wa_file);
-
-        let wb_file = write_doc_file(&dir, DocKind::Work, "Work B", "wb content", &[]).unwrap();
-        let mut work_b = Doc::new(DocKind::Work, Some(phase_doc.id.clone()), "Work B".to_string(), wb_file);
-        work_b.dependencies = vec![work_a.id.clone()];
-
-        let child_docs = vec![spec_doc, phase_doc, work_a.clone(), work_b];
-        let h = docs_to_hierarchy(&plan_doc, plan_markdown, &child_docs, &dir).unwrap();
+        let ac = AcceptanceCriteria(vec![]);
+        let h = records_to_hierarchy(&plan_id, "Plan", "# Plan\n\nA plan.", ac, &records).unwrap();
 
         assert_eq!(h.works.len(), 2);
-        let wb = h.works.iter().find(|w| w.title == "Work B").unwrap();
         let wa = h.works.iter().find(|w| w.title == "Work A").unwrap();
-        // work_b's dependency must be resolved to work_a's domain ID (not Doc ID)
+        let wb = h.works.iter().find(|w| w.title == "Work B").unwrap();
         assert_eq!(wb.dependencies, vec![wa.id.clone()]);
     }
 
     #[test]
-    fn test_docs_to_hierarchy_work_resource_tags_empty() {
-        let dir = TestDir::new("loopr-dth-rt");
-        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
-        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
-        // Decomposer never sets resource_tags - must be empty
+    fn test_records_to_hierarchy_resource_tags_empty() {
+        let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
+        let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
         assert!(h.works[0].resource_tags.is_empty());
     }
 
     #[test]
-    fn test_docs_to_hierarchy_phase_order() {
-        use crate::domain::doc::write_doc_file;
-        let dir = TestDir::new("loopr-dth-order");
+    fn test_records_to_hierarchy_phase_order() {
+        let plan_id = crate::id::generate_id("pl");
+        let spec_id = crate::id::generate_id("sp");
+        let ph1_id = crate::id::generate_id("ph");
+        let ph2_id = crate::id::generate_id("ph");
 
-        let plan_markdown = "# Plan";
-        let plan_file = write_doc_file(&dir, DocKind::Plan, "Plan", plan_markdown, &[]).unwrap();
-        let plan_doc = Doc::new(DocKind::Plan, None, "Plan".to_string(), plan_file);
+        let records = vec![
+            ChildRecord {
+                id: spec_id.clone(),
+                kind: DocKind::Spec,
+                parent_id: Some(plan_id.clone()),
+                title: "Spec".to_string(),
+                content: "spec".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+            },
+            ChildRecord {
+                id: ph1_id,
+                kind: DocKind::Phase,
+                parent_id: Some(spec_id.clone()),
+                title: "Phase 1".to_string(),
+                content: "ph1".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+            },
+            ChildRecord {
+                id: ph2_id,
+                kind: DocKind::Phase,
+                parent_id: Some(spec_id),
+                title: "Phase 2".to_string(),
+                content: "ph2".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+            },
+        ];
 
-        let spec_file = write_doc_file(&dir, DocKind::Spec, "Spec", "spec", &[]).unwrap();
-        let spec_doc = Doc::new(DocKind::Spec, Some(plan_doc.id.clone()), "Spec".to_string(), spec_file);
-
-        let ph1_file = write_doc_file(&dir, DocKind::Phase, "Phase 1", "ph1", &[]).unwrap();
-        let ph1 = Doc::new(
-            DocKind::Phase,
-            Some(spec_doc.id.clone()),
-            "Phase 1".to_string(),
-            ph1_file,
-        );
-        let ph2_file = write_doc_file(&dir, DocKind::Phase, "Phase 2", "ph2", &[]).unwrap();
-        let ph2 = Doc::new(
-            DocKind::Phase,
-            Some(spec_doc.id.clone()),
-            "Phase 2".to_string(),
-            ph2_file,
-        );
-
-        let child_docs = vec![spec_doc, ph1, ph2];
-        let h = docs_to_hierarchy(&plan_doc, plan_markdown, &child_docs, &dir).unwrap();
+        let ac = AcceptanceCriteria(vec![]);
+        let h = records_to_hierarchy(&plan_id, "Plan", "# Plan", ac, &records).unwrap();
 
         assert_eq!(h.phases.len(), 2);
         assert_eq!(h.phases[0].order, 0);

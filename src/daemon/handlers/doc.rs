@@ -6,13 +6,9 @@
 //! - `doc.inject` (E2E test path): caller supplies a path to an existing plan .md file.
 //!
 //! Both paths:
-//!   1. Create a transient working directory under the system temp dir
-//!   2. Write the plan .md file into the working directory
-//!   3. Create a `Doc` record (DocKind::Plan) and persist it
-//!   4. Optionally run the Decomposer (skip via `skip_decompose=true` for tests)
-//!   5. Persist child Docs produced by the Decomposer
-//!   6. Create a CoordinatorGoal and CoordinatorState
-//!   7. Start the Coordinator agent
+//!   1. Optionally run the Decomposer (skip via `skip_decompose=true` for tests)
+//!   2. Create a CoordinatorGoal and CoordinatorState
+//!   3. Start the Coordinator agent
 //!
 //! The manifest entry path (`coordinator.seed_manifest`) is in coordinator.rs and
 //! skips the Decomposer, injecting a pre-decomposed hierarchy directly.
@@ -27,16 +23,13 @@ use tokio::sync::broadcast;
 
 use crate::config::{IntegratorConfig, InterviewMode, ValidatorConfig};
 use crate::daemon::context::Stores;
-use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy, extract_acceptance_criteria};
+use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-use crate::domain::doc::{Doc, DocKind, write_doc_file};
 use crate::domain::markdown::write_doc_markdown;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::validator::client::{LlmClient, ReqwestClient};
 use crate::worktree::manager::WorktreeManager;
-
-use super::common::persist_doc;
 
 /// Handle `doc.accept`: accept plan markdown as a string and run the full entry pipeline.
 ///
@@ -146,12 +139,11 @@ pub(super) async fn handle_doc_inject(
     })
 }
 
-/// Shared entry pipeline: write plan.md, create Doc, optionally decompose, start Coordinator.
+/// Shared entry pipeline: receive plan markdown, optionally decompose, start Coordinator.
 ///
-/// When `skip_decompose=false`: creates the plan Doc, spawns decomposition in a background
-/// task, creates the goal in `Decomposing` state, starts the coordinator, and returns
-/// immediately. `child_count` is `null` in the response - it will be available via the
-/// `decomposition.completed` event.
+/// When `skip_decompose=false`: creates the goal in `Decomposing` state, spawns decomposition
+/// in a background task, starts the coordinator, and returns immediately. `child_count` is
+/// `null` in the response - it will be available via the `decomposition.completed` event.
 ///
 /// When `skip_decompose=true`: behaves synchronously (used in tests).
 pub(super) async fn accept_plan_markdown(
@@ -165,25 +157,6 @@ pub(super) async fn accept_plan_markdown(
 ) -> eyre::Result<DaemonResponse> {
     let title = extract_plan_title(&markdown);
     info!("doc entry: plan title = {:?}", title);
-
-    // Create a transient working directory for this decomposition run.
-    // Uses a timestamp-based name under system temp so runs don't accumulate in the repo.
-    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let run_dir = std::env::temp_dir().join(format!("loopr-run-{}", ts));
-    std::fs::create_dir_all(&run_dir).map_err(|e| eyre!("Failed to create run directory: {}", e))?;
-    info!("doc entry: run_dir = {}", run_dir.display());
-
-    // Write plan.md into the run directory
-    let filename = write_doc_file(&run_dir, DocKind::Plan, &title, &markdown, &[])
-        .map_err(|e| eyre!("Failed to write plan.md: {}", e))?;
-
-    // Build the plan Doc record
-    let mut plan_doc = Doc::new(DocKind::Plan, None, title.clone(), filename);
-    plan_doc.acceptance_criteria = extract_acceptance_criteria(&markdown);
-    let plan_doc_id = plan_doc.id.clone();
-
-    // Persist the plan Doc
-    persist_doc(stores, plan_doc.clone(), event_tx)?;
 
     // Deactivate any existing active CoordinatorGoals
     {
@@ -250,8 +223,6 @@ pub(super) async fn accept_plan_markdown(
         // Spawn background decomposition task
         let stores_bg = Arc::clone(stores);
         let event_tx_bg = event_tx.clone();
-        let plan_doc_bg = plan_doc.clone();
-        let run_dir_bg = run_dir.clone();
         let markdown_bg = markdown.clone();
         let goal_id_bg = goal_id.clone();
         let dc = stores.config.decomposer.clone();
@@ -261,20 +232,15 @@ pub(super) async fn accept_plan_markdown(
             let brief = classify_brief(&stores_bg, &markdown_bg).await;
             info!("{} starting decomposition (brief={})", decomposer_prefix, brief);
             let client = ReqwestClient::new();
-            match decompose_hierarchy(&plan_doc_bg, &run_dir_bg, &dc, &client, brief).await {
-                Ok((hierarchy, child_docs, partial_err)) => {
-                    let child_count = child_docs.len();
+            match decompose_hierarchy(&markdown_bg, &dc, &client, brief).await {
+                Ok((hierarchy, partial_err)) => {
+                    let child_count = hierarchy.specs.len() + hierarchy.phases.len() + hierarchy.works.len();
                     info!(
-                        "{} decomposition produced {} child docs",
+                        "{} decomposition produced {} domain records",
                         decomposer_prefix, child_count
                     );
                     match persist_hierarchy(&stores_bg, &event_tx_bg, hierarchy) {
                         Ok(()) => {
-                            for child in child_docs {
-                                if let Err(e) = persist_doc(&stores_bg, child, &event_tx_bg) {
-                                    warn!("doc entry (bg): failed to persist child doc: {}", e);
-                                }
-                            }
                             if let Some(err) = partial_err {
                                 // Partial success: some spec branches failed. Persist completed
                                 // records (done above) but signal failure so coordinator surfaces
@@ -365,16 +331,11 @@ pub(super) async fn accept_plan_markdown(
         .unwrap_or("")
         .to_string();
 
-    let _ = event_tx.send(DaemonEvent::new(
-        "doc.plan_accepted",
-        json!({ "doc_id": plan_doc_id, "goal_id": goal_id }),
-    ));
+    let _ = event_tx.send(DaemonEvent::new("doc.plan_accepted", json!({ "goal_id": goal_id })));
 
     Ok(DaemonResponse::ok(
         req_id,
         json!({
-            "doc_id": plan_doc_id,
-            "run_dir": run_dir.to_string_lossy(),
             "child_count": child_count_for_response,
             "goal_id": goal_id,
             "coordinator_session_id": coordinator_session_id,
@@ -539,7 +500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_doc_accept_skip_decompose_creates_doc() {
+    async fn test_doc_accept_skip_decompose_creates_goal() {
         let dir = TestDir::new("doc-accept-test");
         let mut stores = crate::daemon::context::Stores::new();
         stores.config.project.repo_path = dir.to_path_buf();
@@ -553,25 +514,17 @@ mod tests {
 
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
         let result = resp.result.unwrap();
-        assert!(result["doc_id"].as_str().unwrap().starts_with("pl-"));
         assert_eq!(result["child_count"], 0);
+        assert!(result["goal_id"].as_str().is_some(), "goal_id must be present");
 
-        // Doc should be in the in-memory store
+        // No Doc records - Doc intermediary is gone
         let docs = stores.read_docs().unwrap();
-        assert_eq!(docs.len(), 1);
-        let doc = docs.values().next().unwrap();
-        assert_eq!(doc.kind, DocKind::Plan);
-        assert!(doc.markdown.ends_with(".md"));
+        assert_eq!(docs.len(), 0, "no Doc records should be created");
 
-        // plan.md should exist on disk
-        let run_dir_str = result["run_dir"].as_str().unwrap();
-        let plan_path = std::path::Path::new(run_dir_str).join(&doc.markdown);
-        assert!(plan_path.exists(), "plan.md not found at {}", plan_path.display());
-        let content = std::fs::read_to_string(&plan_path).unwrap();
-        assert!(content.contains("Auth Refactor Plan"));
-
-        // Title must be stored on the Doc (not "Untitled Plan")
-        assert_eq!(doc.title, "Auth Refactor Plan", "Doc.title must match the H1 heading");
+        // Goal should exist with correct title
+        let goals = stores.read_coordinator_goals().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals.values().next().unwrap().goal, "Auth Refactor Plan");
     }
 
     #[tokio::test]
@@ -711,33 +664,17 @@ mod tests {
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
 
         let result = resp.result.unwrap();
-        assert!(result["doc_id"].as_str().unwrap().starts_with("pl-"));
         assert_eq!(result["child_count"], 0);
+        assert!(result["goal_id"].as_str().is_some(), "goal_id must be present");
 
+        // No Doc records - Doc intermediary is gone
         let docs = stores.read_docs().unwrap();
-        assert_eq!(docs.len(), 1);
-        let doc = docs.values().next().unwrap();
-        assert_eq!(doc.kind, DocKind::Plan);
+        assert_eq!(docs.len(), 0, "no Doc records should be created");
 
-        // The plan.md content should be copied to the run directory
-        let run_dir = std::path::Path::new(result["run_dir"].as_str().unwrap());
-        let written = std::fs::read_to_string(run_dir.join(&doc.markdown)).unwrap();
-        assert!(written.contains("Feature Implementation"));
-    }
-
-    // --- persist_doc ---
-
-    #[test]
-    fn test_persist_doc_in_memory() {
-        let (_dir, stores) = test_stores();
-        let tx = test_event_tx();
-        let doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
-        let id = doc.id.clone();
-
-        persist_doc(&stores, doc, &tx).unwrap();
-
-        let docs = stores.read_docs().unwrap();
-        assert!(docs.contains_key(&id));
+        // Goal should exist with correct title
+        let goals = stores.read_coordinator_goals().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals.values().next().unwrap().goal, "Feature Implementation");
     }
 
     // --- single coordinator invariant (Phase 2) ---
