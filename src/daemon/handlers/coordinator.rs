@@ -190,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_get_goal_returns_active() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -208,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_coordinator_get_goal_when_none() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "coordinator.get_goal", json!({}));

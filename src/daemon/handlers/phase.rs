@@ -442,7 +442,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_rejects_duplicate_draft() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -468,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_rejects_complete_spec() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -511,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_rejects_abandoned_spec() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -542,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -569,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_missing_spec_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.create", json!({"title": "Phase"}));
@@ -580,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_spec_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.create", json!({"parent_id": "nonexistent", "title": "Phase"}));
@@ -591,7 +591,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_missing_title() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -607,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_create_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -649,7 +649,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_get_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -684,7 +684,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_get_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.get", json!({"id": "nonexistent"}));
@@ -724,7 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_list_empty() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "phase.list", json!(null));
@@ -735,7 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_list_filtered_by_spec_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (plan_id, spec_id_1) = create_test_spec(&stores, &tx, &wm).await;
@@ -904,7 +904,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_transition_draft_to_active() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -946,7 +946,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_transition_invalid_skip_state() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -977,7 +977,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_transition_wrong_role() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -1008,7 +1008,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_phase_transition_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_phase_update_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -1233,7 +1233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_phase_update_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -1249,7 +1249,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_phase_update_missing_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(

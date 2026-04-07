@@ -391,7 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -416,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create_missing_resource() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -432,7 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create_missing_holder_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -452,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_get() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1).await;
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_get_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_list() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         create_lock(&stores, &tx, &wm, 1).await;
@@ -524,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_list_filter_active_only() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1).await;
@@ -619,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_release() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1).await;
@@ -637,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_release_already_released() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1).await;
@@ -663,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_expire() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1).await;
@@ -681,7 +681,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_expire_already_expired() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let lock_id = create_lock(&stores, &tx, &wm, 1).await;
@@ -776,7 +776,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -788,7 +788,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_release_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -810,7 +810,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create_with_ttl_param() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -833,7 +833,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create_auto_expire() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -858,7 +858,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_create_renewable_flag() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 

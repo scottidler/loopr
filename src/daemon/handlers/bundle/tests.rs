@@ -115,7 +115,7 @@ fn insert_published_tick(stores: &Arc<Stores>, number: u32) -> String {
 
 #[tokio::test]
 async fn test_bundle_create_rejects_done_work() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -139,7 +139,7 @@ async fn test_bundle_create_rejects_done_work() {
 
 #[tokio::test]
 async fn test_bundle_create_rejects_abandoned_work() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -200,7 +200,7 @@ async fn test_bundle_create_persists_to_taskstore() {
 
 #[tokio::test]
 async fn test_bundle_create_success() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -228,7 +228,7 @@ async fn test_bundle_create_success() {
 
 #[tokio::test]
 async fn test_bundle_create_no_base_tick() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -249,7 +249,7 @@ async fn test_bundle_create_no_base_tick() {
 
 #[tokio::test]
 async fn test_bundle_create_missing_work_id() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(1, "bundle.create", json!({"branch_name": "feature/x"}));
@@ -260,7 +260,7 @@ async fn test_bundle_create_missing_work_id() {
 
 #[tokio::test]
 async fn test_bundle_create_work_not_found() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(
@@ -275,7 +275,7 @@ async fn test_bundle_create_work_not_found() {
 
 #[tokio::test]
 async fn test_bundle_create_missing_branch_name() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -287,7 +287,7 @@ async fn test_bundle_create_missing_branch_name() {
 
 #[tokio::test]
 async fn test_bundle_create_broadcasts_event() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let mut rx = tx.subscribe();
@@ -311,7 +311,7 @@ async fn test_bundle_create_broadcasts_event() {
 
 #[tokio::test]
 async fn test_bundle_get_success() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -344,7 +344,7 @@ async fn test_bundle_get_success() {
 
 #[tokio::test]
 async fn test_bundle_get_not_found() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(1, "bundle.get", json!({"id": "nonexistent"}));
@@ -388,7 +388,7 @@ async fn test_bundle_get_reads_from_taskstore() {
 
 #[tokio::test]
 async fn test_bundle_list_empty() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(1, "bundle.list", json!(null));
@@ -399,7 +399,7 @@ async fn test_bundle_list_empty() {
 
 #[tokio::test]
 async fn test_bundle_list_filtered_by_work_id() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (phase_id, wi_id_1) = create_test_work(&stores, &tx, &wm).await;
@@ -546,7 +546,7 @@ async fn test_bundle_list_reads_from_taskstore() {
 
 #[tokio::test]
 async fn test_bundle_transition_proposed_to_triaged() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let mut rx = tx.subscribe();
@@ -594,7 +594,7 @@ async fn test_bundle_transition_proposed_to_triaged() {
 
 #[tokio::test]
 async fn test_bundle_transition_invalid_skip_state() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -630,7 +630,7 @@ async fn test_bundle_transition_invalid_skip_state() {
 
 #[tokio::test]
 async fn test_bundle_transition_wrong_role() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -666,7 +666,7 @@ async fn test_bundle_transition_wrong_role() {
 
 #[tokio::test]
 async fn test_bundle_transition_not_found() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let req = DaemonRequest::new(
@@ -686,7 +686,7 @@ async fn test_bundle_transition_not_found() {
 
 #[tokio::test]
 async fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_exists() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -709,7 +709,7 @@ async fn test_bundle_create_staleness_guard_rejects_no_base_tick_when_published_
 
 #[tokio::test]
 async fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -735,7 +735,7 @@ async fn test_bundle_create_staleness_guard_rejects_stale_base_tick() {
 
 #[tokio::test]
 async fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -760,7 +760,7 @@ async fn test_bundle_create_staleness_guard_accepts_matching_base_tick() {
 
 #[tokio::test]
 async fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -785,7 +785,7 @@ async fn test_bundle_create_staleness_guard_uses_highest_tick_number() {
 
 #[tokio::test]
 async fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let mut rx = tx.subscribe();
@@ -814,7 +814,7 @@ async fn test_bundle_create_staleness_guard_broadcasts_stale_event() {
 #[tokio::test]
 async fn test_bundle_create_bootstrap_no_published_tick_no_base() {
     // Bootstrap case: no published tick, no base_tick_id -> OK
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -835,7 +835,7 @@ async fn test_bundle_create_bootstrap_no_published_tick_no_base() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_success() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
@@ -868,7 +868,7 @@ async fn test_handle_bundle_update_success() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_not_found() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let resp = dispatch(
@@ -884,7 +884,7 @@ async fn test_handle_bundle_update_not_found() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_missing_id() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let resp = dispatch(
@@ -900,7 +900,7 @@ async fn test_handle_bundle_update_missing_id() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
@@ -927,7 +927,7 @@ async fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_claims_string_backward_compat() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
@@ -953,7 +953,7 @@ async fn test_handle_bundle_update_claims_string_backward_compat() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_claims_array() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;
@@ -980,7 +980,7 @@ async fn test_handle_bundle_update_claims_array() {
 
 #[tokio::test]
 async fn test_handle_bundle_create_rejects_too_many_loc() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -1007,7 +1007,7 @@ async fn test_handle_bundle_create_rejects_too_many_loc() {
 
 #[tokio::test]
 async fn test_handle_bundle_create_accepts_loc_within_limit() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -1033,7 +1033,7 @@ async fn test_handle_bundle_create_accepts_loc_within_limit() {
 
 #[tokio::test]
 async fn test_handle_bundle_update_rejects_too_many_loc() {
-    let stores = test_stores();
+    let (_dir, stores) = test_stores();
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let (_, bundle_id) = create_test_bundle(&stores, &tx, &wm).await;

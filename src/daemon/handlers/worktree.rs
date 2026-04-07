@@ -272,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_create_missing_work_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -289,7 +289,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_create_work_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -306,7 +306,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_create_validates_work_exists() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Create a full hierarchy so work exists
@@ -333,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_list_returns_response() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // list on nonexistent repo will error, but it routes correctly
@@ -351,7 +351,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_cleanup_missing_work_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -368,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_cleanup_work_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -385,7 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_refresh_missing_work_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_refresh_nonexistent_worktree() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -419,7 +419,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worktree_dispatch_routes_all_methods() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Verify all 4 worktree methods are routed (not method_not_found)

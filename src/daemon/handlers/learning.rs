@@ -500,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_create_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -531,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_create_missing_source_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -548,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_create_missing_content() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -565,7 +565,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_create_invalid_scope() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -586,7 +586,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_create_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -611,7 +611,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_get_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let learning_id = create_learning(&stores, &tx, &wm, 1).await;
@@ -630,7 +630,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_get_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -668,7 +668,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_list_empty() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -685,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_list_with_scope_filter() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Create a work-scoped learning
@@ -775,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_reinforce() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let learning_id = create_learning(&stores, &tx, &wm, 1).await;
@@ -805,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_reinforce_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -823,7 +823,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_contradict() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let learning_id = create_learning(&stores, &tx, &wm, 1).await;
@@ -844,7 +844,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_promote_and_demote() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let learning_id = create_learning(&stores, &tx, &wm, 1).await;
@@ -876,7 +876,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_learning_promote_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -1002,7 +1002,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_learning_update() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let learning_id = create_learning(&stores, &tx, &wm, 1).await;
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_learning_update_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -1049,7 +1049,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_learning_update_missing_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(

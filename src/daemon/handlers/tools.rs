@@ -178,7 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_valid_bare_command() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -207,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_missing_bare_command_rejected() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -233,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_error_is_instructive() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -257,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_valid_absolute_path() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -276,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_missing_absolute_path_rejected() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -303,7 +303,7 @@ mod tests {
         std::fs::create_dir_all(&scripts_dir).unwrap();
         std::fs::write(scripts_dir.join("test.sh"), "#!/bin/sh\necho ok").unwrap();
 
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -329,7 +329,7 @@ mod tests {
     async fn test_tools_register_relative_path_missing_in_context_dir() {
         let tmp = crate::test_util::TestDir::new("loopr-tool-relpath-miss");
 
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -352,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_relative_path_no_context_dir_accepted() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -376,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn test_tools_register_extracts_first_token() {
         // "lua test_todo.lua --verbose" should check "lua", which exists
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Use "echo" as a universally available command with extra args
@@ -396,7 +396,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_empty_name() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_missing_command() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tools.register", json!({"name": "test"}));
@@ -425,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tools_register_rebuilds_tool_runner() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 

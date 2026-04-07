@@ -360,7 +360,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_create_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -377,7 +377,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_create_missing_number() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.create", json!({}));
@@ -388,7 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_create_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_create_singleton_guard_blocks_second() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
@@ -439,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_create_singleton_guard_allows_after_terminal() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
@@ -505,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_get_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -533,7 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_get_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.get", json!({"id": "nonexistent"}));
@@ -572,7 +572,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_list_empty() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "tick.list", json!(null));
@@ -583,7 +583,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_list_filtered_by_status() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
@@ -770,7 +770,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_transition_open_to_sealing() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -804,7 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_transition_invalid_skip_state() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -831,7 +831,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_transition_wrong_role() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -858,7 +858,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_transition_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -873,7 +873,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tick_transition_default_role_is_integrator() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -902,7 +902,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_tick_update_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_test_tick(&stores, &tx, &wm).await;
@@ -933,7 +933,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_tick_update_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -949,7 +949,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_tick_update_missing_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(

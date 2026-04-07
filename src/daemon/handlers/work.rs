@@ -697,7 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_rejects_complete_phase() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -740,7 +740,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_rejects_abandoned_phase() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -773,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -821,7 +821,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_missing_phase_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -836,7 +836,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_phase_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -851,7 +851,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_missing_title() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -867,7 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_create_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -892,7 +892,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_get_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -925,7 +925,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_get_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "work.get", json!({"id": "nonexistent"}));
@@ -965,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_list_empty() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "work.list", json!(null));
@@ -976,7 +976,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_list_filtered_by_phase_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id, phase_id_1) = create_test_phase(&stores, &tx, &wm).await;
@@ -1153,7 +1153,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_transition_draft_to_ready() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -1204,7 +1204,7 @@ mod tests {
     #[tokio::test]
     async fn test_work_transition_ready_to_done_coordinator() {
         // Ready -> Done(Coordinator) is valid: pre-flight AC check short-circuit path
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -1269,7 +1269,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_transition_wrong_role() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -1305,7 +1305,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_work_transition_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -1371,7 +1371,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_work_update_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
@@ -1408,7 +1408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_work_update_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -1424,7 +1424,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_work_update_missing_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -1523,7 +1523,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_self_referencing_dependency_rejected_via_handler() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -1550,7 +1550,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_direct_cycle_rejected_at_update() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;
@@ -1577,7 +1577,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_valid_chain_accepted_via_handler() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, _, phase_id) = create_test_phase(&stores, &tx, &wm).await;

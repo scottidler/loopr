@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_doc_accept_missing_markdown() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.accept", json!({}));
@@ -529,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_doc_accept_empty_markdown() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": "   " }));
@@ -666,7 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_doc_inject_missing_path() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.inject", json!({}));
@@ -677,7 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_doc_inject_nonexistent_file() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.inject", json!({ "path": "/nonexistent/plan.md" }));
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn test_persist_doc_in_memory() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan-test.md".to_string());
         let id = doc.id.clone();

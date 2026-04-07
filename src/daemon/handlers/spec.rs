@@ -416,7 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -441,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_missing_plan_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.create", json!({"title": "Spec"}));
@@ -452,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_plan_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.create", json!({"parent_id": "nonexistent", "title": "Spec"}));
@@ -463,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_missing_title() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -479,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_broadcasts_event() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -519,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_rejects_complete_plan() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -562,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_rejects_abandoned_plan() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -593,7 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_create_rejects_duplicate_draft() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -613,7 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_get_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -642,7 +642,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_get_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.get", json!({"id": "nonexistent"}));
@@ -682,7 +682,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_list_empty() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "spec.list", json!(null));
@@ -693,7 +693,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_list_filtered_by_plan_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id_1 = create_test_plan(&stores, &tx, &wm).await;
@@ -837,7 +837,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_transition_draft_to_active() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let mut rx = tx.subscribe();
@@ -877,7 +877,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_transition_invalid_skip_state() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -908,7 +908,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_transition_wrong_role() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
@@ -939,7 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spec_transition_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(
@@ -1121,7 +1121,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_spec_update_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_spec_update_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -1165,7 +1165,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_spec_update_missing_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(

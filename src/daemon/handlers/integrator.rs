@@ -692,7 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_success() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
@@ -718,7 +718,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_failure() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
@@ -744,7 +744,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_wrong_state() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -772,7 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_not_found() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -789,7 +789,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_missing_tick_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let resp = dispatch(
@@ -806,7 +806,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_events() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let mut rx = tx.subscribe();
         let wm = test_worktree_mgr();
@@ -838,7 +838,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_publish_from_open() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -871,7 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_publish_from_sealing() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
@@ -894,7 +894,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_publish_wrong_state() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
@@ -926,7 +926,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_publish_validation_failure() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -958,7 +958,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_dispatch_routes() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         for method in &["integrator.validate", "integrator.publish"] {
@@ -983,7 +983,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_multi_command_stops_on_first_failure() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_validator_validate_no_validator() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -1224,7 +1224,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_validator_report_no_taskstore() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_validator_reports_no_taskstore() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_tool_list() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 

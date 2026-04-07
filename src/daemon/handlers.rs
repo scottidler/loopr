@@ -317,8 +317,30 @@ pub(crate) mod tests {
     use crate::domain::work::Work;
     use crate::test_util::TestDir;
 
-    pub(crate) fn test_stores() -> Arc<Stores> {
-        Arc::new(Stores::new())
+    pub(crate) fn test_stores() -> (TestDir, Arc<Stores>) {
+        let dir = TestDir::new("loopr-handler-test");
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&dir)
+            .output()
+            .expect("git init failed");
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
+            .current_dir(&dir)
+            .output()
+            .expect("git initial commit failed");
+        let mut stores = Stores::new();
+        stores.config.project.repo_path = dir.to_path_buf();
+        (dir, Arc::new(stores))
     }
 
     pub(crate) fn test_stores_with_taskstore() -> (TestDir, Arc<Stores>) {
@@ -426,7 +448,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_dispatch_unknown_method() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "unknown.method", json!(null));
@@ -437,7 +459,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_dispatch_handshake() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.handshake", json!({"client_version": "0.1.0"}));
@@ -448,7 +470,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_dispatch_status_empty() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.status", json!(null));
@@ -465,7 +487,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_dispatch_status_with_records() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Insert a plan
@@ -523,7 +545,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_dispatch_shutdown() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let mut rx = tx.subscribe();
         let wm = test_worktree_mgr();
@@ -567,7 +589,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_dispatch_system_init_without_store() {
-        let stores = test_stores(); // No TaskStore
+        let (_dir, stores) = test_stores(); // No TaskStore
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.init", json!({}));

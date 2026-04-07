@@ -580,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_start_max_pool_enforcement() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -601,7 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_start_pool_allows_after_terminal() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -620,7 +620,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_pause() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -643,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_pause_missing_session() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -660,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_pause_terminal_state() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -683,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_resume() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -707,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_resume_missing_session() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -724,7 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_output() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -763,7 +763,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_agent_output_missing_session_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
@@ -805,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_implementer_dedup_rejects_second_on_same_work() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
@@ -837,7 +837,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_implementer_dedup_allows_after_terminal() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
@@ -871,7 +871,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_implementer_dedup_allows_different_work_id() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
@@ -934,7 +934,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_status_fallback_to_hashmap() {
-        let stores = test_stores();
+        let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
