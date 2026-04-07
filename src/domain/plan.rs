@@ -6,7 +6,7 @@ use taskstore::record::{IndexValue, Record};
 use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::criteria::AcceptanceCriteria;
-use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso, strip_markdown_section};
 use crate::id;
 
 /// Shared status enum for Plan, Spec, and Phase records.
@@ -204,7 +204,7 @@ impl DocMarkdown for Plan {
     }
 
     fn doc_body(&self) -> String {
-        let mut body = self.description.clone();
+        let mut body = strip_markdown_section(&self.description, "Acceptance Criteria");
         if !self.acceptance_criteria.is_empty() {
             body.push_str("\n\n## Acceptance Criteria\n\n");
             for item in &self.acceptance_criteria.0 {

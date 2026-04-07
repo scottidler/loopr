@@ -108,6 +108,31 @@ fn needs_quoting(s: &str) -> bool {
         || s.is_empty()
 }
 
+/// Remove a `## <section_title>` section (and its content) from a markdown body.
+///
+/// Matches the first occurrence of `## <section_title>` (case-sensitive) and
+/// removes it along with all content up to (but not including) the next `## `
+/// heading or the end of the string. Trailing whitespace is stripped from the
+/// result. Returns the original string unchanged if no match is found.
+pub fn strip_markdown_section(body: &str, section_title: &str) -> String {
+    let needle = format!("## {}", section_title);
+    let Some(start) = body.find(&needle) else {
+        return body.to_string();
+    };
+    // Find the next `## ` heading after the section we're removing.
+    let after_section = &body[start + needle.len()..];
+    let end = after_section
+        .find("\n## ")
+        .map(|pos| start + needle.len() + pos)
+        .unwrap_or(body.len());
+    let mut result = format!("{}{}", &body[..start], &body[end..]);
+    // Strip trailing whitespace that may be left behind.
+    while result.ends_with('\n') || result.ends_with(' ') {
+        result.pop();
+    }
+    result
+}
+
 /// Convert epoch milliseconds to an ISO 8601 UTC timestamp string.
 pub fn millis_to_iso(ms: i64) -> String {
     DateTime::from_timestamp_millis(ms)
@@ -124,6 +149,50 @@ pub fn millis_to_iso(ms: i64) -> String {
 mod tests {
     use super::*;
     use crate::test_util::TestDir;
+
+    // --- strip_markdown_section ---
+
+    #[test]
+    fn test_strip_section_removes_ac_at_end() {
+        let body = "## Overview\n\nSome text.\n\n## Acceptance Criteria\n\n- Must work\n- Must pass\n";
+        let result = strip_markdown_section(body, "Acceptance Criteria");
+        assert!(!result.contains("## Acceptance Criteria"));
+        assert!(!result.contains("Must work"));
+        assert!(result.contains("## Overview"));
+        assert!(result.contains("Some text."));
+    }
+
+    #[test]
+    fn test_strip_section_removes_ac_before_next_heading() {
+        let body =
+            "## Overview\n\nSome text.\n\n## Acceptance Criteria\n\n- Must work\n\n## Next Section\n\nMore text.\n";
+        let result = strip_markdown_section(body, "Acceptance Criteria");
+        assert!(!result.contains("## Acceptance Criteria"));
+        assert!(!result.contains("Must work"));
+        assert!(result.contains("## Overview"));
+        assert!(result.contains("## Next Section"));
+        assert!(result.contains("More text."));
+    }
+
+    #[test]
+    fn test_strip_section_no_match_returns_unchanged() {
+        let body = "## Overview\n\nSome text.\n";
+        let result = strip_markdown_section(body, "Acceptance Criteria");
+        assert_eq!(result, body);
+    }
+
+    #[test]
+    fn test_strip_section_empty_body() {
+        let result = strip_markdown_section("", "Acceptance Criteria");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_strip_section_only_ac() {
+        let body = "## Acceptance Criteria\n\n- Must work\n";
+        let result = strip_markdown_section(body, "Acceptance Criteria");
+        assert_eq!(result, "");
+    }
 
     // --- millis_to_iso ---
 
