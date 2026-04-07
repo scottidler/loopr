@@ -4,6 +4,7 @@ use eyre::eyre;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
+use crate::domain::markdown::write_doc_markdown;
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
@@ -108,7 +109,10 @@ pub(super) fn handle_phase_create(
             return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
 
-        stores.write_phases()?.insert(id.clone(), phase);
+        stores.write_phases()?.insert(id.clone(), phase.clone());
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &phase) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_created("phase", &id));
 
         Ok(DaemonResponse::ok(req.id, phase_json))
@@ -295,6 +299,9 @@ pub(super) fn handle_phase_transition(
             "[transition] phase.{}: {:?} -> {:?} by {}",
             id, from, target_status, role
         );
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &phase_clone) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "phase",
             &id,
@@ -346,6 +353,9 @@ pub(super) fn handle_phase_update(
         }
 
         let phase_json = serde_json::to_value(&*phase)?;
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &*phase) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_updated("phases", &id));
         Ok(DaemonResponse::ok(req.id, phase_json))
     })

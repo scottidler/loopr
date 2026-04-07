@@ -5,6 +5,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
 use crate::domain::criteria::AcceptanceCriteria;
+use crate::domain::markdown::write_doc_markdown;
 use crate::domain::plan::{HierarchyStatus, Plan, PlanStatus};
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
@@ -84,7 +85,10 @@ pub(super) fn handle_plan_create(
             return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
 
-        stores.write_plans()?.insert(id.clone(), plan);
+        stores.write_plans()?.insert(id.clone(), plan.clone());
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &plan) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_created("plan", &id));
 
         Ok(DaemonResponse::ok(req.id, plan_json))
@@ -256,6 +260,9 @@ pub(super) fn handle_plan_transition(
             "[transition] plan.{}: {:?} -> {:?} by {}",
             id, from, target_status, role
         );
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &plan_clone) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "plan",
             &id,
@@ -307,6 +314,9 @@ pub(super) fn handle_plan_update(
         }
 
         let plan_json = serde_json::to_value(&*plan)?;
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &*plan) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_updated("plans", &id));
         Ok(DaemonResponse::ok(req.id, plan_json))
     })

@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
 use crate::domain::bundle::BundleStatus;
+use crate::domain::markdown::write_doc_markdown;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
@@ -223,7 +224,10 @@ pub(super) fn handle_work_create(
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
         };
 
-        stores.write_works()?.insert(id.clone(), work);
+        stores.write_works()?.insert(id.clone(), work.clone());
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &work) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_created("work", &id));
 
         Ok(DaemonResponse::ok(req.id, wi_json))
@@ -441,6 +445,9 @@ pub(super) fn handle_work_transition(
             "[transition] work.{}: {:?} -> {:?} by {}",
             id, from, target_status, role
         );
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &wi_clone) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "work",
             &id,
@@ -545,6 +552,9 @@ pub(super) fn handle_work_update(
         }
 
         let wi_json = serde_json::to_value(&*wi)?;
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &*wi) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_updated("works", &id));
         Ok(DaemonResponse::ok(req.id, wi_json))
     })

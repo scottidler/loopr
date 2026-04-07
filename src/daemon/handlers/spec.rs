@@ -4,6 +4,7 @@ use eyre::eyre;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
+use crate::domain::markdown::write_doc_markdown;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
@@ -107,7 +108,10 @@ pub(super) fn handle_spec_create(
             return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string())));
         }
 
-        stores.write_specs()?.insert(id.clone(), spec);
+        stores.write_specs()?.insert(id.clone(), spec.clone());
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &spec) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_created("spec", &id));
 
         Ok(DaemonResponse::ok(req.id, spec_json))
@@ -294,6 +298,9 @@ pub(super) fn handle_spec_transition(
             "[transition] spec.{}: {:?} -> {:?} by {}",
             id, from, target_status, role
         );
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &spec_clone) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::transition_completed(
             "spec",
             &id,
@@ -342,6 +349,9 @@ pub(super) fn handle_spec_update(
         }
 
         let spec_json = serde_json::to_value(&*spec)?;
+        if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &*spec) {
+            tracing::warn!("docs/loopr write failed for {}: {}", id, e);
+        }
         let _ = event_tx.send(DaemonEvent::record_updated("specs", &id));
         Ok(DaemonResponse::ok(req.id, spec_json))
     })

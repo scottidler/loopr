@@ -1,14 +1,11 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use chrono::Local;
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 use taskstore::record::{IndexValue, Record};
 
 use crate::id;
-
-const RUN_DIR_FORMAT: &str = "%Y%m%d-%H%M%S";
 
 /// The level of the plan hierarchy this document represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -157,18 +154,6 @@ impl WorkDoc {
     pub fn new(parent_id: String, title: String, markdown: String) -> Self {
         Self(Doc::new(DocKind::Work, Some(parent_id), title, markdown))
     }
-}
-
-// --- Run directory management ---
-
-/// Create a new run directory under `<project_root>/.loopr/runs/YYYYMMDD-HHMMSS/`.
-///
-/// Each orchestration run gets an isolated flat directory for its .md artifacts.
-pub fn create_run_dir(project_root: &Path) -> Result<PathBuf> {
-    let name = Local::now().format(RUN_DIR_FORMAT).to_string();
-    let run_dir = project_root.join(".loopr").join("runs").join(name);
-    std::fs::create_dir_all(&run_dir)?;
-    Ok(run_dir)
 }
 
 /// Slugify a title for use in filenames.
@@ -553,35 +538,5 @@ mod tests {
         assert_eq!(filename, "plan-my-plan-2.md");
         let written = std::fs::read_to_string(dir.join("plan-my-plan-2.md")).unwrap();
         assert_eq!(written, "new content");
-    }
-
-    // --- Run directory ---
-
-    #[test]
-    fn test_create_run_dir_creates_directory() {
-        let dir = TestDir::new("loopr-run-test");
-        let run_dir = create_run_dir(&dir).unwrap();
-        assert!(run_dir.exists());
-        assert!(run_dir.is_dir());
-    }
-
-    #[test]
-    fn test_create_run_dir_under_loopr_runs() {
-        let dir = TestDir::new("loopr-run-test");
-        let run_dir = create_run_dir(&dir).unwrap();
-        let expected_prefix = dir.join(".loopr").join("runs");
-        assert!(run_dir.starts_with(&expected_prefix));
-    }
-
-    #[test]
-    fn test_create_run_dir_name_format() {
-        let dir = TestDir::new("loopr-run-test");
-        let run_dir = create_run_dir(&dir).unwrap();
-        let name = run_dir.file_name().unwrap().to_str().unwrap();
-        // YYYYMMDD-HHMMSS = 15 chars
-        assert_eq!(name.len(), 15, "run dir name should be 15 chars: got {}", name);
-        assert!(name.chars().nth(8) == Some('-'), "char 8 should be '-'");
-        assert!(name[..8].chars().all(|c| c.is_ascii_digit()));
-        assert!(name[9..].chars().all(|c| c.is_ascii_digit()));
     }
 }

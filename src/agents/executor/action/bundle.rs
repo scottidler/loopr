@@ -788,7 +788,7 @@ mod tests {
             .await
             .unwrap();
 
-        std::fs::write(dir.join(".gitignore"), ".taskstore/\n*.log\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), ".taskstore/\n*.log\ndocs/\n").unwrap();
         tokio::process::Command::new("git")
             .args(["add", ".gitignore"])
             .current_dir(&dir)

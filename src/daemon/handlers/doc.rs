@@ -32,7 +32,7 @@ use crate::daemon::context::Stores;
 use crate::decomposer::{decompose_hierarchy, extract_acceptance_criteria};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-use crate::domain::doc::{Doc, DocKind, create_run_dir, write_doc_file};
+use crate::domain::doc::{Doc, DocKind, write_doc_file};
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus};
 use crate::domain::spec::{Spec, SpecStatus};
@@ -171,9 +171,11 @@ pub(super) async fn accept_plan_markdown(
     let title = extract_plan_title(&markdown);
     info!("doc entry: plan title = {:?}", title);
 
-    // Create run directory under <repo>/.loopr/runs/YYYYMMDD-HHMMSS/
-    let project_root = stores.config.project.repo_path.clone();
-    let run_dir = create_run_dir(&project_root).map_err(|e| eyre!("Failed to create run directory: {}", e))?;
+    // Create a transient working directory for this decomposition run.
+    // Uses a timestamp-based name under system temp so runs don't accumulate in the repo.
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let run_dir = std::env::temp_dir().join(format!("loopr-run-{}", ts));
+    std::fs::create_dir_all(&run_dir).map_err(|e| eyre!("Failed to create run directory: {}", e))?;
     info!("doc entry: run_dir = {}", run_dir.display());
 
     // Write plan.md into the run directory

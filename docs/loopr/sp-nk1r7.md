@@ -1,0 +1,11 @@
+---
+id: sp-nk1r7
+parent-id: pl-c3f3a
+title: Parent Spec
+status: Draft
+acceptance-criteria: []
+created-at: "2026-04-07T05:38:06Z"
+updated-at: "2026-04-07T05:38:06Z"
+---
+
+
