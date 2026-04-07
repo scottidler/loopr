@@ -33,6 +33,7 @@ use crate::decomposer::{decompose_hierarchy, extract_acceptance_criteria};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
+use crate::domain::markdown::write_doc_markdown;
 use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus};
 use crate::domain::spec::{Spec, SpecStatus};
@@ -520,19 +521,32 @@ fn double_write_old_records(
         // lock drops here
     }
 
-    // Phase C: update in-memory maps
+    // Phase C: update in-memory maps and emit docs/loopr/<id>.md for each record
+    let repo_path = stores.config.project.repo_path.clone();
     for record in records {
         match record {
             OldRecord::Plan(r) => {
+                if let Err(e) = write_doc_markdown(&repo_path, &r) {
+                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
+                }
                 stores.write_plans()?.insert(r.id.clone(), r);
             }
             OldRecord::Spec(r) => {
+                if let Err(e) = write_doc_markdown(&repo_path, &r) {
+                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
+                }
                 stores.write_specs()?.insert(r.id.clone(), r);
             }
             OldRecord::Phase(r) => {
+                if let Err(e) = write_doc_markdown(&repo_path, &r) {
+                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
+                }
                 stores.write_phases()?.insert(r.id.clone(), r);
             }
             OldRecord::Work(r) => {
+                if let Err(e) = write_doc_markdown(&repo_path, &r) {
+                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
+                }
                 stores.write_works()?.insert(r.id.clone(), r);
             }
         }
