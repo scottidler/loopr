@@ -37,8 +37,9 @@ pub trait DocMarkdown {
 
 /// Write `record` as `{repo_path}/docs/loopr/{id}.md`.
 ///
-/// Creates the directory if needed. This is a synchronous `std::fs::write` -
-/// files are small (a few KB) and non-blocking in practice.
+/// If the file already exists, the existing body (LLM prose) is preserved and
+/// only the frontmatter is updated. If the file does not exist, `doc_body()` is
+/// used as the body (contains only the structured AC section for new IPC records).
 ///
 /// Advisory: failure logs a warning but MUST NOT propagate to the caller.
 /// Callers should use the returned `Result` only for logging.
@@ -46,13 +47,82 @@ pub fn write_doc_markdown(repo_path: &Path, record: &impl DocMarkdown) -> Result
     let dir = repo_path.join("docs").join("loopr");
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{}.md", record.doc_id()));
+    let body = if path.exists() {
+        read_body_from_path(&path).unwrap_or_else(|_| record.doc_body())
+    } else {
+        record.doc_body()
+    };
     let content = format!(
         "---\n{}---\n\n{}\n",
         format_frontmatter(&record.doc_frontmatter()),
-        record.doc_body()
+        body
     );
     fs::write(&path, content)?;
     Ok(())
+}
+
+/// Write `record` with an explicit LLM `body` as `{repo_path}/docs/loopr/{id}.md`.
+///
+/// Used by `persist_hierarchy` to write the initial file with the full LLM markdown
+/// content. Overwrites any existing file.
+pub fn write_doc_markdown_body(repo_path: &Path, record: &impl DocMarkdown, body: &str) -> Result<()> {
+    let dir = repo_path.join("docs").join("loopr");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.md", record.doc_id()));
+    let content = format!(
+        "---\n{}---\n\n{}\n",
+        format_frontmatter(&record.doc_frontmatter()),
+        body
+    );
+    fs::write(&path, content)?;
+    Ok(())
+}
+
+/// Read the body (everything after the closing `---` of the frontmatter) from a
+/// `docs/loopr/<id>.md` file. Returns empty string if the file has no body.
+///
+/// Errors if the file cannot be read.
+pub fn read_doc_content(repo_path: &Path, id: &str) -> Result<String> {
+    let path = repo_path.join("docs").join("loopr").join(format!("{}.md", id));
+    read_body_from_path(&path)
+}
+
+fn read_body_from_path(path: &Path) -> Result<String> {
+    let raw = fs::read_to_string(path).map_err(|e| eyre::eyre!("read_doc_content: {}: {}", path.display(), e))?;
+    Ok(extract_body_from_markdown(&raw))
+}
+
+/// Extract the body from a markdown string with YAML frontmatter.
+/// Returns everything after the closing `---` delimiter, stripped of leading blank lines.
+fn extract_body_from_markdown(content: &str) -> String {
+    let mut in_frontmatter = false;
+    let mut past_frontmatter = false;
+    let mut body_lines: Vec<&str> = Vec::new();
+
+    for line in content.lines() {
+        if line == "---" && !in_frontmatter && !past_frontmatter {
+            in_frontmatter = true;
+            continue;
+        }
+        if line == "---" && in_frontmatter {
+            in_frontmatter = false;
+            past_frontmatter = true;
+            continue;
+        }
+        if past_frontmatter {
+            body_lines.push(line);
+        }
+    }
+
+    // Trim leading blank lines
+    while body_lines.first().map(|s| s.is_empty()).unwrap_or(false) {
+        body_lines.remove(0);
+    }
+    // Trim trailing blank lines
+    while body_lines.last().map(|s| s.is_empty()).unwrap_or(false) {
+        body_lines.pop();
+    }
+    body_lines.join("\n")
 }
 
 // =====================================================

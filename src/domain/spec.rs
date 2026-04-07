@@ -16,6 +16,8 @@ pub struct Spec {
     pub id: String,
     pub parent_id: String,
     pub title: String,
+    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
+    #[serde(default, skip_serializing)]
     pub description: String,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
@@ -155,7 +157,7 @@ mod tests {
         assert_eq!(spec.id, deserialized.id);
         assert_eq!(spec.parent_id, deserialized.parent_id);
         assert_eq!(spec.title, deserialized.title);
-        assert_eq!(spec.description, deserialized.description);
+        // description is skip_serializing - not part of serde roundtrip
         assert_eq!(spec.status(), deserialized.status());
         assert_eq!(spec.created_at, deserialized.created_at);
         assert_eq!(spec.updated_at, deserialized.updated_at);

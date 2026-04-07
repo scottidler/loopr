@@ -1399,7 +1399,7 @@ mod tests {
         assert!(!resp.is_error(), "work.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Updated Work");
-        assert_eq!(result["description"], "New desc");
+        // description is skip_serializing - not in JSON response
         assert_eq!(result["assignee"], "agent-1");
         assert_eq!(result["resource_tags"].as_array().unwrap().len(), 1);
         assert_eq!(result["acceptance_criteria"].as_array().unwrap().len(), 1);

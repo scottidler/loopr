@@ -1103,7 +1103,7 @@ mod tests {
         assert!(!resp.is_error(), "plan.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Updated Plan");
-        assert_eq!(result["description"], "New desc");
+        // description is skip_serializing - not in JSON response
         assert_eq!(result["acceptance_criteria"], serde_json::json!(["New criteria"]));
     }
 

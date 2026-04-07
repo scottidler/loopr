@@ -855,11 +855,15 @@ async fn ratify_hierarchy<H: HttpClient + Sync>(
 ///
 /// Returned by `decompose_hierarchy` so callers receive strongly-typed records
 /// directly instead of `Vec<Doc>` that must be converted in a separate pass.
+///
+/// `content` maps domain record ID → LLM markdown body. `persist_hierarchy` uses
+/// this to write `docs/loopr/<id>.md` with the full prose content.
 pub struct DecomposedHierarchy {
     pub plan: Plan,
     pub specs: Vec<Spec>,
     pub phases: Vec<Phase>,
     pub works: Vec<Work>,
+    pub content: std::collections::HashMap<String, String>,
 }
 
 /// Convert in-memory `Vec<ChildRecord>` into typed domain records.
@@ -937,11 +941,19 @@ fn records_to_hierarchy(
         }
     }
 
+    // Build content map: id -> LLM markdown body (for persist_hierarchy to write docs/loopr/)
+    let mut content = std::collections::HashMap::new();
+    content.insert(plan_id.to_string(), plan_markdown.to_string());
+    for record in all_records {
+        content.insert(record.id.clone(), record.content.clone());
+    }
+
     Ok(DecomposedHierarchy {
         plan,
         specs,
         phases,
         works,
+        content,
     })
 }
 

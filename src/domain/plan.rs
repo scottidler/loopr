@@ -65,87 +65,13 @@ impl fmt::Display for Tier {
     }
 }
 
-/// Classify a Plan as Full or Brief using the tier-gate prompt and an LLM call.
-///
-/// Reads the tier-gate.pmt prompt, appends the Plan's description, calls the LLM,
-/// and parses "full" or "brief" from the response. Falls back to Full on any error.
-///
-/// Uses Haiku (or whatever model the ValidatorConfig specifies) - this is a binary
-/// classification task, not a reasoning task.
-pub async fn classify_tier(plan: &Plan, client: &crate::validator::client::LlmClient) -> Tier {
-    let prompt_template = crate::prompts::store().tier_gate.clone();
-    if prompt_template.is_empty() {
-        tracing::warn!("tier-gate prompt is empty, defaulting to Full");
-        return Tier::Full;
-    }
-
-    let prompt = format!("{}\n{}", prompt_template, plan.description);
-
-    match client.call(&prompt).await {
-        Ok(response) => match parse_tier(&response) {
-            Some(tier) => {
-                tracing::info!("Tier classification: {:?} (plan={})", tier, plan.id);
-                tier
-            }
-            None => {
-                tracing::warn!(
-                    "Tier classification returned {:?}, retrying (plan={})",
-                    response.trim(),
-                    plan.id
-                );
-                retry_tier(client, &response, &plan.id).await
-            }
-        },
-        Err(e) => {
-            tracing::warn!("Tier classification failed, defaulting to Full: {}", e);
-            Tier::Full
-        }
-    }
-}
-
-fn parse_tier(response: &str) -> Option<Tier> {
-    match response.trim().to_lowercase().as_str() {
-        "brief" => Some(Tier::Brief),
-        "full" => Some(Tier::Full),
-        _ => None,
-    }
-}
-
-async fn retry_tier(client: &crate::validator::client::LlmClient, bad_response: &str, plan_id: &str) -> Tier {
-    let correction = format!(
-        "You responded with {:?} but the only valid responses are \
-         exactly \"Brief\" or \"Full\". Reply with one of those two \
-         words only, nothing else.",
-        bad_response.trim()
-    );
-    match client.call(&correction).await {
-        Ok(response) => match parse_tier(&response) {
-            Some(tier) => {
-                tracing::info!("Tier classification on retry: {:?} (plan={})", tier, plan_id);
-                tier
-            }
-            None => {
-                tracing::error!(
-                    "Tier classification retry also returned {:?}, \
-                     defaulting to Full (plan={})",
-                    response.trim(),
-                    plan_id
-                );
-                Tier::Full
-            }
-        },
-        Err(e) => {
-            tracing::error!("Tier classification retry failed, defaulting to Full: {}", e);
-            Tier::Full
-        }
-    }
-}
-
-/// Top-level objective. Contains markdown description and acceptance criteria.
+/// Top-level objective. Contains acceptance criteria and lifecycle status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     pub id: String,
     pub title: String,
+    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
+    #[serde(default, skip_serializing)]
     pub description: String,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,

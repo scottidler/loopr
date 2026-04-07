@@ -53,6 +53,8 @@ pub struct Work {
     pub id: String,
     pub parent_id: String,
     pub title: String,
+    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
+    #[serde(default, skip_serializing)]
     pub description: String,
     pub assignee: Option<String>,
     status: WorkStatus,

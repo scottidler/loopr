@@ -16,6 +16,8 @@ pub struct Phase {
     pub id: String,
     pub parent_id: String,
     pub title: String,
+    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
+    #[serde(default, skip_serializing)]
     pub description: String,
     pub order: u32,
     status: PhaseStatus,
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(phase.id, deserialized.id);
         assert_eq!(phase.parent_id, deserialized.parent_id);
         assert_eq!(phase.title, deserialized.title);
-        assert_eq!(phase.description, deserialized.description);
+        // description is skip_serializing - not part of serde roundtrip
         assert_eq!(phase.order, deserialized.order);
         assert_eq!(phase.status(), deserialized.status());
         assert_eq!(phase.created_at, deserialized.created_at);
