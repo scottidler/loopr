@@ -626,9 +626,12 @@ pub async fn decompose<H: HttpClient + Sync>(
 /// In Brief mode (plan has no contracts), skips Spec and Phase levels
 /// and decomposes Plan directly into Works.
 ///
-/// Returns `(docs, partial_err)`. When `partial_err` is `Some`, one or more spec
-/// branches failed but the successful branches' docs are still returned. Ratification
-/// is skipped on partial failure. The caller is responsible for persisting partial_err.
+/// Returns `(hierarchy, child_docs, partial_err)`.
+///
+/// `hierarchy` contains typed Plan/Spec/Phase/Work domain records ready for persistence.
+/// `child_docs` are the raw Doc records still needed for ingestion tracking (`persist_doc`).
+/// `partial_err`: when `Some`, one or more spec branches failed but successful branches
+/// are still returned. Ratification is skipped on partial failure.
 #[instrument(skip_all, fields(plan_id = %plan.id, plan_title = ?plan.title, brief = %brief, run_dir = %run_dir.display()))]
 pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     plan: &Doc,
@@ -636,7 +639,12 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     http_client: &H,
     brief: bool,
-) -> Result<(Vec<Doc>, Option<String>)> {
+) -> Result<(DecomposedHierarchy, Vec<Doc>, Option<String>)> {
+    // Read plan markdown now - needed for Plan.description in docs_to_hierarchy.
+    let plan_path = run_dir.join(&plan.markdown);
+    let plan_markdown = std::fs::read_to_string(&plan_path)
+        .context(format!("Failed to read plan markdown: {}", plan_path.display()))?;
+
     let mut all_docs = Vec::new();
 
     if brief {
@@ -699,10 +707,11 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
         resolve_cross_branch_deps(&mut all_docs, &global_title_to_id);
 
         if let Some(err) = branch_error {
-            // Partial success: persist completed branches but skip ratification
-            // (ratification requires a complete hierarchy).
+            // Partial success: convert to typed records and return with error.
+            // Ratification is skipped (requires a complete hierarchy).
             info!("partial failure plan={} total_docs={}", plan.id, all_docs.len());
-            return Ok((all_docs, Some(err)));
+            let hierarchy = docs_to_hierarchy(plan, &plan_markdown, &all_docs, run_dir)?;
+            return Ok((hierarchy, all_docs, Some(err)));
         }
     }
 
@@ -710,7 +719,8 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
     // Hierarchical ratification (bottom-up, sequential by design)
     ratify_hierarchy(plan, &all_docs, run_dir, config, http_client).await?;
 
-    Ok((all_docs, None))
+    let hierarchy = docs_to_hierarchy(plan, &plan_markdown, &all_docs, run_dir)?;
+    Ok((hierarchy, all_docs, None))
 }
 
 /// Decompose one spec into phases + works, with phases' work-decompositions running concurrently.
@@ -1450,27 +1460,30 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (all_docs, partial_err) = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (hierarchy, _child_docs, partial_err) =
+            decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_none(),
             "expected no partial failure, got: {:?}",
             partial_err
         );
 
-        // Find Work Alpha and Work Beta in the results
-        let alpha = all_docs
+        // Find Work Alpha and Work Beta in the domain records
+        let alpha = hierarchy
+            .works
             .iter()
-            .find(|d| d.title == "Work Alpha")
+            .find(|w| w.title == "Work Alpha")
             .expect("Work Alpha not found");
-        let beta = all_docs
+        let beta = hierarchy
+            .works
             .iter()
-            .find(|d| d.title == "Work Beta")
+            .find(|w| w.title == "Work Beta")
             .expect("Work Beta not found");
 
         assert_eq!(
             beta.dependencies,
             vec![alpha.id.clone()],
-            "Work Beta must resolve its cross-spec dependency to Work Alpha's ID"
+            "Work Beta must resolve its cross-spec dependency to Work Alpha's domain ID"
         );
 
         unsafe { std::env::remove_var(&env_key) };
@@ -1558,19 +1571,32 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (all_docs, partial_err) = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (hierarchy, _child_docs, partial_err) =
+            decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_none(),
             "expected no partial failure, got: {:?}",
             partial_err
         );
 
-        let specs: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
-        let phases: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
-        let works: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
-        assert_eq!(specs.len(), 2, "expected 2 specs, got {}", specs.len());
-        assert_eq!(phases.len(), 2, "expected 2 phases, got {}", phases.len());
-        assert_eq!(works.len(), 2, "expected 2 works, got {}", works.len());
+        assert_eq!(
+            hierarchy.specs.len(),
+            2,
+            "expected 2 specs, got {}",
+            hierarchy.specs.len()
+        );
+        assert_eq!(
+            hierarchy.phases.len(),
+            2,
+            "expected 2 phases, got {}",
+            hierarchy.phases.len()
+        );
+        assert_eq!(
+            hierarchy.works.len(),
+            2,
+            "expected 2 works, got {}",
+            hierarchy.works.len()
+        );
 
         unsafe { std::env::remove_var(&env_key) };
     }
@@ -1651,26 +1677,29 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (all_docs, partial_err) = decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
+        let (hierarchy, _child_docs, partial_err) =
+            decompose_hierarchy(&plan, &dir, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_none(),
             "expected no partial failure, got: {:?}",
             partial_err
         );
 
-        let alpha = all_docs
+        let alpha = hierarchy
+            .works
             .iter()
-            .find(|d| d.title == "Work Alpha")
+            .find(|w| w.title == "Work Alpha")
             .expect("Work Alpha not found");
-        let beta = all_docs
+        let beta = hierarchy
+            .works
             .iter()
-            .find(|d| d.title == "Work Beta")
+            .find(|w| w.title == "Work Beta")
             .expect("Work Beta not found");
 
         assert_eq!(
             beta.dependencies,
             vec![alpha.id.clone()],
-            "Work Beta must resolve its cross-spec dep to Work Alpha's ID via post-merge pass"
+            "Work Beta must resolve its cross-spec dep to Work Alpha's domain ID via post-merge pass"
         );
 
         unsafe { std::env::remove_var(&env_key) };
@@ -1790,7 +1819,7 @@ mod tests {
         let result = decompose_hierarchy(&plan, &dir, &config, &mock, false).await;
         assert!(result.is_ok(), "decompose_hierarchy should succeed with partial docs");
 
-        let (all_docs, partial_err) = result.unwrap();
+        let (hierarchy, _child_docs, partial_err) = result.unwrap();
 
         // partial_err must be set - Bad Track branch failed
         assert!(partial_err.is_some(), "expected partial_err to be set, got None");
@@ -1800,25 +1829,26 @@ mod tests {
             "partial_err should name the failed spec, got: {err_msg}"
         );
 
-        // Good Track's docs must be present
-        assert!(!all_docs.is_empty(), "should have docs from the successful branch");
-        let phases: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
-        let works: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
+        // Good Track's domain records must be present
         assert_eq!(
-            phases.len(),
+            hierarchy.phases.len(),
             1,
             "expected 1 phase from Good Track, got {}",
-            phases.len()
+            hierarchy.phases.len()
         );
-        assert_eq!(works.len(), 1, "expected 1 work from Good Track, got {}", works.len());
-
-        // The Good Track spec itself is also in all_docs (returned by decompose_into(plan, Spec))
-        let specs: Vec<_> = all_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
         assert_eq!(
-            specs.len(),
+            hierarchy.works.len(),
+            1,
+            "expected 1 work from Good Track, got {}",
+            hierarchy.works.len()
+        );
+
+        // Both specs are present (Good Track + failed Bad Track which was produced by plan decompose)
+        assert_eq!(
+            hierarchy.specs.len(),
             2,
             "both specs should be present (even failed one from plan decompose), got {}",
-            specs.len()
+            hierarchy.specs.len()
         );
 
         unsafe { std::env::remove_var(&env_key) };

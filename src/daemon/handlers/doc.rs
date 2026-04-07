@@ -17,11 +17,9 @@
 //! The manifest entry path (`coordinator.seed_manifest`) is in coordinator.rs and
 //! skips the Decomposer, injecting a pre-decomposed hierarchy directly.
 
-use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
-use eyre::{bail, eyre};
+use eyre::eyre;
 use tracing::{info, instrument, warn};
 
 use serde_json::json;
@@ -29,15 +27,11 @@ use tokio::sync::broadcast;
 
 use crate::config::{IntegratorConfig, InterviewMode, ValidatorConfig};
 use crate::daemon::context::Stores;
-use crate::decomposer::{decompose_hierarchy, extract_acceptance_criteria};
+use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy, extract_acceptance_criteria};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
 use crate::domain::markdown::write_doc_markdown;
-use crate::domain::phase::{Phase, PhaseStatus};
-use crate::domain::plan::{Plan, PlanStatus};
-use crate::domain::spec::{Spec, SpecStatus};
-use crate::domain::work::{Work, WorkStatus};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::validator::client::{LlmClient, ReqwestClient};
 use crate::worktree::manager::WorktreeManager;
@@ -268,13 +262,13 @@ pub(super) async fn accept_plan_markdown(
             info!("{} starting decomposition (brief={})", decomposer_prefix, brief);
             let client = ReqwestClient::new();
             match decompose_hierarchy(&plan_doc_bg, &run_dir_bg, &dc, &client, brief).await {
-                Ok((child_docs, partial_err)) => {
+                Ok((hierarchy, child_docs, partial_err)) => {
                     let child_count = child_docs.len();
                     info!(
                         "{} decomposition produced {} child docs",
                         decomposer_prefix, child_count
                     );
-                    match double_write_old_records(&stores_bg, &plan_doc_bg, &markdown_bg, &child_docs, &run_dir_bg) {
+                    match persist_hierarchy(&stores_bg, &event_tx_bg, hierarchy) {
                         Ok(()) => {
                             for child in child_docs {
                                 if let Err(e) = persist_doc(&stores_bg, child, &event_tx_bg) {
@@ -283,7 +277,7 @@ pub(super) async fn accept_plan_markdown(
                             }
                             if let Some(err) = partial_err {
                                 // Partial success: some spec branches failed. Persist completed
-                                // docs (done above) but signal failure so coordinator surfaces
+                                // records (done above) but signal failure so coordinator surfaces
                                 // NeedsHelp instead of busy-polling.
                                 if let Ok(mut states) = stores_bg.write_coordinator_states()
                                     && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
@@ -389,167 +383,51 @@ pub(super) async fn accept_plan_markdown(
     ))
 }
 
-/// Double-write old-style Plan/Spec/Phase/Work records alongside Docs so the
-/// Coordinator (which reads old stores) can execute the plan.
+/// Persist a `DecomposedHierarchy` to the TaskStore, in-memory maps, docs/loopr/, and events.
 ///
-/// Returns `Err` on any failure; the caller must treat a failed double-write as
-/// `decomposition.failed` so the coordinator never gets stuck in `Decomposing`.
-/// A fully-built old-format record ready for store insertion.
-enum OldRecord {
-    Plan(Plan),
-    Spec(Spec),
-    Phase(Phase),
-    Work(Work),
-}
-
-impl OldRecord {
-    fn old_id(&self) -> &str {
-        match self {
-            OldRecord::Plan(r) => &r.id,
-            OldRecord::Spec(r) => &r.id,
-            OldRecord::Phase(r) => &r.id,
-            OldRecord::Work(r) => &r.id,
-        }
-    }
-}
-
-/// Build all old-format records in memory (Phase A of double_write_old_records).
+/// Inserts records in dependency order: Plan -> Specs -> Phases -> Works.
+/// Each record goes through the same pattern as the IPC handlers:
+///   1. TaskStore write (under lock)
+///   2. In-memory insert
+///   3. write_doc_markdown (advisory: log-and-continue on failure)
+///   4. DaemonEvent broadcast
 ///
-/// Pure computation: reads markdown files, constructs Plan/Spec/Phase/Work values,
-/// resolves parent IDs. Returns Err immediately if any file is missing or a parent
-/// reference cannot be resolved. No DB writes happen in this function.
-fn build_all_old_records(
-    plan_doc: &Doc,
-    plan_markdown: &str,
-    child_docs: &[Doc],
-    run_dir: &Path,
-) -> eyre::Result<Vec<OldRecord>> {
-    let mut records: Vec<OldRecord> = Vec::new();
-    let mut doc_to_old: HashMap<String, String> = HashMap::new();
-
-    use crate::domain::criteria::AcceptanceCriteria;
-    let title = extract_plan_title(plan_markdown);
-    let ac = AcceptanceCriteria(plan_doc.acceptance_criteria.clone());
-    let mut old_plan = Plan::new(title, plan_markdown.to_string(), ac);
-    old_plan.force_status(PlanStatus::Active);
-    let old_plan_id = old_plan.id.clone();
-    doc_to_old.insert(plan_doc.id.clone(), old_plan_id);
-    records.push(OldRecord::Plan(old_plan));
-
-    // Process specs before phases before works so parent records exist first.
-    let specs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
-    let phases: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
-    let works: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
-    let mut phase_counters: HashMap<String, u32> = HashMap::new();
-
-    for child in specs.iter().chain(phases.iter()).chain(works.iter()) {
-        let Some(ref doc_parent_id) = child.parent_id else {
-            continue;
-        };
-        let Some(old_parent_id) = doc_to_old.get(doc_parent_id).cloned() else {
-            bail!("double-write: no old record for parent Doc {}", doc_parent_id);
-        };
-        let content = std::fs::read_to_string(run_dir.join(&child.markdown))
-            .map_err(|e| eyre!("double-write: failed to read {}: {}", child.markdown, e))?;
-        let child_title = child.title.clone();
-
-        let record = match child.kind {
-            DocKind::Spec => {
-                let mut spec = Spec::new(old_parent_id, child_title, content);
-                spec.force_status(SpecStatus::Active);
-                OldRecord::Spec(spec)
-            }
-            DocKind::Phase => {
-                let order = phase_counters.entry(doc_parent_id.clone()).or_insert(0);
-                let current_order = *order;
-                *order += 1;
-                let mut phase = Phase::new(old_parent_id, child_title, content, current_order);
-                phase.force_status(PhaseStatus::Active);
-                OldRecord::Phase(phase)
-            }
-            DocKind::Work => {
-                let mut work = Work::new(old_parent_id, child_title, content);
-                work.force_status(WorkStatus::Ready);
-                work.acceptance_criteria =
-                    crate::domain::criteria::AcceptanceCriteria(child.acceptance_criteria.clone());
-                work.dependencies = child
-                    .dependencies
-                    .iter()
-                    .filter_map(|dep_doc_id| doc_to_old.get(dep_doc_id).cloned())
-                    .collect();
-                OldRecord::Work(work)
-            }
-            DocKind::Plan => continue,
-        };
-        doc_to_old.insert(child.id.clone(), record.old_id().to_string());
-        records.push(record);
-    }
-
-    Ok(records)
-}
-
-fn double_write_old_records(
+/// The `resource_tags.is_empty()` guard from `handle_work_create` is intentionally
+/// NOT applied here - works from decomposition always have empty resource_tags.
+fn persist_hierarchy(
     stores: &Arc<Stores>,
-    plan_doc: &Doc,
-    plan_markdown: &str,
-    child_docs: &[Doc],
-    run_dir: &Path,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    hierarchy: DecomposedHierarchy,
 ) -> eyre::Result<()> {
-    // Phase A: build all records in memory; fails fast before any DB write
-    let records = build_all_old_records(plan_doc, plan_markdown, child_docs, run_dir)?;
+    let repo_path = stores.config.project.repo_path.clone();
 
-    // Phase B: hold the TaskStore lock for the entire batch so no concurrent reader
-    // observes a half-written hierarchy during the write window
-    if let Some(store_arc) = &stores.store {
-        let mut store = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
-        for record in &records {
-            match record {
-                OldRecord::Plan(r) => store
+    macro_rules! persist_one {
+        ($writer:expr, $coll:literal, $r:expr) => {{
+            let r = $r;
+            if let Some(store) = &stores.store {
+                store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
                     .create(r.clone())
-                    .map_err(|e| eyre!("failed to persist old Plan: {}", e))?,
-                OldRecord::Spec(r) => store
-                    .create(r.clone())
-                    .map_err(|e| eyre!("failed to persist old Spec: {}", e))?,
-                OldRecord::Phase(r) => store
-                    .create(r.clone())
-                    .map_err(|e| eyre!("failed to persist old Phase: {}", e))?,
-                OldRecord::Work(r) => store
-                    .create(r.clone())
-                    .map_err(|e| eyre!("failed to persist old Work: {}", e))?,
-            };
-        }
-        // lock drops here
+                    .map_err(|e| eyre!("failed to persist {}: {}", $coll, e))?;
+            }
+            $writer?.insert(r.id.clone(), r.clone());
+            if let Err(e) = write_doc_markdown(&repo_path, &r) {
+                tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
+            }
+            let _ = event_tx.send(DaemonEvent::record_created($coll, &r.id));
+        }};
     }
 
-    // Phase C: update in-memory maps and emit docs/loopr/<id>.md for each record
-    let repo_path = stores.config.project.repo_path.clone();
-    for record in records {
-        match record {
-            OldRecord::Plan(r) => {
-                if let Err(e) = write_doc_markdown(&repo_path, &r) {
-                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
-                }
-                stores.write_plans()?.insert(r.id.clone(), r);
-            }
-            OldRecord::Spec(r) => {
-                if let Err(e) = write_doc_markdown(&repo_path, &r) {
-                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
-                }
-                stores.write_specs()?.insert(r.id.clone(), r);
-            }
-            OldRecord::Phase(r) => {
-                if let Err(e) = write_doc_markdown(&repo_path, &r) {
-                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
-                }
-                stores.write_phases()?.insert(r.id.clone(), r);
-            }
-            OldRecord::Work(r) => {
-                if let Err(e) = write_doc_markdown(&repo_path, &r) {
-                    tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
-                }
-                stores.write_works()?.insert(r.id.clone(), r);
-            }
-        }
+    persist_one!(stores.write_plans(), "plan", hierarchy.plan);
+    for r in hierarchy.specs {
+        persist_one!(stores.write_specs(), "spec", r);
+    }
+    for r in hierarchy.phases {
+        persist_one!(stores.write_phases(), "phase", r);
+    }
+    for r in hierarchy.works {
+        persist_one!(stores.write_works(), "work", r);
     }
 
     Ok(())
@@ -860,106 +738,6 @@ mod tests {
 
         let docs = stores.read_docs().unwrap();
         assert!(docs.contains_key(&id));
-    }
-
-    // --- double_write_old_records ---
-
-    #[test]
-    fn test_double_write_returns_err_when_child_file_missing() {
-        // If a child doc references a markdown file that doesn't exist on disk,
-        // double_write_old_records must return Err (not silently skip).
-        let dir = TestDir::new("double-write-missing-file");
-        let mut stores = crate::daemon::context::Stores::new();
-        stores.config.project.repo_path = dir.to_path_buf();
-        let stores = std::sync::Arc::new(stores);
-
-        let plan_markdown = "# My Plan\n\n## Summary\n\nDo stuff.\n";
-        let plan_doc = Doc::new(DocKind::Plan, None, "My Plan".to_string(), "plan.md".to_string());
-
-        // Child references a file that doesn't exist in the run_dir
-        let mut child = Doc::new(
-            DocKind::Spec,
-            Some(plan_doc.id.clone()),
-            "Spec One".to_string(),
-            "spec-one.md".to_string(), // file is not created on disk
-        );
-        child.parent_id = Some(plan_doc.id.clone());
-
-        let run_dir = dir.to_path_buf();
-        let result = double_write_old_records(&stores, &plan_doc, plan_markdown, &[child], &run_dir);
-
-        assert!(result.is_err(), "expected Err when child file is missing");
-    }
-
-    #[test]
-    fn test_build_all_old_records_fails_on_missing_parent() {
-        // A child doc whose parent_id is not in the plan hierarchy must cause
-        // build_all_old_records to return Err before any DB write occurs.
-        let dir = TestDir::new("double-write-missing-parent");
-
-        let plan_markdown = "# Test Plan\n\n## Summary\n\nDo stuff.\n";
-        let plan_doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), "plan.md".to_string());
-
-        // Child has an unknown parent_id (not the plan's id)
-        let mut child = Doc::new(
-            DocKind::Spec,
-            Some("unknown-parent-id".to_string()),
-            "Orphan Spec".to_string(),
-            "orphan.md".to_string(),
-        );
-        child.parent_id = Some("unknown-parent-id".to_string());
-        std::fs::write(dir.join("orphan.md"), "# Orphan").unwrap();
-
-        let result = build_all_old_records(&plan_doc, plan_markdown, &[child], &dir);
-
-        assert!(result.is_err(), "expected Err for missing parent reference");
-        let msg = format!("{}", result.err().unwrap());
-        assert!(
-            msg.contains("no old record for parent Doc"),
-            "error should mention missing parent: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_double_write_no_interleaved_reads_on_failure() {
-        // When build_all_old_records fails (child file missing), double_write_old_records
-        // must return Err without having written any record to the store or in-memory maps.
-        let dir = TestDir::new("double-write-atomic");
-        let mut stores_inner = crate::daemon::context::Stores::new();
-        stores_inner.config.project.repo_path = dir.to_path_buf();
-        let stores = std::sync::Arc::new(stores_inner);
-
-        let plan_markdown = "# Atomic Plan\n\n## Summary\n\nDo stuff.\n";
-        let plan_doc = Doc::new(DocKind::Plan, None, "Atomic Plan".to_string(), "plan.md".to_string());
-
-        // One valid spec (file present) and one invalid spec (file missing)
-        let mut good_spec = Doc::new(
-            DocKind::Spec,
-            Some(plan_doc.id.clone()),
-            "Good Spec".to_string(),
-            "good.md".to_string(),
-        );
-        good_spec.parent_id = Some(plan_doc.id.clone());
-        std::fs::write(dir.join("good.md"), "# Good Spec").unwrap();
-
-        let mut bad_spec = Doc::new(
-            DocKind::Spec,
-            Some(plan_doc.id.clone()),
-            "Bad Spec".to_string(),
-            "bad.md".to_string(), // file intentionally missing
-        );
-        bad_spec.parent_id = Some(plan_doc.id.clone());
-
-        let result = double_write_old_records(&stores, &plan_doc, plan_markdown, &[good_spec, bad_spec], &dir);
-
-        // Must fail (Phase A detected the missing file before any DB write)
-        assert!(result.is_err(), "expected Err when a child file is missing");
-
-        // In-memory store must be empty (no partial write)
-        let plans = stores.read_plans().unwrap();
-        assert!(plans.is_empty(), "no Plan should be in memory after Phase A failure");
-        let specs = stores.read_specs().unwrap();
-        assert!(specs.is_empty(), "no Spec should be in memory after Phase A failure");
     }
 
     // --- single coordinator invariant (Phase 2) ---
