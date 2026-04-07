@@ -112,7 +112,7 @@ E2E_TARGET="${E2E_TARGET:-rust-version}"
 
 # Each run gets a timestamped subdirectory under the target name
 RUN_TS="$(date +%Y%m%d-%H%M%S)"
-TARGET_BASE="/tmp/loopr-e2e/${E2E_TARGET}"
+TARGET_BASE="/tmp/loopr/e2e/${E2E_TARGET}"
 TARGET="${TARGET_BASE}/${RUN_TS}"
 LATEST_LINK="${TARGET_BASE}/latest"
 
