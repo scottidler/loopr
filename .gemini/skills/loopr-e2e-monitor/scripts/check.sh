@@ -197,12 +197,12 @@ fi
 
 # ── 7. Decomposed Docs ────────────────────────────────────────────────────────
 section "7. Generated Document Output State"
-LOOPR_RUNS="$TARGET/.loopr/runs"
+LOOPR_RUNS="$TARGET/docs/loopr"
 if [ -d "$LOOPR_RUNS" ]; then
-    echo "Found .loopr/runs/ docs. Total markdown files:"
-    find "$LOOPR_RUNS" -type f -name "*.md" | wc -l
+    echo "Found docs/loopr/ docs. Total markdown files:"
+    find "$LOOPR_RUNS" -name "*.md" | wc -l
 else
-    warn "No .loopr/runs/ directory found"
+    warn "No docs/loopr/ directory found"
 fi
 
 echo
