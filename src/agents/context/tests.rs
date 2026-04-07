@@ -859,16 +859,16 @@ fn test_context_builder_guidance_appears_before_hierarchy() {
         .user_message
         .find("## Work Status Transitions")
         .expect("guidance section not found");
-    let hierarchy_pos = assembled
+    let assignment_pos = assembled
         .user_message
-        .find("## Hierarchy")
-        .expect("hierarchy section not found");
+        .find("## Your Assignment")
+        .expect("assignment section not found");
 
     assert!(
-        guidance_pos < hierarchy_pos,
-        "Guidance (pos {}) should appear before Hierarchy (pos {})",
+        guidance_pos < assignment_pos,
+        "Guidance (pos {}) should appear before Your Assignment (pos {})",
         guidance_pos,
-        hierarchy_pos
+        assignment_pos
     );
 }
 

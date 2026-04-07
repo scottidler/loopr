@@ -246,9 +246,12 @@ pub struct ContextBuilder<'a> {
     dependency_summaries: Vec<DependencySummary>,
     // Learning scope chain
     scope_ids: Vec<(String, LearningScope)>,
-    // IDs for sibling lookups
+    // IDs for sibling lookups and docs/loopr/ parent links
     work_id: Option<String>,
     parent_id: Option<String>,
+    plan_id: Option<String>,
+    spec_id: Option<String>,
+    phase_id: Option<String>,
     // Optional sections
     bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, touched_paths)
     bundle_diff: Option<String>,
@@ -294,6 +297,9 @@ impl<'a> ContextBuilder<'a> {
             scope_ids: Vec::new(),
             work_id: None,
             parent_id: None,
+            plan_id: None,
+            spec_id: None,
+            phase_id: None,
             bundle_info: None,
             bundle_diff: None,
             bundle_noop_reason: None,
@@ -359,6 +365,7 @@ impl<'a> ContextBuilder<'a> {
                 (plan.title.clone(), plan.description.clone(), plan.id.clone())
             };
             self.plan = Some((plan_title, plan_desc));
+            self.plan_id = Some(plan_id_owned.clone());
             self.parent_id = Some(plan_id_owned.clone());
             self.scope_ids = vec![
                 (work_id.to_string(), LearningScope::Work),
@@ -403,6 +410,9 @@ impl<'a> ContextBuilder<'a> {
             self.plan = Some((plan_title, plan_desc));
             self.spec = Some((spec_title, spec_desc));
             self.phase = Some((ph_title, ph_desc));
+            self.plan_id = Some(plan_id_owned.clone());
+            self.spec_id = Some(spec_id_owned.clone());
+            self.phase_id = Some(phase_id_owned.clone());
             self.parent_id = Some(phase_id_owned.clone());
             self.scope_ids = vec![
                 (work_id.to_string(), LearningScope::Work),
@@ -571,54 +581,86 @@ impl<'a> ContextBuilder<'a> {
             msg.push_str(guidance);
         }
 
-        // --- Hierarchy section ---
-        if self.plan.is_some() || self.spec.is_some() || self.phase.is_some() || self.work.is_some() {
-            let mut hierarchy = String::new();
-            hierarchy.push_str("## Hierarchy\n\n");
-            if let Some((ref title, ref desc)) = self.plan {
-                hierarchy.push_str(&format!("**Plan:** {} — {}\n", title, desc));
-            }
-            if let Some((ref title, ref desc)) = self.spec {
-                hierarchy.push_str(&format!("**Spec:** {} — {}\n", title, desc));
-            }
-            if let Some((ref title, ref desc)) = self.phase {
-                hierarchy.push_str(&format!("**Phase:** {} — {}\n", title, desc));
-            }
-            if let Some((ref title, ref desc)) = self.work {
-                hierarchy.push_str(&format!("**Work:** {} — {}\n", title, desc));
-            }
-            if !self.work_acceptance_criteria.is_empty() {
-                hierarchy.push_str("\n**Acceptance Criteria:**\n");
-                for ac in &self.work_acceptance_criteria {
-                    hierarchy.push_str(&format!("- {}\n", ac));
+        // --- Your Assignment section ---
+        // Interpolate the full Work doc from docs/loopr/{work_id}.md (untruncated).
+        // Falls back to inline title+description if the file doesn't exist yet.
+        if self.work.is_some() || self.work_id.is_some() {
+            let repo_path = &self.stores.config.project.repo_path;
+            let work_doc_content = self.work_id.as_ref().and_then(|wid| {
+                let path = repo_path.join("docs").join("loopr").join(format!("{}.md", wid));
+                std::fs::read_to_string(&path).ok()
+            });
+
+            if let Some(ref doc_content) = work_doc_content {
+                msg.push_str("## Your Assignment\n\n");
+                msg.push_str(doc_content);
+                msg.push_str("\n\n");
+            } else {
+                // Fallback: inline description when doc file not yet on disk
+                let mut fallback = String::new();
+                fallback.push_str("## Your Assignment\n\n");
+                if let Some((ref title, ref desc)) = self.work {
+                    fallback.push_str(&format!("**Work:** {}\n\n{}\n\n", title, desc));
                 }
+                if !self.work_acceptance_criteria.is_empty() {
+                    fallback.push_str("**Acceptance Criteria:**\n");
+                    for ac in &self.work_acceptance_criteria {
+                        fallback.push_str(&format!("- {}\n", ac));
+                    }
+                    fallback.push('\n');
+                }
+                msg.push_str(&fallback);
             }
+
+            // Inline resource tags and dependencies always (fallback metadata)
             if !self.work_resource_tags.is_empty() {
-                hierarchy.push_str("\n**Allowed Files:**\n");
+                msg.push_str("**Allowed Files:**\n");
                 for tag in &self.work_resource_tags {
-                    hierarchy.push_str(&format!("- {}\n", tag));
+                    msg.push_str(&format!("- {}\n", tag));
                 }
+                msg.push('\n');
             }
             if !self.dependency_summaries.is_empty() {
-                hierarchy.push_str("\n**Dependencies:**\n");
+                msg.push_str("**Dependencies:**\n");
                 for dep in &self.dependency_summaries {
                     let files = dep.resource_tags.join(", ");
-                    hierarchy.push_str(&format!("- [{}] {} - files: {}\n", dep.status, dep.title, files));
+                    msg.push_str(&format!("- [{}] {} - files: {}\n", dep.status, dep.title, files));
                 }
+                msg.push('\n');
             }
-            hierarchy.push('\n');
 
-            let hierarchy_tokens = estimate_tokens(&hierarchy);
-            if hierarchy_tokens > self.budget.hierarchy {
-                let dropped = hierarchy_tokens.saturating_sub(self.budget.hierarchy);
-                let prefix = self.log_prefix.as_deref().unwrap_or("");
-                warn!(
-                    "{} Hierarchy section truncated: {} tokens > {} budget, dropped {} tokens",
-                    prefix, hierarchy_tokens, self.budget.hierarchy, dropped
-                );
-                msg.push_str(&truncate_prose(&hierarchy, self.budget.hierarchy));
-            } else {
-                msg.push_str(&hierarchy);
+            // Parent context links (agent can read_file if needed)
+            let has_parents = self.plan.is_some() || self.spec.is_some() || self.phase.is_some();
+            if has_parents {
+                msg.push_str("## Parent Context (read if needed)\n\n");
+                match (&self.plan, &self.plan_id) {
+                    (Some((title, _)), Some(id)) => {
+                        msg.push_str(&format!("- [Plan: {}](docs/loopr/{}.md)\n", title, id));
+                    }
+                    (Some((title, desc)), None) => {
+                        msg.push_str(&format!("- **Plan:** {} - {}\n", title, desc));
+                    }
+                    _ => {}
+                }
+                match (&self.spec, &self.spec_id) {
+                    (Some((title, _)), Some(id)) => {
+                        msg.push_str(&format!("- [Spec: {}](docs/loopr/{}.md)\n", title, id));
+                    }
+                    (Some((title, desc)), None) => {
+                        msg.push_str(&format!("- **Spec:** {} - {}\n", title, desc));
+                    }
+                    _ => {}
+                }
+                match (&self.phase, &self.phase_id) {
+                    (Some((title, _)), Some(id)) => {
+                        msg.push_str(&format!("- [Phase: {}](docs/loopr/{}.md)\n", title, id));
+                    }
+                    (Some((title, desc)), None) => {
+                        msg.push_str(&format!("- **Phase:** {} - {}\n", title, desc));
+                    }
+                    _ => {}
+                }
+                msg.push('\n');
             }
         }
 
