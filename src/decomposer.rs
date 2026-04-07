@@ -16,7 +16,12 @@ use tracing::{debug, info, instrument, trace, warn};
 use futures::future::{join_all, try_join_all};
 
 use crate::config::DecomposerConfig;
+use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::doc::{Doc, DocKind, write_doc_file};
+use crate::domain::phase::{Phase, PhaseStatus};
+use crate::domain::plan::{Plan, PlanStatus};
+use crate::domain::spec::{Spec, SpecStatus};
+use crate::domain::work::{Work, WorkStatus};
 use crate::validator::client::HttpClient;
 
 const LLM_CALL_TIMEOUT_SECS: u64 = 180;
@@ -847,6 +852,114 @@ async fn ratify_hierarchy<H: HttpClient + Sync>(
     }
 
     Ok(())
+}
+
+// =====================================================
+// DecomposedHierarchy + docs_to_hierarchy
+// =====================================================
+
+/// The fully typed output of a decomposition run.
+///
+/// Returned by `decompose_hierarchy` so callers receive strongly-typed records
+/// directly instead of `Vec<Doc>` that must be converted in a separate pass.
+pub struct DecomposedHierarchy {
+    pub plan: Plan,
+    pub specs: Vec<Spec>,
+    pub phases: Vec<Phase>,
+    pub works: Vec<Work>,
+}
+
+/// Convert the raw `Vec<Doc>` output of `decompose_hierarchy` into typed domain records.
+///
+/// Direct port of `build_all_old_records` from `handlers/doc.rs`. The caller passes
+/// `run_dir` so this function can read each child's markdown content from disk
+/// (the decomposer writes content to staging files; the `Doc.markdown` field names them).
+///
+/// Behaviors:
+/// - `Plan.description` = `plan_markdown` (the full plan markdown text)
+/// - `Plan` starts Active (coordinator begins executing immediately)
+/// - `Spec` and `Phase` start Active
+/// - `Work` starts Ready (first work is immediately eligible for assignment)
+/// - `Work.acceptance_criteria` comes from `Doc.acceptance_criteria`
+/// - `Work.dependencies` resolved from `doc_id -> domain_id` mapping
+/// - `Work.resource_tags` is empty (decomposer tool schema has no resource_tags field)
+fn docs_to_hierarchy(
+    plan_doc: &Doc,
+    plan_markdown: &str,
+    child_docs: &[Doc],
+    run_dir: &Path,
+) -> Result<DecomposedHierarchy> {
+    use std::collections::HashMap;
+
+    let mut doc_to_domain: HashMap<String, String> = HashMap::new();
+
+    let ac = AcceptanceCriteria(plan_doc.acceptance_criteria.clone());
+    let mut plan = Plan::new(plan_doc.title.clone(), plan_markdown.to_string(), ac);
+    plan.force_status(PlanStatus::Active);
+    doc_to_domain.insert(plan_doc.id.clone(), plan.id.clone());
+
+    let mut specs: Vec<Spec> = Vec::new();
+    let mut phases: Vec<Phase> = Vec::new();
+    let mut works: Vec<Work> = Vec::new();
+
+    let spec_docs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Spec).collect();
+    let phase_docs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Phase).collect();
+    let work_docs: Vec<&Doc> = child_docs.iter().filter(|d| d.kind == DocKind::Work).collect();
+
+    // Process in dependency order: specs before phases before works
+    let mut phase_counters: HashMap<String, u32> = HashMap::new();
+
+    for child in spec_docs.iter().chain(phase_docs.iter()).chain(work_docs.iter()) {
+        let Some(ref doc_parent_id) = child.parent_id else {
+            continue;
+        };
+        let Some(domain_parent_id) = doc_to_domain.get(doc_parent_id).cloned() else {
+            bail!("docs_to_hierarchy: no domain record for parent Doc {}", doc_parent_id);
+        };
+
+        let content = std::fs::read_to_string(run_dir.join(&child.markdown))
+            .map_err(|e| eyre::eyre!("docs_to_hierarchy: failed to read {}: {}", child.markdown, e))?;
+
+        match child.kind {
+            DocKind::Spec => {
+                let mut spec = Spec::new(domain_parent_id, child.title.clone(), content);
+                spec.force_status(SpecStatus::Active);
+                spec.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
+                doc_to_domain.insert(child.id.clone(), spec.id.clone());
+                specs.push(spec);
+            }
+            DocKind::Phase => {
+                let order = phase_counters.entry(doc_parent_id.clone()).or_insert(0);
+                let current_order = *order;
+                *order += 1;
+                let mut phase = Phase::new(domain_parent_id, child.title.clone(), content, current_order);
+                phase.force_status(PhaseStatus::Active);
+                phase.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
+                doc_to_domain.insert(child.id.clone(), phase.id.clone());
+                phases.push(phase);
+            }
+            DocKind::Work => {
+                let mut work = Work::new(domain_parent_id, child.title.clone(), content);
+                work.force_status(WorkStatus::Ready);
+                work.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
+                work.dependencies = child
+                    .dependencies
+                    .iter()
+                    .filter_map(|dep_doc_id| doc_to_domain.get(dep_doc_id).cloned())
+                    .collect();
+                doc_to_domain.insert(child.id.clone(), work.id.clone());
+                works.push(work);
+            }
+            DocKind::Plan => continue,
+        }
+    }
+
+    Ok(DecomposedHierarchy {
+        plan,
+        specs,
+        phases,
+        works,
+    })
 }
 
 #[allow(clippy::unwrap_used)]
@@ -1709,5 +1822,185 @@ mod tests {
         );
 
         unsafe { std::env::remove_var(&env_key) };
+    }
+
+    // --- docs_to_hierarchy ---
+
+    /// Build a minimal Doc set for testing: one Plan, one Spec, one Phase, one Work.
+    fn build_test_docs(dir: &TestDir) -> (Doc, String, Vec<Doc>) {
+        use crate::domain::doc::write_doc_file;
+        let plan_markdown = "# Test Plan\n\nA test plan.";
+        let spec_content = "Spec content";
+        let phase_content = "Phase content";
+        let work_content = "Work content";
+
+        let plan_file = write_doc_file(dir, DocKind::Plan, "Test Plan", plan_markdown, &[]).unwrap();
+        let mut plan_doc = Doc::new(DocKind::Plan, None, "Test Plan".to_string(), plan_file);
+        plan_doc.acceptance_criteria = vec!["plan passes".to_string()];
+
+        let spec_file = write_doc_file(dir, DocKind::Spec, "Core Spec", spec_content, &[]).unwrap();
+        let mut spec_doc = Doc::new(
+            DocKind::Spec,
+            Some(plan_doc.id.clone()),
+            "Core Spec".to_string(),
+            spec_file,
+        );
+        spec_doc.acceptance_criteria = vec!["spec passes".to_string()];
+
+        let phase_file = write_doc_file(dir, DocKind::Phase, "Phase One", phase_content, &[]).unwrap();
+        let mut phase_doc = Doc::new(
+            DocKind::Phase,
+            Some(spec_doc.id.clone()),
+            "Phase One".to_string(),
+            phase_file,
+        );
+        phase_doc.acceptance_criteria = vec!["phase passes".to_string()];
+
+        let work_file = write_doc_file(dir, DocKind::Work, "Write tests", work_content, &[]).unwrap();
+        let mut work_doc = Doc::new(
+            DocKind::Work,
+            Some(phase_doc.id.clone()),
+            "Write tests".to_string(),
+            work_file,
+        );
+        work_doc.acceptance_criteria = vec!["assert tests pass".to_string()];
+
+        let child_docs = vec![spec_doc, phase_doc, work_doc];
+        (plan_doc, plan_markdown.to_string(), child_docs)
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_basic() {
+        let dir = TestDir::new("loopr-dth-basic");
+        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
+        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+
+        assert_eq!(h.plan.title, "Test Plan");
+        assert_eq!(h.plan.description, plan_markdown);
+        assert_eq!(h.specs.len(), 1);
+        assert_eq!(h.phases.len(), 1);
+        assert_eq!(h.works.len(), 1);
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_plan_status_active() {
+        let dir = TestDir::new("loopr-dth-status");
+        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
+        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+
+        use crate::domain::plan::HierarchyStatus;
+        assert_eq!(h.plan.status(), HierarchyStatus::Active);
+        assert_eq!(h.specs[0].status(), HierarchyStatus::Active);
+        assert_eq!(h.phases[0].status(), HierarchyStatus::Active);
+        use crate::domain::work::WorkStatus;
+        assert_eq!(h.works[0].status(), WorkStatus::Ready);
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_acceptance_criteria_propagated() {
+        let dir = TestDir::new("loopr-dth-ac");
+        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
+        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+
+        assert_eq!(h.plan.acceptance_criteria.0, vec!["plan passes"]);
+        assert_eq!(h.specs[0].acceptance_criteria.0, vec!["spec passes"]);
+        assert_eq!(h.phases[0].acceptance_criteria.0, vec!["phase passes"]);
+        assert_eq!(h.works[0].acceptance_criteria.0, vec!["assert tests pass"]);
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_parent_ids_resolved() {
+        let dir = TestDir::new("loopr-dth-parents");
+        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
+        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+
+        // Spec parent = Plan id
+        assert_eq!(h.specs[0].parent_id, h.plan.id);
+        // Phase parent = Spec id
+        assert_eq!(h.phases[0].parent_id, h.specs[0].id);
+        // Work parent = Phase id
+        assert_eq!(h.works[0].parent_id, h.phases[0].id);
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_work_dependency_resolved() {
+        use crate::domain::doc::write_doc_file;
+        let dir = TestDir::new("loopr-dth-deps");
+
+        let plan_markdown = "# Plan\n\nA plan.";
+        let plan_file = write_doc_file(&dir, DocKind::Plan, "Plan", plan_markdown, &[]).unwrap();
+        let plan_doc = Doc::new(DocKind::Plan, None, "Plan".to_string(), plan_file);
+
+        let spec_file = write_doc_file(&dir, DocKind::Spec, "Spec", "spec", &[]).unwrap();
+        let spec_doc = Doc::new(DocKind::Spec, Some(plan_doc.id.clone()), "Spec".to_string(), spec_file);
+
+        let phase_file = write_doc_file(&dir, DocKind::Phase, "Phase", "phase", &[]).unwrap();
+        let phase_doc = Doc::new(
+            DocKind::Phase,
+            Some(spec_doc.id.clone()),
+            "Phase".to_string(),
+            phase_file,
+        );
+
+        // work_a has no deps; work_b depends on work_a (by Doc ID)
+        let wa_file = write_doc_file(&dir, DocKind::Work, "Work A", "wa content", &[]).unwrap();
+        let work_a = Doc::new(DocKind::Work, Some(phase_doc.id.clone()), "Work A".to_string(), wa_file);
+
+        let wb_file = write_doc_file(&dir, DocKind::Work, "Work B", "wb content", &[]).unwrap();
+        let mut work_b = Doc::new(DocKind::Work, Some(phase_doc.id.clone()), "Work B".to_string(), wb_file);
+        work_b.dependencies = vec![work_a.id.clone()];
+
+        let child_docs = vec![spec_doc, phase_doc, work_a.clone(), work_b];
+        let h = docs_to_hierarchy(&plan_doc, plan_markdown, &child_docs, &dir).unwrap();
+
+        assert_eq!(h.works.len(), 2);
+        let wb = h.works.iter().find(|w| w.title == "Work B").unwrap();
+        let wa = h.works.iter().find(|w| w.title == "Work A").unwrap();
+        // work_b's dependency must be resolved to work_a's domain ID (not Doc ID)
+        assert_eq!(wb.dependencies, vec![wa.id.clone()]);
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_work_resource_tags_empty() {
+        let dir = TestDir::new("loopr-dth-rt");
+        let (plan_doc, plan_markdown, child_docs) = build_test_docs(&dir);
+        let h = docs_to_hierarchy(&plan_doc, &plan_markdown, &child_docs, &dir).unwrap();
+        // Decomposer never sets resource_tags - must be empty
+        assert!(h.works[0].resource_tags.is_empty());
+    }
+
+    #[test]
+    fn test_docs_to_hierarchy_phase_order() {
+        use crate::domain::doc::write_doc_file;
+        let dir = TestDir::new("loopr-dth-order");
+
+        let plan_markdown = "# Plan";
+        let plan_file = write_doc_file(&dir, DocKind::Plan, "Plan", plan_markdown, &[]).unwrap();
+        let plan_doc = Doc::new(DocKind::Plan, None, "Plan".to_string(), plan_file);
+
+        let spec_file = write_doc_file(&dir, DocKind::Spec, "Spec", "spec", &[]).unwrap();
+        let spec_doc = Doc::new(DocKind::Spec, Some(plan_doc.id.clone()), "Spec".to_string(), spec_file);
+
+        let ph1_file = write_doc_file(&dir, DocKind::Phase, "Phase 1", "ph1", &[]).unwrap();
+        let ph1 = Doc::new(
+            DocKind::Phase,
+            Some(spec_doc.id.clone()),
+            "Phase 1".to_string(),
+            ph1_file,
+        );
+        let ph2_file = write_doc_file(&dir, DocKind::Phase, "Phase 2", "ph2", &[]).unwrap();
+        let ph2 = Doc::new(
+            DocKind::Phase,
+            Some(spec_doc.id.clone()),
+            "Phase 2".to_string(),
+            ph2_file,
+        );
+
+        let child_docs = vec![spec_doc, ph1, ph2];
+        let h = docs_to_hierarchy(&plan_doc, plan_markdown, &child_docs, &dir).unwrap();
+
+        assert_eq!(h.phases.len(), 2);
+        assert_eq!(h.phases[0].order, 0);
+        assert_eq!(h.phases[1].order, 1);
     }
 }
