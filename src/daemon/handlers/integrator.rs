@@ -303,8 +303,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         }
                     }
                 };
+                let ac_str = plan.acceptance_criteria.0.join("\n");
                 validator
-                    .validate_plan(&target_id, &plan.title, &plan.description, &plan.acceptance_criteria)
+                    .validate_plan(&target_id, &plan.title, &plan.description, &ac_str)
                     .await
             }
             "spec" | "specs" => {
@@ -429,12 +430,13 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                         .join("\n");
                     (plan, specs_list, children_ids)
                 };
+                let ac_str = plan.acceptance_criteria.0.join("\n");
                 evaluator
                     .evaluate_plan_specs(
                         &parent_id,
                         &plan.title,
                         &plan.description,
-                        &plan.acceptance_criteria,
+                        &ac_str,
                         &specs_list,
                         children_ids,
                     )

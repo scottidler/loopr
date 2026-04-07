@@ -233,10 +233,7 @@ mod tests {
 
     #[test]
     fn test_format_frontmatter_list_item_with_quotes() {
-        let fields = vec![(
-            "ac".to_string(),
-            FmValue::List(vec!["say \"hello\"".to_string()]),
-        )];
+        let fields = vec![("ac".to_string(), FmValue::List(vec!["say \"hello\"".to_string()]))];
         let result = format_frontmatter(&fields);
         assert_eq!(result, "ac:\n  - \"say \\\"hello\\\"\"\n");
     }
@@ -277,7 +274,9 @@ mod tests {
     #[test]
     fn test_write_doc_markdown_creates_file() {
         let dir = TestDir::new("loopr-markdown-test");
-        let record = SimpleRecord { id: "pl-abc12".to_string() };
+        let record = SimpleRecord {
+            id: "pl-abc12".to_string(),
+        };
         write_doc_markdown(&dir, &record).unwrap();
         let path = dir.join("docs/loopr/pl-abc12.md");
         assert!(path.exists(), "file should be created at docs/loopr/<id>.md");
@@ -286,11 +285,16 @@ mod tests {
     #[test]
     fn test_write_doc_markdown_content_format() {
         let dir = TestDir::new("loopr-markdown-test");
-        let record = SimpleRecord { id: "pl-def34".to_string() };
+        let record = SimpleRecord {
+            id: "pl-def34".to_string(),
+        };
         write_doc_markdown(&dir, &record).unwrap();
         let content = fs::read_to_string(dir.join("docs/loopr/pl-def34.md")).unwrap();
         assert!(content.starts_with("---\n"), "must start with frontmatter delimiter");
-        assert!(content.contains("---\n\nBody text.\n"), "body must follow closing delimiter");
+        assert!(
+            content.contains("---\n\nBody text.\n"),
+            "body must follow closing delimiter"
+        );
         assert!(content.contains("id: pl-def34"), "frontmatter must contain id");
         assert!(content.contains("title: Test"), "frontmatter must contain title");
     }
@@ -299,7 +303,9 @@ mod tests {
     fn test_write_doc_markdown_creates_dir() {
         let dir = TestDir::new("loopr-markdown-test");
         // docs/loopr/ does not exist yet - write_doc_markdown must create it
-        let record = SimpleRecord { id: "wk-99999".to_string() };
+        let record = SimpleRecord {
+            id: "wk-99999".to_string(),
+        };
         write_doc_markdown(&dir, &record).unwrap();
         assert!(dir.join("docs/loopr").is_dir(), "docs/loopr/ must be created");
     }
@@ -307,7 +313,9 @@ mod tests {
     #[test]
     fn test_write_doc_markdown_overwrites_on_update() {
         let dir = TestDir::new("loopr-markdown-test");
-        let r1 = SimpleRecord { id: "pl-upd01".to_string() };
+        let r1 = SimpleRecord {
+            id: "pl-upd01".to_string(),
+        };
         write_doc_markdown(&dir, &r1).unwrap();
 
         // Second write with same id overwrites

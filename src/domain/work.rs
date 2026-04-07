@@ -5,6 +5,8 @@ use taskstore::{IndexValue, Record};
 
 use loopr_derive::{FlexibleEnum, Fsm};
 
+use crate::domain::criteria::AcceptanceCriteria;
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
@@ -57,7 +59,7 @@ pub struct Work {
     pub resource_tags: Vec<String>,
     pub dependencies: Vec<String>,
     #[serde(default)]
-    pub acceptance_criteria: Vec<String>,
+    pub acceptance_criteria: AcceptanceCriteria,
     #[serde(default)]
     pub checklist: Vec<ChecklistItem>,
     pub created_at: i64,
@@ -116,11 +118,55 @@ impl Work {
             status: WorkStatus::Draft,
             resource_tags: Vec::new(),
             dependencies: Vec::new(),
-            acceptance_criteria: Vec::new(),
+            acceptance_criteria: AcceptanceCriteria::default(),
             checklist: Vec::new(),
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl DocMarkdown for Work {
+    fn doc_id(&self) -> &str {
+        &self.id
+    }
+
+    fn doc_body(&self) -> String {
+        let mut body = self.description.clone();
+        if !self.acceptance_criteria.is_empty() {
+            body.push_str("\n\n## Acceptance Criteria\n\n");
+            for item in &self.acceptance_criteria.0 {
+                body.push_str(&format!("- [ ] {}\n", item));
+            }
+        }
+        if !self.checklist.is_empty() {
+            body.push_str("\n\n## Checklist\n\n");
+            for item in &self.checklist {
+                let mark = if item.completed { "x" } else { " " };
+                body.push_str(&format!("- [{}] {}\n", mark, item.description));
+            }
+        }
+        body
+    }
+
+    fn doc_frontmatter(&self) -> Vec<(String, FmValue)> {
+        let mut m = Vec::new();
+        m.push(("id".into(), FmValue::Text(self.id.clone())));
+        m.push(("parent-id".into(), FmValue::Text(self.parent_id.clone())));
+        m.push(("title".into(), FmValue::Text(self.title.clone())));
+        m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
+        if let Some(ref assignee) = self.assignee {
+            m.push(("assignee".into(), FmValue::Text(assignee.clone())));
+        }
+        m.push(("resource-tags".into(), FmValue::List(self.resource_tags.clone())));
+        m.push(("dependencies".into(), FmValue::List(self.dependencies.clone())));
+        m.push((
+            "acceptance-criteria".into(),
+            FmValue::List(self.acceptance_criteria.0.clone()),
+        ));
+        m.push(("created-at".into(), FmValue::Text(millis_to_iso(self.created_at))));
+        m.push(("updated-at".into(), FmValue::Text(millis_to_iso(self.updated_at))));
+        m
     }
 }
 

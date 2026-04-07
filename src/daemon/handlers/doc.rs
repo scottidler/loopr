@@ -424,9 +424,10 @@ fn build_all_old_records(
     let mut records: Vec<OldRecord> = Vec::new();
     let mut doc_to_old: HashMap<String, String> = HashMap::new();
 
+    use crate::domain::criteria::AcceptanceCriteria;
     let title = extract_plan_title(plan_markdown);
-    let ac_joined = plan_doc.acceptance_criteria.join("\n");
-    let mut old_plan = Plan::new(title, plan_markdown.to_string(), ac_joined);
+    let ac = AcceptanceCriteria(plan_doc.acceptance_criteria.clone());
+    let mut old_plan = Plan::new(title, plan_markdown.to_string(), ac);
     old_plan.force_status(PlanStatus::Active);
     let old_plan_id = old_plan.id.clone();
     doc_to_old.insert(plan_doc.id.clone(), old_plan_id);
@@ -466,7 +467,8 @@ fn build_all_old_records(
             DocKind::Work => {
                 let mut work = Work::new(old_parent_id, child_title, content);
                 work.force_status(WorkStatus::Ready);
-                work.acceptance_criteria = child.acceptance_criteria.clone();
+                work.acceptance_criteria =
+                    crate::domain::criteria::AcceptanceCriteria(child.acceptance_criteria.clone());
                 work.dependencies = child
                     .dependencies
                     .iter()

@@ -549,7 +549,7 @@ async fn test_stale_rejection_resets_work_to_ready() {
     // Create a Work in InReview status (with acceptance_criteria for Ready precondition)
     let mut wi = Work::new("ph-1".into(), "Task A".into(), "desc".into());
     wi.force_status(WorkStatus::InReview);
-    wi.acceptance_criteria = vec!["tests pass".into()];
+    wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -587,7 +587,7 @@ async fn test_stale_rejection_creates_learning() {
 
     let mut wi = Work::new("ph-1".into(), "Task B".into(), "desc".into());
     wi.force_status(WorkStatus::InReview);
-    wi.acceptance_criteria = vec!["tests pass".into()];
+    wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 

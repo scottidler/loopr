@@ -66,7 +66,7 @@ async fn preflight_ac_check(stores: &Arc<Stores>, work_id: &str) -> Option<bool>
          Answer with exactly one word: YES or NO.\n\n\
          ## Acceptance Criteria\n\n",
     );
-    for ac in &acceptance_criteria {
+    for ac in &acceptance_criteria.0 {
         prompt.push_str(&format!("- {}\n", ac));
     }
     prompt.push_str("\n## Current File Contents\n");

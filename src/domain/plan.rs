@@ -5,6 +5,8 @@ use taskstore::record::{IndexValue, Record};
 
 use loopr_derive::{FlexibleEnum, Fsm};
 
+use crate::domain::criteria::AcceptanceCriteria;
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
 
 /// Shared status enum for Plan, Spec, and Phase records.
@@ -145,7 +147,8 @@ pub struct Plan {
     pub id: String,
     pub title: String,
     pub description: String,
-    pub acceptance_criteria: String,
+    #[serde(default)]
+    pub acceptance_criteria: AcceptanceCriteria,
     status: PlanStatus,
     #[serde(default)]
     pub tier: Tier,
@@ -179,7 +182,7 @@ impl Plan {
         self.updated_at = id::now_millis();
     }
 
-    pub fn new(title: String, description: String, acceptance_criteria: String) -> Self {
+    pub fn new(title: String, description: String, acceptance_criteria: AcceptanceCriteria) -> Self {
         tracing::debug!("Plan::new(title={})", title);
         let now = id::now_millis();
         Self {
@@ -192,6 +195,38 @@ impl Plan {
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl DocMarkdown for Plan {
+    fn doc_id(&self) -> &str {
+        &self.id
+    }
+
+    fn doc_body(&self) -> String {
+        let mut body = self.description.clone();
+        if !self.acceptance_criteria.is_empty() {
+            body.push_str("\n\n## Acceptance Criteria\n\n");
+            for item in &self.acceptance_criteria.0 {
+                body.push_str(&format!("- [ ] {}\n", item));
+            }
+        }
+        body
+    }
+
+    fn doc_frontmatter(&self) -> Vec<(String, FmValue)> {
+        let mut m = Vec::new();
+        m.push(("id".into(), FmValue::Text(self.id.clone())));
+        m.push(("title".into(), FmValue::Text(self.title.clone())));
+        m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
+        m.push(("tier".into(), FmValue::Text(format!("{:?}", self.tier))));
+        m.push((
+            "acceptance-criteria".into(),
+            FmValue::List(self.acceptance_criteria.0.clone()),
+        ));
+        m.push(("created-at".into(), FmValue::Text(millis_to_iso(self.created_at))));
+        m.push(("updated-at".into(), FmValue::Text(millis_to_iso(self.updated_at))));
+        m
     }
 }
 
@@ -376,14 +411,11 @@ mod tests {
 
     #[test]
     fn test_plan_new() {
-        let plan = Plan::new(
-            "Test Plan".to_string(),
-            "A test plan".to_string(),
-            "It works".to_string(),
-        );
+        let ac = AcceptanceCriteria(vec!["It works".to_string()]);
+        let plan = Plan::new("Test Plan".to_string(), "A test plan".to_string(), ac);
         assert_eq!(plan.title, "Test Plan");
         assert_eq!(plan.description, "A test plan");
-        assert_eq!(plan.acceptance_criteria, "It works");
+        assert_eq!(plan.acceptance_criteria.0, vec!["It works".to_string()]);
         assert_eq!(plan.status(), HierarchyStatus::Draft);
         assert!(!plan.id.is_empty());
         assert!(plan.created_at > 0);
@@ -395,7 +427,7 @@ mod tests {
         let plan = Plan::new(
             "Test Plan".to_string(),
             "Description".to_string(),
-            "Criteria".to_string(),
+            AcceptanceCriteria::default(),
         );
         let json = serde_json::to_string(&plan).unwrap();
         let deserialized: Plan = serde_json::from_str(&json).unwrap();
@@ -407,8 +439,8 @@ mod tests {
 
     #[test]
     fn test_plan_unique_ids() {
-        let p1 = Plan::new("A".to_string(), "".to_string(), "".to_string());
-        let p2 = Plan::new("B".to_string(), "".to_string(), "".to_string());
+        let p1 = Plan::new("A".to_string(), "".to_string(), AcceptanceCriteria::default());
+        let p2 = Plan::new("B".to_string(), "".to_string(), AcceptanceCriteria::default());
         assert_ne!(p1.id, p2.id);
     }
 
@@ -416,13 +448,13 @@ mod tests {
 
     #[test]
     fn test_plan_record_id() {
-        let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
+        let plan = Plan::new("Test".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
         assert_eq!(Record::id(&plan), plan.id.as_str());
     }
 
     #[test]
     fn test_plan_record_updated_at() {
-        let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
+        let plan = Plan::new("Test".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
         assert_eq!(Record::updated_at(&plan), plan.updated_at);
     }
 
@@ -433,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_plan_record_indexed_fields() {
-        let plan = Plan::new("Test".to_string(), "Desc".to_string(), "Crit".to_string());
+        let plan = Plan::new("Test".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
         let fields = plan.indexed_fields();
         assert_eq!(fields.len(), 2);
         assert_eq!(
@@ -448,11 +480,56 @@ mod tests {
 
     #[test]
     fn test_plan_record_roundtrip_json() {
-        let plan = Plan::new("RT".to_string(), "Desc".to_string(), "Crit".to_string());
+        let plan = Plan::new("RT".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
         let json = serde_json::to_string(&plan).unwrap();
         let restored: Plan = serde_json::from_str(&json).unwrap();
         assert_eq!(Record::id(&restored), Record::id(&plan));
         assert_eq!(Record::updated_at(&restored), Record::updated_at(&plan));
         assert_eq!(Plan::collection_name(), "plans");
+    }
+
+    // --- DocMarkdown impl tests ---
+
+    #[test]
+    fn test_plan_doc_id() {
+        let plan = Plan::new("T".into(), "D".into(), AcceptanceCriteria::default());
+        assert_eq!(plan.doc_id(), plan.id.as_str());
+    }
+
+    #[test]
+    fn test_plan_doc_body_no_ac() {
+        let plan = Plan::new("T".into(), "My description".into(), AcceptanceCriteria::default());
+        let body = plan.doc_body();
+        assert_eq!(body, "My description");
+    }
+
+    #[test]
+    fn test_plan_doc_body_with_ac() {
+        let ac = AcceptanceCriteria(vec!["Tests pass".to_string()]);
+        let plan = Plan::new("T".into(), "Desc".into(), ac);
+        let body = plan.doc_body();
+        assert!(body.contains("## Acceptance Criteria"));
+        assert!(body.contains("- [ ] Tests pass"));
+    }
+
+    #[test]
+    fn test_plan_doc_frontmatter_keys() {
+        let plan = Plan::new("My Plan".into(), "D".into(), AcceptanceCriteria::default());
+        let fm = plan.doc_frontmatter();
+        let keys: Vec<&str> = fm.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"id"));
+        assert!(keys.contains(&"title"));
+        assert!(keys.contains(&"status"));
+        assert!(keys.contains(&"tier"));
+        assert!(keys.contains(&"acceptance-criteria"));
+        assert!(keys.contains(&"created-at"));
+        assert!(keys.contains(&"updated-at"));
+    }
+
+    #[test]
+    fn test_plan_doc_frontmatter_id_first() {
+        let plan = Plan::new("T".into(), "D".into(), AcceptanceCriteria::default());
+        let fm = plan.doc_frontmatter();
+        assert_eq!(fm[0].0, "id", "id must be the first frontmatter key");
     }
 }

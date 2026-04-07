@@ -147,7 +147,7 @@ pub(super) fn handle_work_create(
             ));
         }
 
-        let acceptance_criteria: Vec<String> = req
+        let acceptance_criteria: crate::domain::criteria::AcceptanceCriteria = req
             .params
             .get("acceptance_criteria")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -525,7 +525,10 @@ pub(super) fn handle_work_update(
             wi.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
         if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_array()) {
-            wi.acceptance_criteria = criteria.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            wi.acceptance_criteria = criteria
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<crate::domain::criteria::AcceptanceCriteria>();
         }
         if let Some(deps) = req.params.get("dependencies").and_then(|v| v.as_array()) {
             wi.dependencies = deps.iter().filter_map(|v| v.as_str().map(String::from)).collect();

@@ -344,7 +344,7 @@ impl<'a> ContextBuilder<'a> {
         };
 
         self.work = Some((wi_title, wi_desc));
-        self.work_acceptance_criteria = wi_ac;
+        self.work_acceptance_criteria = wi_ac.0;
         self.work_resource_tags = wi_rt;
         self.dependency_summaries = dep_summaries;
         self.work_id = Some(work_id.to_string());

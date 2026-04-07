@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use taskstore::record::{IndexValue, Record};
 
+use crate::domain::criteria::AcceptanceCriteria;
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::domain::plan::HierarchyStatus;
 use crate::id;
 
@@ -18,6 +20,9 @@ pub struct Phase {
     pub order: u32,
     status: PhaseStatus,
     #[serde(default)]
+    pub acceptance_criteria: AcceptanceCriteria,
+    /// Kept for backward deserialization of old JSONL records; ignored on write.
+    #[serde(default, skip_serializing)]
     pub validation_commands: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -59,10 +64,44 @@ impl Phase {
             description,
             order,
             status: PhaseStatus::Draft,
+            acceptance_criteria: AcceptanceCriteria::default(),
             validation_commands: Vec::new(),
             created_at: now,
             updated_at: now,
         }
+    }
+}
+
+impl DocMarkdown for Phase {
+    fn doc_id(&self) -> &str {
+        &self.id
+    }
+
+    fn doc_body(&self) -> String {
+        let mut body = self.description.clone();
+        if !self.acceptance_criteria.is_empty() {
+            body.push_str("\n\n## Acceptance Criteria\n\n");
+            for item in &self.acceptance_criteria.0 {
+                body.push_str(&format!("- [ ] {}\n", item));
+            }
+        }
+        body
+    }
+
+    fn doc_frontmatter(&self) -> Vec<(String, FmValue)> {
+        let mut m = Vec::new();
+        m.push(("id".into(), FmValue::Text(self.id.clone())));
+        m.push(("parent-id".into(), FmValue::Text(self.parent_id.clone())));
+        m.push(("title".into(), FmValue::Text(self.title.clone())));
+        m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
+        m.push(("order".into(), FmValue::Text(self.order.to_string())));
+        m.push((
+            "acceptance-criteria".into(),
+            FmValue::List(self.acceptance_criteria.0.clone()),
+        ));
+        m.push(("created-at".into(), FmValue::Text(millis_to_iso(self.created_at))));
+        m.push(("updated-at".into(), FmValue::Text(millis_to_iso(self.updated_at))));
+        m
     }
 }
 

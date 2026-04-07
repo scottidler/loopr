@@ -4,6 +4,7 @@ use eyre::eyre;
 use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
+use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::plan::{HierarchyStatus, Plan, PlanStatus};
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
@@ -34,12 +35,18 @@ pub(super) fn handle_plan_create(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let acceptance_criteria = req
+        let acceptance_criteria: AcceptanceCriteria = req
             .params
             .get("acceptance_criteria")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .map(|v| {
+                // Accept either a JSON array or a plain string from older callers
+                if let Some(s) = v.as_str() {
+                    AcceptanceCriteria::from(s)
+                } else {
+                    serde_json::from_value(v.clone()).unwrap_or_default()
+                }
+            })
+            .unwrap_or_default();
 
         if title.is_empty() {
             return Ok(DaemonResponse::err(
@@ -286,7 +293,7 @@ pub(super) fn handle_plan_update(
             plan.description = desc.to_string();
         }
         if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_str()) {
-            plan.acceptance_criteria = criteria.to_string();
+            plan.acceptance_criteria = AcceptanceCriteria::from(criteria);
         }
         plan.updated_at = crate::id::now_millis();
 
@@ -1087,7 +1094,7 @@ mod tests {
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Updated Plan");
         assert_eq!(result["description"], "New desc");
-        assert_eq!(result["acceptance_criteria"], "New criteria");
+        assert_eq!(result["acceptance_criteria"], serde_json::json!(["New criteria"]));
     }
 
     #[tokio::test]

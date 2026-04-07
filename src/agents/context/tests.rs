@@ -999,7 +999,8 @@ fn setup_stores_with_enrichment(dir: &std::path::Path) -> (Stores, String, Strin
     // Main work (depends on dep_work)
     let mut wi = Work::new(phase_id, "Write tests".into(), "Write tests for the model".into());
     wi.resource_tags = vec!["tests/model.rs".into()];
-    wi.acceptance_criteria = vec!["All tests pass".into(), "Coverage above 80%".into()];
+    wi.acceptance_criteria =
+        crate::domain::criteria::AcceptanceCriteria(vec!["All tests pass".into(), "Coverage above 80%".into()]);
     wi.dependencies = vec![dep_id.clone()];
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
