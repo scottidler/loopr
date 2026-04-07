@@ -451,7 +451,6 @@ fn test_truncate_list_exceeds_budget() {
 #[test]
 fn test_token_budget_for_implementer() {
     let budget = TokenBudget::for_role(Role::Implementer);
-    assert_eq!(budget.hierarchy, 2000);
     assert_eq!(budget.learnings, 2000);
     assert_eq!(budget.tools_or_actions, 500);
     assert_eq!(budget.previous_summary, 4000);
@@ -460,7 +459,6 @@ fn test_token_budget_for_implementer() {
 #[test]
 fn test_token_budget_for_reviewer() {
     let budget = TokenBudget::for_role(Role::Reviewer);
-    assert_eq!(budget.hierarchy, 2000);
     assert_eq!(budget.learnings, 2000);
     assert_eq!(budget.tools_or_actions, 0);
     assert_eq!(budget.previous_summary, 0);
@@ -868,6 +866,51 @@ fn test_context_builder_guidance_appears_before_hierarchy() {
         guidance_pos < assignment_pos,
         "Guidance (pos {}) should appear before Your Assignment (pos {})",
         guidance_pos,
+        assignment_pos
+    );
+}
+
+#[test]
+fn test_context_builder_reads_work_doc_from_filesystem() {
+    let dir = TestDir::new("loopr-ctx-workdoc");
+    let (stores, wi_id) = setup_stores(&dir);
+
+    // Pre-create the work doc on disk - ContextBuilder must read this and inject it
+    let docs_dir = dir.join("docs/loopr");
+    std::fs::create_dir_all(&docs_dir).unwrap();
+    let unique_sentinel = "SENTINEL_CONTENT_FROM_DISK_7x9q";
+    let work_doc_path = docs_dir.join(format!("{}.md", wi_id));
+    std::fs::write(
+        &work_doc_path,
+        format!("---\nid: {}\n---\n\n{}\n", wi_id, unique_sentinel),
+    )
+    .unwrap();
+
+    let assembled = ContextBuilder::new(&stores, Role::Implementer)
+        .load_work_hierarchy(&wi_id)
+        .unwrap()
+        .build("system")
+        .unwrap();
+
+    // The unique sentinel must appear verbatim in the user message - proving the file was read
+    assert!(
+        assembled.user_message.contains(unique_sentinel),
+        "Work doc content from disk must appear in context; user_message:\n{}",
+        assembled.user_message
+    );
+    // And it must be under ## Your Assignment
+    let assignment_pos = assembled
+        .user_message
+        .find("## Your Assignment")
+        .expect("## Your Assignment section must be present");
+    let sentinel_pos = assembled
+        .user_message
+        .find(unique_sentinel)
+        .expect("sentinel must be present");
+    assert!(
+        sentinel_pos > assignment_pos,
+        "sentinel (pos {}) must appear after ## Your Assignment (pos {})",
+        sentinel_pos,
         assignment_pos
     );
 }

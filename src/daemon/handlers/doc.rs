@@ -6,8 +6,8 @@
 //! - `doc.inject` (E2E test path): caller supplies a path to an existing plan .md file.
 //!
 //! Both paths:
-//!   1. Create a run directory under `<repo>/.loopr/runs/YYYYMMDD-HHMMSS/`
-//!   2. Write the plan .md file into the run directory
+//!   1. Create a transient working directory under the system temp dir
+//!   2. Write the plan .md file into the working directory
 //!   3. Create a `Doc` record (DocKind::Plan) and persist it
 //!   4. Optionally run the Decomposer (skip via `skip_decompose=true` for tests)
 //!   5. Persist child Docs produced by the Decomposer

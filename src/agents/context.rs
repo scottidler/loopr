@@ -143,7 +143,6 @@ fn truncate_list(items: &[String], max_tokens: usize) -> Vec<String> {
 #[derive(Debug, Clone)]
 pub struct TokenBudget {
     pub work_target: usize,
-    pub hierarchy: usize,
     pub learnings: usize,
     pub state_summary: usize,
     pub tools_or_actions: usize,
@@ -157,7 +156,6 @@ impl TokenBudget {
         match role {
             Role::Coordinator => Self {
                 work_target: 500,
-                hierarchy: 3000,
                 learnings: 1500,
                 state_summary: 3000,
                 tools_or_actions: 500,
@@ -166,7 +164,6 @@ impl TokenBudget {
             },
             Role::Researcher => Self {
                 work_target: 1000,
-                hierarchy: 1000,
                 learnings: 1000,
                 state_summary: 0,
                 tools_or_actions: 300,
@@ -175,7 +172,6 @@ impl TokenBudget {
             },
             Role::Implementer => Self {
                 work_target: 1000,
-                hierarchy: 2000,
                 learnings: 2000,
                 state_summary: 2000,
                 tools_or_actions: 500,
@@ -184,7 +180,6 @@ impl TokenBudget {
             },
             Role::Reviewer => Self {
                 work_target: 1000,
-                hierarchy: 2000,
                 learnings: 2000,
                 state_summary: 1000,
                 tools_or_actions: 0,
@@ -193,7 +188,6 @@ impl TokenBudget {
             },
             Role::Integrator => Self {
                 work_target: 500,
-                hierarchy: 500,
                 learnings: 1000,
                 state_summary: 1500,
                 tools_or_actions: 400,
