@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 
 use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::daemon::context::Stores;
+use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
 
@@ -115,13 +116,11 @@ async fn preflight_ac_check(stores: &Arc<Stores>, work_id: &str) -> Option<bool>
 
 /// Run a single Work item through the full Implementer lifecycle.
 ///
-/// This is the entry point for pull-based workers. It:
-/// 1. Transitions Work Ready -> InProgress (returns Ok if already claimed)
+/// This is the entry point for pull-based workers. The Work must already be
+/// InProgress (claimed atomically by `next_assignable_work`). It:
+/// 1. Verifies Work is still InProgress
 /// 2. Creates an AgentSession
 /// 3. Delegates to `run_agent_task` for the full lifecycle (worktree, LLM, agent loop, handback, cleanup)
-///
-/// Race handling: if the Ready -> InProgress transition fails (another worker grabbed it),
-/// returns Ok(()) immediately - this is expected contention, not an error.
 pub async fn run_single_work(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
@@ -164,26 +163,27 @@ pub async fn run_single_work(
         return Ok(());
     }
 
-    // Step 1: Transition Work Ready -> InProgress.
-    // Use the bridge to go through the handler (FSM validation + persistence).
-    let transition_resp = bridge.request(
-        "work.transition",
-        serde_json::json!({
-            "id": work_id,
-            "target_status": "InProgress",
-            "role": "coordinator",
-            "assignee": "implementer",
-        }),
-    );
-    if transition_resp.is_error() {
-        // Expected contention: another worker grabbed this Work first.
-        info!(
-            "Worker {} could not claim Work {} (likely already claimed): {:?}",
-            worker_id,
-            work_id,
-            transition_resp.error.as_ref().map(|e| &e.message)
-        );
-        return Ok(());
+    // Step 1: Work is already InProgress (claimed atomically by next_assignable_work).
+    // Verify it's still InProgress before proceeding - another reconciliation pass
+    // could have changed it.
+    {
+        let works = stores.read_works()?;
+        match works.get(work_id) {
+            Some(w) if w.status() == WorkStatus::InProgress => {}
+            Some(w) => {
+                info!(
+                    "Worker {} skipping Work {} - status is {:?}, expected InProgress",
+                    worker_id,
+                    work_id,
+                    w.status()
+                );
+                return Ok(());
+            }
+            None => {
+                info!("Worker {} skipping Work {} - not found in store", worker_id, work_id);
+                return Ok(());
+            }
+        }
     }
 
     // Step 2: Check pool capacity and dedup before creating session

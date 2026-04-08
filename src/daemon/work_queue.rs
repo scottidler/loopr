@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tracing::{debug, warn};
+
 use crate::agents::AgentKind;
 use crate::daemon::context::Stores;
 use crate::domain::lock::LockStatus;
@@ -12,8 +14,13 @@ struct WorkPriority {
     pub score: i64,
 }
 
-/// Determine the next Work to assign from the Ready pool.
-/// Returns None if no assignable Work exists.
+/// Determine the next Work to assign from the Ready pool and atomically claim it.
+/// Returns None if no assignable Work exists or if the candidate was claimed by
+/// another worker between the scoring and claiming phases.
+///
+/// Two-phase approach:
+/// - Phase 1 (read lock): score all Ready candidates
+/// - Phase 2 (write lock): re-verify the winner is still Ready, mark InProgress
 ///
 /// Filters:
 /// - Work must be in Ready state
@@ -25,44 +32,72 @@ struct WorkPriority {
 /// - +100 if no active locks contend with the Work's files
 /// - +(10 - min(deps, 10)) * 10 for fewer dependencies
 pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>) -> Option<String> {
-    let works = stores.read_works().ok()?;
-    let locks = stores.read_locks().ok()?;
-    let sessions = stores.read_agent_sessions().ok()?;
+    // Phase 1: score candidates under read lock
+    let candidate_id = {
+        let works = stores.read_works().ok()?;
+        let locks = stores.read_locks().ok()?;
+        let sessions = stores.read_agent_sessions().ok()?;
 
-    let mut candidates: Vec<WorkPriority> = works
-        .values()
-        .filter(|w| w.status() == WorkStatus::Ready)
-        .filter(|w| current_phase_id.map(|pid| w.parent_id == pid).unwrap_or(true))
-        // Exclude Works whose dependencies aren't Done
-        .filter(|w| {
-            w.dependencies.iter().all(|dep_id| {
-                works
-                    .get(dep_id)
-                    .map(|dep| dep.status() == WorkStatus::Done)
-                    .unwrap_or(false)
+        let mut candidates: Vec<WorkPriority> = works
+            .values()
+            .filter(|w| w.status() == WorkStatus::Ready)
+            .filter(|w| current_phase_id.map(|pid| w.parent_id == pid).unwrap_or(true))
+            // Exclude Works whose dependencies aren't Done
+            .filter(|w| {
+                w.dependencies.iter().all(|dep_id| {
+                    works
+                        .get(dep_id)
+                        .map(|dep| dep.status() == WorkStatus::Done)
+                        .unwrap_or(false)
+                })
             })
-        })
-        // Exclude Works that already have a non-terminal Implementer
-        .filter(|w| {
-            !sessions.values().any(|s| {
-                s.agent_type == AgentKind::Implementer
-                    && s.work_id.as_deref() == Some(&w.id)
-                    && !s.status().is_terminal()
+            // Exclude Works that already have a non-terminal Implementer
+            .filter(|w| {
+                !sessions.values().any(|s| {
+                    s.agent_type == AgentKind::Implementer
+                        && s.work_id.as_deref() == Some(&w.id)
+                        && !s.status().is_terminal()
+                })
             })
-        })
-        .map(|w| {
-            let score = compute_priority(w, &locks);
-            WorkPriority {
-                work_id: w.id.clone(),
-                score,
-            }
-        })
-        .collect();
+            .map(|w| {
+                let score = compute_priority(w, &locks);
+                WorkPriority {
+                    work_id: w.id.clone(),
+                    score,
+                }
+            })
+            .collect();
 
-    // Sort by priority (highest first)
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+        // Sort by priority (highest first)
+        candidates.sort_by(|a, b| b.score.cmp(&a.score));
 
-    candidates.first().map(|c| c.work_id.clone())
+        candidates.first().map(|c| c.work_id.clone())
+    }?;
+
+    // Phase 2: atomically claim under write lock
+    let mut works = stores.write_works().ok()?;
+    let work = works.get_mut(&candidate_id)?;
+    if work.status() != WorkStatus::Ready {
+        debug!(
+            "next_assignable_work: candidate {} no longer Ready (status={:?}), lost race",
+            candidate_id,
+            work.status()
+        );
+        return None;
+    }
+    work.force_status(WorkStatus::InProgress);
+    work.assignee = Some("implementer".to_string());
+    // Persist to TaskStore while still holding the write lock
+    if let Some(ref store_arc) = stores.store
+        && let Ok(mut s) = store_arc.lock()
+        && let Err(e) = s.update(work.clone())
+    {
+        warn!(
+            "next_assignable_work: failed to persist claim for {}: {}",
+            candidate_id, e
+        );
+    }
+    Some(candidate_id)
 }
 
 /// Compute priority score for a Work item.
@@ -308,5 +343,76 @@ mod tests {
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
         assert_eq!(next_assignable_work(&stores, None), Some(wb_id));
+    }
+
+    #[test]
+    fn test_atomic_claim_marks_inprogress() {
+        let stores = test_stores();
+        let id = ready_work(&stores, "phase-1", "Work A");
+
+        // Claim the work
+        let result = next_assignable_work(&stores, None);
+        assert_eq!(result, Some(id.clone()));
+
+        // Verify it was marked InProgress
+        let works = stores.works.read().unwrap();
+        assert_eq!(works[&id].status(), WorkStatus::InProgress);
+    }
+
+    #[test]
+    fn test_atomic_claim_sets_assignee() {
+        let stores = test_stores();
+        let id = ready_work(&stores, "phase-1", "Work A");
+
+        next_assignable_work(&stores, None);
+
+        let works = stores.works.read().unwrap();
+        assert_eq!(works[&id].assignee, Some("implementer".to_string()));
+    }
+
+    #[test]
+    fn test_atomic_claim_prevents_double_assignment() {
+        let stores = test_stores();
+        let id = ready_work(&stores, "phase-1", "Work A");
+
+        // First call claims it
+        let first = next_assignable_work(&stores, None);
+        assert_eq!(first, Some(id));
+
+        // Second call finds nothing (work is now InProgress, not Ready)
+        let second = next_assignable_work(&stores, None);
+        assert!(second.is_none());
+    }
+
+    #[test]
+    fn test_concurrent_claim_only_one_wins() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let stores = test_stores();
+        let id = ready_work(&stores, "phase-1", "Contested Work");
+        let _ = id; // we just need one Ready work
+
+        let barrier = Arc::new(Barrier::new(2));
+        let stores1 = stores.clone();
+        let stores2 = stores.clone();
+        let b1 = barrier.clone();
+        let b2 = barrier.clone();
+
+        let t1 = thread::spawn(move || {
+            b1.wait();
+            next_assignable_work(&stores1, None)
+        });
+        let t2 = thread::spawn(move || {
+            b2.wait();
+            next_assignable_work(&stores2, None)
+        });
+
+        let r1 = t1.join().unwrap();
+        let r2 = t2.join().unwrap();
+
+        // Exactly one thread should have claimed the work
+        let winners: Vec<_> = [r1, r2].iter().filter(|r| r.is_some()).cloned().collect();
+        assert_eq!(winners.len(), 1, "exactly one thread should claim the work");
     }
 }
