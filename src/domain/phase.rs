@@ -20,9 +20,6 @@ pub struct Phase {
     status: PhaseStatus,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
-    /// Kept for backward deserialization of old JSONL records; ignored on write.
-    #[serde(default, skip_serializing)]
-    pub validation_commands: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -63,7 +60,6 @@ impl Phase {
             order,
             status: PhaseStatus::Draft,
             acceptance_criteria: AcceptanceCriteria::default(),
-            validation_commands: Vec::new(),
             created_at: now,
             updated_at: now,
         }

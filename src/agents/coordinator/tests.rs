@@ -1993,13 +1993,14 @@ async fn test_phase_missing_test_tool_no_validation_commands() {
     assert!(warning.is_empty(), "no warning when phase has no validation_commands");
 }
 
+// Phase-level validation_commands removed in domain-model-cleanup Phase 3.
+// phase_missing_test_tool now always returns empty. Test kept as tombstone.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_phase_missing_test_tool_warns_when_no_tool() {
+async fn test_phase_missing_test_tool_always_empty_after_field_removal() {
     let dir = TestDir::new("loopr-coord-toolguard-warn");
     let stores = test_stores(&dir);
 
-    let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    phase.validation_commands = vec!["cargo test".to_string()];
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -2008,12 +2009,9 @@ async fn test_phase_missing_test_tool_warns_when_no_tool() {
 
     let warning = phase_missing_test_tool(&stores, &coord_state);
     assert!(
-        !warning.is_empty(),
-        "should warn when validation_commands exist but no test tool"
+        warning.is_empty(),
+        "phase_missing_test_tool always returns empty after field removal"
     );
-    assert!(warning.contains("WARNING"));
-    assert!(warning.contains("register_tool"));
-    assert!(warning.contains("cargo test"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2021,8 +2019,7 @@ async fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
     let dir = TestDir::new("loopr-coord-toolguard-ok");
     let stores = test_stores(&dir);
 
-    let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    phase.validation_commands = vec!["cargo test".to_string()];
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 

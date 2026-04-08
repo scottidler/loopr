@@ -4,7 +4,6 @@
 //! seal it, run validation commands, then publish or fail. Every decision is an
 //! if/then/else on data from the stores — no prompts, no parsing, no temperature.
 
-use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -1143,38 +1142,15 @@ fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]
 }
 
 /// Resolve effective validation commands: global + phase-scoped (deduplicated).
+/// Returns the effective set of validation commands to run for a set of bundles.
+/// Phase-level validation_commands were removed in domain-model-cleanup Phase 3;
+/// only global (IntegratorConfig) commands remain.
 pub fn effective_validation_commands(
     global_commands: &[String],
-    bundle_ids: &[String],
-    stores: &Stores,
+    _bundle_ids: &[String],
+    _stores: &Stores,
 ) -> Vec<String> {
-    let mut commands: Vec<String> = global_commands.to_vec();
-    let mut seen: HashSet<String> = commands.iter().cloned().collect();
-
-    let Ok(bundles) = stores.read_bundles() else {
-        return commands;
-    };
-    let Ok(works) = stores.read_works() else {
-        return commands;
-    };
-    let Ok(phases) = stores.read_phases() else {
-        return commands;
-    };
-
-    for bid in bundle_ids {
-        if let Some(bundle) = bundles.get(bid)
-            && let Some(work) = works.get(&bundle.work_id)
-            && let Some(phase) = phases.get(&work.parent_id)
-        {
-            for cmd in &phase.validation_commands {
-                if seen.insert(cmd.clone()) {
-                    commands.push(cmd.clone());
-                }
-            }
-        }
-    }
-
-    commands
+    global_commands.to_vec()
 }
 
 /// Run validation commands synchronously (same pattern as handlers.rs).

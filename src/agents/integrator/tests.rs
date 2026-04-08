@@ -1091,58 +1091,24 @@ async fn test_effective_validation_commands_global_only() {
     assert_eq!(result, vec!["echo global"]);
 }
 
+// Phase-level validation_commands removed in domain-model-cleanup Phase 3.
+// effective_validation_commands now returns only global commands regardless of phase.
 #[tokio::test(flavor = "multi_thread")]
-async fn test_effective_validation_commands_with_phase() {
-    use crate::domain::phase::Phase;
-
+async fn test_effective_validation_commands_with_phase_returns_global_only() {
     let dir = TestDir::new("loopr-int-evc-phase");
     let stores = test_stores(&dir);
-
-    // Create phase with validation commands
-    let mut phase = Phase::new("spec-1".into(), "P1".into(), 1);
-    phase.validation_commands = vec!["echo phase".to_string()];
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase.id.clone(), phase);
-
-    // Create work in that phase
-    let work = Work::new(phase_id, "W1".into());
-    let work_id = work.id.clone();
-    stores.works.write().unwrap().insert(work.id.clone(), work);
-
-    // Create bundle for that work
-    let bundle = Bundle::new(work_id, None, "feature/test".into(), vec![]);
-    let bundle_id = bundle.id.clone();
-    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
-
     let global = vec!["echo global".to_string()];
-    let result = effective_validation_commands(&global, &[bundle_id], &stores);
-    assert_eq!(result, vec!["echo global", "echo phase"]);
+    let result = effective_validation_commands(&global, &[], &stores);
+    assert_eq!(result, vec!["echo global"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_effective_validation_commands_deduplicates() {
-    use crate::domain::phase::Phase;
-
+async fn test_effective_validation_commands_global_unchanged() {
     let dir = TestDir::new("loopr-int-evc-dedup");
     let stores = test_stores(&dir);
-
-    let mut phase = Phase::new("spec-1".into(), "P1".into(), 1);
-    phase.validation_commands = vec!["echo global".to_string(), "echo phase".to_string()];
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase.id.clone(), phase);
-
-    let work = Work::new(phase_id, "W1".into());
-    let work_id = work.id.clone();
-    stores.works.write().unwrap().insert(work.id.clone(), work);
-
-    let bundle = Bundle::new(work_id, None, "feature/test".into(), vec![]);
-    let bundle_id = bundle.id.clone();
-    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
-
     let global = vec!["echo global".to_string()];
-    let result = effective_validation_commands(&global, &[bundle_id], &stores);
-    // "echo global" should not be duplicated
-    assert_eq!(result, vec!["echo global", "echo phase"]);
+    let result = effective_validation_commands(&global, &[], &stores);
+    assert_eq!(result, vec!["echo global"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -677,52 +677,10 @@ fn sweep_integrated_to_done(
     }
 }
 
-/// Check if the current phase requires validation tools but none are registered.
-/// Returns a warning string for the coordinator prompt, or empty string if tools are available.
-fn phase_missing_test_tool(stores: &Stores, coord_state: &CoordinatorState) -> String {
-    let phase_id = match &coord_state.current_phase_id {
-        Some(id) => id,
-        None => return String::new(),
-    };
-    let phase = {
-        let Ok(phases) = stores.read_phases() else {
-            return String::new();
-        };
-        match phases.get(phase_id) {
-            Some(p) => p.clone(),
-            None => return String::new(),
-        }
-    };
-    if phase.validation_commands.is_empty() {
-        return String::new();
-    }
-    // Phase has validation_commands - check if a test tool exists
-    let has_test_tool = stores
-        .read_tool_runner()
-        .ok()
-        .is_some_and(|runner| runner.get_tool("test").is_some());
-    if has_test_tool {
-        return String::new();
-    }
-    // Surface the declared validation commands as a hint
-    let cmds_list = phase
-        .validation_commands
-        .iter()
-        .map(|c| format!("  - `{}`", c))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        "**WARNING: This phase has validation-commands but no 'test' tool \
-         is registered.** The declared validation commands for this phase are:\n\
-         {}\n\
-         You MUST use `register_tool` to register a test command based on \
-         these commands BEFORE dispatching implementers. Extract the \
-         executable from the commands above and register it. \
-         Do NOT spawn researchers for tool discovery when validation \
-         commands are already declared.\n\n",
-        cmds_list
-    )
+/// Phase-level validation_commands were removed in domain-model-cleanup Phase 3.
+/// This function now always returns empty - validation commands live only in IntegratorConfig.
+fn phase_missing_test_tool(_stores: &Stores, _coord_state: &CoordinatorState) -> String {
+    String::new()
 }
 
 /// Determine the FSM state footer -- state-specific instructions for the LLM.
