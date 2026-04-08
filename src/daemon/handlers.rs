@@ -319,6 +319,17 @@ pub(crate) mod tests {
 
     pub(crate) fn test_stores() -> (TestDir, Arc<Stores>) {
         let dir = TestDir::new("loopr-handler-test");
+        let mut stores = Stores::new();
+        stores.config.project.repo_path = dir.to_path_buf();
+        (dir, Arc::new(stores))
+    }
+
+    /// Like `test_stores` but initializes a real git repo with a HEAD commit.
+    /// Only use this when the test actually requires `git rev-parse HEAD` to succeed
+    /// (e.g. asserting that `integration_sha` is populated). All other tests should
+    /// use `test_stores()` to avoid paying the ~0.5s per-test git subprocess cost.
+    pub(crate) fn test_stores_with_git() -> (TestDir, Arc<Stores>) {
+        let dir = TestDir::new("loopr-handler-test-git");
         std::process::Command::new("git")
             .args(["init"])
             .current_dir(&dir)

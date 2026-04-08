@@ -601,8 +601,8 @@ mod tests {
     use crate::daemon::context::Stores;
     use crate::daemon::handlers::dispatch;
     use crate::daemon::handlers::tests::{
-        test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_stores_with_validator,
-        test_worktree_mgr,
+        test_event_tx, test_integrator_config, test_stores, test_stores_with_git, test_stores_with_taskstore,
+        test_stores_with_validator, test_worktree_mgr,
     };
     use crate::domain::validation::{ValidationReport, ValidationVerdict};
     use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
@@ -643,7 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integrator_validate_success() {
-        let (_dir, stores) = test_stores();
+        let (_dir, stores) = test_stores_with_git();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let tick_id = create_sealing_tick(&stores, &tx, &wm).await;
