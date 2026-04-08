@@ -71,13 +71,18 @@ macro_rules! try_async_handler {
 
 /// Returns the configured max_pool for a given agent type.
 fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
-    match agent_type {
+    let raw = match agent_type {
         AgentKind::Implementer => config.agents.implementer.max_pool,
         AgentKind::Reviewer => config.agents.reviewer.max_pool,
         AgentKind::Coordinator => config.agents.coordinator.role.max_pool,
         AgentKind::Researcher => config.agents.researcher.max_pool,
         AgentKind::Integrator => 1,
         AgentKind::Chat => 1, // Single chat session for now
+    };
+    if raw == crate::config::MAX_POOL_UNLIMITED {
+        config.agents.worker_pool_size.resolve()
+    } else {
+        raw
     }
 }
 
@@ -629,7 +634,8 @@ pub(crate) mod tests {
     #[test]
     fn test_max_pool_for_helper() {
         let config = crate::config::Config::default();
-        assert_eq!(max_pool_for(AgentKind::Implementer, &config), 6);
+        // Implementer default is MAX_POOL_UNLIMITED, resolved to worker_pool_size (>= 1).
+        assert!(max_pool_for(AgentKind::Implementer, &config) >= 1);
         assert_eq!(max_pool_for(AgentKind::Reviewer, &config), 2);
         assert_eq!(max_pool_for(AgentKind::Coordinator, &config), 1);
         assert_eq!(max_pool_for(AgentKind::Researcher, &config), 4);

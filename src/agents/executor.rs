@@ -193,11 +193,15 @@ pub async fn run_single_work(
             .values()
             .filter(|s| s.agent_type == AgentKind::Implementer && !s.status().is_terminal())
             .count();
-        let max_pool = stores.config.agents.implementer.max_pool as usize;
-        if active_count >= max_pool {
+        let effective_max = if implementer_config.max_pool == crate::config::MAX_POOL_UNLIMITED {
+            stores.config.agents.worker_pool_size.resolve() as usize
+        } else {
+            implementer_config.max_pool as usize
+        };
+        if active_count >= effective_max {
             warn!(
                 "Worker {} pool exhausted ({}/{}), skipping Work {}",
-                worker_id, active_count, max_pool, work_id
+                worker_id, active_count, effective_max, work_id
             );
             return Ok(());
         }

@@ -383,6 +383,11 @@ impl Default for AgentConfig {
     }
 }
 
+/// Sentinel value for `max_pool` meaning "no hard cap - bounded by worker_pool_size".
+/// When `max_pool` equals this value, the effective cap is resolved from
+/// `AgentsConfig::worker_pool_size` at runtime. Explicit values in config still work.
+pub const MAX_POOL_UNLIMITED: u32 = u32::MAX;
+
 /// Per-role agent configuration (Implementer or Reviewer).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -411,7 +416,7 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 8192,
             max_iterations: 20,
-            max_pool: 6,
+            max_pool: MAX_POOL_UNLIMITED,
             temperature: 0.3,
             session_timeout_secs: Some(1800), // 30 min
             max_requeries: 3,
@@ -805,7 +810,7 @@ mod tests {
     fn test_agent_role_config_implementer_defaults() {
         let rc = AgentRoleConfig::default_implementer();
         assert_eq!(rc.max_iterations, 20);
-        assert_eq!(rc.max_pool, 6);
+        assert_eq!(rc.max_pool, MAX_POOL_UNLIMITED);
         assert_eq!(rc.max_tokens, 8192);
         assert!((rc.temperature - 0.3).abs() < f32::EPSILON);
         assert_eq!(rc.max_requeries, 3);
