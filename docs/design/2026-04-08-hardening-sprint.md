@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-08
-**Status:** In Review
+**Status:** Implemented
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -143,20 +143,30 @@ This requires a small addition to coordinator.pmt: instruct the coordinator that
 sees a Learning containing "STRUCTURAL CONFLICT", it must Abandon the named works and
 redecompose the phase (not just retry). No new IPC surface required.
 
-Note: do NOT transition conflicting works to `Blocked` - `Blocked` is a dependency-wait
-state. Resetting to `Ready` then creating the Learning is the correct sequence; the
-coordinator will Abandon them on its next pass before they get picked up again by a worker.
+Conflicting works are transitioned directly to `Abandoned` (standard `InReview → Abandoned`
+coordinator transition, no override required). This eliminates the worker race entirely -
+no work is ever returned to `Ready` when it is known to be poisoned.
 
-**Edge case - race with worker re-pickup:** Between the integrator resetting a conflicting
-work to `Ready` and the coordinator reading the structural-conflict Learning, a worker could
-claim and start the same work again. The coordinator must handle this: when it sees a
-structural-conflict Learning and the named work is `InProgress`, it should use
-`override_work` to force it to `Abandoned` (override is valid on InProgress). Add this
-case to the coordinator prompt's structural-conflict handling instruction.
+Non-conflicting works from the same tick are reset to `Ready` for normal retry (current
+`reset_work_after_bundle_rejection` behavior, unchanged).
 
-**Edge case - unresolvable conflict files:** If `git diff --name-only --diff-filter=U`
-returns empty (binary conflict, submodule conflict, etc.), fall back to the retryable path.
-Log a warning but do not escalate. Structural classification requires confirmed file overlap.
+**Classification method:** Cross-reference `work.files` declared scope across all bundles
+in the tick. If two or more bundles' corresponding works claim the same file, that is a
+structural conflict. This uses bundle metadata rather than live git conflict markers
+(which are cleaned up by `git merge --abort` before we can inspect them).
+
+**Edge case - no declared files overlap:** Returns `None` → retryable path. This handles
+binary conflicts, submodule conflicts, or cases where bundles have empty `files` lists.
+
+**Coordinator prompt instruction** (added to Rules section):
+When the coordinator sees a Learning containing "STRUCTURAL CONFLICT", it creates replacement
+Works for the phase with explicit per-file ownership. Works that were Abandoned by the
+integrator are already terminal; the coordinator creates new ones.
+
+**Amendment from Gemini architectural review (2026-04-08):**
+Original design proposed resetting to `Ready` then creating a Learning (with coordinator
+doing a subsequent Abandon). Gemini correctly identified this as a deliberate race condition.
+Revised to `Abandoned` directly, which is a valid standard FSM transition from `InReview`.
 
 ### Phase 3 - Domain Model Phase 7
 

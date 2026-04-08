@@ -4,6 +4,7 @@
 //! seal it, run validation commands, then publish or fail. Every decision is an
 //! if/then/else on data from the stores — no prompts, no parsing, no temperature.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -582,6 +583,9 @@ impl IntegratorAgent {
                         ));
                     }
 
+                    // Classify the conflict before rejecting bundles (while we still have context).
+                    let conflict_kind = classify_conflict(&self.ctx.stores, &valid_bundle_ids);
+
                     for bundle_id in &valid_bundle_ids {
                         let resp = self.ctx.bridge.request(
                             "bundle.transition",
@@ -598,15 +602,33 @@ impl IntegratorAgent {
                                 bundle_id,
                                 msg
                             ));
-                        } else {
-                            let wi_id = self
-                                .ctx
-                                .stores
-                                .read_bundles()?
-                                .get(bundle_id.as_str())
-                                .map(|b| b.work_id.clone())
-                                .unwrap_or_default();
-                            self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
+                        }
+                    }
+
+                    // Handle work reset based on conflict type.
+                    match conflict_kind {
+                        Some((conflicting_files, conflicting_work_ids)) => {
+                            self.ctx.warn(&format!(
+                                "structural merge conflict detected: works={:?} files={:?}",
+                                conflicting_work_ids, conflicting_files
+                            ));
+                            self.escalate_structural_conflict(
+                                &conflicting_work_ids,
+                                &conflicting_files,
+                                &valid_bundle_ids,
+                            );
+                        }
+                        None => {
+                            // Retryable conflict - reset all works to Ready.
+                            if let Ok(bundles) = self.ctx.stores.read_bundles() {
+                                for bundle_id in &valid_bundle_ids {
+                                    let wi_id = bundles
+                                        .get(bundle_id.as_str())
+                                        .map(|b| b.work_id.clone())
+                                        .unwrap_or_default();
+                                    self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
+                                }
+                            }
                         }
                     }
 
@@ -1029,6 +1051,95 @@ impl IntegratorAgent {
     }
 
     /// After rejecting a bundle, reset the parent Work to Ready so it can be re-assigned.
+    /// Escalate a structural merge conflict to the coordinator via a Learning.
+    ///
+    /// Transitions conflicting works directly to `Abandoned` (standard `InReview → Abandoned`
+    /// transition, Coordinator role) so no worker can re-pick them up before the coordinator
+    /// acts. Non-conflicting works from the same tick are reset to Ready for normal retry.
+    /// A single `STRUCTURAL CONFLICT` Learning is created so the coordinator can detect it
+    /// and create replacement Works with explicit per-file ownership.
+    fn escalate_structural_conflict(
+        &self,
+        conflicting_work_ids: &HashSet<String>,
+        conflicting_files: &HashSet<String>,
+        all_bundle_ids: &[String],
+    ) {
+        // Abandon conflicting works - InReview → Abandoned is a valid coordinator transition.
+        let mut phase_id = String::new();
+        for wi_id in conflicting_work_ids {
+            if let Ok(works) = self.ctx.stores.read_works() {
+                if let Some(w) = works.get(wi_id.as_str()) {
+                    phase_id = w.parent_id.clone();
+                }
+            }
+            let resp = self.ctx.bridge.request(
+                "work.transition",
+                serde_json::json!({
+                    "id": wi_id,
+                    "target_status": "Abandoned",
+                    "role": "coordinator",
+                }),
+            );
+            if resp.is_error() {
+                self.ctx.warn(&format!(
+                    "escalate_structural_conflict: failed to abandon {}: {:?}",
+                    wi_id, resp.error
+                ));
+            } else {
+                self.ctx.info(&format!(
+                    "escalate_structural_conflict: abandoned {} (structural conflict)",
+                    wi_id
+                ));
+            }
+        }
+
+        // Reset non-conflicting works to Ready for normal retry.
+        if let Ok(bundles) = self.ctx.stores.read_bundles() {
+            for bid in all_bundle_ids {
+                if let Some(b) = bundles.get(bid.as_str()) {
+                    if !conflicting_work_ids.contains(&b.work_id) {
+                        self.reset_work_after_bundle_rejection(&b.work_id, "merge conflict (unrelated)");
+                    }
+                }
+            }
+        }
+
+        // Create a single structured Learning so the coordinator can detect and redecompose.
+        let mut files_sorted: Vec<&String> = conflicting_files.iter().collect();
+        files_sorted.sort();
+        let mut works_sorted: Vec<&String> = conflicting_work_ids.iter().collect();
+        works_sorted.sort();
+        let content = format!(
+            "STRUCTURAL CONFLICT: Works [{}] both modified [{}]. \
+             Their implementations are incompatible. \
+             Create replacement Works for this phase with explicit file ownership - \
+             each file must be owned by exactly one Work. \
+             Do not retry these works.",
+            works_sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+            files_sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+        );
+        let learn_resp = self.ctx.bridge.request(
+            "learning.create",
+            serde_json::json!({
+                "content": content,
+                "scope": "phase",
+                "source_id": if phase_id.is_empty() {
+                    works_sorted.first().map(|s| s.as_str()).unwrap_or("")
+                } else {
+                    phase_id.as_str()
+                },
+            }),
+        );
+        if learn_resp.is_error() {
+            self.ctx.warn(&format!(
+                "escalate_structural_conflict: failed to create learning: {:?}",
+                learn_resp.error
+            ));
+        } else {
+            self.ctx.info("escalate_structural_conflict: created STRUCTURAL CONFLICT learning");
+        }
+    }
+
     fn reset_work_after_bundle_rejection(&self, work_id: &str, reason: &str) {
         if work_id.is_empty() {
             return;
@@ -1067,6 +1178,44 @@ impl IntegratorAgent {
                 work_id
             ));
         }
+    }
+}
+
+/// Classify whether a merge failure is structural (multiple bundles in the same tick
+/// declared ownership of the same file) or retryable.
+///
+/// Returns `Some((conflicting_files, conflicting_work_ids))` for structural conflicts,
+/// or `None` when no file overlap is detected (treat as retryable).
+///
+/// This uses bundle-declared `work.files` rather than live git conflict markers because
+/// `merge --abort` cleans up conflict state before this function is called.
+fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<String>, HashSet<String>)> {
+    let bundles = stores.read_bundles().ok()?;
+    let works = stores.read_works().ok()?;
+
+    // Map file → first work_id that claimed it.
+    let mut file_to_work: HashMap<String, String> = HashMap::new();
+    let mut conflicting_files: HashSet<String> = HashSet::new();
+    let mut conflicting_works: HashSet<String> = HashSet::new();
+
+    for bid in bundle_ids {
+        let Some(bundle) = bundles.get(bid.as_str()) else { continue };
+        let Some(work) = works.get(bundle.work_id.as_str()) else { continue };
+        for file in &work.files {
+            if let Some(first_work) = file_to_work.get(file) {
+                conflicting_files.insert(file.clone());
+                conflicting_works.insert(first_work.clone());
+                conflicting_works.insert(bundle.work_id.clone());
+            } else {
+                file_to_work.insert(file.clone(), bundle.work_id.clone());
+            }
+        }
+    }
+
+    if conflicting_files.is_empty() {
+        None
+    } else {
+        Some((conflicting_files, conflicting_works))
     }
 }
 

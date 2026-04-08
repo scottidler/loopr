@@ -1256,3 +1256,67 @@ async fn test_run_cycle_returns_idle_when_degraded() {
         "run_cycle should return Idle when degraded"
     );
 }
+
+// --- classify_conflict tests ---
+
+#[test]
+fn test_classify_conflict_no_overlap_returns_none() {
+    let dir = TestDir::new("loopr-intg-cc1");
+    let stores = test_stores(&dir);
+
+    let mut wk_a = Work::new("phase-1".into(), "Work A".into());
+    wk_a.files = vec!["src/a.rs".into()];
+    let mut wk_b = Work::new("phase-1".into(), "Work B".into());
+    wk_b.files = vec!["src/b.rs".into()];
+
+    let mut bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
+    let mut bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
+    bundle_a.force_status(crate::domain::bundle::BundleStatus::Reviewed);
+    bundle_b.force_status(crate::domain::bundle::BundleStatus::Reviewed);
+
+    stores.works.write().unwrap().insert(wk_a.id.clone(), wk_a);
+    stores.works.write().unwrap().insert(wk_b.id.clone(), wk_b);
+    stores.bundles.write().unwrap().insert(bundle_a.id.clone(), bundle_a.clone());
+    stores.bundles.write().unwrap().insert(bundle_b.id.clone(), bundle_b.clone());
+
+    let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
+    assert!(result.is_none(), "non-overlapping files should return None");
+}
+
+#[test]
+fn test_classify_conflict_with_overlap_returns_some() {
+    let dir = TestDir::new("loopr-intg-cc2");
+    let stores = test_stores(&dir);
+
+    let mut wk_a = Work::new("phase-1".into(), "Work A".into());
+    wk_a.files = vec!["src/database.py".into(), "src/models.py".into()];
+    let mut wk_b = Work::new("phase-1".into(), "Work B".into());
+    wk_b.files = vec!["src/database.py".into(), "tests/test_db.py".into()]; // database.py is shared
+
+    let mut bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
+    let mut bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
+    bundle_a.force_status(crate::domain::bundle::BundleStatus::Reviewed);
+    bundle_b.force_status(crate::domain::bundle::BundleStatus::Reviewed);
+
+    let wk_a_id = wk_a.id.clone();
+    let wk_b_id = wk_b.id.clone();
+    stores.works.write().unwrap().insert(wk_a.id.clone(), wk_a);
+    stores.works.write().unwrap().insert(wk_b.id.clone(), wk_b);
+    stores.bundles.write().unwrap().insert(bundle_a.id.clone(), bundle_a.clone());
+    stores.bundles.write().unwrap().insert(bundle_b.id.clone(), bundle_b.clone());
+
+    let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
+    assert!(result.is_some(), "overlapping files should return Some");
+    let (files, works) = result.unwrap();
+    assert!(files.contains("src/database.py"));
+    assert!(works.contains(&wk_a_id));
+    assert!(works.contains(&wk_b_id));
+}
+
+#[test]
+fn test_classify_conflict_empty_bundle_list_returns_none() {
+    let dir = TestDir::new("loopr-intg-cc3");
+    let stores = test_stores(&dir);
+    let result = classify_conflict(&stores, &[]);
+    assert!(result.is_none(), "empty bundle list should return None");
+}
