@@ -103,6 +103,8 @@ If asked to monitor continuously:
 ## Rules of Engagement
 
 - Read-only observer only — no writes, no edits, no attempts to fix agents.
-- Always use the static `latest` symlink, never construct dynamic paths.
+- Always use the static `latest` symlink, never construct dynamic paths. The `latest` symlink is updated atomically at the **start** of a run, before the daemon starts. Any data read from `latest/` after the script starts is strictly from the current run.
+- Session logs (`~/.local/share/loopr/sessions/latest/`) are updated concurrently with the daemon start.
+- Work IDs (e.g., `wk-oudn1`) are generated fresh each run using ULIDs. Different IDs mean a different run. **Never** mix data or analysis across different runs.
 - Summarize findings concisely with counts: e.g. "3 works Done, 1 InProgress (bundle Proposed), 0 active sessions".
 - Quote relevant log lines verbatim when reporting panics or errors.
