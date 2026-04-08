@@ -804,60 +804,140 @@ fn build_fsm_footer(
     }
 }
 
-/// Find the next phase to activate, respecting sequential execution order.
-///
-/// Execution model: Specs execute sequentially (by `order`). Within each
-/// spec, phases execute sequentially (by `order`). Within an active phase,
-/// work items execute in parallel (constrained only by dependencies and
-/// shared files). This function finds the next phase to activate - it does
-/// not manage work-level parallelism.
-///
-/// Returns the first Draft phase in the earliest spec that still has
-/// non-terminal phases. Returns None if a phase is already in progress
-/// or all specs are exhausted.
-///
-/// Critical invariant: never look at phases from Spec N+1 while Spec N
-/// has non-terminal phases.
+// ---------------------------------------------------------------------------
+// Sequential execution model
+// ---------------------------------------------------------------------------
+//
+// The hierarchy is:
+//
+//   Plan
+//     Spec 0  (sequential - one at a time, ordered by spec.order)
+//       Phase 0  (sequential - one at a time, ordered by phase.order)
+//         Work A, B, C  (parallel - constrained by deps / shared files)
+//       Phase 1
+//         Work D, E
+//     Spec 1
+//       Phase 0
+//         Work F, G
+//
+// The coordinator iterates this structure top-down:
+//   - The current spec is Active; all earlier specs are Complete.
+//   - The current phase (within the current spec) is Active; earlier
+//     phases are Complete.
+//   - Works within the active phase run in parallel unless blocked by
+//     dependencies or file contention.
+//
+// Advancement:
+//   - Phase completes -> activate next phase in same spec.
+//   - All phases in a spec complete -> mark spec Complete, activate next
+//     spec, start its first phase.
+//   - All specs exhausted -> goal done.
+//
+// find_next_phase_to_activate() walks the hierarchy in order and returns
+// the next Draft phase. As a side effect it transitions spec status
+// (Draft -> Active for current, Active -> Complete for exhausted).
+// If the current phase is still running it returns None - we wait.
+//
+// Invariant: never look at Spec N+1 while Spec N has non-terminal phases.
+// ---------------------------------------------------------------------------
+
+/// Walk the spec/phase hierarchy and return the next Draft phase to activate.
+/// Transitions spec status as a side effect.
 fn find_next_phase_to_activate(stores: &Stores, _coord_state: &CoordinatorState) -> Option<(String, String)> {
     let plan = generation::find_active_plan(stores)?;
 
-    let Ok(all_specs) = stores.read_specs() else {
-        return None;
+    let spec_ids_and_orders: Vec<(String, u32)> = {
+        let Ok(all_specs) = stores.read_specs() else {
+            return None;
+        };
+        let mut specs: Vec<_> = all_specs
+            .values()
+            .filter(|s| s.parent_id == plan.id)
+            .filter(|s| !matches!(s.status(), HierarchyStatus::Abandoned))
+            .map(|s| (s.id.clone(), s.order))
+            .collect();
+        specs.sort_by_key(|(_, order)| *order);
+        specs
     };
-    let mut specs: Vec<_> = all_specs
-        .values()
-        .filter(|s| s.parent_id == plan.id)
-        .filter(|s| !matches!(s.status(), HierarchyStatus::Abandoned))
-        .collect();
-    specs.sort_by_key(|s| s.order);
 
-    let Ok(all_phases) = stores.read_phases() else {
-        return None;
+    let phase_data: Vec<(String, String, String, u32, HierarchyStatus)> = {
+        let Ok(all_phases) = stores.read_phases() else {
+            return None;
+        };
+        all_phases
+            .values()
+            .map(|p| (p.id.clone(), p.parent_id.clone(), p.title.clone(), p.order, p.status()))
+            .collect()
     };
 
-    for spec in &specs {
-        let mut phases: Vec<_> = all_phases.values().filter(|p| p.parent_id == spec.id).collect();
-        phases.sort_by_key(|p| p.order);
+    for (spec_id, _) in &spec_ids_and_orders {
+        let mut phases: Vec<_> = phase_data.iter().filter(|(_, pid, _, _, _)| pid == spec_id).collect();
+        phases.sort_by_key(|(_, _, _, order, _)| *order);
 
         let has_non_terminal = phases
             .iter()
-            .any(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned));
+            .any(|(_, _, _, _, status)| !matches!(status, HierarchyStatus::Complete | HierarchyStatus::Abandoned));
 
         if has_non_terminal {
+            // Activate this spec if it's still Draft
+            activate_spec_if_draft(stores, spec_id);
+
             // Return the first Draft phase in this spec
-            for phase in &phases {
-                if phase.status() == HierarchyStatus::Draft {
-                    return Some((phase.id.clone(), phase.title.clone()));
+            for (phase_id, _, title, _, status) in &phases {
+                if *status == HierarchyStatus::Draft {
+                    return Some((phase_id.clone(), title.clone()));
                 }
             }
             // No Draft phases but some are still Active/in-progress - wait
             return None;
         }
-        // All phases in this spec are terminal - continue to next spec
+
+        // All phases in this spec are terminal - mark spec Complete
+        mark_spec_complete(stores, spec_id);
     }
 
     // All specs exhausted
     None
+}
+
+/// Activate a spec (Draft -> Active) if it's currently Draft.
+fn activate_spec_if_draft(stores: &Stores, spec_id: &str) {
+    let Ok(mut specs) = stores.write_specs() else {
+        return;
+    };
+    if let Some(spec) = specs.get_mut(spec_id)
+        && spec.status() == HierarchyStatus::Draft
+    {
+        spec.force_status(HierarchyStatus::Active);
+        tracing::info!("Spec {} activated (Draft -> Active)", spec_id);
+        let spec_clone = spec.clone();
+        drop(specs);
+        if let Some(ref store) = stores.store
+            && let Ok(mut s) = store.lock()
+        {
+            let _ = s.update(spec_clone);
+        }
+    }
+}
+
+/// Mark a spec Complete when all its phases are terminal.
+fn mark_spec_complete(stores: &Stores, spec_id: &str) {
+    let Ok(mut specs) = stores.write_specs() else {
+        return;
+    };
+    if let Some(spec) = specs.get_mut(spec_id)
+        && spec.status() == HierarchyStatus::Active
+    {
+        spec.force_status(HierarchyStatus::Complete);
+        tracing::info!("Spec {} completed (Active -> Complete)", spec_id);
+        let spec_clone = spec.clone();
+        drop(specs);
+        if let Some(ref store) = stores.store
+            && let Ok(mut s) = store.lock()
+        {
+            let _ = s.update(spec_clone);
+        }
+    }
 }
 
 /// Build a status summary for the current phase's works.

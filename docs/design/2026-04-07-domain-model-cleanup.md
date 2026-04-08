@@ -480,24 +480,34 @@ DocKind::Spec => {
 
 Specs are processed in the order they appear in `all_records` after filtering by `DocKind::Spec`. This matches the LLM output order, which is the intended decomposition order.
 
-**Directive: `find_next_phase_to_activate()` algorithm.** The current implementation at `coordinator.rs:841-863` does not enforce spec boundaries. Rewrite to this exact algorithm:
+**Directive: sequential execution via ordered iteration.**
+
+The execution model is an iterator over a two-level ordered hierarchy:
 
 ```
-fn find_next_phase_to_activate(stores, plan_id) -> Option<Phase>:
-    1. Read all specs where parent_id == plan_id
-    2. Sort specs by spec.order ascending
-    3. For each spec in order:
-        a. Read all phases where parent_id == spec.id
-        b. Sort phases by phase.order ascending
-        c. If any phase in this spec is non-terminal (not Complete, not Abandoned):
-            - Return the first phase that is Draft (needs activation)
-            - If no Draft phases but some are still Active/in-progress, return None
-              (current phase still running, wait)
-        d. If ALL phases in this spec are terminal: continue to next spec
-    4. If all specs exhausted: return None (plan is done)
+Plan
+  Spec 0  (sequential - one at a time)
+    Phase 0  (sequential - one at a time)
+      Work A, Work B, Work C  (parallel - constrained by deps and shared files)
+    Phase 1
+      Work D, Work E
+  Spec 1
+    Phase 0
+      Work F, Work G
 ```
 
-The critical invariant: **never look at phases from Spec N+1 while Spec N has non-terminal phases.** The current code violates this by iterating across all specs and returning the first unfinished phase it finds regardless of spec boundaries.
+Specs execute in `order`. Phases within each spec execute in `order`. Works within the active phase execute in parallel (unless blocked by dependencies or file contention).
+
+The coordinator tracks where it is via spec/phase status:
+- The current spec is Active, all earlier specs are Complete.
+- The current phase is Active, all earlier phases in that spec are Complete.
+- When a phase completes: advance to the next phase in the same spec.
+- When all phases in a spec complete: mark the spec Complete, activate the next spec, start its first phase.
+- When all specs are exhausted: goal is done.
+
+`find_next_phase_to_activate()` walks the hierarchy in order and returns the next Draft phase to activate. As a side effect it transitions spec status (Draft -> Active for the current spec, Active -> Complete for exhausted specs). If the current phase is still running (Active, not yet terminal), it returns None - the coordinator waits.
+
+Critical invariant: never look at phases from Spec N+1 while Spec N has non-terminal phases.
 
 #### Phase 7: Add markdown links (children in frontmatter)
 
