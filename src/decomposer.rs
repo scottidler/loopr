@@ -74,17 +74,20 @@ pub struct RatifyIssue {
     pub issue: String,
 }
 
-/// Build the decomposition prompt: template instructions + parent content.
+/// Build the decomposition prompt: template instructions + template content + parent content.
 /// `target_kind` is the kind of document to produce (not the parent kind).
 fn build_decompose_prompt(target_kind: DocKind, parent_content: &str) -> Result<String> {
     let prompts = crate::prompts::store();
-    let template = match target_kind {
-        DocKind::Spec => &prompts.decompose_spec,
-        DocKind::Phase => &prompts.decompose_phase,
-        DocKind::Work => &prompts.decompose_work,
+    let (instructions, template_text) = match target_kind {
+        DocKind::Spec => (&prompts.decompose_spec, include_str!("../docs/templates/spec.md")),
+        DocKind::Phase => (&prompts.decompose_phase, include_str!("../docs/templates/phase.md")),
+        DocKind::Work => (&prompts.decompose_work, include_str!("../docs/templates/work.md")),
         DocKind::Plan => bail!("cannot decompose into Plan"),
     };
-    Ok(format!("{}\n\n## Parent Document\n\n{}", template, parent_content))
+    Ok(format!(
+        "{}\n\n## Template\n\n{}\n\n## Parent Document\n\n{}",
+        instructions, template_text, parent_content
+    ))
 }
 
 /// Build a validation prompt for a child document.
@@ -2004,5 +2007,64 @@ mod tests {
         assert_eq!(h.phases.len(), 2);
         assert_eq!(h.phases[0].order, 0);
         assert_eq!(h.phases[1].order, 1);
+    }
+
+    // --- build_decompose_prompt ---
+
+    #[test]
+    fn test_decompose_prompt_contains_template_section() {
+        crate::prompts::init_defaults();
+        let result = build_decompose_prompt(DocKind::Spec, "parent content").unwrap();
+        assert!(
+            result.contains("## Template"),
+            "decompose prompt missing ## Template section"
+        );
+    }
+
+    #[test]
+    fn test_decompose_prompt_spec_contains_template_heading() {
+        crate::prompts::init_defaults();
+        let result = build_decompose_prompt(DocKind::Spec, "parent content").unwrap();
+        assert!(
+            result.contains("## Overview"),
+            "decompose prompt missing spec template ## Overview heading"
+        );
+    }
+
+    #[test]
+    fn test_decompose_prompt_contains_parent_document_section() {
+        crate::prompts::init_defaults();
+        let sentinel = "SENTINEL_PARENT_CONTENT_ae92f1";
+        let result = build_decompose_prompt(DocKind::Spec, sentinel).unwrap();
+        assert!(
+            result.contains("## Parent Document"),
+            "decompose prompt missing ## Parent Document section"
+        );
+        assert!(
+            result.contains(sentinel),
+            "parent content not present in decompose prompt"
+        );
+    }
+
+    #[test]
+    fn test_decompose_and_validate_prompts_share_spec_template() {
+        crate::prompts::init_defaults();
+        let decompose = build_decompose_prompt(DocKind::Spec, "parent").unwrap();
+        let validate = build_validate_prompt(DocKind::Spec, "child");
+        assert!(
+            decompose.contains("# Spec Template"),
+            "decompose prompt missing spec template content"
+        );
+        assert!(
+            validate.contains("# Spec Template"),
+            "validate prompt missing spec template content"
+        );
+    }
+
+    #[test]
+    fn test_decompose_prompt_plan_returns_err() {
+        crate::prompts::init_defaults();
+        let result = build_decompose_prompt(DocKind::Plan, "parent");
+        assert!(result.is_err(), "expected error for DocKind::Plan");
     }
 }

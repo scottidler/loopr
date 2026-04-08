@@ -23,7 +23,7 @@ Respond with a JSON array of phases. Each phase is an object:
 
 ## Rules
 
-1. Each Phase must follow the Phase template structure (Parent, Deliverables, Validation, Dependencies, Work Items)
+1. Each Phase must follow the template provided in the "## Template" section below EXACTLY - use the same section headings and subsection structure (including ### sub-headings within sections)
 2. Dependencies are Phase titles that must complete before this one can start
 3. Do NOT include any text outside the JSON array
 4. Produce 1-5 Phases for typical Specs

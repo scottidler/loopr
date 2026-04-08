@@ -23,7 +23,7 @@ Respond with a JSON array of specs. Each spec is an object:
 
 ## Rules
 
-1. Each Spec must follow the Spec template structure (Overview, Data Flow, Module Structure, etc.)
+1. Each Spec must follow the template provided in the "## Template" section below EXACTLY - use the same section headings, include all required sections, and follow the structural conventions shown
 2. Every Plan requirement must be covered by at least one Spec
 3. Dependencies are Spec titles that must complete before this one can start
 4. Do NOT include any text outside the JSON array
