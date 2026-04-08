@@ -729,20 +729,12 @@ fn build_fsm_footer(
                     if let Some(phase) = phase {
                         let existing = generation::find_works_for_parent(stores, &phase.id);
                         if existing.is_empty() {
-                            let phase_content = crate::domain::markdown::read_doc_content_or_empty(
+                            let phase_md = crate::domain::markdown::read_full_markdown_or_empty(
                                 &stores.config.project.repo_path,
                                 &phase.id,
                             );
-                            let prompt = build_work_prompt(
-                                &phase,
-                                &phase_content,
-                                &existing,
-                                &HashMap::new(),
-                                &[],
-                                &[],
-                                None,
-                                None,
-                            );
+                            let prompt =
+                                build_work_prompt(&phase, &phase_md, &existing, &HashMap::new(), &[], &[], None, None);
                             format!(
                                 "## Activating Phase: {} (id: {})\n\n\
                                  Generate Works for this phase. Each Work should have clear \

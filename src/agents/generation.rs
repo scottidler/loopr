@@ -43,18 +43,21 @@ pub struct GenerationPrompt {
 /// Build a Work generation prompt.
 ///
 /// Input context:
-/// - Active Phase (title, order, ID, spec reference, description)
+/// - Active Phase (full `.md` content including frontmatter)
 /// - Existing Works in this Phase (to avoid duplicates)
 /// - Relevant learnings (scoped to Phase + Spec + Plan + Global)
 /// - Codebase context (researcher findings about affected modules)
+///
+/// `phase_markdown_content` is the Phase's full `docs/loopr/<id>.md` file.
+/// `plan_markdown_content` is the Plan's full `docs/loopr/<id>.md` file (optional).
 pub fn build_work_prompt(
     phase: &Phase,
-    phase_content: &str,
+    phase_markdown_content: &str,
     existing_works: &[Work],
     work_contents: &HashMap<String, String>,
     learnings: &[String],
     findings: &[String],
-    plan_description: Option<&str>,
+    plan_markdown_content: Option<&str>,
     guidance_section: Option<&str>,
 ) -> GenerationPrompt {
     tracing::debug!(
@@ -68,21 +71,17 @@ pub fn build_work_prompt(
 
     msg.push_str("## Task: Generate Works\n\n");
 
-    // Include the original plan description so the LLM can see the full
+    // Include the original plan so the LLM can see the full
     // user-agreed structure when generating work items.
-    if let Some(plan_desc) = plan_description.filter(|d| !d.is_empty()) {
-        msg.push_str("### Original Plan (user-agreed - be faithful to this structure)\n");
-        msg.push_str(plan_desc);
+    if let Some(plan_md) = plan_markdown_content.filter(|d| !d.is_empty()) {
+        msg.push_str("### Original Plan (user-agreed - be faithful to this structure)\n\n");
+        msg.push_str(plan_md);
         msg.push_str("\n\n");
     }
 
-    msg.push_str("### Active Phase\n");
-    msg.push_str(&format!("- **ID:** {}\n", phase.id));
-    msg.push_str(&format!("- **Spec ID:** {}\n", phase.parent_id));
-    msg.push_str(&format!("- **Title:** {}\n", phase.title));
-    msg.push_str(&format!("- **Order:** {}\n", phase.order));
-    // TODO: post-migration - rethink how doc body content is presented in prompts
-    msg.push_str(&format!("- **Body:** {}\n\n", phase_content));
+    msg.push_str("### Active Phase\n\n");
+    msg.push_str(phase_markdown_content);
+    msg.push_str("\n\n");
 
     if let Some(guidance) = guidance_section {
         msg.push_str(guidance);

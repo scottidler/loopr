@@ -1,10 +1,10 @@
-IMPORTANT: If the Phase's description (inherited from the Plan) already specifies
+IMPORTANT: If the Phase's markdown content (inherited from the Plan) already specifies
 individual Work items (e.g., "Work 1: ...", "Work 2: ..."), create exactly those
 Work items with:
-- The titles and descriptions as specified in the plan
+- The titles as specified in the plan
 - The dependencies as specified (e.g., "depends on Work 1" means use batch:0)
 - The files as specified (if file paths are mentioned)
-- The acceptance_criteria extracted from the description
+- The acceptance_criteria extracted from the plan
 Do NOT split a described Work item into multiple smaller items.
 Do NOT create Work items that are not in the plan.
 Do NOT remove dependencies that the plan specifies.
@@ -14,7 +14,7 @@ the plan omitted. The plan was agreed upon with the user. Faithfully execute it.
 Create Works for this Phase. Each Work should be:
 - Small enough for an Implementer to complete in 5-10 iterations (one iteration = one LLM call producing actions)
 - Have a clear title starting with a verb (e.g., "Implement JWT signing utility")
-- Have a description with:
+- Include:
   - What to implement (specific functions, structs, traits)
   - 2-4 acceptance criteria as testable assertions (e.g., "jwt::sign() returns valid HS256 token")
 - Include files as relative file paths that will be modified (e.g., ["src/auth/jwt.rs", "src/auth/mod.rs"])
@@ -25,7 +25,7 @@ Create Works for this Phase. Each Work should be:
     the other Work's output (e.g., Work B imports a struct defined in Work A's files).
   - If two Works touch DIFFERENT files, they MUST have NO dependency between them.
   - Prefer fan-out: many Works depending on one scaffolding Work, NOT linear chains.
-  - Example — WRONG: A→B→C  RIGHT: A→B, A→C (B and C run in parallel after A)
+  - Example - WRONG: A->B->C  RIGHT: A->B, A->C (B and C run in parallel after A)
 
 List items with no dependencies first, then items with dependencies.
 
