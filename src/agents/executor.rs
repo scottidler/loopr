@@ -238,15 +238,30 @@ pub async fn run_single_work(
         worker_id, session_id, work_id
     );
 
-    // Step 4: Run the full agent lifecycle (worktree, LLM, loop, handback, cleanup)
-    run_agent_task(
-        session_id,
-        AgentKind::Implementer,
-        stores.clone(),
-        event_tx.clone(),
-        worktree_mgr.clone(),
-    )
-    .await;
+    // Step 4: Spawn the full agent lifecycle as a Tokio task and register its handle.
+    //
+    // Must use tokio::spawn (not .await) so the JoinHandle can be stored in
+    // agent_handles before the reconciler next fires. Without a registered handle,
+    // reconcile() cannot distinguish a live worker-spawned session from an orphaned
+    // one, and resets InProgress work to Blocked every 30s while the implementer runs.
+    let task_stores = stores.clone();
+    let task_event_tx = event_tx.clone();
+    let task_worktree_mgr = worktree_mgr.clone();
+    let task_session_id = session_id.clone();
+    let handle = tokio::spawn(async move {
+        run_agent_task(
+            task_session_id,
+            AgentKind::Implementer,
+            task_stores,
+            task_event_tx,
+            task_worktree_mgr,
+        )
+        .await;
+    });
+
+    // Register handle so reconciler sees this session as live.
+    // Lock ordering: agent_handles is always acquired after agent_sessions.
+    stores.lock_agent_handles()?.insert(session_id.clone(), handle);
 
     Ok(())
 }

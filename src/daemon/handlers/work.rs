@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use eyre::eyre;
 use tokio::sync::broadcast;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::domain::bundle::BundleStatus;
 use crate::domain::markdown::{update_parent_children, write_doc_markdown};
@@ -317,6 +317,67 @@ pub(super) fn handle_work_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
     })
 }
 
+/// When `done_id` transitions to Done, scan all Blocked works and promote any
+/// whose every dependency is now satisfied (all Done) to Ready.
+///
+/// This replaces the coordinator's manual recovery loop that was detecting
+/// "wk-X is Blocked but dependency is Done" and fixing it ad-hoc. The promotion
+/// is idempotent: calling it twice on the same done_id is harmless.
+fn unblock_dependents(stores: &Arc<Stores>, done_id: &str, event_tx: &broadcast::Sender<DaemonEvent>) {
+    // Phase 1 (read): collect Blocked work IDs whose all deps are Done.
+    let to_unblock: Vec<String> = {
+        let Ok(works) = stores.read_works() else { return };
+        works
+            .values()
+            .filter(|w| w.status() == WorkStatus::Blocked)
+            .filter(|w| {
+                w.dependencies.iter().all(|dep_id| {
+                    if dep_id == done_id {
+                        return true; // the work that just became Done
+                    }
+                    works
+                        .get(dep_id)
+                        .map(|d| d.status() == WorkStatus::Done)
+                        .unwrap_or(false)
+                })
+            })
+            .map(|w| w.id.clone())
+            .collect()
+    };
+
+    if to_unblock.is_empty() {
+        return;
+    }
+
+    // Phase 2 (write): promote each to Ready and persist.
+    let Ok(mut works) = stores.write_works() else { return };
+    let store_lock = stores.store.as_ref();
+    for unblock_id in &to_unblock {
+        let Some(w) = works.get_mut(unblock_id) else { continue };
+        // Guard: status may have changed between phases (another thread beat us).
+        if w.status() != WorkStatus::Blocked {
+            continue;
+        }
+        w.force_status(WorkStatus::Ready);
+        w.updated_at = crate::id::now_millis();
+        if let Some(store_arc) = store_lock
+            && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+            && let Err(e) = s.update(w.clone())
+        {
+            warn!("unblock_dependents: failed to persist {}: {}", unblock_id, e);
+            continue;
+        }
+        debug!("unblock_dependents: {} Blocked -> Ready (dependency {} Done)", unblock_id, done_id);
+        let _ = event_tx.send(DaemonEvent::transition_completed(
+            "work",
+            unblock_id,
+            "Blocked",
+            "Ready",
+            "system",
+        ));
+    }
+}
+
 #[instrument(skip_all, fields(id = ?req.params.get("id"), target_status = ?req.params.get("target_status")))]
 pub(super) fn handle_work_transition(
     stores: &Arc<Stores>,
@@ -484,6 +545,13 @@ pub(super) fn handle_work_transition(
                     "reason": override_reason,
                 }),
             ));
+        }
+
+        // Auto-unblock: when work reaches Done, promote any Blocked dependents
+        // whose every dependency is now satisfied to Ready. This removes the
+        // coordinator's manual "wk-X Blocked but dependency Done" recovery loop.
+        if effective_status == WorkStatus::Done {
+            unblock_dependents(stores, &id, event_tx);
         }
 
         Ok(DaemonResponse::ok(req.id, wi_json))
@@ -1696,6 +1764,134 @@ mod tests {
             wi.status(),
             crate::domain::work::WorkStatus::Abandoned,
             "work should be Abandoned when attempt_count reaches MAX_WORK_ATTEMPTS"
+        );
+    }
+
+    // --- dependency unblocking tests ---
+
+    /// When a work item transitions to Done, any Blocked work that listed it
+    /// as its only dependency must be promoted to Ready automatically.
+    #[tokio::test]
+    async fn test_unblock_dependents_on_done() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (phase_id, _) = create_test_work(&stores, &tx, &wm).await;
+
+        // Create wk-A (no deps) and wk-B (depends on wk-A).
+        let wk_a = create_work(&stores, &tx, &wm, &phase_id, "Work A", &[]).await;
+        let wk_b = create_work(&stores, &tx, &wm, &phase_id, "Work B", &[&wk_a]).await;
+
+        // wk-A is Ready; wk-B is Blocked because wk-A isn't Done yet.
+        {
+            let mut works = stores.works.write().unwrap();
+            works.get_mut(&wk_b).unwrap().force_status(WorkStatus::Blocked);
+        }
+
+        // Transition wk-A to Done via coordinator pre-flight short-circuit (Ready -> Done).
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "work.transition",
+                json!({"id": wk_a, "target_status": "done", "role": "coordinator"}),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error(), "wk-A -> Done failed: {:?}", resp.error);
+
+        // wk-B should now be Ready.
+        let works = stores.works.read().unwrap();
+        assert_eq!(
+            works.get(&wk_b).unwrap().status(),
+            WorkStatus::Ready,
+            "wk-B should be unblocked to Ready when wk-A becomes Done"
+        );
+    }
+
+    /// A work with two dependencies stays Blocked if only one dep is Done.
+    #[tokio::test]
+    async fn test_unblock_requires_all_deps_done() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (phase_id, _) = create_test_work(&stores, &tx, &wm).await;
+
+        let wk_a = create_work(&stores, &tx, &wm, &phase_id, "Work A", &[]).await;
+        let wk_b = create_work(&stores, &tx, &wm, &phase_id, "Work B", &[]).await;
+        let wk_c = create_work(&stores, &tx, &wm, &phase_id, "Work C", &[&wk_a, &wk_b]).await;
+
+        // wk-C is Blocked; wk-B stays Ready (not Done).
+        {
+            let mut works = stores.works.write().unwrap();
+            works.get_mut(&wk_c).unwrap().force_status(WorkStatus::Blocked);
+        }
+
+        // Transition wk-A to Done - wk-C should still be Blocked (wk-B not Done).
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "work.transition",
+                json!({"id": wk_a, "target_status": "done", "role": "coordinator"}),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error(), "wk-A -> Done failed: {:?}", resp.error);
+
+        let works = stores.works.read().unwrap();
+        assert_eq!(
+            works.get(&wk_c).unwrap().status(),
+            WorkStatus::Blocked,
+            "wk-C must stay Blocked while wk-B is not Done"
+        );
+    }
+
+    /// Completing the second dependency finally unblocks the dependent.
+    #[tokio::test]
+    async fn test_unblock_fires_when_last_dep_done() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (phase_id, _) = create_test_work(&stores, &tx, &wm).await;
+
+        let wk_a = create_work(&stores, &tx, &wm, &phase_id, "Work A", &[]).await;
+        let wk_b = create_work(&stores, &tx, &wm, &phase_id, "Work B", &[]).await;
+        let wk_c = create_work(&stores, &tx, &wm, &phase_id, "Work C", &[&wk_a, &wk_b]).await;
+
+        // Set wk-A Done directly; wk-C Blocked.
+        {
+            let mut works = stores.works.write().unwrap();
+            works.get_mut(&wk_a).unwrap().force_status(WorkStatus::Done);
+            works.get_mut(&wk_c).unwrap().force_status(WorkStatus::Blocked);
+        }
+
+        // Transition wk-B -> Done (pre-flight short-circuit). Both deps now Done -> wk-C unblocked.
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                1,
+                "work.transition",
+                json!({"id": wk_b, "target_status": "done", "role": "coordinator"}),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error(), "wk-B -> Done failed: {:?}", resp.error);
+
+        let works = stores.works.read().unwrap();
+        assert_eq!(
+            works.get(&wk_c).unwrap().status(),
+            WorkStatus::Ready,
+            "wk-C should be unblocked once both wk-A and wk-B are Done"
         );
     }
 }

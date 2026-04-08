@@ -1979,4 +1979,95 @@ mod tests {
         let fixed = ctx.reconcile();
         assert_eq!(fixed, 0);
     }
+
+    /// Regression: worker-spawned sessions previously bypassed handle registration,
+    /// causing the reconciler to kill the session (Running, no handle -> Failed) and
+    /// then reset the work (InProgress, no live session -> Blocked) in a single sweep.
+    ///
+    /// The reconciler computes active_work_ids before the session sweep, so a Running
+    /// session with no registered handle is excluded from active_work_ids immediately.
+    /// This means both the session→Failed and work→Blocked corrections happen in one
+    /// reconcile() call — not two separate sweeps.
+    ///
+    /// After the fix, the worker registers a handle, so the session and work survive.
+    /// This test documents the one-sweep cascade that the fix prevents.
+    #[tokio::test]
+    async fn test_reconcile_inprogress_work_session_no_handle_resets_in_two_sweeps() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        // InProgress work + Running session claiming it, but NO handle registered.
+        // This is the pre-fix state for worker-spawned implementers.
+        let mut wi = Work::new("phase-1".into(), "Worker WI".into());
+        wi.force_status(WorkStatus::InProgress);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".to_string());
+        session.work_id = Some(wi_id.clone());
+        session.force_status(AgentStatus::Running);
+        let session_id = session.id.clone();
+        ctx.stores.agent_sessions.write().unwrap().insert(session_id.clone(), session);
+        // Deliberately NO handle inserted — this is the bug scenario.
+
+        // Single sweep: active_work_ids is computed before the session sweep, so the
+        // no-handle Running session is excluded immediately. Both the session→Failed
+        // correction AND the work→Blocked correction happen in the same reconcile() call.
+        let fixed = ctx.reconcile();
+        assert!(fixed >= 1, "single sweep should fix both the orphaned session and the orphaned work");
+        let session_status = ctx.stores.agent_sessions.read().unwrap()[&session_id].status();
+        assert_eq!(session_status, AgentStatus::Failed, "session should be Failed after one sweep");
+        let work_status = ctx.stores.works.read().unwrap()[&wi_id].status();
+        assert_eq!(work_status, WorkStatus::Blocked, "work should be Blocked after one sweep");
+    }
+
+    /// Positive case: worker registers handle -> session stays Running, work stays InProgress.
+    /// This is the post-fix expected behavior verified directly.
+    #[tokio::test]
+    async fn test_reconcile_inprogress_work_with_registered_handle_survives() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        let mut wi = Work::new("phase-1".into(), "Worker WI".into());
+        wi.force_status(WorkStatus::InProgress);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut session = AgentSession::new(AgentKind::Implementer, "test-model".to_string());
+        session.work_id = Some(wi_id.clone());
+        session.force_status(AgentStatus::Running);
+        let session_id = session.id.clone();
+        ctx.stores.agent_sessions.write().unwrap().insert(session_id.clone(), session);
+
+        // Register a live handle (never-completing task) — this is what the fix adds.
+        let handle = tokio::spawn(std::future::pending::<()>());
+        ctx.stores.agent_handles.lock().unwrap().insert(session_id.clone(), handle);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 0, "no fixes should be needed with a registered handle");
+        assert_eq!(
+            ctx.stores.works.read().unwrap()[&wi_id].status(),
+            WorkStatus::InProgress,
+            "work must stay InProgress while session has a live handle"
+        );
+        assert_eq!(
+            ctx.stores.agent_sessions.read().unwrap()[&session_id].status(),
+            AgentStatus::Running,
+            "session must stay Running with a live handle"
+        );
+    }
 }
