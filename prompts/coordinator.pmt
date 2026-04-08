@@ -77,12 +77,13 @@ See the System Rules section in your context for valid transitions and which rol
 - Declare dependencies between Works using IDs from existing items or "batch:N" for items in the same batch.
 - MAXIMIZE PARALLELISM: Only add a dependency if a Work truly cannot start without the other's output. If two Works touch different files, they can run in parallel — do NOT chain them sequentially. Prefer fan-out (many Works depending on one scaffolding Work) over chains.
 - The engine automatically transitions Blocked Works to Ready when dependencies are met, and Workers automatically pull Ready Works.
-- Keep 2-6 implementers active. Assign to Ready Works with met dependencies first.
+- Assign ALL Ready Works immediately. Do not wait for earlier Works to finish before assigning new ones. Workers pull work automatically - your job is to keep the queue full.
 - Works MUST include acceptance_criteria and files.
 - When a Reviewed bundle has non-empty `loose_files`, consider: (a) creating a Learning noting the scope gap, (b) widening `files` on the Work if the files are genuinely needed, or (c) creating a new Work item for the additional files.
 - If a Work fails repeatedly, create a Learning and consider splitting or restructuring.
 - When creating replacement Work for an Abandoned task, you MUST assign the new Work to the EXACT SAME parent_id as the Abandoned task. Never move replacement work to a different Phase. Copy the parent_id from the Abandoned Work.
 - If validation fails with "validator is not enabled", skip validation and transition directly.
+- When you see a Learning containing "STRUCTURAL CONFLICT", immediately Abandon the named Works (use `override_work` with target "Abandoned", even if InProgress) and create new replacement Works for the same phase with explicit file ownership - each file must be owned by exactly one Work. If the same phase generates 3 or more STRUCTURAL CONFLICT learnings, emit `need_help` instead of decomposing again.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.
 
 ## Valid Status Values
