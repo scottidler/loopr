@@ -213,15 +213,13 @@ mod tests {
         // Researcher prompt must contain {query} placeholder
         assert!(s.researcher.contains("{query}"));
         // Validator templates must contain their placeholders
-        assert!(s.validator_plan.contains("{title}"));
-        assert!(s.validator_plan.contains("{acceptance_criteria}"));
+        assert!(s.validator_plan.contains("{markdown_content}"));
         assert!(s.validator_plan.contains("{schema}"));
-        assert!(s.validator_spec.contains("{title}"));
-        assert!(s.validator_spec.contains("{plan_title}"));
+        assert!(s.validator_spec.contains("{markdown_content}"));
+        assert!(s.validator_spec.contains("{parent_markdown_content}"));
         assert!(s.validator_spec.contains("{schema}"));
-        assert!(s.validator_phase.contains("{title}"));
-        assert!(s.validator_phase.contains("{order}"));
-        assert!(s.validator_phase.contains("{spec_title}"));
+        assert!(s.validator_phase.contains("{markdown_content}"));
+        assert!(s.validator_phase.contains("{parent_markdown_content}"));
         assert!(s.validator_phase.contains("{schema}"));
     }
 
@@ -406,66 +404,57 @@ mod tests {
     #[test]
     fn test_validator_plan_output_equivalence() {
         init_defaults();
-        let title = "Implement Auth";
-        let desc = "Add JWT-based authentication to the API";
-        let criteria = "All endpoints require valid token; tests pass";
+        let md = "---\ntitle: Implement Auth\nacceptance-criteria:\n  - All endpoints require valid token\n  - Tests pass\n---\n\nAdd JWT-based authentication to the API";
 
-        let output = crate::validator::prompts::plan_prompt(title, desc, criteria);
+        let output = crate::validator::prompts::plan_prompt(md);
 
-        // Verify structure matches old format! output
-        assert!(output.contains(&format!("Title: {}", title)));
-        assert!(output.contains(desc));
-        assert!(output.contains(&format!("Acceptance Criteria:\n{}", criteria)));
-        // Schema was inlined by the old RESPONSE_SCHEMA const
+        // Full markdown content is embedded
+        assert!(output.contains("Implement Auth"));
+        assert!(output.contains("Add JWT-based authentication to the API"));
+        assert!(output.contains("All endpoints require valid token"));
+        // Schema is inlined
         assert!(output.contains("\"verdict\": \"pass | fail | warn\""));
         assert!(output.contains("\"severity\": \"error | warning | info\""));
         // No residual placeholders
-        assert!(!output.contains("{title}"));
-        assert!(!output.contains("{description}"));
-        assert!(!output.contains("{acceptance_criteria}"));
+        assert!(!output.contains("{markdown_content}"));
         assert!(!output.contains("{schema}"));
     }
 
     #[test]
     fn test_validator_spec_output_equivalence() {
         init_defaults();
-        let title = "JWT Auth Spec";
-        let desc = "Use RS256 tokens with 15-minute expiry";
-        let plan_title = "Implement Auth";
+        let md = "---\ntitle: JWT Auth Spec\nparent-id: pl-123\n---\n\nUse RS256 tokens with 15-minute expiry";
+        let parent_md = "---\ntitle: Implement Auth\n---\n\nParent plan body";
 
-        let output = crate::validator::prompts::spec_prompt(title, desc, plan_title);
+        let output = crate::validator::prompts::spec_prompt(md, parent_md);
 
-        assert!(output.contains(&format!("Title: {}", title)));
-        assert!(output.contains(desc));
-        assert!(output.contains(&format!("Parent Plan: {}", plan_title)));
+        assert!(output.contains("JWT Auth Spec"));
+        assert!(output.contains("Use RS256 tokens with 15-minute expiry"));
+        assert!(output.contains("Implement Auth"));
         assert!(output.contains("\"verdict\": \"pass | fail | warn\""));
         // No residual placeholders
-        assert!(!output.contains("{title}"));
-        assert!(!output.contains("{description}"));
-        assert!(!output.contains("{plan_title}"));
+        assert!(!output.contains("{markdown_content}"));
+        assert!(!output.contains("{parent_markdown_content}"));
         assert!(!output.contains("{schema}"));
     }
 
     #[test]
     fn test_validator_phase_output_equivalence() {
         init_defaults();
-        let title = "Token Validation";
-        let desc = "Implement middleware for JWT validation";
-        let order: u32 = 2;
-        let spec_title = "JWT Auth Spec";
+        let md =
+            "---\ntitle: Token Validation\norder: 2\nparent-id: sp-456\n---\n\nImplement middleware for JWT validation";
+        let parent_md = "---\ntitle: JWT Auth Spec\n---\n\nSpec body";
 
-        let output = crate::validator::prompts::phase_prompt(title, desc, order, spec_title);
+        let output = crate::validator::prompts::phase_prompt(md, parent_md);
 
-        assert!(output.contains(&format!("Title: {}", title)));
-        assert!(output.contains(desc));
-        assert!(output.contains(&format!("Order: {}", order)));
-        assert!(output.contains(&format!("Parent Spec: {}", spec_title)));
+        assert!(output.contains("Token Validation"));
+        assert!(output.contains("Implement middleware for JWT validation"));
+        assert!(output.contains("order: 2"));
+        assert!(output.contains("JWT Auth Spec"));
         assert!(output.contains("\"verdict\": \"pass | fail | warn\""));
         // No residual placeholders
-        assert!(!output.contains("{title}"));
-        assert!(!output.contains("{description}"));
-        assert!(!output.contains("{order}"));
-        assert!(!output.contains("{spec_title}"));
+        assert!(!output.contains("{markdown_content}"));
+        assert!(!output.contains("{parent_markdown_content}"));
         assert!(!output.contains("{schema}"));
     }
 

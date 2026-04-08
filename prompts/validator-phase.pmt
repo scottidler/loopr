@@ -3,19 +3,18 @@ You are reviewing a Phase document. Your job is to assess whether this document 
 
 ## Document Under Review
 
-Title: {title}
-Body:
-{content}
+{markdown_content}
 
-Order: {order}
-Parent Spec: {spec_title}
+## Parent Context
+
+{parent_markdown_content}
 
 ## Evaluation Criteria
 
-1. References a valid Spec — the phase's deliverables should map to the spec's technical approach.
-2. Ordered correctly — earlier phases should provide foundations that later phases build on.
-3. Deliverables are concrete — lists specific files, modules, or functions to be created/modified.
-4. Dependencies identified — lists which prior phases must complete and why.
+1. References a valid Spec - the phase's deliverables should map to the spec's technical approach.
+2. Ordered correctly - earlier phases should provide foundations that later phases build on.
+3. Deliverables are concrete - lists specific files, modules, or functions to be created/modified.
+4. Dependencies identified - lists which prior phases must complete and why.
 
 ## Output Format
 

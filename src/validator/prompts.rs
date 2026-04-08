@@ -1,36 +1,39 @@
 //! Per-type validation prompt templates for the Doc Validator LLM.
 //!
 //! Each collection type (Plan, Spec, Phase) has specific evaluation criteria
-//! and additional fields that the LLM uses to assess readiness for Draft → Active.
+//! and additional fields that the LLM uses to assess readiness for Draft -> Active.
 
 /// Build a validation prompt for a Plan document.
-pub fn plan_prompt(title: &str, content: &str, acceptance_criteria: &str) -> String {
+///
+/// `markdown_content` is the full `docs/loopr/<id>.md` file including frontmatter.
+pub fn plan_prompt(markdown_content: &str) -> String {
     crate::prompts::store()
         .validator_plan
-        .replace("{title}", title)
-        .replace("{content}", content)
-        .replace("{acceptance_criteria}", acceptance_criteria)
+        .replace("{markdown_content}", markdown_content)
         .replace("{schema}", &crate::prompts::store().validator_schema)
 }
 
 /// Build a validation prompt for a Spec document.
-pub fn spec_prompt(title: &str, content: &str, plan_title: &str) -> String {
+///
+/// `markdown_content` is the spec's full `.md` file.
+/// `parent_markdown_content` is the parent Plan's full `.md` file.
+pub fn spec_prompt(markdown_content: &str, parent_markdown_content: &str) -> String {
     crate::prompts::store()
         .validator_spec
-        .replace("{title}", title)
-        .replace("{content}", content)
-        .replace("{plan_title}", plan_title)
+        .replace("{markdown_content}", markdown_content)
+        .replace("{parent_markdown_content}", parent_markdown_content)
         .replace("{schema}", &crate::prompts::store().validator_schema)
 }
 
 /// Build a validation prompt for a Phase document.
-pub fn phase_prompt(title: &str, content: &str, order: u32, spec_title: &str) -> String {
+///
+/// `markdown_content` is the phase's full `.md` file.
+/// `parent_markdown_content` is the parent Spec's full `.md` file.
+pub fn phase_prompt(markdown_content: &str, parent_markdown_content: &str) -> String {
     crate::prompts::store()
         .validator_phase
-        .replace("{title}", title)
-        .replace("{content}", content)
-        .replace("{order}", &order.to_string())
-        .replace("{spec_title}", spec_title)
+        .replace("{markdown_content}", markdown_content)
+        .replace("{parent_markdown_content}", parent_markdown_content)
         .replace("{schema}", &crate::prompts::store().validator_schema)
 }
 
@@ -44,9 +47,10 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_prompt_contains_title() {
+    fn test_plan_prompt_contains_content() {
         init();
-        let prompt = plan_prompt("My Plan", "A description", "Must pass tests");
+        let md = "---\ntitle: My Plan\n---\n\nA description\n\n## Acceptance Criteria\n\n- Must pass tests";
+        let prompt = plan_prompt(md);
         assert!(prompt.contains("My Plan"));
         assert!(prompt.contains("A description"));
         assert!(prompt.contains("Must pass tests"));
@@ -55,7 +59,8 @@ mod tests {
     #[test]
     fn test_plan_prompt_contains_criteria() {
         init();
-        let prompt = plan_prompt("Title", "Desc", "Criteria");
+        let md = "---\ntitle: T\n---\n\nBody";
+        let prompt = plan_prompt(md);
         assert!(prompt.contains("Clear objective stated"));
         assert!(prompt.contains("Measurable acceptance criteria"));
         assert!(prompt.contains("Scope is bounded"));
@@ -64,7 +69,8 @@ mod tests {
     #[test]
     fn test_plan_prompt_contains_schema() {
         init();
-        let prompt = plan_prompt("T", "D", "C");
+        let md = "---\ntitle: T\n---\n\nBody";
+        let prompt = plan_prompt(md);
         assert!(prompt.contains("\"verdict\""));
         assert!(prompt.contains("\"issues\""));
         assert!(prompt.contains("\"summary\""));
@@ -73,7 +79,9 @@ mod tests {
     #[test]
     fn test_spec_prompt_contains_fields() {
         init();
-        let prompt = spec_prompt("My Spec", "Spec desc", "Parent Plan");
+        let md = "---\ntitle: My Spec\nparent-id: pl-123\n---\n\nSpec desc";
+        let parent_md = "---\ntitle: Parent Plan\n---\n\nPlan body";
+        let prompt = spec_prompt(md, parent_md);
         assert!(prompt.contains("My Spec"));
         assert!(prompt.contains("Spec desc"));
         assert!(prompt.contains("Parent Plan"));
@@ -82,7 +90,9 @@ mod tests {
     #[test]
     fn test_spec_prompt_contains_criteria() {
         init();
-        let prompt = spec_prompt("T", "D", "P");
+        let md = "---\ntitle: T\n---\n\nBody";
+        let parent_md = "---\ntitle: P\n---\n\nParent";
+        let prompt = spec_prompt(md, parent_md);
         assert!(prompt.contains("Technical approach described"));
         assert!(prompt.contains("Key decisions documented"));
         assert!(prompt.contains("Testability addressed"));
@@ -91,17 +101,21 @@ mod tests {
     #[test]
     fn test_phase_prompt_contains_fields() {
         init();
-        let prompt = phase_prompt("My Phase", "Phase desc", 3, "Parent Spec");
+        let md = "---\ntitle: My Phase\norder: 3\nparent-id: sp-123\n---\n\nPhase desc";
+        let parent_md = "---\ntitle: Parent Spec\n---\n\nSpec body";
+        let prompt = phase_prompt(md, parent_md);
         assert!(prompt.contains("My Phase"));
         assert!(prompt.contains("Phase desc"));
-        assert!(prompt.contains("Order: 3"));
+        assert!(prompt.contains("order: 3"));
         assert!(prompt.contains("Parent Spec"));
     }
 
     #[test]
     fn test_phase_prompt_contains_criteria() {
         init();
-        let prompt = phase_prompt("T", "D", 1, "S");
+        let md = "---\ntitle: T\norder: 1\n---\n\nBody";
+        let parent_md = "---\ntitle: S\n---\n\nParent";
+        let prompt = phase_prompt(md, parent_md);
         assert!(prompt.contains("Deliverables are concrete"));
         assert!(prompt.contains("Dependencies identified"));
         assert!(prompt.contains("Ordered correctly"));
@@ -110,9 +124,11 @@ mod tests {
     #[test]
     fn test_all_prompts_request_json_only() {
         init();
-        let plan = plan_prompt("T", "D", "C");
-        let spec = spec_prompt("T", "D", "P");
-        let phase = phase_prompt("T", "D", 1, "S");
+        let md = "---\ntitle: T\n---\n\nBody";
+        let parent_md = "---\ntitle: P\n---\n\nParent";
+        let plan = plan_prompt(md);
+        let spec = spec_prompt(md, parent_md);
+        let phase = phase_prompt(md, parent_md);
         for prompt in [&plan, &spec, &phase] {
             assert!(prompt.contains("Respond with ONLY valid JSON"));
         }

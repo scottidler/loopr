@@ -3,18 +3,18 @@ You are reviewing a Spec document. Your job is to assess whether this document i
 
 ## Document Under Review
 
-Title: {title}
-Body:
-{content}
+{markdown_content}
 
-Parent Plan: {plan_title}
+## Parent Context
+
+{parent_markdown_content}
 
 ## Evaluation Criteria
 
-1. References a valid Plan — the spec's approach should directly address the plan's objective and acceptance criteria.
-2. Technical approach described — the spec should name specific modules, patterns, and dependencies.
-3. Key decisions documented — at least one alternative was considered and rejected with rationale.
-4. Testability addressed — the spec identifies what will be unit-tested vs integration-tested.
+1. References a valid Plan - the spec's approach should directly address the plan's objective and acceptance criteria.
+2. Technical approach described - the spec should name specific modules, patterns, and dependencies.
+3. Key decisions documented - at least one alternative was considered and rejected with rationale.
+4. Testability addressed - the spec identifies what will be unit-tested vs integration-tested.
 
 ## Output Format
 

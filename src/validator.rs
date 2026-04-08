@@ -48,42 +48,41 @@ impl DocValidator<ReqwestClient> {
 
 impl<H: HttpClient> DocValidator<H> {
     /// Validate a Plan document.
-    pub async fn validate_plan(
-        &self,
-        target_id: &str,
-        title: &str,
-        description: &str,
-        acceptance_criteria: &str,
-    ) -> Result<ValidationReport> {
+    ///
+    /// `markdown_content` is the full `docs/loopr/<id>.md` file including frontmatter.
+    pub async fn validate_plan(&self, target_id: &str, markdown_content: &str) -> Result<ValidationReport> {
         debug!("DocValidator::validate_plan(target_id={})", target_id);
-        let prompt = prompts::plan_prompt(title, description, acceptance_criteria);
+        let prompt = prompts::plan_prompt(markdown_content);
         self.run_validation("plans", target_id, &prompt).await
     }
 
     /// Validate a Spec document.
+    ///
+    /// `markdown_content` is the spec's full `.md` file.
+    /// `parent_markdown_content` is the parent Plan's full `.md` file.
     pub async fn validate_spec(
         &self,
         target_id: &str,
-        title: &str,
-        description: &str,
-        plan_title: &str,
+        markdown_content: &str,
+        parent_markdown_content: &str,
     ) -> Result<ValidationReport> {
         debug!("DocValidator::validate_spec(target_id={})", target_id);
-        let prompt = prompts::spec_prompt(title, description, plan_title);
+        let prompt = prompts::spec_prompt(markdown_content, parent_markdown_content);
         self.run_validation("specs", target_id, &prompt).await
     }
 
     /// Validate a Phase document.
+    ///
+    /// `markdown_content` is the phase's full `.md` file.
+    /// `parent_markdown_content` is the parent Spec's full `.md` file.
     pub async fn validate_phase(
         &self,
         target_id: &str,
-        title: &str,
-        description: &str,
-        order: u32,
-        spec_title: &str,
+        markdown_content: &str,
+        parent_markdown_content: &str,
     ) -> Result<ValidationReport> {
         debug!("DocValidator::validate_phase(target_id={})", target_id);
-        let prompt = prompts::phase_prompt(title, description, order, spec_title);
+        let prompt = prompts::phase_prompt(markdown_content, parent_markdown_content);
         self.run_validation("phases", target_id, &prompt).await
     }
 
@@ -232,7 +231,10 @@ mod tests {
         let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
-            .validate_plan("plan-1", "Test Plan", "A plan", "Must work")
+            .validate_plan(
+                "plan-1",
+                "---\ntitle: Test Plan\n---\n\nA plan\n\n## Acceptance Criteria\n\n- Must work",
+            )
             .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
@@ -250,7 +252,7 @@ mod tests {
         let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
-            .validate_plan("plan-2", "Bad Plan", "Vague", "")
+            .validate_plan("plan-2", "---\ntitle: Bad Plan\n---\n\nVague")
             .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Fail);
@@ -268,7 +270,11 @@ mod tests {
         let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
-            .validate_spec("spec-1", "My Spec", "Desc", "Parent Plan")
+            .validate_spec(
+                "spec-1",
+                "---\ntitle: My Spec\nparent-id: pl-123\n---\n\nDesc",
+                "---\ntitle: Parent Plan\n---\n\nPlan body",
+            )
             .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Warn);
@@ -286,7 +292,11 @@ mod tests {
         let validator = DocValidator::with_http_client(config, mock);
 
         let report = validator
-            .validate_phase("phase-1", "My Phase", "Desc", 1, "Parent Spec")
+            .validate_phase(
+                "phase-1",
+                "---\ntitle: My Phase\norder: 1\nparent-id: sp-123\n---\n\nDesc",
+                "---\ntitle: Parent Spec\n---\n\nSpec body",
+            )
             .await
             .unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
@@ -303,7 +313,7 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&fenced));
         let validator = DocValidator::with_http_client(config, mock);
 
-        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
+        let report = validator.validate_plan("p1", "---\ntitle: T\n---\n\nD").await.unwrap();
         assert_eq!(report.verdict, ValidationVerdict::Pass);
 
         unsafe { std::env::remove_var(&env_var) };
@@ -315,7 +325,7 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response("This is not JSON at all"));
         let validator = DocValidator::with_http_client(config, mock);
 
-        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
+        let report = validator.validate_plan("p1", "---\ntitle: T\n---\n\nD").await.unwrap();
         // Should fall back to Fail verdict
         assert_eq!(report.verdict, ValidationVerdict::Fail);
         assert_eq!(report.issues.len(), 1);
@@ -331,7 +341,7 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(config, mock);
 
-        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
+        let report = validator.validate_plan("p1", "---\ntitle: T\n---\n\nD").await.unwrap();
         assert_eq!(report.model_used, "claude-sonnet-4-6");
 
         unsafe { std::env::remove_var(&env_var) };
@@ -343,7 +353,7 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&passing_llm_response()));
         let validator = DocValidator::with_http_client(config, mock);
 
-        let report = validator.validate_plan("p1", "T", "D", "C").await.unwrap();
+        let report = validator.validate_plan("p1", "---\ntitle: T\n---\n\nD").await.unwrap();
         assert!(!report.id.is_empty());
         assert!(report.created_at > 0);
 

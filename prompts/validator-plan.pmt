@@ -3,18 +3,13 @@ You are reviewing a Plan document. Your job is to assess whether this document i
 
 ## Document Under Review
 
-Title: {title}
-Body:
-{content}
-
-Acceptance Criteria:
-{acceptance_criteria}
+{markdown_content}
 
 ## Evaluation Criteria
 
-1. Clear objective stated — the plan should describe a specific, achievable outcome (not vague like 'improve performance').
-2. Measurable acceptance criteria defined — each criterion must be independently verifiable through tests or inspection.
-3. Scope is bounded — the plan explicitly states what is included AND what is excluded.
+1. Clear objective stated - the plan should describe a specific, achievable outcome (not vague like 'improve performance').
+2. Measurable acceptance criteria defined - each criterion must be independently verifiable through tests or inspection.
+3. Scope is bounded - the plan explicitly states what is included AND what is excluded.
 
 ## Output Format
 

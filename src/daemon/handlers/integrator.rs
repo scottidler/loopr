@@ -8,7 +8,7 @@ use tracing::{debug, instrument};
 
 use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;
-use crate::domain::markdown::read_doc_content_or_empty;
+use crate::domain::markdown::{read_doc_content_or_empty, read_full_markdown_or_empty};
 use crate::domain::tick::TickStatus;
 use crate::domain::validation::ValidationReport;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -304,53 +304,36 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         }
                     }
                 };
-                let ac_str = plan.acceptance_criteria.0.join("\n");
-                let plan_content = read_doc_content_or_empty(&stores.config.project.repo_path, &plan.id);
-                validator
-                    .validate_plan(&target_id, &plan.title, &plan_content, &ac_str)
-                    .await
+                let plan_md = read_full_markdown_or_empty(&stores.config.project.repo_path, &plan.id);
+                validator.validate_plan(&target_id, &plan_md).await
             }
             "spec" | "specs" => {
-                let (spec, plan_title) = {
+                let spec = {
                     let specs = stores.read_specs()?;
-                    let spec = match specs.get(&target_id) {
+                    match specs.get(&target_id) {
                         Some(s) => s.clone(),
                         None => {
                             return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &target_id)));
                         }
-                    };
-                    let plan_title = stores
-                        .read_plans()?
-                        .get(&spec.parent_id)
-                        .map(|p| p.title.clone())
-                        .unwrap_or_default();
-                    (spec, plan_title)
+                    }
                 };
-                let spec_content = read_doc_content_or_empty(&stores.config.project.repo_path, &spec.id);
-                validator
-                    .validate_spec(&target_id, &spec.title, &spec_content, &plan_title)
-                    .await
+                let spec_md = read_full_markdown_or_empty(&stores.config.project.repo_path, &spec.id);
+                let plan_md = read_full_markdown_or_empty(&stores.config.project.repo_path, &spec.parent_id);
+                validator.validate_spec(&target_id, &spec_md, &plan_md).await
             }
             "phase" | "phases" => {
-                let (phase, spec_title) = {
+                let phase = {
                     let phases = stores.read_phases()?;
-                    let phase = match phases.get(&target_id) {
+                    match phases.get(&target_id) {
                         Some(p) => p.clone(),
                         None => {
                             return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &target_id)));
                         }
-                    };
-                    let spec_title = stores
-                        .read_specs()?
-                        .get(&phase.parent_id)
-                        .map(|s| s.title.clone())
-                        .unwrap_or_default();
-                    (phase, spec_title)
+                    }
                 };
-                let phase_content = read_doc_content_or_empty(&stores.config.project.repo_path, &phase.id);
-                validator
-                    .validate_phase(&target_id, &phase.title, &phase_content, phase.order, &spec_title)
-                    .await
+                let phase_md = read_full_markdown_or_empty(&stores.config.project.repo_path, &phase.id);
+                let spec_md = read_full_markdown_or_empty(&stores.config.project.repo_path, &phase.parent_id);
+                validator.validate_phase(&target_id, &phase_md, &spec_md).await
             }
             _ => {
                 return Ok(DaemonResponse::err(

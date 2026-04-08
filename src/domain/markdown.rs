@@ -96,6 +96,25 @@ pub fn read_doc_content_or_empty(repo_path: &Path, id: &str) -> String {
     })
 }
 
+/// Read the complete `docs/loopr/<id>.md` file including YAML frontmatter.
+///
+/// Unlike [`read_doc_content`] which strips the frontmatter and returns only
+/// the body, this returns everything - frontmatter + body. Used for prompt
+/// template interpolation where the LLM reads the frontmatter directly.
+pub fn read_full_markdown(repo_path: &Path, id: &str) -> Result<String> {
+    let path = repo_path.join("docs").join("loopr").join(format!("{}.md", id));
+    fs::read_to_string(&path).map_err(|e| eyre::eyre!("{}: {}", path.display(), e))
+}
+
+/// Like [`read_full_markdown`] but returns an empty string on failure.
+/// Logs a warning so missing files are visible in logs.
+pub fn read_full_markdown_or_empty(repo_path: &Path, id: &str) -> String {
+    read_full_markdown(repo_path, id).unwrap_or_else(|e| {
+        tracing::warn!("read_full_markdown failed for {}: {}", id, e);
+        String::new()
+    })
+}
+
 fn read_body_from_path(path: &Path) -> Result<String> {
     let raw = fs::read_to_string(path).map_err(|e| eyre::eyre!("read_doc_content: {}: {}", path.display(), e))?;
     Ok(extract_body_from_markdown(&raw))
@@ -611,6 +630,36 @@ mod tests {
         update_parent_children(&dir, "pl-idem", "sp-x", "Spec X");
         let content = fs::read_to_string(dir.join("docs/loopr/pl-idem.md")).unwrap();
         assert_eq!(content.matches("sp-x.md").count(), 1);
+    }
+
+    // --- read_full_markdown ---
+
+    #[test]
+    fn test_read_full_markdown_includes_frontmatter() {
+        let dir = TestDir::new("loopr-markdown-full");
+        let record = SimpleRecord {
+            id: "pl-full01".to_string(),
+        };
+        write_doc_markdown(&dir, &record).unwrap();
+        let content = read_full_markdown(&dir, "pl-full01").unwrap();
+        assert!(content.starts_with("---\n"), "must include frontmatter");
+        assert!(content.contains("id: pl-full01"));
+        assert!(content.contains("title: Test"));
+        assert!(content.contains("Body text."));
+    }
+
+    #[test]
+    fn test_read_full_markdown_missing_file_errors() {
+        let dir = TestDir::new("loopr-markdown-full");
+        let result = read_full_markdown(&dir, "nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_full_markdown_or_empty_returns_empty_on_missing() {
+        let dir = TestDir::new("loopr-markdown-full");
+        let content = read_full_markdown_or_empty(&dir, "nonexistent");
+        assert!(content.is_empty());
     }
 
     #[test]
