@@ -21,6 +21,7 @@ use crate::domain::phase::{Phase, PhaseStatus};
 use crate::domain::plan::{Plan, PlanStatus};
 use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::work::{Work, WorkStatus};
+use crate::prompts::SECTION_AC;
 use crate::validator::client::HttpClient;
 
 const LLM_CALL_TIMEOUT_SECS: u64 = 180;
@@ -173,7 +174,7 @@ pub fn extract_acceptance_criteria(content: &str) -> Vec<String> {
     let mut criteria = Vec::new();
 
     for line in content.lines() {
-        if line.starts_with("## Acceptance Criteria") {
+        if line.starts_with(&format!("## {}", SECTION_AC)) {
             in_section = true;
             continue;
         }

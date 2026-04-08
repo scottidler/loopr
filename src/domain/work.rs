@@ -8,6 +8,7 @@ use loopr_derive::{FlexibleEnum, Fsm};
 use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
+use crate::prompts::SECTION_AC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
 pub enum WorkStatus {
@@ -128,7 +129,7 @@ impl DocMarkdown for Work {
     fn doc_body(&self) -> String {
         let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("## Acceptance Criteria\n\n");
+            body.push_str(&format!("## {}\n\n", SECTION_AC));
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }

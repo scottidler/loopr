@@ -8,6 +8,7 @@ use loopr_derive::{FlexibleEnum, Fsm};
 use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
+use crate::prompts::SECTION_AC;
 
 /// Shared status enum for Plan, Spec, and Phase records.
 /// All three use the same four-state machine with Coordinator-only transitions.
@@ -131,7 +132,7 @@ impl DocMarkdown for Plan {
     fn doc_body(&self) -> String {
         let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("## Acceptance Criteria\n\n");
+            body.push_str(&format!("## {}\n\n", SECTION_AC));
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }
@@ -433,7 +434,7 @@ mod tests {
         let ac = AcceptanceCriteria(vec!["Tests pass".to_string()]);
         let plan = Plan::new("T".into(), ac);
         let body = plan.doc_body();
-        assert!(body.contains("## Acceptance Criteria"));
+        assert!(body.contains(&format!("## {}", SECTION_AC)));
         assert!(body.contains("- [ ] Tests pass"));
     }
 

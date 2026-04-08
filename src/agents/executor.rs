@@ -21,6 +21,7 @@ use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::daemon::context::Stores;
 use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::DaemonEvent;
+use crate::prompts::SECTION_AC;
 use crate::worktree::manager::WorktreeManager;
 
 /// Pre-flight acceptance-criteria check.
@@ -62,10 +63,11 @@ async fn preflight_ac_check(stores: &Arc<Stores>, work_id: &str) -> Option<bool>
     let api_key_env = &stores.config.agents.implementer.api_key_env;
     let api_key = std::env::var(api_key_env).ok()?;
 
-    let mut prompt = String::from(
+    let mut prompt = format!(
         "Do the following files already satisfy ALL of the acceptance criteria listed below?\n\n\
          Answer with exactly one word: YES or NO.\n\n\
-         ## Acceptance Criteria\n\n",
+         ## {}\n\n",
+        SECTION_AC
     );
     for ac in &acceptance_criteria.0 {
         prompt.push_str(&format!("- {}\n", ac));

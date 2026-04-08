@@ -64,6 +64,13 @@ pub struct PromptStore {
 
 static STORE: OnceLock<PromptStore> = OnceLock::new();
 
+/// Canonical section header names used in both markdown documents and Rust parsing.
+/// These are the *names* without the `## ` prefix. Use `format!("## {}", SECTION_AC)`
+/// when emitting a heading, and pass the bare name to `strip_markdown_section`.
+pub const SECTION_AC: &str = "Acceptance Criteria";
+pub const SECTION_OVERVIEW: &str = "Overview";
+pub const SECTION_IMPLEMENTATION: &str = "Implementation Notes";
+
 /// Replace status value placeholders with canonical VARIANT_NAMES from enums.
 fn interpolate_status_values(content: String) -> String {
     content
@@ -358,7 +365,7 @@ mod tests {
         let p = &store().reviewer;
         assert!(p.starts_with("You are a Reviewer agent in the Loopr development orchestrator."));
         for criterion in [
-            "Acceptance Criteria",
+            SECTION_AC,
             "Safety & Security",
             "Build & Tests",
             "Scope",

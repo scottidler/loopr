@@ -6,6 +6,7 @@ use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::domain::plan::HierarchyStatus;
 use crate::id;
+use crate::prompts::SECTION_AC;
 
 /// Type alias so Spec can name its own status type.
 pub type SpecStatus = HierarchyStatus;
@@ -75,7 +76,7 @@ impl DocMarkdown for Spec {
     fn doc_body(&self) -> String {
         let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("## Acceptance Criteria\n\n");
+            body.push_str(&format!("## {}\n\n", SECTION_AC));
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }
