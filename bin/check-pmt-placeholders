@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Cross-reference {placeholder} patterns between .pmt files and Rust .replace() calls.
+# Fails if a .pmt placeholder has no corresponding .replace() in Rust, or vice versa.
+#
+# Known exceptions:
+#   - {plan_id} in researcher.pmt is inside prose (not a substitution target)
+#   - interview.pmt placeholders ({goal}, {diagnostic_section}, {interview_exchanges})
+#     are substituted programmatically via push_str, not .replace()
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROMPTS_DIR="$REPO_ROOT/prompts"
+SRC_DIR="$REPO_ROOT/src"
+
+# Extract {placeholder} patterns from .pmt files
+pmt_placeholders=$(grep -roP '\{[a-z_]+\}' "$PROMPTS_DIR" --include='*.pmt' | \
+    awk -F: '{print $2}' | sort -u)
+
+# Extract .replace("{placeholder}" targets from Rust files
+rust_replacements=$(grep -roP '\.replace\("\{[a-z_]+\}"' "$SRC_DIR" --include='*.rs' | \
+    grep -oP '\{[a-z_]+\}' | sort -u)
+
+# Known exceptions: placeholders in .pmt files that are NOT interpolated via .replace()
+# These are either: (a) inside prose examples, or (b) substituted via push_str
+EXCEPTIONS=(
+    "{plan_id}"                # prose example in researcher.pmt
+    "{diagnostic_section}"     # interview.pmt - substituted via push_str
+    "{interview_exchanges}"    # interview.pmt - substituted via push_str
+)
+
+# Filter exceptions from pmt_placeholders
+filtered_pmt=""
+for p in $pmt_placeholders; do
+    skip=false
+    for ex in "${EXCEPTIONS[@]}"; do
+        if [ "$p" = "$ex" ]; then
+            skip=true
+            break
+        fi
+    done
+    if ! $skip; then
+        filtered_pmt="$filtered_pmt $p"
+    fi
+done
+
+errors=0
+
+# Check: .pmt placeholder with no .replace() in Rust
+for p in $filtered_pmt; do
+    if ! echo "$rust_replacements" | grep -qF "$p"; then
+        echo "ERROR: $p found in .pmt but no .replace() in Rust"
+        errors=$((errors + 1))
+    fi
+done
+
+# Check: Rust .replace() with no .pmt placeholder
+for p in $rust_replacements; do
+    if ! echo "$pmt_placeholders" | grep -qF "$p"; then
+        echo "ERROR: .replace(\"$p\") in Rust but not found in any .pmt"
+        errors=$((errors + 1))
+    fi
+done
+
+if [ $errors -gt 0 ]; then
+    echo ""
+    echo "FAIL: $errors placeholder mismatch(es) found"
+    exit 1
+fi
+
+echo "OK: all .pmt placeholders have matching .replace() calls"

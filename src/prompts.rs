@@ -660,4 +660,104 @@ mod tests {
             "missing Proposed (BundleStatus) in interpolated coordinator prompt"
         );
     }
+
+    // =========================================================================
+    // Sentinel tests: every interpolated .pmt has zero residual placeholders
+    // and all sentinel values appear in the output.
+    // =========================================================================
+
+    /// Assert no `{word}` patterns remain in the output (residual placeholders).
+    ///
+    /// `exceptions` lists placeholder strings that are expected in the output
+    /// (e.g., `{plan_id}` appearing as a prose example, not a substitution target).
+    fn assert_no_residual_placeholders(output: &str, template_name: &str, exceptions: &[&str]) {
+        let re = regex::Regex::new(r"\{[a-z_]+\}").unwrap();
+        let residuals: Vec<&str> = re
+            .find_iter(output)
+            .map(|m| m.as_str())
+            .filter(|p| !exceptions.contains(p))
+            .collect();
+        assert!(
+            residuals.is_empty(),
+            "{} has residual placeholders: {:?}",
+            template_name,
+            residuals
+        );
+    }
+
+    #[test]
+    fn test_sentinel_validator_plan() {
+        init_defaults();
+        let sentinel = "SENTINEL_PLAN_MARKDOWN_ae92f1";
+        let output = crate::validator::prompts::plan_prompt(sentinel);
+        assert!(
+            output.contains(sentinel),
+            "sentinel value missing from validator-plan output"
+        );
+        assert_no_residual_placeholders(&output, "validator-plan.pmt", &[]);
+    }
+
+    #[test]
+    fn test_sentinel_validator_spec() {
+        init_defaults();
+        let sentinel_md = "SENTINEL_SPEC_MD_b37c02";
+        let sentinel_parent = "SENTINEL_PARENT_MD_c48d03";
+        let output = crate::validator::prompts::spec_prompt(sentinel_md, sentinel_parent);
+        assert!(output.contains(sentinel_md), "spec sentinel missing");
+        assert!(output.contains(sentinel_parent), "parent sentinel missing");
+        assert_no_residual_placeholders(&output, "validator-spec.pmt", &[]);
+    }
+
+    #[test]
+    fn test_sentinel_validator_phase() {
+        init_defaults();
+        let sentinel_md = "SENTINEL_PHASE_MD_d59e04";
+        let sentinel_parent = "SENTINEL_PARENT_MD_e60f05";
+        let output = crate::validator::prompts::phase_prompt(sentinel_md, sentinel_parent);
+        assert!(output.contains(sentinel_md), "phase sentinel missing");
+        assert!(output.contains(sentinel_parent), "parent sentinel missing");
+        assert_no_residual_placeholders(&output, "validator-phase.pmt", &[]);
+    }
+
+    #[test]
+    fn test_sentinel_coverage_plan_specs() {
+        init_defaults();
+        let sentinel_parent = "SENTINEL_PLAN_MD_f71a06";
+        let sentinel_children = "SENTINEL_SPECS_MD_a82b07";
+        let output = crate::evaluator::prompts::plan_specs_prompt(sentinel_parent, sentinel_children);
+        assert!(output.contains(sentinel_parent), "parent sentinel missing");
+        assert!(output.contains(sentinel_children), "children sentinel missing");
+        assert_no_residual_placeholders(&output, "coverage-plan-specs.pmt", &[]);
+    }
+
+    #[test]
+    fn test_sentinel_coverage_spec_phases() {
+        init_defaults();
+        let sentinel_parent = "SENTINEL_SPEC_MD_b93c08";
+        let sentinel_children = "SENTINEL_PHASES_MD_c04d09";
+        let output = crate::evaluator::prompts::spec_phases_prompt(sentinel_parent, sentinel_children);
+        assert!(output.contains(sentinel_parent), "parent sentinel missing");
+        assert!(output.contains(sentinel_children), "children sentinel missing");
+        assert_no_residual_placeholders(&output, "coverage-spec-phases.pmt", &[]);
+    }
+
+    #[test]
+    fn test_sentinel_coverage_phase_works() {
+        init_defaults();
+        let sentinel_parent = "SENTINEL_PHASE_MD_d15e10";
+        let sentinel_children = "SENTINEL_WORKS_MD_e26f11";
+        let output = crate::evaluator::prompts::phase_works_prompt(sentinel_parent, sentinel_children);
+        assert!(output.contains(sentinel_parent), "parent sentinel missing");
+        assert!(output.contains(sentinel_children), "children sentinel missing");
+        assert_no_residual_placeholders(&output, "coverage-phase-works.pmt", &[]);
+    }
+
+    #[test]
+    fn test_sentinel_researcher() {
+        init_defaults();
+        let sentinel_query = "SENTINEL_QUERY_f37a12";
+        let output = store().researcher.replace("{query}", sentinel_query);
+        assert!(output.contains(sentinel_query), "query sentinel missing");
+        assert_no_residual_placeholders(&output, "researcher.pmt", &["{plan_id}"]);
+    }
 }
