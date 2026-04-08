@@ -212,6 +212,102 @@ pub fn strip_markdown_section(body: &str, section_title: &str) -> String {
     result
 }
 
+/// Add a child link to a parent's `children` frontmatter list.
+///
+/// Reads `docs/loopr/<parent_id>.md`, appends a markdown link to the child
+/// in the `children:` frontmatter list, and writes the file back.
+/// Creates the `children:` key if it doesn't exist.
+///
+/// Advisory: failure logs a warning but does not propagate.
+pub fn update_parent_children(repo_path: &Path, parent_id: &str, child_id: &str, child_title: &str) {
+    let path = repo_path.join("docs").join("loopr").join(format!("{}.md", parent_id));
+    let Ok(raw) = fs::read_to_string(&path) else {
+        tracing::warn!("update_parent_children: cannot read {}", path.display());
+        return;
+    };
+
+    let link = format!("[{}]({}.md)", child_title, child_id);
+
+    // Check if this child link already exists
+    if raw.contains(&format!("({}.md)", child_id)) {
+        return;
+    }
+
+    // Find the frontmatter boundaries
+    let mut lines: Vec<&str> = raw.lines().collect();
+    let mut fm_end = None;
+    let mut in_fm = false;
+    for (i, line) in lines.iter().enumerate() {
+        if *line == "---" && !in_fm {
+            in_fm = true;
+            continue;
+        }
+        if *line == "---" && in_fm {
+            fm_end = Some(i);
+            break;
+        }
+    }
+
+    let Some(end_idx) = fm_end else {
+        tracing::warn!("update_parent_children: no frontmatter in {}", path.display());
+        return;
+    };
+
+    // Find existing children: key or insert before closing ---
+    let children_line = lines[1..end_idx]
+        .iter()
+        .position(|l| l.starts_with("children:"))
+        .map(|p| p + 1); // +1 because we started at index 1
+
+    if let Some(cl) = children_line {
+        // Replace `children: []` with block list, or append to existing list
+        if lines[cl].trim() == "children: []" {
+            lines[cl] = "children:";
+            let new_line_owned = format!("  - \"{}\"", link);
+            // We need to own the string - rebuild the content
+            let mut result = Vec::new();
+            for (i, line) in lines.iter().enumerate() {
+                result.push(line.to_string());
+                if i == cl {
+                    result.push(new_line_owned.clone());
+                }
+            }
+            let content = result.join("\n");
+            if let Err(e) = fs::write(&path, format!("{}\n", content.trim_end())) {
+                tracing::warn!("update_parent_children: write failed: {}", e);
+            }
+            return;
+        }
+        // Append new child entry before closing ---
+        let new_entry = format!("  - \"{}\"", link);
+        let mut result: Vec<String> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i == end_idx {
+                result.push(new_entry.clone());
+            }
+            result.push(line.to_string());
+        }
+        let content = result.join("\n");
+        if let Err(e) = fs::write(&path, format!("{}\n", content.trim_end())) {
+            tracing::warn!("update_parent_children: write failed: {}", e);
+        }
+    } else {
+        // No children key - insert one before closing ---
+        let mut result: Vec<String> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i == end_idx {
+                result.push("children:".to_string());
+                result.push(format!("  - \"{}\"", link));
+            }
+            result.push(line.to_string());
+        }
+        let content = result.join("\n");
+        if let Err(e) = fs::write(&path, format!("{}\n", content.trim_end())) {
+            tracing::warn!("update_parent_children: write failed: {}", e);
+        }
+    }
+}
+
 /// Convert epoch milliseconds to an ISO 8601 UTC timestamp string.
 pub fn millis_to_iso(ms: i64) -> String {
     DateTime::from_timestamp_millis(ms)
@@ -471,5 +567,56 @@ mod tests {
         let content = fs::read_to_string(dir.join("docs/loopr/pl-upd01.md")).unwrap();
         // Only one copy of the id in the frontmatter
         assert_eq!(content.matches("id: pl-upd01").count(), 1);
+    }
+
+    // --- update_parent_children ---
+
+    #[test]
+    fn test_update_parent_children_adds_child_link() {
+        let dir = TestDir::new("loopr-markdown-children");
+        let record = SimpleRecord {
+            id: "pl-parent".to_string(),
+        };
+        write_doc_markdown(&dir, &record).unwrap();
+
+        update_parent_children(&dir, "pl-parent", "sp-child1", "Auth Spec");
+        let content = fs::read_to_string(dir.join("docs/loopr/pl-parent.md")).unwrap();
+        assert!(content.contains("[Auth Spec](sp-child1.md)"));
+    }
+
+    #[test]
+    fn test_update_parent_children_multiple_children() {
+        let dir = TestDir::new("loopr-markdown-children");
+        let record = SimpleRecord {
+            id: "pl-multi".to_string(),
+        };
+        write_doc_markdown(&dir, &record).unwrap();
+
+        update_parent_children(&dir, "pl-multi", "sp-a", "Spec A");
+        update_parent_children(&dir, "pl-multi", "sp-b", "Spec B");
+        let content = fs::read_to_string(dir.join("docs/loopr/pl-multi.md")).unwrap();
+        assert!(content.contains("[Spec A](sp-a.md)"));
+        assert!(content.contains("[Spec B](sp-b.md)"));
+    }
+
+    #[test]
+    fn test_update_parent_children_idempotent() {
+        let dir = TestDir::new("loopr-markdown-children");
+        let record = SimpleRecord {
+            id: "pl-idem".to_string(),
+        };
+        write_doc_markdown(&dir, &record).unwrap();
+
+        update_parent_children(&dir, "pl-idem", "sp-x", "Spec X");
+        update_parent_children(&dir, "pl-idem", "sp-x", "Spec X");
+        let content = fs::read_to_string(dir.join("docs/loopr/pl-idem.md")).unwrap();
+        assert_eq!(content.matches("sp-x.md").count(), 1);
+    }
+
+    #[test]
+    fn test_update_parent_children_missing_parent_no_panic() {
+        let dir = TestDir::new("loopr-markdown-children");
+        // Parent file doesn't exist - should log warning, not panic
+        update_parent_children(&dir, "pl-missing", "sp-orphan", "Orphan Spec");
     }
 }

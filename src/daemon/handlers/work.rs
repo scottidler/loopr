@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, instrument};
 
 use crate::domain::bundle::BundleStatus;
-use crate::domain::markdown::write_doc_markdown;
+use crate::domain::markdown::{update_parent_children, write_doc_markdown};
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
@@ -221,6 +221,7 @@ pub(super) fn handle_work_create(
         if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &work) {
             tracing::warn!("docs/loopr write failed for {}: {}", id, e);
         }
+        update_parent_children(&stores.config.project.repo_path, &work.parent_id, &id, &work.title);
         let _ = event_tx.send(DaemonEvent::record_created("work", &id));
 
         Ok(DaemonResponse::ok(req.id, wi_json))

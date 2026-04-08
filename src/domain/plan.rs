@@ -155,6 +155,7 @@ impl DocMarkdown for Plan {
         ));
         m.push(("created-at".into(), FmValue::Text(millis_to_iso(self.created_at))));
         m.push(("updated-at".into(), FmValue::Text(millis_to_iso(self.updated_at))));
+        m.push(("children".into(), FmValue::List(vec![])));
         m
     }
 }

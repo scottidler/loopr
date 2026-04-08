@@ -26,7 +26,7 @@ use crate::daemon::context::Stores;
 use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-use crate::domain::markdown::write_doc_markdown;
+use crate::domain::markdown::{update_parent_children, write_doc_markdown};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::validator::client::{LlmClient, ReqwestClient};
 use crate::worktree::manager::WorktreeManager;
@@ -380,14 +380,18 @@ fn persist_hierarchy(
         }};
     }
 
+    let plan_id = hierarchy.plan.id.clone();
     persist_one!(stores.write_plans(), "plan", hierarchy.plan);
     for r in hierarchy.specs {
+        update_parent_children(&repo_path, &plan_id, &r.id, &r.title);
         persist_one!(stores.write_specs(), "spec", r);
     }
     for r in hierarchy.phases {
+        update_parent_children(&repo_path, &r.parent_id, &r.id, &r.title);
         persist_one!(stores.write_phases(), "phase", r);
     }
     for r in hierarchy.works {
+        update_parent_children(&repo_path, &r.parent_id, &r.id, &r.title);
         persist_one!(stores.write_works(), "work", r);
     }
 
