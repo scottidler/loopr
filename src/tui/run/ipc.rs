@@ -703,7 +703,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into());
+        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into(), 0);
         let specs_json = serde_json::to_value(vec![mock_spec]).unwrap();
 
         let server = IpcServer::new(&path);

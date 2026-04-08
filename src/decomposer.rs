@@ -894,6 +894,7 @@ fn records_to_hierarchy(
     let phase_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Phase).collect();
     let work_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Work).collect();
 
+    let mut spec_counter: u32 = 0;
     let mut phase_counters: HashMap<String, u32> = HashMap::new();
 
     for child in spec_records
@@ -908,7 +909,8 @@ fn records_to_hierarchy(
 
         match child.kind {
             DocKind::Spec => {
-                let mut spec = Spec::new(parent_id, child.title.clone());
+                let mut spec = Spec::new(parent_id, child.title.clone(), spec_counter);
+                spec_counter += 1;
                 spec.id = child.id.clone();
                 spec.force_status(SpecStatus::Active);
                 spec.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());

@@ -804,29 +804,60 @@ fn build_fsm_footer(
     }
 }
 
-/// Find the next phase that hasn't been completed yet (by order).
-fn find_next_phase_to_activate(stores: &Stores, coord_state: &CoordinatorState) -> Option<(String, String)> {
+/// Find the next phase to activate, respecting sequential execution order.
+///
+/// Execution model: Specs execute sequentially (by `order`). Within each
+/// spec, phases execute sequentially (by `order`). Within an active phase,
+/// work items execute in parallel (constrained only by dependencies and
+/// shared files). This function finds the next phase to activate - it does
+/// not manage work-level parallelism.
+///
+/// Returns the first Draft phase in the earliest spec that still has
+/// non-terminal phases. Returns None if a phase is already in progress
+/// or all specs are exhausted.
+///
+/// Critical invariant: never look at phases from Spec N+1 while Spec N
+/// has non-terminal phases.
+fn find_next_phase_to_activate(stores: &Stores, _coord_state: &CoordinatorState) -> Option<(String, String)> {
     let plan = generation::find_active_plan(stores)?;
-    let specs = generation::find_active_specs_for_plan(stores, &plan.id);
+
+    let Ok(all_specs) = stores.read_specs() else {
+        return None;
+    };
+    let mut specs: Vec<_> = all_specs
+        .values()
+        .filter(|s| s.parent_id == plan.id)
+        .filter(|s| !matches!(s.status(), HierarchyStatus::Abandoned))
+        .collect();
+    specs.sort_by_key(|s| s.order);
+
+    let Ok(all_phases) = stores.read_phases() else {
+        return None;
+    };
 
     for spec in &specs {
-        let phases = generation::find_active_phases_for_spec(stores, &spec.id);
-        for phase in &phases {
-            if !coord_state.phases_completed.contains(&phase.id) {
-                return Some((phase.id.clone(), phase.title.clone()));
+        let mut phases: Vec<_> = all_phases.values().filter(|p| p.parent_id == spec.id).collect();
+        phases.sort_by_key(|p| p.order);
+
+        let has_non_terminal = phases
+            .iter()
+            .any(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned));
+
+        if has_non_terminal {
+            // Return the first Draft phase in this spec
+            for phase in &phases {
+                if phase.status() == HierarchyStatus::Draft {
+                    return Some((phase.id.clone(), phase.title.clone()));
+                }
             }
+            // No Draft phases but some are still Active/in-progress - wait
+            return None;
         }
+        // All phases in this spec are terminal - continue to next spec
     }
 
-    // Also check for phases that are still in Draft/Active status
-    let phases = stores.read_phases().ok()?;
-    let mut ordered: Vec<_> = phases
-        .values()
-        .filter(|p| !coord_state.phases_completed.contains(&p.id))
-        .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
-        .collect();
-    ordered.sort_by_key(|p| p.order);
-    ordered.first().map(|p| (p.id.clone(), p.title.clone()))
+    // All specs exhausted
+    None
 }
 
 /// Build a status summary for the current phase's works.

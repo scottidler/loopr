@@ -73,7 +73,7 @@ fn setup_stores(dir: &Path) -> Arc<Stores> {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-    let spec = Spec::new(plan_id.clone(), "Test Spec".into());
+    let spec = Spec::new(plan_id.clone(), "Test Spec".into(), 0);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 

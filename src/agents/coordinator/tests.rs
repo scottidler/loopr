@@ -376,7 +376,7 @@ async fn test_build_state_summary_comprehensive() {
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Add spec
-    let spec = Spec::new(plan_id.clone(), "My Spec".into());
+    let spec = Spec::new(plan_id.clone(), "My Spec".into(), 0);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
@@ -452,7 +452,7 @@ async fn test_check_phase_completion_all_done() {
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Create an Active spec
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
@@ -493,7 +493,7 @@ async fn test_check_phase_completion_partial() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
@@ -532,7 +532,7 @@ async fn test_check_phase_completion_no_works() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
@@ -563,7 +563,7 @@ async fn test_check_phase_completion_multiple_phases() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
@@ -676,7 +676,7 @@ async fn test_check_fsm_transition_planning_to_activate() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Spec".into());
+    let mut spec = Spec::new(plan_id.clone(), "Spec".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
@@ -847,7 +847,7 @@ async fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into());
+    let mut spec = Spec::new(plan_id, "S".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
@@ -1108,18 +1108,18 @@ async fn test_fsm_phase_gate_to_activate_when_more_phases() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into());
+    let mut spec = Spec::new(plan_id, "S".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    phase1.force_status(HierarchyStatus::Active);
+    phase1.force_status(HierarchyStatus::Complete);
     let phase1_id = phase1.id.clone();
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
-    let mut phase2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    phase2.force_status(HierarchyStatus::Active);
+    // Phase 2 stays Draft - ready to activate
+    let phase2 = Phase::new(spec_id, "Phase 2".into(), 2);
     stores.phases.write().unwrap().insert(phase2.id.clone(), phase2);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -1256,29 +1256,97 @@ async fn test_find_next_phase_skips_completed() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into());
+    let mut spec = Spec::new(plan_id, "S".into(), 0);
+    spec.force_status(HierarchyStatus::Active);
+    let spec_id = spec.id.clone();
+    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+    // p1 is Complete, p2 is Draft - next phase should be p2
+    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
+    p1.force_status(HierarchyStatus::Complete);
+    let p1_id = p1.id.clone();
+    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
+
+    let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
+    // p2 stays Draft (default)
+    let p2_id = p2.id.clone();
+    stores.phases.write().unwrap().insert(p2_id.clone(), p2);
+
+    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    let result = find_next_phase_to_activate(&stores, &coord_state);
+    assert!(result.is_some());
+    let (id, title) = result.unwrap();
+    assert_eq!(id, p2_id);
+    assert_eq!(title, "Phase 2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_find_next_phase_waits_for_active_phase() {
+    // When a phase is Active (in progress), return None - don't skip ahead
+    let dir = TestDir::new("loopr-fsm-nextphwait");
+    let stores = test_stores(&dir);
+
+    let mut plan = Plan::new("P".into(), "c".into());
+    plan.force_status(HierarchyStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec = Spec::new(plan_id, "S".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     p1.force_status(HierarchyStatus::Active);
-    let p1_id = p1.id.clone();
-    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
+    stores.phases.write().unwrap().insert(p1.id.clone(), p1);
 
-    let mut p2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    p2.force_status(HierarchyStatus::Active);
+    let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
     let p2_id = p2.id.clone();
     stores.phases.write().unwrap().insert(p2_id.clone(), p2);
 
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.phases_completed.push(p1_id.clone());
-
+    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     let result = find_next_phase_to_activate(&stores, &coord_state);
+    // p1 is Active (non-terminal), p2 is Draft -> return first Draft = p2
     assert!(result.is_some());
-    let (id, title) = result.unwrap();
+    let (id, _title) = result.unwrap();
     assert_eq!(id, p2_id);
-    assert_eq!(title, "Phase 2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_find_next_phase_respects_spec_boundaries() {
+    // Phases from Spec 1 must all be terminal before looking at Spec 2
+    let dir = TestDir::new("loopr-fsm-nextphspec");
+    let stores = test_stores(&dir);
+
+    let mut plan = Plan::new("P".into(), "c".into());
+    plan.force_status(HierarchyStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec1 = Spec::new(plan_id.clone(), "Spec 1".into(), 0);
+    spec1.force_status(HierarchyStatus::Active);
+    let spec1_id = spec1.id.clone();
+    stores.specs.write().unwrap().insert(spec1_id.clone(), spec1);
+
+    let mut spec2 = Spec::new(plan_id, "Spec 2".into(), 1);
+    spec2.force_status(HierarchyStatus::Active);
+    let spec2_id = spec2.id.clone();
+    stores.specs.write().unwrap().insert(spec2_id.clone(), spec2);
+
+    // Spec 1 has an Active phase (non-terminal)
+    let mut p1 = Phase::new(spec1_id, "S1 Phase 1".into(), 0);
+    p1.force_status(HierarchyStatus::Active);
+    stores.phases.write().unwrap().insert(p1.id.clone(), p1);
+
+    // Spec 2 has a Draft phase
+    let p2 = Phase::new(spec2_id, "S2 Phase 1".into(), 0);
+    let p2_id = p2.id.clone();
+    stores.phases.write().unwrap().insert(p2_id.clone(), p2);
+
+    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    let result = find_next_phase_to_activate(&stores, &coord_state);
+    // Spec 1 still has non-terminal phases - must NOT return Spec 2's phase
+    assert!(result.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1306,18 +1374,18 @@ async fn test_fsm_transition_handler_complete_phase_on_activate() {
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into());
+    let mut spec = Spec::new(plan_id, "S".into(), 0);
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    p1.force_status(HierarchyStatus::Active);
+    p1.force_status(HierarchyStatus::Complete);
     let p1_id = p1.id.clone();
     stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
-    let mut p2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    p2.force_status(HierarchyStatus::Active);
+    // Phase 2 stays Draft - ready to activate
+    let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
     stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
     // Coordinator is in PhaseGate with phase 1 as current
@@ -1327,7 +1395,7 @@ async fn test_fsm_transition_handler_complete_phase_on_activate() {
 
     let config = CoordinatorConfig::default();
 
-    // check_fsm_transition should return ActivatePhase
+    // check_fsm_transition should return ActivatePhase (Phase 2 is Draft)
     let transition = check_fsm_transition(&stores, &coord_state, &config);
     assert_eq!(transition, Some(CoordinatorFsmState::ActivatePhase));
 

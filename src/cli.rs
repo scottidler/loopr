@@ -19,7 +19,7 @@ pub enum CrudCmd {
         /// Parent ID (required for spec, phase, work)
         #[arg(short, long)]
         parent: Option<String>,
-        /// Order (for Phase)
+        /// Order (for Spec, Phase)
         #[arg(long)]
         order: Option<u32>,
         /// File paths scoping work (for Work, repeatable)

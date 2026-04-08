@@ -149,11 +149,13 @@ pub fn find_active_plan(stores: &Stores) -> Option<Plan> {
 /// Find active Specs for a given Plan.
 pub fn find_active_specs_for_plan(stores: &Stores, plan_id: &str) -> Vec<Spec> {
     let Ok(specs) = stores.read_specs() else { return vec![] };
-    specs
+    let mut result: Vec<_> = specs
         .values()
         .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
         .cloned()
-        .collect()
+        .collect();
+    result.sort_by_key(|s| s.order);
+    result
 }
 
 /// Find active Phases for a given Spec.
@@ -254,14 +256,14 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fasp");
         let stores = test_stores(&dir);
 
-        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into());
+        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into(), 0);
         spec1.force_status(HierarchyStatus::Active);
         stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
 
-        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into());
+        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into(), 1);
         stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
 
-        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into());
+        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into(), 0);
         spec3.force_status(HierarchyStatus::Active);
         stores.specs.write().unwrap().insert(spec3.id.clone(), spec3);
 

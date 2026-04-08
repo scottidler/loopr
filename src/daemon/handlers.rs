@@ -524,7 +524,7 @@ pub(crate) mod tests {
             .unwrap();
 
         // Create a spec via TaskStore directly
-        let spec = Spec::new(plan.id.clone(), "TS Spec".into());
+        let spec = Spec::new(plan.id.clone(), "TS Spec".into(), 0);
         stores.store.as_ref().unwrap().lock().unwrap().create(spec).unwrap();
 
         let req = DaemonRequest::new(1, "system.status", json!(null));

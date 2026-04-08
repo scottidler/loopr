@@ -1057,7 +1057,7 @@ mod tests {
             let mut store = Store::open(&repo_path).unwrap();
             let plan = Plan::new("Hydration Test".into(), "Criteria".into());
             store.create(plan).unwrap();
-            let spec = Spec::new("plan-1".into(), "Spec".into());
+            let spec = Spec::new("plan-1".into(), "Spec".into(), 0);
             store.create(spec).unwrap();
         }
 
@@ -1083,7 +1083,7 @@ mod tests {
         {
             let mut store = Store::open(&repo_path).unwrap();
             store.create(Plan::new("P".into(), "c".into())).unwrap();
-            store.create(Spec::new("p1".into(), "S".into())).unwrap();
+            store.create(Spec::new("p1".into(), "S".into(), 0)).unwrap();
             store.create(Phase::new("s1".into(), "Ph".into(), 1)).unwrap();
             store.create(Work::new("ph1".into(), "W".into())).unwrap();
             store
@@ -1274,7 +1274,7 @@ mod tests {
     #[test]
     fn test_stores_spec_insert_and_read() {
         let stores = Stores::new();
-        let spec = Spec::new("plan-1".into(), "Test Spec".into());
+        let spec = Spec::new("plan-1".into(), "Test Spec".into(), 0);
         let id = spec.id.clone();
         stores.specs.write().unwrap().insert(id.clone(), spec);
         let specs = stores.specs.read().unwrap();
