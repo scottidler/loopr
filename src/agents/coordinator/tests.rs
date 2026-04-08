@@ -110,7 +110,7 @@ async fn test_build_state_summary_with_plan() {
     let dir = TestDir::new("loopr-coord-plan");
     let stores = test_stores(&dir);
 
-    let plan = Plan::new("Test Plan".into(), "A test plan".into(), "Tests pass".into());
+    let plan = Plan::new("Test Plan".into(), "Tests pass".into());
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -125,7 +125,7 @@ async fn test_build_state_summary_excludes_completed() {
     let dir = TestDir::new("loopr-coord-excl");
     let stores = test_stores(&dir);
 
-    let mut plan = Plan::new("Done Plan".into(), "desc".into(), "crit".into());
+    let mut plan = Plan::new("Done Plan".into(), "crit".into());
     plan.force_status(HierarchyStatus::Complete);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
@@ -139,7 +139,7 @@ async fn test_build_state_summary_with_works() {
     let dir = TestDir::new("loopr-coord-wi");
     let stores = test_stores(&dir);
 
-    let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
+    let wi = Work::new("ph-1".into(), "Add auth".into());
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let summary = build_state_summary(&stores, TEST_PREFIX);
@@ -233,10 +233,10 @@ async fn test_build_state_summary_works_before_plans() {
     let dir = TestDir::new("loopr-coord-order");
     let stores = test_stores(&dir);
 
-    let plan = Plan::new("Test Plan".into(), "desc".into(), "crit".into());
+    let plan = Plan::new("Test Plan".into(), "crit".into());
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-    let wi = Work::new("ph-1".into(), "Add auth".into(), "desc".into());
+    let wi = Work::new("ph-1".into(), "Add auth".into());
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let summary = build_state_summary(&stores, TEST_PREFIX);
@@ -256,7 +256,7 @@ async fn test_build_state_summary_excludes_done_works() {
     let dir = TestDir::new("loopr-coord-donewi");
     let stores = test_stores(&dir);
 
-    let mut wi = Work::new("ph-1".into(), "Done Work".into(), "desc".into());
+    let mut wi = Work::new("ph-1".into(), "Done Work".into());
     wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -371,22 +371,22 @@ async fn test_build_state_summary_comprehensive() {
     let stores = test_stores(&dir);
 
     // Add plan
-    let plan = Plan::new("My Plan".into(), "desc".into(), "crit".into());
+    let plan = Plan::new("My Plan".into(), "crit".into());
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Add spec
-    let spec = Spec::new(plan_id.clone(), "My Spec".into(), "spec desc".into());
+    let spec = Spec::new(plan_id.clone(), "My Spec".into());
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     // Add phase
-    let phase = Phase::new(spec_id.clone(), "Phase 1".into(), "phase desc".into(), 1);
+    let phase = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // Add work item
-    let wi = Work::new(phase_id.clone(), "WI 1".into(), "wi desc".into());
+    let wi = Work::new(phase_id.clone(), "WI 1".into());
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     // Add tick
@@ -446,29 +446,29 @@ async fn test_check_phase_completion_all_done() {
     let stores = test_stores(&dir);
 
     // Create an Active plan
-    let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+    let mut plan = Plan::new("Test Plan".into(), "criteria".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
     // Create an Active spec
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     // Create an Active phase
-    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // Create works that are all Done
-    let mut w1 = Work::new(phase_id.clone(), "Work 1".into(), "desc".into());
+    let mut w1 = Work::new(phase_id.clone(), "Work 1".into());
     w1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w1.id.clone(), w1);
 
-    let mut w2 = Work::new(phase_id.clone(), "Work 2".into(), "desc".into());
+    let mut w2 = Work::new(phase_id.clone(), "Work 2".into());
     w2.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
@@ -488,27 +488,27 @@ async fn test_check_phase_completion_partial() {
     let stores = test_stores(&dir);
 
     // Active plan → Active spec → Active phase
-    let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+    let mut plan = Plan::new("Test Plan".into(), "criteria".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // One work Done, one still InProgress
-    let mut w1 = Work::new(phase_id.clone(), "Work 1".into(), "desc".into());
+    let mut w1 = Work::new(phase_id.clone(), "Work 1".into());
     w1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w1.id.clone(), w1);
 
-    let mut w2 = Work::new(phase_id.clone(), "Work 2".into(), "desc".into());
+    let mut w2 = Work::new(phase_id.clone(), "Work 2".into());
     w2.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
@@ -527,17 +527,17 @@ async fn test_check_phase_completion_no_works() {
     let stores = test_stores(&dir);
 
     // Active plan → Active spec → Active phase, but NO works
-    let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+    let mut plan = Plan::new("Test Plan".into(), "criteria".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
@@ -558,33 +558,33 @@ async fn test_check_phase_completion_multiple_phases() {
     let stores = test_stores(&dir);
 
     // Active plan → Active spec → 2 Active phases
-    let mut plan = Plan::new("Test Plan".into(), "desc".into(), "criteria".into());
+    let mut plan = Plan::new("Test Plan".into(), "criteria".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into(), "desc".into());
+    let mut spec = Spec::new(plan_id.clone(), "Test Spec".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
     // Phase 1: all works Done
-    let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     phase1.force_status(HierarchyStatus::Active);
     let phase1_id = phase1.id.clone();
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
-    let mut w1 = Work::new(phase1_id.clone(), "Work 1".into(), "desc".into());
+    let mut w1 = Work::new(phase1_id.clone(), "Work 1".into());
     w1.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(w1.id.clone(), w1);
 
     // Phase 2: one work still InProgress
-    let mut phase2 = Phase::new(spec_id.clone(), "Phase 2".into(), "desc".into(), 2);
+    let mut phase2 = Phase::new(spec_id.clone(), "Phase 2".into(), 2);
     phase2.force_status(HierarchyStatus::Active);
     let phase2_id = phase2.id.clone();
     stores.phases.write().unwrap().insert(phase2_id.clone(), phase2);
 
-    let mut w2 = Work::new(phase2_id.clone(), "Work 2".into(), "desc".into());
+    let mut w2 = Work::new(phase2_id.clone(), "Work 2".into());
     w2.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(w2.id.clone(), w2);
 
@@ -671,17 +671,17 @@ async fn test_check_fsm_transition_planning_to_activate() {
     let stores = test_stores(&dir);
 
     // Create Plan → Spec → Phase hierarchy (all Active)
-    let mut plan = Plan::new("Plan".into(), "desc".into(), "crit".into());
+    let mut plan = Plan::new("Plan".into(), "crit".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id.clone(), "Spec".into(), "desc".into());
+    let mut spec = Spec::new(plan_id.clone(), "Spec".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     phase.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
@@ -698,12 +698,12 @@ async fn test_check_fsm_transition_executing_to_phase_gate() {
     let dir = TestDir::new("loopr-coord-fsm-exec2gate");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // Create a Done work item in the phase
-    let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI 1".into());
     wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -761,12 +761,12 @@ async fn test_build_phase_status_with_works() {
     let dir = TestDir::new("loopr-coord-fsm-phstatus");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
-    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
+    let wi1 = Work::new(phase_id.clone(), "WI 1".into());
+    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into());
     wi2.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
@@ -788,13 +788,13 @@ async fn test_build_phase_status_all_terminal() {
     let dir = TestDir::new("loopr-coord-fsm-allterm");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Done Phase".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Done Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let mut wi1 = Work::new(phase_id.clone(), "WI 1".into());
     wi1.force_status(WorkStatus::Done);
-    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
+    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into());
     wi2.force_status(WorkStatus::Abandoned);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
@@ -828,7 +828,7 @@ async fn test_fsm_planning_stays_when_plan_but_no_spec() {
     let dir = TestDir::new("loopr-fsm-plannospec");
     let stores = test_stores(&dir);
 
-    let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+    let mut plan = Plan::new("P".into(), "c".into());
     plan.force_status(HierarchyStatus::Active);
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
@@ -842,12 +842,12 @@ async fn test_fsm_planning_stays_when_plan_spec_but_no_phases() {
     let dir = TestDir::new("loopr-fsm-plannophase");
     let stores = test_stores(&dir);
 
-    let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+    let mut plan = Plan::new("P".into(), "c".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+    let mut spec = Spec::new(plan_id, "S".into());
     spec.force_status(HierarchyStatus::Active);
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
@@ -862,7 +862,7 @@ async fn test_fsm_planning_stays_when_plan_is_draft() {
     let stores = test_stores(&dir);
 
     // Plan exists but is Draft, not Active
-    let plan = Plan::new("P".into(), "d".into(), "c".into());
+    let plan = Plan::new("P".into(), "c".into());
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
     let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -877,11 +877,11 @@ async fn test_fsm_activate_phase_to_executing_when_wis_exist() {
     let dir = TestDir::new("loopr-fsm-act2exec");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let wi = Work::new(phase_id.clone(), "WI 1".into());
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -913,7 +913,7 @@ async fn test_fsm_activate_phase_stays_when_no_wis() {
     let dir = TestDir::new("loopr-fsm-actnowi");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -933,11 +933,11 @@ async fn test_fsm_executing_stays_when_wis_in_progress() {
     let dir = TestDir::new("loopr-fsm-execwip");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI 1".into());
     wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -954,13 +954,13 @@ async fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
     let dir = TestDir::new("loopr-fsm-execmix");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi1 = Work::new(phase_id.clone(), "WI Done".into(), "desc".into());
+    let mut wi1 = Work::new(phase_id.clone(), "WI Done".into());
     wi1.force_status(WorkStatus::Done);
-    let mut wi2 = Work::new(phase_id.clone(), "WI Abandoned".into(), "desc".into());
+    let mut wi2 = Work::new(phase_id.clone(), "WI Abandoned".into());
     wi2.force_status(WorkStatus::Abandoned);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
@@ -981,13 +981,13 @@ async fn test_fsm_executing_stays_when_partial_done() {
     let dir = TestDir::new("loopr-fsm-execpartial");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi1 = Work::new(phase_id.clone(), "WI Done".into(), "desc".into());
+    let mut wi1 = Work::new(phase_id.clone(), "WI Done".into());
     wi1.force_status(WorkStatus::Done);
-    let mut wi2 = Work::new(phase_id.clone(), "WI Ready".into(), "desc".into());
+    let mut wi2 = Work::new(phase_id.clone(), "WI Ready".into());
     wi2.force_status(WorkStatus::Ready);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
@@ -1005,7 +1005,7 @@ async fn test_fsm_executing_to_phase_gate_on_zero_wis() {
     let dir = TestDir::new("loopr-fsm-exec0wi");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
     // No work items!
@@ -1027,12 +1027,12 @@ async fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
     let dir = TestDir::new("loopr-fsm-exectimeout");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // WI in progress — would normally stay Executing
-    let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI".into());
     wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1058,11 +1058,11 @@ async fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
     let dir = TestDir::new("loopr-fsm-execgoalto");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI".into());
     wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1103,22 +1103,22 @@ async fn test_fsm_phase_gate_to_activate_when_more_phases() {
     let dir = TestDir::new("loopr-fsm-gate2act");
     let stores = test_stores(&dir);
 
-    let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+    let mut plan = Plan::new("P".into(), "c".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+    let mut spec = Spec::new(plan_id, "S".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     phase1.force_status(HierarchyStatus::Active);
     let phase1_id = phase1.id.clone();
     stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
 
-    let mut phase2 = Phase::new(spec_id, "Phase 2".into(), "desc".into(), 2);
+    let mut phase2 = Phase::new(spec_id, "Phase 2".into(), 2);
     phase2.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(phase2.id.clone(), phase2);
 
@@ -1186,12 +1186,12 @@ async fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
     let dir = TestDir::new("loopr-fsm-phtopri");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // All WIs are Done — would normally trigger PhaseGate via WI check
-    let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI".into());
     wi.force_status(WorkStatus::Done);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1217,11 +1217,11 @@ async fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
     let dir = TestDir::new("loopr-fsm-goaltopri");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi = Work::new(phase_id.clone(), "WI".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI".into());
     wi.force_status(WorkStatus::InProgress);
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1251,22 +1251,22 @@ async fn test_find_next_phase_skips_completed() {
     let dir = TestDir::new("loopr-fsm-nextphskip");
     let stores = test_stores(&dir);
 
-    let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+    let mut plan = Plan::new("P".into(), "c".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+    let mut spec = Spec::new(plan_id, "S".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), "d".into(), 1);
+    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     p1.force_status(HierarchyStatus::Active);
     let p1_id = p1.id.clone();
     stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
-    let mut p2 = Phase::new(spec_id, "Phase 2".into(), "d".into(), 2);
+    let mut p2 = Phase::new(spec_id, "Phase 2".into(), 2);
     p2.force_status(HierarchyStatus::Active);
     let p2_id = p2.id.clone();
     stores.phases.write().unwrap().insert(p2_id.clone(), p2);
@@ -1301,22 +1301,22 @@ async fn test_fsm_transition_handler_complete_phase_on_activate() {
     let dir = TestDir::new("loopr-fsm-thcomplete");
     let stores = test_stores(&dir);
 
-    let mut plan = Plan::new("P".into(), "d".into(), "c".into());
+    let mut plan = Plan::new("P".into(), "c".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
-    let mut spec = Spec::new(plan_id, "S".into(), "d".into());
+    let mut spec = Spec::new(plan_id, "S".into());
     spec.force_status(HierarchyStatus::Active);
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), "d".into(), 1);
+    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     p1.force_status(HierarchyStatus::Active);
     let p1_id = p1.id.clone();
     stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
-    let mut p2 = Phase::new(spec_id, "Phase 2".into(), "d".into(), 2);
+    let mut p2 = Phase::new(spec_id, "Phase 2".into(), 2);
     p2.force_status(HierarchyStatus::Active);
     stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
@@ -1347,7 +1347,7 @@ async fn test_mark_phase_record_complete() {
     let dir = TestDir::new("loopr-coord-phasecomplete");
     let stores = test_stores(&dir);
 
-    let mut phase = Phase::new("spec-1".into(), "Test Phase".into(), "desc".into(), 1);
+    let mut phase = Phase::new("spec-1".into(), "Test Phase".into(), 1);
     phase.force_status(HierarchyStatus::Active);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
@@ -1432,11 +1432,11 @@ async fn test_prune_independent_deps_removes_disjoint() {
     let stores = test_stores(&dir);
 
     // Create two works with non-overlapping resource_tags — dep should be pruned
-    let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
+    let mut wi_a = Work::new("phase-1".into(), "Work A".into());
     wi_a.resource_tags = vec!["src/a.rs".into()];
     let a_id = wi_a.id.clone();
 
-    let mut wi_b = Work::new("phase-1".into(), "Work B".into(), "d".into());
+    let mut wi_b = Work::new("phase-1".into(), "Work B".into());
     wi_b.resource_tags = vec!["src/b.rs".into()];
     wi_b.dependencies = vec![a_id.clone()];
     let b_id = wi_b.id.clone();
@@ -1456,11 +1456,11 @@ async fn test_prune_independent_deps_keeps_overlapping() {
     let stores = test_stores(&dir);
 
     // Both works touch src/main.rs — dep should be kept
-    let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
+    let mut wi_a = Work::new("phase-1".into(), "Work A".into());
     wi_a.resource_tags = vec!["src/main.rs".into(), "src/a.rs".into()];
     let a_id = wi_a.id.clone();
 
-    let mut wi_b = Work::new("phase-1".into(), "Work B".into(), "d".into());
+    let mut wi_b = Work::new("phase-1".into(), "Work B".into());
     wi_b.resource_tags = vec!["src/main.rs".into(), "src/b.rs".into()];
     wi_b.dependencies = vec![a_id.clone()];
     let b_id = wi_b.id.clone();
@@ -1480,11 +1480,11 @@ async fn test_prune_independent_deps_keeps_external() {
     let stores = test_stores(&dir);
 
     // wi_b depends on an external work (not in batch) — should be kept regardless
-    let mut wi_a = Work::new("phase-1".into(), "Work A".into(), "d".into());
+    let mut wi_a = Work::new("phase-1".into(), "Work A".into());
     wi_a.resource_tags = vec!["src/a.rs".into()];
     let a_id = wi_a.id.clone();
 
-    let mut wi_b = Work::new("phase-1".into(), "Work B".into(), "d".into());
+    let mut wi_b = Work::new("phase-1".into(), "Work B".into());
     wi_b.resource_tags = vec!["src/b.rs".into()];
     wi_b.dependencies = vec!["wi-external".to_string()];
     let b_id = wi_b.id.clone();
@@ -1518,16 +1518,16 @@ async fn test_build_phase_status_shows_dependencies() {
     let dir = TestDir::new("loopr-coord-depstatus");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi1 = Work::new(phase_id.clone(), "Setup".into(), "d".into());
+    let mut wi1 = Work::new(phase_id.clone(), "Setup".into());
     wi1.force_status(WorkStatus::Done);
     let wi1_id = wi1.id.clone();
     stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
-    let mut wi2 = Work::new(phase_id.clone(), "Build".into(), "d".into());
+    let mut wi2 = Work::new(phase_id.clone(), "Build".into());
     wi2.dependencies = vec![wi1_id.clone()];
     let wi2_id = wi2.id.clone();
     stores.works.write().unwrap().insert(wi2_id.clone(), wi2);
@@ -1545,16 +1545,16 @@ async fn test_build_phase_status_shows_blocked_deps() {
     let dir = TestDir::new("loopr-coord-depblocked");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let wi1 = Work::new(phase_id.clone(), "Setup".into(), "d".into());
+    let wi1 = Work::new(phase_id.clone(), "Setup".into());
     // Default status is Draft, not Done
     let wi1_id = wi1.id.clone();
     stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
 
-    let mut wi2 = Work::new(phase_id.clone(), "Build".into(), "d".into());
+    let mut wi2 = Work::new(phase_id.clone(), "Build".into());
     wi2.dependencies = vec![wi1_id.clone()];
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -1602,11 +1602,11 @@ async fn test_build_phase_status_includes_failure_learnings() {
     let dir = TestDir::new("loopr-coord-learnings");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), "d".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
-    let mut wi1 = Work::new(phase_id.clone(), "Failing WI".into(), "d".into());
+    let mut wi1 = Work::new(phase_id.clone(), "Failing WI".into());
     wi1.force_status(WorkStatus::InProgress);
     let wi1_id = wi1.id.clone();
     stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
@@ -1652,7 +1652,7 @@ async fn test_build_state_summary_includes_recently_merged_bundles() {
     let stores = test_stores(&dir);
 
     // Create a WI in Integrated status (not Done)
-    let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+    let mut wi = Work::new("phase-1".into(), "Test WI".into());
     wi.force_status(WorkStatus::Integrated);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1678,7 +1678,7 @@ async fn test_build_state_summary_excludes_merged_when_wi_done() {
     let stores = test_stores(&dir);
 
     // Create a WI in Done status
-    let mut wi = Work::new("phase-1".into(), "Done WI".into(), "desc".into());
+    let mut wi = Work::new("phase-1".into(), "Done WI".into());
     wi.force_status(WorkStatus::Done);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1704,7 +1704,7 @@ async fn test_build_state_summary_includes_rejected_bundle_with_inreview_work() 
     let stores = test_stores(&dir);
 
     // Create a WI in InReview status
-    let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+    let mut wi = Work::new("phase-1".into(), "Test WI".into());
     wi.force_status(WorkStatus::InReview);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1739,7 +1739,7 @@ async fn test_build_state_summary_rejected_bundle_includes_verification_reason()
     let dir = TestDir::new("loopr-coord-c3-reason");
     let stores = test_stores(&dir);
 
-    let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+    let mut wi = Work::new("phase-1".into(), "Test WI".into());
     wi.force_status(WorkStatus::InReview);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1762,7 +1762,7 @@ async fn test_build_state_summary_rejected_bundle_fallback_reason_when_empty() {
     let dir = TestDir::new("loopr-coord-c3-noverify");
     let stores = test_stores(&dir);
 
-    let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+    let mut wi = Work::new("phase-1".into(), "Test WI".into());
     wi.force_status(WorkStatus::InReview);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1786,7 +1786,7 @@ async fn test_build_state_summary_excludes_rejected_when_work_not_inreview() {
     let stores = test_stores(&dir);
 
     // Work already transitioned back to InProgress
-    let mut wi = Work::new("phase-1".into(), "Test WI".into(), "desc".into());
+    let mut wi = Work::new("phase-1".into(), "Test WI".into());
     wi.force_status(WorkStatus::InProgress);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1810,12 +1810,12 @@ async fn test_sweep_integrated_to_done_transitions_works() {
     let dir = TestDir::new("loopr-coord-sweep-basic");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // Insert a Work directly at Integrated status
-    let mut wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let mut wi = Work::new(phase_id.clone(), "WI 1".into());
     wi.force_status(WorkStatus::Integrated);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1841,12 +1841,12 @@ async fn test_sweep_noop_when_no_integrated_works() {
     let dir = TestDir::new("loopr-coord-sweep-noop");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // Insert a Work at Ready (not Integrated)
-    let wi = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let wi = Work::new(phase_id.clone(), "WI 1".into());
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
@@ -1871,16 +1871,16 @@ async fn test_sweep_then_fsm_advances_to_phase_gate() {
     let dir = TestDir::new("loopr-coord-sweep-fsmadv");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
     // All Works in phase are Integrated — sweep should transition them to Done
-    let mut wi1 = Work::new(phase_id.clone(), "WI 1".into(), "desc".into());
+    let mut wi1 = Work::new(phase_id.clone(), "WI 1".into());
     wi1.force_status(WorkStatus::Integrated);
     stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
-    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into(), "desc".into());
+    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into());
     wi2.force_status(WorkStatus::Integrated);
     stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -1982,7 +1982,7 @@ async fn test_phase_missing_test_tool_no_validation_commands() {
     let dir = TestDir::new("loopr-coord-toolguard-novc");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
 
@@ -1998,7 +1998,7 @@ async fn test_phase_missing_test_tool_warns_when_no_tool() {
     let dir = TestDir::new("loopr-coord-toolguard-warn");
     let stores = test_stores(&dir);
 
-    let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     phase.validation_commands = vec!["cargo test".to_string()];
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);
@@ -2021,7 +2021,7 @@ async fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
     let dir = TestDir::new("loopr-coord-toolguard-ok");
     let stores = test_stores(&dir);
 
-    let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+    let mut phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
     phase.validation_commands = vec!["cargo test".to_string()];
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase_id.clone(), phase);

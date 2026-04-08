@@ -316,9 +316,7 @@ mod tests {
     #[test]
     fn test_draw_with_data() {
         let mut app = App::new();
-        app.state
-            .works
-            .push(Work::new("ph1".into(), "Task 1".into(), "desc".into()));
+        app.state.works.push(Work::new("ph1".into(), "Task 1".into()));
         app.state.bundles.push(Bundle::new(
             "wi1".into(),
             None,
@@ -509,9 +507,7 @@ mod tests {
     fn test_render_content_all_views() {
         // Verify render_content renders without panic for every view, including with data
         let mut app = App::new();
-        app.state
-            .works
-            .push(Work::new("ph1".into(), "WI 1".into(), "desc".into()));
+        app.state.works.push(Work::new("ph1".into(), "WI 1".into()));
         app.state.bundles.push(Bundle::new(
             "wi1".into(),
             None,

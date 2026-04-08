@@ -30,12 +30,6 @@ pub(super) fn handle_plan_create(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let description = req
-            .params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
         let acceptance_criteria: AcceptanceCriteria = req
             .params
             .get("acceptance_criteria")
@@ -67,7 +61,7 @@ pub(super) fn handle_plan_create(
             }
         }
 
-        let plan = Plan::new(title, description, acceptance_criteria);
+        let plan = Plan::new(title, acceptance_criteria);
         let plan_json = match serde_json::to_value(&plan) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -295,9 +289,6 @@ pub(super) fn handle_plan_update(
 
         if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
             plan.title = title.to_string();
-        }
-        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-            plan.description = desc.to_string();
         }
         if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_str()) {
             plan.acceptance_criteria = AcceptanceCriteria::from(criteria);

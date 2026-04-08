@@ -2,7 +2,7 @@ You are evaluating whether a set of Phases fully implements a Spec.
 
 ## Parent Spec
 - Title: {spec_title}
-- Description: {spec_description}
+- Body: {spec_content}
 - Plan context: {plan_title}
 
 ## Generated Phases (in order)

@@ -214,7 +214,6 @@ mod tests {
         assert!(s.researcher.contains("{query}"));
         // Validator templates must contain their placeholders
         assert!(s.validator_plan.contains("{title}"));
-        assert!(s.validator_plan.contains("{description}"));
         assert!(s.validator_plan.contains("{acceptance_criteria}"));
         assert!(s.validator_plan.contains("{schema}"));
         assert!(s.validator_spec.contains("{title}"));
@@ -528,8 +527,17 @@ mod tests {
     #[test]
     fn test_generation_work_prompt_contains_pmt_instructions() {
         init_defaults();
-        let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), "d".into(), 1);
-        let prompt = crate::agents::generation::build_work_prompt(&phase, &[], &[], &[], None, None);
+        let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), 1);
+        let prompt = crate::agents::generation::build_work_prompt(
+            &phase,
+            "",
+            &[],
+            &std::collections::HashMap::new(),
+            &[],
+            &[],
+            None,
+            None,
+        );
         let pmt = &store().generation_work;
         assert!(
             prompt.user_message.contains(pmt.trim()),

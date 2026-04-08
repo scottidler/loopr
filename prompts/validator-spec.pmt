@@ -4,8 +4,8 @@ You are reviewing a Spec document. Your job is to assess whether this document i
 ## Document Under Review
 
 Title: {title}
-Description:
-{description}
+Body:
+{content}
 
 Parent Plan: {plan_title}
 

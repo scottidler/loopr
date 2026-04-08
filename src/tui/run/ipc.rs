@@ -379,7 +379,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_plan = Plan::new("Test Plan".into(), "A test plan".into(), "Criteria".into());
+        let mock_plan = Plan::new("Test Plan".into(), "Criteria".into());
         let plans_json = serde_json::to_value(vec![mock_plan.clone()]).unwrap();
 
         let server = IpcServer::new(&path);
@@ -434,7 +434,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-wi-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_wi = Work::new("ph1".into(), "Task 1".into(), "desc".into());
+        let mock_wi = Work::new("ph1".into(), "Task 1".into());
         let wis_json = serde_json::to_value(vec![mock_wi.clone()]).unwrap();
 
         let server = IpcServer::new(&path);
@@ -703,7 +703,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into(), "Desc".into());
+        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into());
         let specs_json = serde_json::to_value(vec![mock_spec]).unwrap();
 
         let server = IpcServer::new(&path);
@@ -754,7 +754,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-phase-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_phase = Phase::new("spec-1".into(), "Phase 1".into(), "Desc".into(), 1);
+        let mock_phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
         let phases_json = serde_json::to_value(vec![mock_phase]).unwrap();
 
         let server = IpcServer::new(&path);

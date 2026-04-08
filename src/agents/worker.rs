@@ -180,7 +180,7 @@ mod tests {
         };
 
         // Create a Ready work item
-        let mut w = Work::new("phase-1".to_string(), "Test Work".to_string(), String::new());
+        let mut w = Work::new("phase-1".to_string(), "Test Work".to_string());
         w.force_status(WorkStatus::Ready);
         let work_id = w.id.clone();
         stores.works.write().unwrap().insert(work_id.clone(), w);

@@ -47,12 +47,8 @@ mod tests {
     #[test]
     fn test_render_with_items_shows_content() {
         let mut app = App::new();
-        app.state
-            .works
-            .push(Work::new("ph1".into(), "Task 1".into(), "desc".into()));
-        app.state
-            .works
-            .push(Work::new("ph1".into(), "Task 2".into(), "desc".into()));
+        app.state.works.push(Work::new("ph1".into(), "Task 1".into()));
+        app.state.works.push(Work::new("ph1".into(), "Task 2".into()));
 
         let mut terminal = test_terminal(80, 24);
         terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();
@@ -65,9 +61,7 @@ mod tests {
     #[test]
     fn test_render_shows_status() {
         let mut app = App::new();
-        app.state
-            .works
-            .push(Work::new("ph1".into(), "My Work".into(), "desc".into()));
+        app.state.works.push(Work::new("ph1".into(), "My Work".into()));
 
         let mut terminal = test_terminal(80, 24);
         terminal.draw(|frame| render(&app, frame, frame.area())).unwrap();

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use taskstore::record::{IndexValue, Record};
 
 use crate::domain::criteria::AcceptanceCriteria;
-use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso, strip_markdown_section};
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::domain::plan::HierarchyStatus;
 use crate::id;
 
@@ -16,9 +16,6 @@ pub struct Spec {
     pub id: String,
     pub parent_id: String,
     pub title: String,
-    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
-    #[serde(default, skip_serializing)]
-    pub description: String,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
     status: SpecStatus,
@@ -52,14 +49,13 @@ impl Spec {
         self.updated_at = crate::id::now_millis();
     }
 
-    pub fn new(parent_id: String, title: String, description: String) -> Self {
+    pub fn new(parent_id: String, title: String) -> Self {
         tracing::debug!("Spec::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("sp"),
             parent_id,
             title,
-            description,
             acceptance_criteria: AcceptanceCriteria::default(),
             status: HierarchyStatus::Draft,
             created_at: now,
@@ -74,9 +70,9 @@ impl DocMarkdown for Spec {
     }
 
     fn doc_body(&self) -> String {
-        let mut body = strip_markdown_section(&self.description, "Acceptance Criteria");
+        let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("\n\n## Acceptance Criteria\n\n");
+            body.push_str("## Acceptance Criteria\n\n");
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }
@@ -131,14 +127,9 @@ mod tests {
 
     #[test]
     fn test_spec_new() {
-        let spec = Spec::new(
-            "plan-123".to_string(),
-            "Test Spec".to_string(),
-            "A detailed specification".to_string(),
-        );
+        let spec = Spec::new("plan-123".to_string(), "Test Spec".to_string());
         assert_eq!(spec.parent_id, "plan-123");
         assert_eq!(spec.title, "Test Spec");
-        assert_eq!(spec.description, "A detailed specification");
         assert_eq!(spec.status(), HierarchyStatus::Draft);
         assert!(!spec.id.is_empty());
         assert!(spec.created_at > 0);
@@ -147,17 +138,12 @@ mod tests {
 
     #[test]
     fn test_spec_serde_roundtrip() {
-        let spec = Spec::new(
-            "plan-456".to_string(),
-            "Roundtrip Spec".to_string(),
-            "Description".to_string(),
-        );
+        let spec = Spec::new("plan-456".to_string(), "Roundtrip Spec".to_string());
         let json = serde_json::to_string(&spec).unwrap();
         let deserialized: Spec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec.id, deserialized.id);
         assert_eq!(spec.parent_id, deserialized.parent_id);
         assert_eq!(spec.title, deserialized.title);
-        // description is skip_serializing - not part of serde roundtrip
         assert_eq!(spec.status(), deserialized.status());
         assert_eq!(spec.created_at, deserialized.created_at);
         assert_eq!(spec.updated_at, deserialized.updated_at);
@@ -165,15 +151,15 @@ mod tests {
 
     #[test]
     fn test_spec_unique_ids() {
-        let s1 = Spec::new("plan-1".to_string(), "A".to_string(), "".to_string());
-        let s2 = Spec::new("plan-1".to_string(), "B".to_string(), "".to_string());
+        let s1 = Spec::new("plan-1".to_string(), "A".to_string());
+        let s2 = Spec::new("plan-1".to_string(), "B".to_string());
         assert_ne!(s1.id, s2.id);
     }
 
     #[test]
     fn test_spec_preserves_parent_id() {
         let parent_id = "plan-789".to_string();
-        let spec = Spec::new(parent_id.clone(), "Title".to_string(), "Desc".to_string());
+        let spec = Spec::new(parent_id.clone(), "Title".to_string());
         assert_eq!(spec.parent_id, parent_id);
     }
 
@@ -242,13 +228,13 @@ mod tests {
 
     #[test]
     fn test_spec_record_id() {
-        let spec = Spec::new("plan-1".to_string(), "T".to_string(), "D".to_string());
+        let spec = Spec::new("plan-1".to_string(), "T".to_string());
         assert_eq!(Record::id(&spec), spec.id);
     }
 
     #[test]
     fn test_spec_record_updated_at() {
-        let spec = Spec::new("plan-1".to_string(), "T".to_string(), "D".to_string());
+        let spec = Spec::new("plan-1".to_string(), "T".to_string());
         assert_eq!(Record::updated_at(&spec), spec.updated_at);
     }
 
@@ -259,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_spec_record_indexed_fields() {
-        let spec = Spec::new("plan-42".to_string(), "T".to_string(), "D".to_string());
+        let spec = Spec::new("plan-42".to_string(), "T".to_string());
         let fields = spec.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
         assert_eq!(
@@ -271,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_spec_record_roundtrip_via_serde() {
-        let spec = Spec::new("plan-99".to_string(), "RT".to_string(), "Desc".to_string());
+        let spec = Spec::new("plan-99".to_string(), "RT".to_string());
         let json = serde_json::to_string(&spec).unwrap();
         let deserialized: Spec = serde_json::from_str(&json).unwrap();
         assert_eq!(Record::id(&spec), Record::id(&deserialized));

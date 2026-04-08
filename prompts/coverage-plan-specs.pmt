@@ -2,7 +2,7 @@ You are evaluating whether a set of Specs fully covers a Plan.
 
 ## Parent Plan
 - Title: {plan_title}
-- Description: {plan_description}
+- Body: {plan_content}
 - Acceptance Criteria: {plan_acceptance_criteria}
 
 ## Generated Specs

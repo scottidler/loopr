@@ -4,8 +4,8 @@ You are reviewing a Plan document. Your job is to assess whether this document i
 ## Document Under Review
 
 Title: {title}
-Description:
-{description}
+Body:
+{content}
 
 Acceptance Criteria:
 {acceptance_criteria}

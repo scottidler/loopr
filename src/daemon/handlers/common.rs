@@ -234,7 +234,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let plan = Plan::new("Gate Test".into(), "desc".into(), "criteria".into());
+        let plan = Plan::new("Gate Test".into(), "criteria".into());
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -272,7 +272,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let plan = Plan::new("Gate Test".into(), "desc".into(), "criteria".into());
+        let plan = Plan::new("Gate Test".into(), "criteria".into());
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 
@@ -311,7 +311,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
 
-        let plan = Plan::new("No Reports".into(), "desc".into(), "criteria".into());
+        let plan = Plan::new("No Reports".into(), "criteria".into());
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan_id.clone(), plan);
 

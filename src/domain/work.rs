@@ -6,7 +6,7 @@ use taskstore::{IndexValue, Record};
 use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::criteria::AcceptanceCriteria;
-use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso, strip_markdown_section};
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
@@ -53,9 +53,6 @@ pub struct Work {
     pub id: String,
     pub parent_id: String,
     pub title: String,
-    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
-    #[serde(default, skip_serializing)]
-    pub description: String,
     pub assignee: Option<String>,
     status: WorkStatus,
     pub resource_tags: Vec<String>,
@@ -108,14 +105,13 @@ impl Work {
         self.updated_at = id::now_millis();
     }
 
-    pub fn new(parent_id: String, title: String, description: String) -> Self {
+    pub fn new(parent_id: String, title: String) -> Self {
         tracing::debug!("Work::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("wk"),
             parent_id,
             title,
-            description,
             assignee: None,
             status: WorkStatus::Draft,
             resource_tags: Vec::new(),
@@ -134,9 +130,9 @@ impl DocMarkdown for Work {
     }
 
     fn doc_body(&self) -> String {
-        let mut body = strip_markdown_section(&self.description, "Acceptance Criteria");
+        let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("\n\n## Acceptance Criteria\n\n");
+            body.push_str("## Acceptance Criteria\n\n");
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }
@@ -237,14 +233,9 @@ mod tests {
 
     #[test]
     fn test_work_new() {
-        let wi = Work::new(
-            "phase-123".to_string(),
-            "Implement JWT".to_string(),
-            "Add JWT signing".to_string(),
-        );
+        let wi = Work::new("phase-123".to_string(), "Implement JWT".to_string());
         assert_eq!(wi.parent_id, "phase-123");
         assert_eq!(wi.title, "Implement JWT");
-        assert_eq!(wi.description, "Add JWT signing");
         assert_eq!(wi.status(), WorkStatus::Draft);
         assert!(wi.assignee.is_none());
         assert!(wi.resource_tags.is_empty());
@@ -256,11 +247,7 @@ mod tests {
 
     #[test]
     fn test_work_serde_roundtrip() {
-        let mut wi = Work::new(
-            "phase-456".to_string(),
-            "Test WI".to_string(),
-            "Description".to_string(),
-        );
+        let mut wi = Work::new("phase-456".to_string(), "Test WI".to_string());
         wi.assignee = Some("alice".to_string());
         wi.resource_tags = vec!["src/auth.rs".to_string()];
         wi.dependencies = vec!["wi-001".to_string()];
@@ -277,8 +264,8 @@ mod tests {
 
     #[test]
     fn test_work_unique_ids() {
-        let w1 = Work::new("p".to_string(), "A".to_string(), "".to_string());
-        let w2 = Work::new("p".to_string(), "B".to_string(), "".to_string());
+        let w1 = Work::new("p".to_string(), "A".to_string());
+        let w2 = Work::new("p".to_string(), "B".to_string());
         assert_ne!(w1.id, w2.id);
     }
 
@@ -480,13 +467,13 @@ mod tests {
 
     #[test]
     fn test_record_id() {
-        let wi = Work::new("phase-1".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Title".into());
         assert_eq!(Record::id(&wi), wi.id);
     }
 
     #[test]
     fn test_record_updated_at() {
-        let wi = Work::new("phase-1".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Title".into());
         assert_eq!(Record::updated_at(&wi), wi.updated_at);
     }
 
@@ -497,14 +484,14 @@ mod tests {
 
     #[test]
     fn test_record_indexed_fields_status() {
-        let wi = Work::new("phase-1".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Title".into());
         let fields = wi.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("Draft".to_string())));
     }
 
     #[test]
     fn test_record_indexed_fields_parent_id() {
-        let wi = Work::new("phase-abc".into(), "Title".into(), "Desc".into());
+        let wi = Work::new("phase-abc".into(), "Title".into());
         let fields = wi.indexed_fields();
         assert_eq!(
             fields.get("parent_id"),

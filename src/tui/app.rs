@@ -498,9 +498,9 @@ mod tests {
     fn test_app_select_next_with_items() {
         let mut app = App::new();
         app.current_view = View::Works;
-        app.state.works.push(Work::new("ph1".into(), "t1".into(), "d1".into()));
-        app.state.works.push(Work::new("ph1".into(), "t2".into(), "d2".into()));
-        app.state.works.push(Work::new("ph1".into(), "t3".into(), "d3".into()));
+        app.state.works.push(Work::new("ph1".into(), "t1".into()));
+        app.state.works.push(Work::new("ph1".into(), "t2".into()));
+        app.state.works.push(Work::new("ph1".into(), "t3".into()));
 
         assert_eq!(app.selected_index, 0);
         app.select_next();
@@ -541,7 +541,7 @@ mod tests {
         app.current_view = View::Works;
         assert_eq!(app.current_list_len(), 0);
 
-        app.state.works.push(Work::new("ph1".into(), "t1".into(), "d1".into()));
+        app.state.works.push(Work::new("ph1".into(), "t1".into()));
         assert_eq!(app.current_list_len(), 1);
 
         app.current_view = View::Bundles;

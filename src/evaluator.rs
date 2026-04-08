@@ -35,7 +35,7 @@ struct LlmOutOfScopeItem {
 pub struct PhaseWorksParams {
     pub id: String,
     pub title: String,
-    pub description: String,
+    pub content: String,
     pub order: u32,
     pub spec_title: String,
 }
@@ -105,13 +105,8 @@ impl<H: HttpClient> CoverageEvaluator<H> {
         children_ids: Vec<String>,
     ) -> Result<CoverageReport> {
         debug!("CoverageEvaluator::evaluate_phase_works(phase_id={})", phase.id);
-        let prompt = prompts::phase_works_prompt(
-            &phase.title,
-            &phase.description,
-            phase.order,
-            &phase.spec_title,
-            works_list,
-        );
+        let prompt =
+            prompts::phase_works_prompt(&phase.title, &phase.content, phase.order, &phase.spec_title, works_list);
         self.run_evaluation("phases", &phase.id, "works", children_ids, &prompt)
             .await
     }
@@ -358,7 +353,7 @@ mod tests {
         let params = PhaseWorksParams {
             id: "ph-123".into(),
             title: "My Phase".into(),
-            description: "Phase desc".into(),
+            content: "Phase desc".into(),
             order: 1,
             spec_title: "Spec Title".into(),
         };

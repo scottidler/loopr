@@ -4,8 +4,8 @@ You are reviewing a Phase document. Your job is to assess whether this document 
 ## Document Under Review
 
 Title: {title}
-Description:
-{description}
+Body:
+{content}
 
 Order: {order}
 Parent Spec: {spec_title}

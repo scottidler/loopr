@@ -8,6 +8,7 @@ use crate::agents::error::AgentError;
 
 use crate::daemon::context::Stores;
 use crate::domain::learning::{Learning, LearningScope};
+use crate::domain::markdown::read_doc_content_or_empty;
 use crate::domain::role::Role;
 use crate::guidance::AgentGuidance;
 use crate::tools::ToolExecutor;
@@ -333,9 +334,10 @@ impl<'a> ContextBuilder<'a> {
                     })
                 })
                 .collect();
+            let wi_content = read_doc_content_or_empty(&self.stores.config.project.repo_path, &wi.id);
             (
                 wi.title.clone(),
-                wi.description.clone(),
+                wi_content,
                 wi.parent_id.clone(),
                 wi.acceptance_criteria.clone(),
                 wi.resource_tags.clone(),
@@ -351,14 +353,15 @@ impl<'a> ContextBuilder<'a> {
 
         if parent_id.starts_with("pl-") {
             // Brief mode: Work parented directly to a Plan
-            let (plan_title, plan_desc, plan_id_owned) = {
+            let (plan_title, plan_content, plan_id_owned) = {
                 let guard = self.stores.read_plans()?;
                 let plan = guard
                     .get(&parent_id)
                     .ok_or_else(|| eyre!("plan not found: {}", parent_id))?;
-                (plan.title.clone(), plan.description.clone(), plan.id.clone())
+                let content = read_doc_content_or_empty(&self.stores.config.project.repo_path, &plan.id);
+                (plan.title.clone(), content, plan.id.clone())
             };
-            self.plan = Some((plan_title, plan_desc));
+            self.plan = Some((plan_title, plan_content));
             self.plan_id = Some(plan_id_owned.clone());
             self.parent_id = Some(plan_id_owned.clone());
             self.scope_ids = vec![
@@ -367,43 +370,36 @@ impl<'a> ContextBuilder<'a> {
             ];
         } else if parent_id.starts_with("ph-") {
             // Full mode: Work -> Phase -> Spec -> Plan
-            let (ph_title, ph_desc, spec_id, phase_id_owned) = {
+            let (ph_title, ph_content, spec_id, phase_id_owned) = {
                 let guard = self.stores.read_phases()?;
                 let phase = guard
                     .get(&parent_id)
                     .ok_or_else(|| eyre!("phase not found: {}", parent_id))?;
-                (
-                    phase.title.clone(),
-                    phase.description.clone(),
-                    phase.parent_id.clone(),
-                    phase.id.clone(),
-                )
+                let content = read_doc_content_or_empty(&self.stores.config.project.repo_path, &phase.id);
+                (phase.title.clone(), content, phase.parent_id.clone(), phase.id.clone())
             };
 
-            let (spec_title, spec_desc, plan_id, spec_id_owned) = {
+            let (spec_title, spec_content, plan_id, spec_id_owned) = {
                 let guard = self.stores.read_specs()?;
                 let spec = guard
                     .get(&spec_id)
                     .ok_or_else(|| eyre!("spec not found: {}", spec_id))?;
-                (
-                    spec.title.clone(),
-                    spec.description.clone(),
-                    spec.parent_id.clone(),
-                    spec.id.clone(),
-                )
+                let content = read_doc_content_or_empty(&self.stores.config.project.repo_path, &spec.id);
+                (spec.title.clone(), content, spec.parent_id.clone(), spec.id.clone())
             };
 
-            let (plan_title, plan_desc, plan_id_owned) = {
+            let (plan_title, plan_content, plan_id_owned) = {
                 let guard = self.stores.read_plans()?;
                 let plan = guard
                     .get(&plan_id)
                     .ok_or_else(|| eyre!("plan not found: {}", plan_id))?;
-                (plan.title.clone(), plan.description.clone(), plan.id.clone())
+                let content = read_doc_content_or_empty(&self.stores.config.project.repo_path, &plan.id);
+                (plan.title.clone(), content, plan.id.clone())
             };
 
-            self.plan = Some((plan_title, plan_desc));
-            self.spec = Some((spec_title, spec_desc));
-            self.phase = Some((ph_title, ph_desc));
+            self.plan = Some((plan_title, plan_content));
+            self.spec = Some((spec_title, spec_content));
+            self.phase = Some((ph_title, ph_content));
             self.plan_id = Some(plan_id_owned.clone());
             self.spec_id = Some(spec_id_owned.clone());
             self.phase_id = Some(phase_id_owned.clone());

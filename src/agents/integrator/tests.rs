@@ -547,7 +547,7 @@ async fn test_stale_rejection_resets_work_to_ready() {
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     // Create a Work in InReview status (with acceptance_criteria for Ready precondition)
-    let mut wi = Work::new("ph-1".into(), "Task A".into(), "desc".into());
+    let mut wi = Work::new("ph-1".into(), "Task A".into());
     wi.force_status(WorkStatus::InReview);
     wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
     let wi_id = wi.id.clone();
@@ -585,7 +585,7 @@ async fn test_stale_rejection_creates_learning() {
     tick.force_status(TickStatus::Published);
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
-    let mut wi = Work::new("ph-1".into(), "Task B".into(), "desc".into());
+    let mut wi = Work::new("ph-1".into(), "Task B".into());
     wi.force_status(WorkStatus::InReview);
     wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
     let wi_id = wi.id.clone();
@@ -624,7 +624,7 @@ async fn test_stale_rejection_handles_terminal_work() {
     stores.ticks.write().unwrap().insert(tick.id.clone(), tick);
 
     // Create a Work that's already Done (terminal)
-    let mut wi = Work::new("ph-1".into(), "Task C".into(), "desc".into());
+    let mut wi = Work::new("ph-1".into(), "Task C".into());
     wi.force_status(WorkStatus::Done);
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
@@ -1099,13 +1099,13 @@ async fn test_effective_validation_commands_with_phase() {
     let stores = test_stores(&dir);
 
     // Create phase with validation commands
-    let mut phase = Phase::new("spec-1".into(), "P1".into(), "".into(), 1);
+    let mut phase = Phase::new("spec-1".into(), "P1".into(), 1);
     phase.validation_commands = vec!["echo phase".to_string()];
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
     // Create work in that phase
-    let work = Work::new(phase_id, "W1".into(), "".into());
+    let work = Work::new(phase_id, "W1".into());
     let work_id = work.id.clone();
     stores.works.write().unwrap().insert(work.id.clone(), work);
 
@@ -1126,12 +1126,12 @@ async fn test_effective_validation_commands_deduplicates() {
     let dir = TestDir::new("loopr-int-evc-dedup");
     let stores = test_stores(&dir);
 
-    let mut phase = Phase::new("spec-1".into(), "P1".into(), "".into(), 1);
+    let mut phase = Phase::new("spec-1".into(), "P1".into(), 1);
     phase.validation_commands = vec!["echo global".to_string(), "echo phase".to_string()];
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-    let work = Work::new(phase_id, "W1".into(), "".into());
+    let work = Work::new(phase_id, "W1".into());
     let work_id = work.id.clone();
     stores.works.write().unwrap().insert(work.id.clone(), work);
 
@@ -1152,11 +1152,11 @@ async fn test_effective_validation_commands_empty_phase() {
     let dir = TestDir::new("loopr-int-evc-empty");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "P1".into(), "".into(), 1);
+    let phase = Phase::new("spec-1".into(), "P1".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-    let work = Work::new(phase_id, "W1".into(), "".into());
+    let work = Work::new(phase_id, "W1".into());
     let work_id = work.id.clone();
     stores.works.write().unwrap().insert(work.id.clone(), work);
 
@@ -1241,7 +1241,7 @@ async fn test_audit_branches_rejects_bundle_with_missing_branch() {
     let stores = test_stores(&dir);
 
     // Non-terminal bundle whose work_id branch does NOT exist in git
-    let work = Work::new("phase-1".into(), "Test Work".into(), "".into());
+    let work = Work::new("phase-1".into(), "Test Work".into());
     let work_id = work.id.clone();
     stores.works.write().unwrap().insert(work_id.clone(), work);
 
@@ -1271,7 +1271,7 @@ async fn test_run_cycle_returns_idle_when_degraded() {
     stores.degraded.store(true, std::sync::atomic::Ordering::Relaxed);
 
     // Add an Accepted bundle to make cycle want to work
-    let work = Work::new("phase-1".into(), "W".into(), "".into());
+    let work = Work::new("phase-1".into(), "W".into());
     let work_id = work.id.clone();
     stores.works.write().unwrap().insert(work_id.clone(), work);
     let mut bundle = Bundle::new(work_id.clone(), None, format!("agent/{}", work_id), vec![]);

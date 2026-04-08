@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use taskstore::record::{IndexValue, Record};
 
 use crate::domain::criteria::AcceptanceCriteria;
-use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso, strip_markdown_section};
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::domain::plan::HierarchyStatus;
 use crate::id;
 
@@ -16,9 +16,6 @@ pub struct Phase {
     pub id: String,
     pub parent_id: String,
     pub title: String,
-    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
-    #[serde(default, skip_serializing)]
-    pub description: String,
     pub order: u32,
     status: PhaseStatus,
     #[serde(default)]
@@ -56,14 +53,13 @@ impl Phase {
         self.updated_at = crate::id::now_millis();
     }
 
-    pub fn new(parent_id: String, title: String, description: String, order: u32) -> Self {
+    pub fn new(parent_id: String, title: String, order: u32) -> Self {
         tracing::debug!("Phase::new(parent_id={}, title={}, order={})", parent_id, title, order);
         let now = id::now_millis();
         Self {
             id: id::generate_id("ph"),
             parent_id,
             title,
-            description,
             order,
             status: PhaseStatus::Draft,
             acceptance_criteria: AcceptanceCriteria::default(),
@@ -80,9 +76,9 @@ impl DocMarkdown for Phase {
     }
 
     fn doc_body(&self) -> String {
-        let mut body = strip_markdown_section(&self.description, "Acceptance Criteria");
+        let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("\n\n## Acceptance Criteria\n\n");
+            body.push_str("## Acceptance Criteria\n\n");
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }
@@ -138,15 +134,9 @@ mod tests {
 
     #[test]
     fn test_phase_new() {
-        let phase = Phase::new(
-            "spec-123".to_string(),
-            "Token generation".to_string(),
-            "Implement JWT token generation".to_string(),
-            1,
-        );
+        let phase = Phase::new("spec-123".to_string(), "Token generation".to_string(), 1);
         assert_eq!(phase.parent_id, "spec-123");
         assert_eq!(phase.title, "Token generation");
-        assert_eq!(phase.description, "Implement JWT token generation");
         assert_eq!(phase.order, 1);
         assert_eq!(phase.status(), HierarchyStatus::Draft);
         assert!(!phase.id.is_empty());
@@ -156,18 +146,12 @@ mod tests {
 
     #[test]
     fn test_phase_serde_roundtrip() {
-        let phase = Phase::new(
-            "spec-456".to_string(),
-            "Roundtrip Phase".to_string(),
-            "Description".to_string(),
-            2,
-        );
+        let phase = Phase::new("spec-456".to_string(), "Roundtrip Phase".to_string(), 2);
         let json = serde_json::to_string(&phase).unwrap();
         let deserialized: Phase = serde_json::from_str(&json).unwrap();
         assert_eq!(phase.id, deserialized.id);
         assert_eq!(phase.parent_id, deserialized.parent_id);
         assert_eq!(phase.title, deserialized.title);
-        // description is skip_serializing - not part of serde roundtrip
         assert_eq!(phase.order, deserialized.order);
         assert_eq!(phase.status(), deserialized.status());
         assert_eq!(phase.created_at, deserialized.created_at);
@@ -176,21 +160,21 @@ mod tests {
 
     #[test]
     fn test_phase_unique_ids() {
-        let p1 = Phase::new("spec-1".to_string(), "A".to_string(), "".to_string(), 1);
-        let p2 = Phase::new("spec-1".to_string(), "B".to_string(), "".to_string(), 2);
+        let p1 = Phase::new("spec-1".to_string(), "A".to_string(), 1);
+        let p2 = Phase::new("spec-1".to_string(), "B".to_string(), 2);
         assert_ne!(p1.id, p2.id);
     }
 
     #[test]
     fn test_phase_preserves_parent_id() {
         let parent_id = "spec-789".to_string();
-        let phase = Phase::new(parent_id.clone(), "Title".to_string(), "Desc".to_string(), 0);
+        let phase = Phase::new(parent_id.clone(), "Title".to_string(), 0);
         assert_eq!(phase.parent_id, parent_id);
     }
 
     #[test]
     fn test_phase_order_preserved() {
-        let phase = Phase::new("spec-1".to_string(), "T".to_string(), "D".to_string(), 42);
+        let phase = Phase::new("spec-1".to_string(), "T".to_string(), 42);
         assert_eq!(phase.order, 42);
     }
 
@@ -250,13 +234,13 @@ mod tests {
 
     #[test]
     fn test_phase_record_id() {
-        let phase = Phase::new("spec-1".into(), "T".into(), "D".into(), 1);
+        let phase = Phase::new("spec-1".into(), "T".into(), 1);
         assert_eq!(Record::id(&phase), phase.id);
     }
 
     #[test]
     fn test_phase_record_updated_at() {
-        let phase = Phase::new("spec-1".into(), "T".into(), "D".into(), 1);
+        let phase = Phase::new("spec-1".into(), "T".into(), 1);
         assert_eq!(Record::updated_at(&phase), phase.updated_at);
     }
 
@@ -267,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_phase_record_indexed_fields() {
-        let phase = Phase::new("spec-42".into(), "T".into(), "D".into(), 1);
+        let phase = Phase::new("spec-42".into(), "T".into(), 1);
         let fields = phase.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
         assert_eq!(
@@ -279,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_phase_record_serde_roundtrip() {
-        let phase = Phase::new("spec-rt".into(), "Roundtrip".into(), "D".into(), 3);
+        let phase = Phase::new("spec-rt".into(), "Roundtrip".into(), 3);
         let json = serde_json::to_string(&phase).unwrap();
         let restored: Phase = serde_json::from_str(&json).unwrap();
         assert_eq!(Record::id(&restored), Record::id(&phase));

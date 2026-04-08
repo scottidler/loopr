@@ -500,19 +500,19 @@ fn setup_stores(dir: &std::path::Path) -> (Stores, String) {
     stores.store = Some(Arc::new(StdMutex::new(store)));
     stores.config = config;
 
-    let plan = Plan::new("Test Plan".into(), "A test plan".into(), "criteria".into());
+    let plan = Plan::new("Test Plan".into(), "criteria".into());
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-    let spec = Spec::new(plan_id, "Test Spec".into(), "A test spec".into());
+    let spec = Spec::new(plan_id, "Test Spec".into());
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-    let phase = Phase::new(spec_id, "Test Phase".into(), "A test phase".into(), 1);
+    let phase = Phase::new(spec_id, "Test Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-    let wi = Work::new(phase_id.clone(), "Test Work".into(), "Implement the feature".into());
+    let wi = Work::new(phase_id.clone(), "Test Work".into());
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1020,27 +1020,27 @@ fn setup_stores_with_enrichment(dir: &std::path::Path) -> (Stores, String, Strin
     stores.store = Some(Arc::new(StdMutex::new(store)));
     stores.config = config;
 
-    let plan = Plan::new("Test Plan".into(), "A plan".into(), "criteria".into());
+    let plan = Plan::new("Test Plan".into(), "criteria".into());
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-    let spec = Spec::new(plan_id, "Test Spec".into(), "A spec".into());
+    let spec = Spec::new(plan_id, "Test Spec".into());
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-    let phase = Phase::new(spec_id, "Test Phase".into(), "A phase".into(), 1);
+    let phase = Phase::new(spec_id, "Test Phase".into(), 1);
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
     // Dependency work (already done)
-    let mut dep_work = Work::new(phase_id.clone(), "Create model".into(), "Create the data model".into());
+    let mut dep_work = Work::new(phase_id.clone(), "Create model".into());
     dep_work.resource_tags = vec!["src/model.rs".into()];
     dep_work.force_status(crate::domain::work::WorkStatus::Done);
     let dep_id = dep_work.id.clone();
     stores.works.write().unwrap().insert(dep_work.id.clone(), dep_work);
 
     // Main work (depends on dep_work)
-    let mut wi = Work::new(phase_id, "Write tests".into(), "Write tests for the model".into());
+    let mut wi = Work::new(phase_id, "Write tests".into());
     wi.resource_tags = vec!["tests/model.rs".into()];
     wi.acceptance_criteria =
         crate::domain::criteria::AcceptanceCriteria(vec!["All tests pass".into(), "Coverage above 80%".into()]);
@@ -1128,12 +1128,12 @@ fn setup_stores_brief(dir: &std::path::Path) -> (Stores, String) {
     stores.store = Some(Arc::new(StdMutex::new(store)));
     stores.config = config;
 
-    let plan = Plan::new("Brief Plan".into(), "A brief plan".into(), "criteria".into());
+    let plan = Plan::new("Brief Plan".into(), "criteria".into());
     let plan_id = plan.id.clone();
     stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
     // Work parented directly to the Plan (Brief mode - no Phase or Spec)
-    let wi = Work::new(plan_id.clone(), "Brief Work".into(), "Do the thing".into());
+    let wi = Work::new(plan_id.clone(), "Brief Work".into());
     let wi_id = wi.id.clone();
     stores.works.write().unwrap().insert(wi.id.clone(), wi);
 

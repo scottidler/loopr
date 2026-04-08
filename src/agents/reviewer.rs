@@ -416,19 +416,19 @@ mod tests {
         stores.store = Some(Arc::new(StdMutex::new(store)));
         stores.config = config;
 
-        let plan = Plan::new("Test Plan".into(), "A test plan".into(), "criteria".into());
+        let plan = Plan::new("Test Plan".into(), "criteria".into());
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-        let spec = Spec::new(plan_id, "Test Spec".into(), "A test spec".into());
+        let spec = Spec::new(plan_id, "Test Spec".into());
         let spec_id = spec.id.clone();
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-        let phase = Phase::new(spec_id, "Test Phase".into(), "A test phase".into(), 1);
+        let phase = Phase::new(spec_id, "Test Phase".into(), 1);
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 
-        let wi = Work::new(phase_id.clone(), "Test Work".into(), "Implement the feature".into());
+        let wi = Work::new(phase_id.clone(), "Test Work".into());
         let wi_id = wi.id.clone();
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 

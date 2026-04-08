@@ -491,10 +491,10 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         // Insert a plan
-        let plan = Plan::new("Test".into(), "".into(), "".into());
+        let plan = Plan::new("Test".into(), "".into());
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
         // Insert a work item
-        let wi = Work::new("p-1".into(), "WI".into(), "".into());
+        let wi = Work::new("p-1".into(), "WI".into());
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let req = DaemonRequest::new(1, "system.status", json!(null));
@@ -513,7 +513,7 @@ pub(crate) mod tests {
         let wm = test_worktree_mgr();
 
         // Create a plan via TaskStore directly
-        let plan = Plan::new("TS Plan".into(), "".into(), "".into());
+        let plan = Plan::new("TS Plan".into(), "".into());
         stores
             .store
             .as_ref()
@@ -524,7 +524,7 @@ pub(crate) mod tests {
             .unwrap();
 
         // Create a spec via TaskStore directly
-        let spec = Spec::new(plan.id.clone(), "TS Spec".into(), "".into());
+        let spec = Spec::new(plan.id.clone(), "TS Spec".into());
         stores.store.as_ref().unwrap().lock().unwrap().create(spec).unwrap();
 
         let req = DaemonRequest::new(1, "system.status", json!(null));

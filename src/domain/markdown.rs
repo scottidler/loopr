@@ -87,6 +87,16 @@ pub fn read_doc_content(repo_path: &Path, id: &str) -> Result<String> {
     read_body_from_path(&path)
 }
 
+/// Like [`read_doc_content`] but returns an empty string on failure instead of
+/// propagating the error. Logs a warning so missing files are visible in logs.
+/// All non-test callsites should prefer this over raw `read_doc_content()`.
+pub fn read_doc_content_or_empty(repo_path: &Path, id: &str) -> String {
+    read_doc_content(repo_path, id).unwrap_or_else(|e| {
+        tracing::warn!("read_doc_content failed for {}: {}", id, e);
+        String::new()
+    })
+}
+
 fn read_body_from_path(path: &Path) -> Result<String> {
     let raw = fs::read_to_string(path).map_err(|e| eyre::eyre!("read_doc_content: {}: {}", path.display(), e))?;
     Ok(extract_body_from_markdown(&raw))

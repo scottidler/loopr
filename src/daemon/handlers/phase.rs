@@ -60,12 +60,6 @@ pub(super) fn handle_phase_create(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let description = req
-            .params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
         let order = req.params.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
         if title.is_empty() {
@@ -91,7 +85,7 @@ pub(super) fn handle_phase_create(
             }
         }
 
-        let phase = Phase::new(parent_id, title, description, order);
+        let phase = Phase::new(parent_id, title, order);
         let phase_json = match serde_json::to_value(&phase) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -334,9 +328,6 @@ pub(super) fn handle_phase_update(
 
         if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
             phase.title = title.to_string();
-        }
-        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-            phase.description = desc.to_string();
         }
         if let Some(order) = req.params.get("order").and_then(|v| v.as_u64()) {
             phase.order = order as u32;

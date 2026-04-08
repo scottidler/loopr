@@ -6,7 +6,7 @@ use taskstore::record::{IndexValue, Record};
 use loopr_derive::{FlexibleEnum, Fsm};
 
 use crate::domain::criteria::AcceptanceCriteria;
-use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso, strip_markdown_section};
+use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
 
 /// Shared status enum for Plan, Spec, and Phase records.
@@ -70,9 +70,6 @@ impl fmt::Display for Tier {
 pub struct Plan {
     pub id: String,
     pub title: String,
-    /// Full markdown body. Not serialized - content lives in docs/loopr/<id>.md.
-    #[serde(default, skip_serializing)]
-    pub description: String,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
     status: PlanStatus,
@@ -108,13 +105,12 @@ impl Plan {
         self.updated_at = id::now_millis();
     }
 
-    pub fn new(title: String, description: String, acceptance_criteria: AcceptanceCriteria) -> Self {
+    pub fn new(title: String, acceptance_criteria: AcceptanceCriteria) -> Self {
         tracing::debug!("Plan::new(title={})", title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("pl"),
             title,
-            description,
             acceptance_criteria,
             status: HierarchyStatus::Draft,
             tier: Tier::default(),
@@ -130,9 +126,9 @@ impl DocMarkdown for Plan {
     }
 
     fn doc_body(&self) -> String {
-        let mut body = strip_markdown_section(&self.description, "Acceptance Criteria");
+        let mut body = String::new();
         if !self.acceptance_criteria.is_empty() {
-            body.push_str("\n\n## Acceptance Criteria\n\n");
+            body.push_str("## Acceptance Criteria\n\n");
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
             }
@@ -338,9 +334,8 @@ mod tests {
     #[test]
     fn test_plan_new() {
         let ac = AcceptanceCriteria(vec!["It works".to_string()]);
-        let plan = Plan::new("Test Plan".to_string(), "A test plan".to_string(), ac);
+        let plan = Plan::new("Test Plan".to_string(), ac);
         assert_eq!(plan.title, "Test Plan");
-        assert_eq!(plan.description, "A test plan");
         assert_eq!(plan.acceptance_criteria.0, vec!["It works".to_string()]);
         assert_eq!(plan.status(), HierarchyStatus::Draft);
         assert!(!plan.id.is_empty());
@@ -350,11 +345,7 @@ mod tests {
 
     #[test]
     fn test_plan_serde_roundtrip() {
-        let plan = Plan::new(
-            "Test Plan".to_string(),
-            "Description".to_string(),
-            AcceptanceCriteria::default(),
-        );
+        let plan = Plan::new("Test Plan".to_string(), AcceptanceCriteria::default());
         let json = serde_json::to_string(&plan).unwrap();
         let deserialized: Plan = serde_json::from_str(&json).unwrap();
         assert_eq!(plan.id, deserialized.id);
@@ -365,8 +356,8 @@ mod tests {
 
     #[test]
     fn test_plan_unique_ids() {
-        let p1 = Plan::new("A".to_string(), "".to_string(), AcceptanceCriteria::default());
-        let p2 = Plan::new("B".to_string(), "".to_string(), AcceptanceCriteria::default());
+        let p1 = Plan::new("A".to_string(), AcceptanceCriteria::default());
+        let p2 = Plan::new("B".to_string(), AcceptanceCriteria::default());
         assert_ne!(p1.id, p2.id);
     }
 
@@ -374,13 +365,13 @@ mod tests {
 
     #[test]
     fn test_plan_record_id() {
-        let plan = Plan::new("Test".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
+        let plan = Plan::new("Test".to_string(), AcceptanceCriteria::default());
         assert_eq!(Record::id(&plan), plan.id.as_str());
     }
 
     #[test]
     fn test_plan_record_updated_at() {
-        let plan = Plan::new("Test".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
+        let plan = Plan::new("Test".to_string(), AcceptanceCriteria::default());
         assert_eq!(Record::updated_at(&plan), plan.updated_at);
     }
 
@@ -391,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_plan_record_indexed_fields() {
-        let plan = Plan::new("Test".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
+        let plan = Plan::new("Test".to_string(), AcceptanceCriteria::default());
         let fields = plan.indexed_fields();
         assert_eq!(fields.len(), 2);
         assert_eq!(
@@ -406,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_plan_record_roundtrip_json() {
-        let plan = Plan::new("RT".to_string(), "Desc".to_string(), AcceptanceCriteria::default());
+        let plan = Plan::new("RT".to_string(), AcceptanceCriteria::default());
         let json = serde_json::to_string(&plan).unwrap();
         let restored: Plan = serde_json::from_str(&json).unwrap();
         assert_eq!(Record::id(&restored), Record::id(&plan));
@@ -418,21 +409,21 @@ mod tests {
 
     #[test]
     fn test_plan_doc_id() {
-        let plan = Plan::new("T".into(), "D".into(), AcceptanceCriteria::default());
+        let plan = Plan::new("T".into(), AcceptanceCriteria::default());
         assert_eq!(plan.doc_id(), plan.id.as_str());
     }
 
     #[test]
     fn test_plan_doc_body_no_ac() {
-        let plan = Plan::new("T".into(), "My description".into(), AcceptanceCriteria::default());
+        let plan = Plan::new("T".into(), AcceptanceCriteria::default());
         let body = plan.doc_body();
-        assert_eq!(body, "My description");
+        assert_eq!(body, "");
     }
 
     #[test]
     fn test_plan_doc_body_with_ac() {
         let ac = AcceptanceCriteria(vec!["Tests pass".to_string()]);
-        let plan = Plan::new("T".into(), "Desc".into(), ac);
+        let plan = Plan::new("T".into(), ac);
         let body = plan.doc_body();
         assert!(body.contains("## Acceptance Criteria"));
         assert!(body.contains("- [ ] Tests pass"));
@@ -440,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_plan_doc_frontmatter_keys() {
-        let plan = Plan::new("My Plan".into(), "D".into(), AcceptanceCriteria::default());
+        let plan = Plan::new("My Plan".into(), AcceptanceCriteria::default());
         let fm = plan.doc_frontmatter();
         let keys: Vec<&str> = fm.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"id"));
@@ -454,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_plan_doc_frontmatter_id_first() {
-        let plan = Plan::new("T".into(), "D".into(), AcceptanceCriteria::default());
+        let plan = Plan::new("T".into(), AcceptanceCriteria::default());
         let fm = plan.doc_frontmatter();
         assert_eq!(fm[0].0, "id", "id must be the first frontmatter key");
     }

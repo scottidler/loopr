@@ -2,7 +2,7 @@ You are evaluating whether a set of Works fully implements a Phase.
 
 ## Parent Phase
 - Title: {phase_title}
-- Description: {phase_description}
+- Body: {phase_content}
 - Order: {phase_order}
 - Spec context: {spec_title}
 

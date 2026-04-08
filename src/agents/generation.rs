@@ -1,7 +1,9 @@
-//! Document generation prompts for the Coordinator's Plan → Spec → Phase → Work pipeline.
+//! Document generation prompts for the Coordinator's Plan -> Spec -> Phase -> Work pipeline.
 //!
 //! The generation engine was purged in the purge-generation-engine refactor (2026-04-04).
 //! Only build_work_prompt and the live query helpers remain.
+
+use std::collections::HashMap;
 
 use crate::daemon::context::Stores;
 use crate::domain::phase::Phase;
@@ -47,7 +49,9 @@ pub struct GenerationPrompt {
 /// - Codebase context (researcher findings about affected modules)
 pub fn build_work_prompt(
     phase: &Phase,
+    phase_content: &str,
     existing_works: &[Work],
+    work_contents: &HashMap<String, String>,
     learnings: &[String],
     findings: &[String],
     plan_description: Option<&str>,
@@ -77,7 +81,8 @@ pub fn build_work_prompt(
     msg.push_str(&format!("- **Spec ID:** {}\n", phase.parent_id));
     msg.push_str(&format!("- **Title:** {}\n", phase.title));
     msg.push_str(&format!("- **Order:** {}\n", phase.order));
-    msg.push_str(&format!("- **Description:** {}\n\n", phase.description));
+    // TODO: post-migration - rethink how doc body content is presented in prompts
+    msg.push_str(&format!("- **Body:** {}\n\n", phase_content));
 
     if let Some(guidance) = guidance_section {
         msg.push_str(guidance);
@@ -93,13 +98,14 @@ pub fn build_work_prompt(
             } else {
                 format!("deps: {}", wi.dependencies.join(", "))
             };
+            let wi_content = work_contents.get(&wi.id).map(String::as_str).unwrap_or("");
             msg.push_str(&format!(
                 "- ID: {} | Title: \"{}\" | Status: {} | {} — {}\n",
                 wi.id,
                 wi.title,
                 wi.status(),
                 deps,
-                wi.description
+                wi_content
             ));
         }
         msg.push_str("\nWhen declaring `dependencies`, use the exact IDs above.\n\n");
@@ -224,7 +230,7 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fap-some");
         let stores = test_stores(&dir);
 
-        let mut plan = Plan::new("Active".into(), "desc".into(), "crit".into());
+        let mut plan = Plan::new("Active".into(), "crit".into());
         plan.force_status(HierarchyStatus::Active);
         stores.plans.write().unwrap().insert(plan.id.clone(), plan.clone());
 
@@ -237,7 +243,7 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fap-skip");
         let stores = test_stores(&dir);
 
-        let plan = Plan::new("Draft".into(), "desc".into(), "crit".into());
+        let plan = Plan::new("Draft".into(), "crit".into());
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
         assert!(find_active_plan(&stores).is_none());
@@ -248,14 +254,14 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fasp");
         let stores = test_stores(&dir);
 
-        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into(), "desc".into());
+        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into());
         spec1.force_status(HierarchyStatus::Active);
         stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
 
-        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into(), "desc".into());
+        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into());
         stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
 
-        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into(), "desc".into());
+        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into());
         spec3.force_status(HierarchyStatus::Active);
         stores.specs.write().unwrap().insert(spec3.id.clone(), spec3);
 
@@ -269,11 +275,11 @@ mod tests {
         let dir = TestDir::new("loopr-gen-faps");
         let stores = test_stores(&dir);
 
-        let mut p2 = Phase::new("spec-1".into(), "Phase 2".into(), "desc".into(), 2);
+        let mut p2 = Phase::new("spec-1".into(), "Phase 2".into(), 2);
         p2.force_status(HierarchyStatus::Active);
         stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
-        let mut p1 = Phase::new("spec-1".into(), "Phase 1".into(), "desc".into(), 1);
+        let mut p1 = Phase::new("spec-1".into(), "Phase 1".into(), 1);
         p1.force_status(HierarchyStatus::Active);
         stores.phases.write().unwrap().insert(p1.id.clone(), p1);
 
@@ -288,9 +294,9 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fwip");
         let stores = test_stores(&dir);
 
-        let wi1 = Work::new("phase-1".into(), "WI 1".into(), "desc".into());
-        let wi2 = Work::new("phase-1".into(), "WI 2".into(), "desc".into());
-        let wi3 = Work::new("phase-2".into(), "WI 3".into(), "desc".into());
+        let wi1 = Work::new("phase-1".into(), "WI 1".into());
+        let wi2 = Work::new("phase-1".into(), "WI 2".into());
+        let wi3 = Work::new("phase-2".into(), "WI 3".into());
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
         stores.works.write().unwrap().insert(wi3.id.clone(), wi3);
@@ -304,12 +310,12 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fwip-ord");
         let stores = test_stores(&dir);
 
-        let mut wi1 = Work::new("phase-x".into(), "WI A".into(), "desc a".into());
+        let mut wi1 = Work::new("phase-x".into(), "WI A".into());
         wi1.force_status(WorkStatus::Done);
-        let mut wi2 = Work::new("phase-x".into(), "WI B".into(), "desc b".into());
+        let mut wi2 = Work::new("phase-x".into(), "WI B".into());
         wi2.force_status(WorkStatus::InProgress);
-        let wi3 = Work::new("phase-x".into(), "WI C".into(), "desc c".into());
-        let wi_other = Work::new("phase-y".into(), "WI Other".into(), "not this phase".into());
+        let wi3 = Work::new("phase-x".into(), "WI C".into());
+        let wi_other = Work::new("phase-y".into(), "WI Other".into());
 
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
@@ -326,7 +332,7 @@ mod tests {
         let dir = TestDir::new("loopr-gen-ipc-true");
         let stores = test_stores(&dir);
 
-        let mut wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
+        let mut wi = Work::new("phase-1".into(), "WI".into());
         wi.force_status(WorkStatus::Done);
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -338,7 +344,7 @@ mod tests {
         let dir = TestDir::new("loopr-gen-ipc-false");
         let stores = test_stores(&dir);
 
-        let wi = Work::new("phase-1".into(), "WI".into(), "desc".into());
+        let wi = Work::new("phase-1".into(), "WI".into());
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
@@ -357,11 +363,11 @@ mod tests {
         let dir = TestDir::new("loopr-gen-ipc-aband");
         let stores = test_stores(&dir);
 
-        let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into());
         wi1.force_status(WorkStatus::Done);
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
-        let mut wi2 = Work::new("phase-1".into(), "WI Abandoned".into(), "desc".into());
+        let mut wi2 = Work::new("phase-1".into(), "WI Abandoned".into());
         wi2.force_status(WorkStatus::Abandoned);
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
@@ -373,11 +379,11 @@ mod tests {
         let dir = TestDir::new("loopr-gen-ipc-mixed");
         let stores = test_stores(&dir);
 
-        let mut wi1 = Work::new("phase-1".into(), "WI Done".into(), "desc".into());
+        let mut wi1 = Work::new("phase-1".into(), "WI Done".into());
         wi1.force_status(WorkStatus::Done);
         stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
 
-        let wi2 = Work::new("phase-1".into(), "WI InProgress".into(), "desc".into());
+        let wi2 = Work::new("phase-1".into(), "WI InProgress".into());
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         assert!(!is_phase_complete(&stores, "phase-1"));

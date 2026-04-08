@@ -882,7 +882,7 @@ fn records_to_hierarchy(
     // We still need a set of known IDs for Work dependency resolution.
     let known_ids: std::collections::HashSet<&str> = all_records.iter().map(|r| r.id.as_str()).collect();
 
-    let mut plan = Plan::new(plan_title.to_string(), plan_markdown.to_string(), plan_ac);
+    let mut plan = Plan::new(plan_title.to_string(), plan_ac);
     plan.id = plan_id.to_string();
     plan.force_status(PlanStatus::Active);
 
@@ -908,7 +908,7 @@ fn records_to_hierarchy(
 
         match child.kind {
             DocKind::Spec => {
-                let mut spec = Spec::new(parent_id, child.title.clone(), child.content.clone());
+                let mut spec = Spec::new(parent_id, child.title.clone());
                 spec.id = child.id.clone();
                 spec.force_status(SpecStatus::Active);
                 spec.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
@@ -918,14 +918,14 @@ fn records_to_hierarchy(
                 let order = phase_counters.entry(parent_id.clone()).or_insert(0);
                 let current_order = *order;
                 *order += 1;
-                let mut phase = Phase::new(parent_id, child.title.clone(), child.content.clone(), current_order);
+                let mut phase = Phase::new(parent_id, child.title.clone(), current_order);
                 phase.id = child.id.clone();
                 phase.force_status(PhaseStatus::Active);
                 phase.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
                 phases.push(phase);
             }
             DocKind::Work => {
-                let mut work = Work::new(parent_id, child.title.clone(), child.content.clone());
+                let mut work = Work::new(parent_id, child.title.clone());
                 work.id = child.id.clone();
                 work.force_status(WorkStatus::Ready);
                 work.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
@@ -1845,7 +1845,11 @@ mod tests {
         let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
 
         assert_eq!(h.plan.title, "Test Plan");
-        assert_eq!(h.plan.description, plan_markdown);
+        // description removed from struct; content lives in hierarchy.content map
+        assert_eq!(
+            h.content.get(&plan_id).map(String::as_str),
+            Some(plan_markdown.as_str())
+        );
         assert_eq!(h.specs.len(), 1);
         assert_eq!(h.phases.len(), 1);
         assert_eq!(h.works.len(), 1);

@@ -60,12 +60,6 @@ pub(super) fn handle_spec_create(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let description = req
-            .params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
 
         if title.is_empty() {
             return Ok(DaemonResponse::err(
@@ -90,7 +84,7 @@ pub(super) fn handle_spec_create(
             }
         }
 
-        let spec = Spec::new(parent_id, title, description);
+        let spec = Spec::new(parent_id, title);
         let spec_json = match serde_json::to_value(&spec) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -333,9 +327,6 @@ pub(super) fn handle_spec_update(
 
         if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
             spec.title = title.to_string();
-        }
-        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-            spec.description = desc.to_string();
         }
         spec.updated_at = crate::id::now_millis();
 

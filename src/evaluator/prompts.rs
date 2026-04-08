@@ -1,36 +1,36 @@
 //! Coverage evaluation prompt templates for each decomposition boundary.
 
-/// Build a coverage evaluation prompt for Plan → Specs.
+/// Build a coverage evaluation prompt for Plan -> Specs.
 pub fn plan_specs_prompt(
     plan_title: &str,
-    plan_description: &str,
+    plan_content: &str,
     plan_acceptance_criteria: &str,
     specs_list: &str,
 ) -> String {
     crate::prompts::store()
         .coverage_plan_specs
         .replace("{plan_title}", plan_title)
-        .replace("{plan_description}", plan_description)
+        .replace("{plan_content}", plan_content)
         .replace("{plan_acceptance_criteria}", plan_acceptance_criteria)
         .replace("{specs_list}", specs_list)
         .replace("{schema}", &crate::prompts::store().coverage_schema)
 }
 
-/// Build a coverage evaluation prompt for Spec → Phases.
-pub fn spec_phases_prompt(spec_title: &str, spec_description: &str, plan_title: &str, phases_list: &str) -> String {
+/// Build a coverage evaluation prompt for Spec -> Phases.
+pub fn spec_phases_prompt(spec_title: &str, spec_content: &str, plan_title: &str, phases_list: &str) -> String {
     crate::prompts::store()
         .coverage_spec_phases
         .replace("{spec_title}", spec_title)
-        .replace("{spec_description}", spec_description)
+        .replace("{spec_content}", spec_content)
         .replace("{plan_title}", plan_title)
         .replace("{phases_list}", phases_list)
         .replace("{schema}", &crate::prompts::store().coverage_schema)
 }
 
-/// Build a coverage evaluation prompt for Phase → Works.
+/// Build a coverage evaluation prompt for Phase -> Works.
 pub fn phase_works_prompt(
     phase_title: &str,
-    phase_description: &str,
+    phase_content: &str,
     phase_order: u32,
     spec_title: &str,
     works_list: &str,
@@ -38,7 +38,7 @@ pub fn phase_works_prompt(
     crate::prompts::store()
         .coverage_phase_works
         .replace("{phase_title}", phase_title)
-        .replace("{phase_description}", phase_description)
+        .replace("{phase_content}", phase_content)
         .replace("{phase_order}", &phase_order.to_string())
         .replace("{spec_title}", spec_title)
         .replace("{works_list}", works_list)

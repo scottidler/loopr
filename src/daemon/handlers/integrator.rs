@@ -8,6 +8,7 @@ use tracing::{debug, instrument};
 
 use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;
+use crate::domain::markdown::read_doc_content_or_empty;
 use crate::domain::tick::TickStatus;
 use crate::domain::validation::ValidationReport;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -304,8 +305,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                     }
                 };
                 let ac_str = plan.acceptance_criteria.0.join("\n");
+                let plan_content = read_doc_content_or_empty(&stores.config.project.repo_path, &plan.id);
                 validator
-                    .validate_plan(&target_id, &plan.title, &plan.description, &ac_str)
+                    .validate_plan(&target_id, &plan.title, &plan_content, &ac_str)
                     .await
             }
             "spec" | "specs" => {
@@ -324,8 +326,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         .unwrap_or_default();
                     (spec, plan_title)
                 };
+                let spec_content = read_doc_content_or_empty(&stores.config.project.repo_path, &spec.id);
                 validator
-                    .validate_spec(&target_id, &spec.title, &spec.description, &plan_title)
+                    .validate_spec(&target_id, &spec.title, &spec_content, &plan_title)
                     .await
             }
             "phase" | "phases" => {
@@ -344,8 +347,9 @@ pub(super) async fn handle_validator_validate(stores: &Arc<Stores>, req: DaemonR
                         .unwrap_or_default();
                     (phase, spec_title)
                 };
+                let phase_content = read_doc_content_or_empty(&stores.config.project.repo_path, &phase.id);
                 validator
-                    .validate_phase(&target_id, &phase.title, &phase.description, phase.order, &spec_title)
+                    .validate_phase(&target_id, &phase.title, &phase_content, phase.order, &spec_title)
                     .await
             }
             _ => {
@@ -423,19 +427,28 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                     let specs = stores.read_specs()?;
                     let child_specs: Vec<_> = specs.values().filter(|s| s.parent_id == parent_id).collect();
                     let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
+                    let repo_path = &stores.config.project.repo_path;
                     let specs_list = child_specs
                         .iter()
-                        .map(|s| format!("- [{}] {}: {}", s.id, s.title, s.description))
+                        .map(|s| {
+                            format!(
+                                "- [{}] {}: {}",
+                                s.id,
+                                s.title,
+                                read_doc_content_or_empty(repo_path, &s.id)
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
                     (plan, specs_list, children_ids)
                 };
                 let ac_str = plan.acceptance_criteria.0.join("\n");
+                let plan_content = read_doc_content_or_empty(&stores.config.project.repo_path, &plan.id);
                 evaluator
                     .evaluate_plan_specs(
                         &parent_id,
                         &plan.title,
-                        &plan.description,
+                        &plan_content,
                         &ac_str,
                         &specs_list,
                         children_ids,
@@ -459,18 +472,28 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                     let phases = stores.read_phases()?;
                     let child_phases: Vec<_> = phases.values().filter(|p| p.parent_id == parent_id).collect();
                     let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
+                    let repo_path = &stores.config.project.repo_path;
                     let phases_list = child_phases
                         .iter()
-                        .map(|p| format!("- [{}] {} (order: {}): {}", p.id, p.title, p.order, p.description))
+                        .map(|p| {
+                            format!(
+                                "- [{}] {} (order: {}): {}",
+                                p.id,
+                                p.title,
+                                p.order,
+                                read_doc_content_or_empty(repo_path, &p.id)
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
                     (spec, plan_title, phases_list, children_ids)
                 };
+                let spec_content = read_doc_content_or_empty(&stores.config.project.repo_path, &spec.id);
                 evaluator
                     .evaluate_spec_phases(
                         &parent_id,
                         &spec.title,
-                        &spec.description,
+                        &spec_content,
                         &plan_title,
                         &phases_list,
                         children_ids,
@@ -494,15 +517,24 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
                     let works = stores.read_works()?;
                     let child_works: Vec<_> = works.values().filter(|w| w.parent_id == parent_id).collect();
                     let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
+                    let repo_path = &stores.config.project.repo_path;
                     let works_list = child_works
                         .iter()
-                        .map(|w| format!("- [{}] {}: {}", w.id, w.title, w.description))
+                        .map(|w| {
+                            format!(
+                                "- [{}] {}: {}",
+                                w.id,
+                                w.title,
+                                read_doc_content_or_empty(repo_path, &w.id)
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
+                    let phase_content = read_doc_content_or_empty(repo_path, &phase.id);
                     let params = crate::evaluator::PhaseWorksParams {
                         id: parent_id.clone(),
                         title: phase.title,
-                        description: phase.description,
+                        content: phase_content,
                         order: phase.order,
                         spec_title,
                     };

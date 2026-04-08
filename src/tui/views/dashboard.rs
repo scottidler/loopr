@@ -130,10 +130,10 @@ mod tests {
         let mut app = App::new();
         app.state
             .works
-            .push(crate::domain::work::Work::new("ph1".into(), "t1".into(), "d1".into()));
+            .push(crate::domain::work::Work::new("ph1".into(), "t1".into()));
         app.state
             .works
-            .push(crate::domain::work::Work::new("ph1".into(), "t2".into(), "d2".into()));
+            .push(crate::domain::work::Work::new("ph1".into(), "t2".into()));
         app.state.ticks.push(crate::domain::tick::Tick::new(1));
 
         let mut terminal = test_terminal(80, 24);

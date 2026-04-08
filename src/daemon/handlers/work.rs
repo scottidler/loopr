@@ -98,13 +98,6 @@ pub(super) fn handle_work_create(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let description = req
-            .params
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
         if title.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
@@ -182,7 +175,7 @@ pub(super) fn handle_work_create(
             dependencies
         };
 
-        let mut work = Work::new(parent_id, title, description);
+        let mut work = Work::new(parent_id, title);
         work.resource_tags = resource_tags;
         work.acceptance_criteria = acceptance_criteria.clone();
         work.dependencies = dependencies;
@@ -521,9 +514,6 @@ pub(super) fn handle_work_update(
 
         if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
             wi.title = title.to_string();
-        }
-        if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
-            wi.description = desc.to_string();
         }
         if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
             wi.assignee = Some(assignee.to_string());
@@ -1443,7 +1433,7 @@ mod tests {
     #[tokio::test]
     async fn test_detect_cycle_self_reference() {
         let mut works = HashMap::new();
-        let w = Work::new("ph-1".into(), "A".into(), "desc".into());
+        let w = Work::new("ph-1".into(), "A".into());
         let id = w.id.clone();
         works.insert(id.clone(), w);
         // A depends on itself
@@ -1453,8 +1443,8 @@ mod tests {
     #[tokio::test]
     async fn test_detect_cycle_direct() {
         let mut works = HashMap::new();
-        let mut a = Work::new("ph-1".into(), "A".into(), "desc".into());
-        let b = Work::new("ph-1".into(), "B".into(), "desc".into());
+        let mut a = Work::new("ph-1".into(), "A".into());
+        let b = Work::new("ph-1".into(), "B".into());
         let a_id = a.id.clone();
         let b_id = b.id.clone();
         // A depends on B
@@ -1470,9 +1460,9 @@ mod tests {
     #[tokio::test]
     async fn test_detect_cycle_transitive() {
         let mut works = HashMap::new();
-        let mut a = Work::new("ph-1".into(), "A".into(), "desc".into());
-        let mut b = Work::new("ph-1".into(), "B".into(), "desc".into());
-        let c = Work::new("ph-1".into(), "C".into(), "desc".into());
+        let mut a = Work::new("ph-1".into(), "A".into());
+        let mut b = Work::new("ph-1".into(), "B".into());
+        let c = Work::new("ph-1".into(), "C".into());
         let a_id = a.id.clone();
         let b_id = b.id.clone();
         let c_id = c.id.clone();
@@ -1489,8 +1479,8 @@ mod tests {
     #[tokio::test]
     async fn test_detect_cycle_valid_chain() {
         let mut works = HashMap::new();
-        let a = Work::new("ph-1".into(), "A".into(), "desc".into());
-        let mut b = Work::new("ph-1".into(), "B".into(), "desc".into());
+        let a = Work::new("ph-1".into(), "A".into());
+        let mut b = Work::new("ph-1".into(), "B".into());
         let a_id = a.id.clone();
         let b_id = b.id.clone();
         b.dependencies = vec![a_id.clone()];
@@ -1503,9 +1493,9 @@ mod tests {
     #[tokio::test]
     async fn test_detect_cycle_diamond_accepted() {
         let mut works = HashMap::new();
-        let d = Work::new("ph-1".into(), "D".into(), "desc".into());
-        let mut b = Work::new("ph-1".into(), "B".into(), "desc".into());
-        let mut c = Work::new("ph-1".into(), "C".into(), "desc".into());
+        let d = Work::new("ph-1".into(), "D".into());
+        let mut b = Work::new("ph-1".into(), "B".into());
+        let mut c = Work::new("ph-1".into(), "C".into());
         let d_id = d.id.clone();
         let b_id = b.id.clone();
         let c_id = c.id.clone();

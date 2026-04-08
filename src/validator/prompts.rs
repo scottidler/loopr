@@ -4,31 +4,31 @@
 //! and additional fields that the LLM uses to assess readiness for Draft → Active.
 
 /// Build a validation prompt for a Plan document.
-pub fn plan_prompt(title: &str, description: &str, acceptance_criteria: &str) -> String {
+pub fn plan_prompt(title: &str, content: &str, acceptance_criteria: &str) -> String {
     crate::prompts::store()
         .validator_plan
         .replace("{title}", title)
-        .replace("{description}", description)
+        .replace("{content}", content)
         .replace("{acceptance_criteria}", acceptance_criteria)
         .replace("{schema}", &crate::prompts::store().validator_schema)
 }
 
 /// Build a validation prompt for a Spec document.
-pub fn spec_prompt(title: &str, description: &str, plan_title: &str) -> String {
+pub fn spec_prompt(title: &str, content: &str, plan_title: &str) -> String {
     crate::prompts::store()
         .validator_spec
         .replace("{title}", title)
-        .replace("{description}", description)
+        .replace("{content}", content)
         .replace("{plan_title}", plan_title)
         .replace("{schema}", &crate::prompts::store().validator_schema)
 }
 
 /// Build a validation prompt for a Phase document.
-pub fn phase_prompt(title: &str, description: &str, order: u32, spec_title: &str) -> String {
+pub fn phase_prompt(title: &str, content: &str, order: u32, spec_title: &str) -> String {
     crate::prompts::store()
         .validator_phase
         .replace("{title}", title)
-        .replace("{description}", description)
+        .replace("{content}", content)
         .replace("{order}", &order.to_string())
         .replace("{spec_title}", spec_title)
         .replace("{schema}", &crate::prompts::store().validator_schema)

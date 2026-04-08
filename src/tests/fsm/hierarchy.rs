@@ -109,7 +109,7 @@ fn reverse_active_to_draft_rejected() {
 #[test]
 fn plan_serde_all_statuses() {
     for status in &ALL_STATES {
-        let mut plan = Plan::new("T".into(), "D".into(), "C".into());
+        let mut plan = Plan::new("T".into(), "C".into());
         plan.force_status(*status);
         let json = serde_json::to_string(&plan).unwrap();
         let restored: Plan = serde_json::from_str(&json).unwrap();

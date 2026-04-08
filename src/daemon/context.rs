@@ -1055,9 +1055,9 @@ mod tests {
         // First: create records directly via TaskStore
         {
             let mut store = Store::open(&repo_path).unwrap();
-            let plan = Plan::new("Hydration Test".into(), "Desc".into(), "Criteria".into());
+            let plan = Plan::new("Hydration Test".into(), "Criteria".into());
             store.create(plan).unwrap();
-            let spec = Spec::new("plan-1".into(), "Spec".into(), "Desc".into());
+            let spec = Spec::new("plan-1".into(), "Spec".into());
             store.create(spec).unwrap();
         }
 
@@ -1082,12 +1082,10 @@ mod tests {
         // Insert one record of each type directly into TaskStore
         {
             let mut store = Store::open(&repo_path).unwrap();
-            store.create(Plan::new("P".into(), "d".into(), "c".into())).unwrap();
-            store.create(Spec::new("p1".into(), "S".into(), "d".into())).unwrap();
-            store
-                .create(Phase::new("s1".into(), "Ph".into(), "d".into(), 1))
-                .unwrap();
-            store.create(Work::new("ph1".into(), "W".into(), "d".into())).unwrap();
+            store.create(Plan::new("P".into(), "c".into())).unwrap();
+            store.create(Spec::new("p1".into(), "S".into())).unwrap();
+            store.create(Phase::new("s1".into(), "Ph".into(), 1)).unwrap();
+            store.create(Work::new("ph1".into(), "W".into())).unwrap();
             store
                 .create(Bundle::new("w1".into(), None, "branch".into(), vec!["claim".into()]))
                 .unwrap();
@@ -1168,7 +1166,7 @@ mod tests {
         .unwrap();
 
         // Create a plan via TaskStore
-        let plan = Plan::new("Test Plan".into(), "Description".into(), "Criteria".into());
+        let plan = Plan::new("Test Plan".into(), "Criteria".into());
         let plan_id = plan.id.clone();
         ctx.stores.store.as_ref().unwrap().lock().unwrap().create(plan).unwrap();
 
@@ -1265,7 +1263,7 @@ mod tests {
     #[test]
     fn test_stores_plan_insert_and_read() {
         let stores = Stores::new();
-        let plan = Plan::new("Test".into(), "Desc".into(), "Criteria".into());
+        let plan = Plan::new("Test".into(), "Criteria".into());
         let id = plan.id.clone();
         stores.plans.write().unwrap().insert(id.clone(), plan);
         let plans = stores.plans.read().unwrap();
@@ -1276,7 +1274,7 @@ mod tests {
     #[test]
     fn test_stores_spec_insert_and_read() {
         let stores = Stores::new();
-        let spec = Spec::new("plan-1".into(), "Test Spec".into(), "Desc".into());
+        let spec = Spec::new("plan-1".into(), "Test Spec".into());
         let id = spec.id.clone();
         stores.specs.write().unwrap().insert(id.clone(), spec);
         let specs = stores.specs.read().unwrap();
@@ -1287,7 +1285,7 @@ mod tests {
     #[test]
     fn test_stores_phase_insert_and_read() {
         let stores = Stores::new();
-        let phase = Phase::new("spec-1".into(), "Test Phase".into(), "Desc".into(), 1);
+        let phase = Phase::new("spec-1".into(), "Test Phase".into(), 1);
         let id = phase.id.clone();
         stores.phases.write().unwrap().insert(id.clone(), phase);
         let phases = stores.phases.read().unwrap();
@@ -1298,7 +1296,7 @@ mod tests {
     #[test]
     fn test_stores_work_insert_and_read() {
         let stores = Stores::new();
-        let wi = Work::new("phase-1".into(), "Test WI".into(), "Desc".into());
+        let wi = Work::new("phase-1".into(), "Test WI".into());
         let id = wi.id.clone();
         stores.works.write().unwrap().insert(id.clone(), wi);
         let works = stores.works.read().unwrap();
@@ -1372,13 +1370,13 @@ mod tests {
         .unwrap();
 
         // Insert a Work in InProgress state (orphaned)
-        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into());
         wi.force_status(WorkStatus::InProgress);
         let wi_id = wi.id.clone();
         ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
 
         // Insert a Work in Draft state (not orphaned)
-        let wi2 = Work::new("phase-1".into(), "Normal WI".into(), "".into());
+        let wi2 = Work::new("phase-1".into(), "Normal WI".into());
         let wi2_id = wi2.id.clone();
         ctx.stores.works.write().unwrap().insert(wi2_id.clone(), wi2);
 
@@ -1443,7 +1441,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into());
         wi.force_status(WorkStatus::InProgress);
         ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1473,7 +1471,7 @@ mod tests {
         .unwrap();
 
         // Draft Work — not orphaned
-        let wi = Work::new("phase-1".into(), "Normal WI".into(), "".into());
+        let wi = Work::new("phase-1".into(), "Normal WI".into());
         ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         // Proposed Bundle — not orphaned
@@ -1583,7 +1581,7 @@ mod tests {
         .unwrap();
 
         // Orphaned InProgress Work
-        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into());
         wi.force_status(WorkStatus::InProgress);
         ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
@@ -1756,7 +1754,7 @@ mod tests {
         .unwrap();
 
         // InProgress work with no session → should be reset to Blocked
-        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into(), "".into());
+        let mut wi = Work::new("phase-1".into(), "Orphaned WI".into());
         wi.force_status(WorkStatus::InProgress);
         let wi_id = wi.id.clone();
         ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1779,7 +1777,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut wi = Work::new("phase-1".into(), "Active WI".into(), "".into());
+        let mut wi = Work::new("phase-1".into(), "Active WI".into());
         wi.force_status(WorkStatus::InProgress);
         let wi_id = wi.id.clone();
         ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1869,7 +1867,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut wi = Work::new("phase-1".into(), "Done WI".into(), "".into());
+        let mut wi = Work::new("phase-1".into(), "Done WI".into());
         wi.force_status(WorkStatus::Done);
         let wi_id = wi.id.clone();
         ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
@@ -1897,7 +1895,7 @@ mod tests {
         .unwrap();
 
         // Draft work and proposed bundle — both in safe states
-        let wi = Work::new("phase-1".into(), "Normal WI".into(), "".into());
+        let wi = Work::new("phase-1".into(), "Normal WI".into());
         ctx.stores.works.write().unwrap().insert(wi.id.clone(), wi);
         let bundle = Bundle::new("wi-1".into(), None, "feature/ok".into(), vec![]);
         ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
