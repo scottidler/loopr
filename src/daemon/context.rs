@@ -725,8 +725,23 @@ impl DaemonContext {
             }
         }
 
-        // --- Work: InProgress with no active session → Blocked ---
+        // --- Work: InProgress with no active session ---
+        // If the work has a Merged bundle, the implementation is complete: advance to Done.
+        // Otherwise the work was abandoned mid-flight: move to Blocked for recovery.
         {
+            // Collect merged work IDs before acquiring the write lock on works (lock ordering).
+            let merged_work_ids: HashSet<String> = self
+                .stores
+                .read_bundles()
+                .map(|bundles| {
+                    bundles
+                        .values()
+                        .filter(|b| b.status() == BundleStatus::Merged)
+                        .map(|b| b.work_id.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+
             let Ok(mut works) = self.stores.write_works() else {
                 warn!("Reconciliation: cannot write works, skipping");
                 return fixed;
@@ -741,8 +756,17 @@ impl DaemonContext {
                     continue; // active agent is running this work
                 }
                 let from = "InProgress";
-                warn!("Reconciliation: Work {} InProgress with no active session", id);
-                wi.force_status(WorkStatus::Blocked);
+                let (to_status, to_str) = if merged_work_ids.contains(id) {
+                    warn!(
+                        "Reconciliation: Work {} InProgress with Merged bundle, advancing to Done",
+                        id
+                    );
+                    (WorkStatus::Done, "Done")
+                } else {
+                    warn!("Reconciliation: Work {} InProgress with no active session", id);
+                    (WorkStatus::Blocked, "Blocked")
+                };
+                wi.force_status(to_status);
                 wi.updated_at = crate::id::now_millis();
                 if let Some(store_arc) = store_lock
                     && let Ok(mut s) = store_arc.lock().map_err(|_| eyre!("taskstore lock poisoned"))
@@ -751,14 +775,10 @@ impl DaemonContext {
                     warn!("Reconciliation: failed to persist work {}: {}", id, e);
                 }
                 self.stores
-                    .append_reconciliation_log("WARN", "work", id, from, "Blocked", REASON_MISSING_HANDLE);
-                let _ = self.event_tx.send(DaemonEvent::reconciled(
-                    "work",
-                    id,
-                    from,
-                    "Blocked",
-                    REASON_MISSING_HANDLE,
-                ));
+                    .append_reconciliation_log("WARN", "work", id, from, to_str, REASON_MISSING_HANDLE);
+                let _ = self
+                    .event_tx
+                    .send(DaemonEvent::reconciled("work", id, from, to_str, REASON_MISSING_HANDLE));
                 fixed += 1;
             }
         }
@@ -1758,6 +1778,62 @@ mod tests {
         wi.force_status(WorkStatus::InProgress);
         let wi_id = wi.id.clone();
         ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 1);
+        let works = ctx.stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].status(), WorkStatus::Blocked);
+    }
+
+    #[test]
+    fn test_reconcile_inprogress_with_merged_bundle_advances_to_done() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        // InProgress work with no session but a Merged bundle → should advance to Done
+        let mut wi = Work::new("phase-1".into(), "Merged WI".into());
+        wi.force_status(WorkStatus::InProgress);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut bundle = Bundle::new(wi_id.clone(), None, "agent/merged-wi".into(), vec![]);
+        bundle.force_status(BundleStatus::Merged);
+        ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+        let fixed = ctx.reconcile();
+        assert_eq!(fixed, 1);
+        let works = ctx.stores.works.read().unwrap();
+        assert_eq!(works[&wi_id].status(), WorkStatus::Done);
+    }
+
+    #[test]
+    fn test_reconcile_inprogress_without_merged_bundle_stays_blocked() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(
+            config,
+            tx,
+            "test".into(),
+            std::path::PathBuf::from("/tmp/loopr-test-session"),
+        )
+        .unwrap();
+
+        // InProgress work with a Rejected bundle and no Merged bundle → Blocked
+        let mut wi = Work::new("phase-1".into(), "Rejected WI".into());
+        wi.force_status(WorkStatus::InProgress);
+        let wi_id = wi.id.clone();
+        ctx.stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+        let mut bundle = Bundle::new(wi_id.clone(), None, "agent/rejected-wi".into(), vec![]);
+        bundle.force_status(BundleStatus::Rejected);
+        ctx.stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
         let fixed = ctx.reconcile();
         assert_eq!(fixed, 1);
