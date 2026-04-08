@@ -619,13 +619,16 @@ impl<'a> ContextBuilder<'a> {
                 msg.push('\n');
             }
 
-            // Parent context links (agent can read_file if needed)
+            // Parent context links (agent can read_file if needed).
+            // Use absolute paths so agents in worktrees can resolve docs/loopr/ files
+            // without symlinks or magic path routing.
             let has_parents = self.plan.is_some() || self.spec.is_some() || self.phase.is_some();
             if has_parents {
+                let docs_dir = repo_path.join("docs").join("loopr");
                 msg.push_str("## Parent Context (read if needed)\n\n");
                 match (&self.plan, &self.plan_id) {
                     (Some((title, _)), Some(id)) => {
-                        msg.push_str(&format!("- [Plan: {}](docs/loopr/{}.md)\n", title, id));
+                        msg.push_str(&format!("- [Plan: {}]({}/{}.md)\n", title, docs_dir.display(), id));
                     }
                     (Some((title, desc)), None) => {
                         msg.push_str(&format!("- **Plan:** {} - {}\n", title, desc));
@@ -634,7 +637,7 @@ impl<'a> ContextBuilder<'a> {
                 }
                 match (&self.spec, &self.spec_id) {
                     (Some((title, _)), Some(id)) => {
-                        msg.push_str(&format!("- [Spec: {}](docs/loopr/{}.md)\n", title, id));
+                        msg.push_str(&format!("- [Spec: {}]({}/{}.md)\n", title, docs_dir.display(), id));
                     }
                     (Some((title, desc)), None) => {
                         msg.push_str(&format!("- **Spec:** {} - {}\n", title, desc));
@@ -643,7 +646,7 @@ impl<'a> ContextBuilder<'a> {
                 }
                 match (&self.phase, &self.phase_id) {
                     (Some((title, _)), Some(id)) => {
-                        msg.push_str(&format!("- [Phase: {}](docs/loopr/{}.md)\n", title, id));
+                        msg.push_str(&format!("- [Phase: {}]({}/{}.md)\n", title, docs_dir.display(), id));
                     }
                     (Some((title, desc)), None) => {
                         msg.push_str(&format!("- **Phase:** {} - {}\n", title, desc));

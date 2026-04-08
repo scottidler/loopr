@@ -1157,3 +1157,49 @@ fn test_load_work_hierarchy_brief() {
     assert!(matches!(builder.scope_ids[0].1, LearningScope::Work));
     assert!(matches!(builder.scope_ids[1].1, LearningScope::Plan));
 }
+
+// --- Parent context links use absolute paths (Fix 3: worktree docs/loopr/ resolution) ---
+
+#[test]
+fn test_parent_context_links_use_absolute_paths() {
+    let dir = TestDir::new("loopr-ctx-abspath");
+    let (stores, wi_id) = setup_stores(&dir);
+
+    let assembled = ContextBuilder::new(&stores, Role::Implementer)
+        .load_work_hierarchy(&wi_id)
+        .unwrap()
+        .build("system")
+        .unwrap();
+
+    // Parent context links must contain the absolute repo_path prefix,
+    // not relative "docs/loopr/" paths. This ensures agents running in
+    // git worktrees can resolve the files.
+    let repo_prefix = dir.join("docs").join("loopr");
+    let prefix_str = repo_prefix.to_string_lossy();
+
+    assert!(
+        assembled.user_message.contains(&*prefix_str),
+        "Parent context links must use absolute path prefix '{}'; got:\n{}",
+        prefix_str,
+        assembled.user_message
+    );
+
+    // Verify none of the parent links use the old relative format
+    let parent_section = assembled
+        .user_message
+        .find("## Parent Context")
+        .expect("Parent Context section must exist");
+    let after_parent = &assembled.user_message[parent_section..];
+    // Find where the next section starts (or end of string)
+    let section_end = after_parent[1..]
+        .find("\n## ")
+        .map(|p| p + 1)
+        .unwrap_or(after_parent.len());
+    let parent_text = &after_parent[..section_end];
+
+    assert!(
+        !parent_text.contains("](docs/loopr/"),
+        "Parent context links must NOT use relative 'docs/loopr/' paths; got:\n{}",
+        parent_text
+    );
+}
