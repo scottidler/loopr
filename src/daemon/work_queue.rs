@@ -121,6 +121,11 @@ fn compute_priority(
     // Prefer Works with fewer/no dependencies (can start immediately)
     score += (10 - work.dependencies.len().min(10) as i64) * 10;
 
+    // Penalize Works that have been attempted and reset multiple times.
+    // Each failed attempt reduces priority, preventing a single broken
+    // Work item from starving the rest of the pool.
+    score -= (work.attempt_count.min(5) as i64) * 50;
+
     score
 }
 
@@ -414,5 +419,72 @@ mod tests {
         // Exactly one thread should have claimed the work
         let winners: Vec<_> = [r1, r2].iter().filter(|r| r.is_some()).cloned().collect();
         assert_eq!(winners.len(), 1, "exactly one thread should claim the work");
+    }
+
+    #[test]
+    fn test_priority_attempt_count_penalty() {
+        let stores = test_stores();
+        let locks = stores.locks.read().unwrap();
+
+        // Work with no attempts (fresh)
+        let w_fresh = Work::new("phase-1".to_string(), "Fresh".to_string());
+        let fresh_score = compute_priority(&w_fresh, &locks);
+
+        // Work with 3 failed attempts
+        let mut w_cycled = Work::new("phase-1".to_string(), "Cycled".to_string());
+        w_cycled.attempt_count = 3;
+        let cycled_score = compute_priority(&w_cycled, &locks);
+
+        assert!(
+            cycled_score < fresh_score,
+            "cycled work (score={}) should have lower priority than fresh work (score={})",
+            cycled_score,
+            fresh_score
+        );
+        assert_eq!(fresh_score - cycled_score, 150, "3 attempts * 50 = 150 penalty");
+    }
+
+    #[test]
+    fn test_priority_attempt_penalty_caps_at_5() {
+        let stores = test_stores();
+        let locks = stores.locks.read().unwrap();
+
+        let mut w_5 = Work::new("phase-1".to_string(), "5 attempts".to_string());
+        w_5.attempt_count = 5;
+        let score_5 = compute_priority(&w_5, &locks);
+
+        let mut w_10 = Work::new("phase-1".to_string(), "10 attempts".to_string());
+        w_10.attempt_count = 10;
+        let score_10 = compute_priority(&w_10, &locks);
+
+        assert_eq!(
+            score_5, score_10,
+            "penalty should cap at 5 attempts (min(count, 5) * 50)"
+        );
+    }
+
+    #[test]
+    fn test_fresh_work_beats_cycled_in_queue() {
+        let stores = test_stores();
+
+        // Cycled work: attempt_count = 2
+        let mut wa = Work::new("phase-1".to_string(), "Cycled".to_string());
+        wa.force_status(WorkStatus::Ready);
+        wa.attempt_count = 2;
+        let wa_id = wa.id.clone();
+        stores.works.write().unwrap().insert(wa_id.clone(), wa);
+
+        // Fresh work: attempt_count = 0
+        let mut wb = Work::new("phase-1".to_string(), "Fresh".to_string());
+        wb.force_status(WorkStatus::Ready);
+        let wb_id = wb.id.clone();
+        stores.works.write().unwrap().insert(wb_id.clone(), wb);
+
+        // Fresh work should be picked (higher priority due to no attempt penalty)
+        assert_eq!(
+            next_assignable_work(&stores, None),
+            Some(wb_id),
+            "fresh work should be preferred over cycled work"
+        );
     }
 }

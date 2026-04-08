@@ -53,6 +53,10 @@ pub struct Work {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
+    /// Number of times this Work has been reset to Ready from a non-Draft state.
+    /// Used by the work queue to penalize cycling items and as a hard-limit backstop.
+    #[serde(default)]
+    pub attempt_count: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -109,6 +113,7 @@ impl Work {
             files: Vec::new(),
             dependencies: Vec::new(),
             acceptance_criteria: AcceptanceCriteria::default(),
+            attempt_count: 0,
             created_at: now,
             updated_at: now,
         }

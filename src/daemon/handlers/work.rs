@@ -19,6 +19,10 @@ use crate::daemon::context::Stores;
 
 use super::{parse_optional_param, parse_required_param};
 
+/// Maximum number of times a Work item can be reset to Ready before being Abandoned.
+/// Prevents infinite noop death loops when the root cause is unresolvable by workers.
+const MAX_WORK_ATTEMPTS: u32 = 5;
+
 /// BFS cycle detection: returns true if adding `dependencies` to `new_id` would
 /// create a cycle in the dependency graph.
 pub(super) fn detect_dependency_cycle(works: &HashMap<String, Work>, new_id: &str, dependencies: &[String]) -> bool {
@@ -415,7 +419,20 @@ pub(super) fn handle_work_transition(
             }
         }
 
-        wi.force_status(target_status);
+        // Increment attempt_count when Work is being reset to Ready from a non-Draft state.
+        // If the item exceeds MAX_WORK_ATTEMPTS, override target to Abandoned - this is the
+        // terminal backstop that prevents an infinite noop death loop.
+        let effective_status = if target_status == WorkStatus::Ready && from != WorkStatus::Draft {
+            wi.attempt_count += 1;
+            if wi.attempt_count >= MAX_WORK_ATTEMPTS {
+                WorkStatus::Abandoned
+            } else {
+                target_status
+            }
+        } else {
+            target_status
+        };
+        wi.force_status(effective_status);
         wi.updated_at = crate::id::now_millis();
         let wi_clone = wi.clone();
         drop(works);
@@ -437,7 +454,7 @@ pub(super) fn handle_work_transition(
 
         debug!(
             "[transition] work.{}: {:?} -> {:?} by {}",
-            id, from, target_status, role
+            id, from, effective_status, role
         );
         if let Err(e) = write_doc_markdown(&stores.config.project.repo_path, &wi_clone) {
             tracing::warn!("docs/loopr write failed for {}: {}", id, e);
@@ -1580,5 +1597,105 @@ mod tests {
         assert!(!a_id.is_empty());
         assert!(!b_id.is_empty());
         assert!(!c_id.is_empty());
+    }
+
+    // --- attempt_count: death loop safety net ---
+
+    #[tokio::test]
+    async fn test_attempt_count_increments_on_reset_to_ready() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
+
+        // Work is Ready after creation (auto-promoted). Manually set to InProgress.
+        stores
+            .works
+            .write()
+            .unwrap()
+            .get_mut(&wi_id)
+            .unwrap()
+            .force_status(crate::domain::work::WorkStatus::InProgress);
+
+        // Override transition: InProgress -> Ready
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                99,
+                "work.transition",
+                serde_json::json!({
+                    "id": wi_id,
+                    "target_status": "ready",
+                    "role": "coordinator",
+                    "override": true
+                }),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error(), "transition failed: {:?}", resp.error);
+
+        let works = stores.works.read().unwrap();
+        let wi = works.get(&wi_id).unwrap();
+        assert_eq!(
+            wi.attempt_count, 1,
+            "attempt_count should increment to 1 on first reset to Ready"
+        );
+        assert_eq!(
+            wi.status(),
+            crate::domain::work::WorkStatus::Ready,
+            "work should be Ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attempt_count_at_max_transitions_to_abandoned() {
+        let (_dir, stores) = test_stores();
+        let tx = test_event_tx();
+        let wm = test_worktree_mgr();
+        let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
+
+        // Pre-set attempt_count to MAX_WORK_ATTEMPTS - 1 = 4
+        {
+            let mut works = stores.works.write().unwrap();
+            let wi = works.get_mut(&wi_id).unwrap();
+            wi.attempt_count = super::MAX_WORK_ATTEMPTS - 1;
+            wi.force_status(crate::domain::work::WorkStatus::InProgress);
+        }
+
+        // One more reset to Ready should tip it over and go to Abandoned
+        let resp = dispatch(
+            &stores,
+            &tx,
+            &wm,
+            &test_integrator_config(),
+            DaemonRequest::new(
+                99,
+                "work.transition",
+                serde_json::json!({
+                    "id": wi_id,
+                    "target_status": "ready",
+                    "role": "coordinator",
+                    "override": true
+                }),
+            ),
+        )
+        .await;
+        assert!(!resp.is_error(), "transition failed: {:?}", resp.error);
+
+        let works = stores.works.read().unwrap();
+        let wi = works.get(&wi_id).unwrap();
+        assert_eq!(
+            wi.attempt_count,
+            super::MAX_WORK_ATTEMPTS,
+            "attempt_count should equal MAX_WORK_ATTEMPTS"
+        );
+        assert_eq!(
+            wi.status(),
+            crate::domain::work::WorkStatus::Abandoned,
+            "work should be Abandoned when attempt_count reaches MAX_WORK_ATTEMPTS"
+        );
     }
 }
