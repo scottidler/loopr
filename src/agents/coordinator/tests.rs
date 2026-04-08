@@ -1281,8 +1281,8 @@ async fn test_find_next_phase_skips_completed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_find_next_phase_waits_for_active_phase() {
-    // When a phase is Active (in progress), return None - don't skip ahead
+async fn test_find_next_phase_returns_first_non_terminal() {
+    // When a phase is Active (non-terminal), return it - it's the current phase
     let dir = TestDir::new("loopr-fsm-nextphwait");
     let stores = test_stores(&dir);
 
@@ -1298,18 +1298,19 @@ async fn test_find_next_phase_waits_for_active_phase() {
 
     let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
     p1.force_status(HierarchyStatus::Active);
-    stores.phases.write().unwrap().insert(p1.id.clone(), p1);
+    let p1_id = p1.id.clone();
+    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
     let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    let p2_id = p2.id.clone();
-    stores.phases.write().unwrap().insert(p2_id.clone(), p2);
+    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
     let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     let result = find_next_phase_to_activate(&stores, &coord_state);
-    // p1 is Active (non-terminal), p2 is Draft -> return first Draft = p2
+    // p1 is Active (first non-terminal) -> return p1
     assert!(result.is_some());
-    let (id, _title) = result.unwrap();
-    assert_eq!(id, p2_id);
+    let (id, title) = result.unwrap();
+    assert_eq!(id, p1_id);
+    assert_eq!(title, "Phase 1");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1336,17 +1337,58 @@ async fn test_find_next_phase_respects_spec_boundaries() {
     // Spec 1 has an Active phase (non-terminal)
     let mut p1 = Phase::new(spec1_id, "S1 Phase 1".into(), 0);
     p1.force_status(HierarchyStatus::Active);
-    stores.phases.write().unwrap().insert(p1.id.clone(), p1);
+    let p1_id = p1.id.clone();
+    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
 
     // Spec 2 has a Draft phase
     let p2 = Phase::new(spec2_id, "S2 Phase 1".into(), 0);
-    let p2_id = p2.id.clone();
-    stores.phases.write().unwrap().insert(p2_id.clone(), p2);
+    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
     let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     let result = find_next_phase_to_activate(&stores, &coord_state);
-    // Spec 1 still has non-terminal phases - must NOT return Spec 2's phase
-    assert!(result.is_none());
+    // Spec 1 still has non-terminal phases - returns Spec 1's phase, NOT Spec 2's
+    assert!(result.is_some());
+    let (id, title) = result.unwrap();
+    assert_eq!(id, p1_id);
+    assert_eq!(title, "S1 Phase 1");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_find_next_phase_all_active_returns_first() {
+    // Bug regression: decomposer creates ALL phases as Active (not Draft).
+    // Old code looked for Draft only -> returned None -> premature GoalComplete.
+    let dir = TestDir::new("loopr-fsm-nextphallactive");
+    let stores = test_stores(&dir);
+
+    let mut plan = Plan::new("P".into(), "c".into());
+    plan.force_status(HierarchyStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
+
+    let mut spec = Spec::new(plan_id, "S".into(), 0);
+    spec.force_status(HierarchyStatus::Active);
+    let spec_id = spec.id.clone();
+    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
+
+    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 0);
+    p1.force_status(HierarchyStatus::Active);
+    let p1_id = p1.id.clone();
+    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
+
+    let mut p2 = Phase::new(spec_id.clone(), "Phase 2".into(), 1);
+    p2.force_status(HierarchyStatus::Active);
+    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
+
+    let mut p3 = Phase::new(spec_id, "Phase 3".into(), 2);
+    p3.force_status(HierarchyStatus::Active);
+    stores.phases.write().unwrap().insert(p3.id.clone(), p3);
+
+    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    let result = find_next_phase_to_activate(&stores, &coord_state);
+    assert!(result.is_some());
+    let (id, title) = result.unwrap();
+    assert_eq!(id, p1_id);
+    assert_eq!(title, "Phase 1");
 }
 
 #[tokio::test(flavor = "multi_thread")]

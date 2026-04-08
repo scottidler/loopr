@@ -826,14 +826,13 @@ fn build_fsm_footer(
 //   - All specs exhausted -> goal done.
 //
 // find_next_phase_to_activate() walks the hierarchy in order and returns
-// the next Draft phase. As a side effect it transitions spec status
-// (Draft -> Active for current, Active -> Complete for exhausted).
-// If the current phase is still running it returns None - we wait.
+// the first non-terminal phase (Active, Draft, etc.). Phases may start as
+// Active (the decomposer creates them that way) or Draft - either is valid.
 //
 // Invariant: never look at Spec N+1 while Spec N has non-terminal phases.
 // ---------------------------------------------------------------------------
 
-/// Walk the spec/phase hierarchy and return the next Draft phase to activate.
+/// Walk the spec/phase hierarchy and return the first non-terminal phase.
 /// Transitions spec status as a side effect.
 fn find_next_phase_to_activate(stores: &Stores, _coord_state: &CoordinatorState) -> Option<(String, String)> {
     let plan = generation::find_active_plan(stores)?;
@@ -874,13 +873,17 @@ fn find_next_phase_to_activate(stores: &Stores, _coord_state: &CoordinatorState)
             // Activate this spec if it's still Draft
             activate_spec_if_draft(stores, spec_id);
 
-            // Return the first Draft phase in this spec
+            // Return the first non-terminal phase in this spec
             for (phase_id, _, title, _, status) in &phases {
-                if *status == HierarchyStatus::Draft {
+                if !matches!(*status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) {
                     return Some((phase_id.clone(), title.clone()));
                 }
             }
-            // No Draft phases but some are still Active/in-progress - wait
+            // has_non_terminal was true but no matching phase found - structurally unreachable
+            tracing::warn!(
+                "find_next_phase_to_activate: has_non_terminal=true for spec {} but no matching phase",
+                spec_id
+            );
             return None;
         }
 
