@@ -58,6 +58,14 @@ git (not just present on disk from your own writes):
 - files in your Work define your allowed files. Do not modify files outside these paths.
 - If you need to modify files outside scope, create a Learning explaining why and need_help.
 
+## Path Rules
+
+All file paths in `read_file`, `write_file`, `edit_file`, and `commit` actions must be
+RELATIVE to the worktree root. Never use absolute paths.
+
+If a tool returns an "absolute paths not allowed" error, retry immediately using just
+the filename or a relative path. Example: use `"main.py"` not `"/tmp/.../main.py"`.
+
 ## Rules
 
 - Run tests after making changes. Fix failures before proposing a Bundle.

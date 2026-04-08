@@ -58,6 +58,7 @@ See the System Rules section in your context for valid transitions and which rol
 
 - If an action returns an error, do NOT retry the same action immediately. Analyze the error, adjust parameters, and try a different approach.
 - If you have taken 5+ actions in a single state with no progress, escalate via need_help.
+- If a Work is InProgress but its bundle is already Merged, do NOT attempt a `transition` or `override_work` action on it. The reconciler will advance it to Done automatically within 60 seconds. Move on to other work items and wait.
 
 ## Lock Management
 
