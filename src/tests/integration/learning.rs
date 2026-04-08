@@ -136,7 +136,7 @@ async fn test_failure_learning_creation() {
             "parent_id": phase_id,
             "title": "Add error handling",
             "description": "Implement error types",
-            "resource_tags": ["src/error.rs"],
+            "files": ["src/error.rs"],
             "acceptance_criteria": ["Error types defined"]
         }),
     )
@@ -167,19 +167,19 @@ async fn test_failure_learning_creation() {
     assert_eq!(retrieved["scope"].as_str().unwrap(), "work");
     assert!(retrieved["content"].as_str().unwrap().contains("thiserror"));
 
-    // Update with resource_tags (set via learning.update)
+    // Update with files (set via learning.update)
     dispatch_ok(
         &stores,
         &tx,
         &wm,
         &ic,
         "learning.update",
-        json!({"id": learning_id, "resource_tags": ["src/error.rs"]}),
+        json!({"id": learning_id, "files": ["src/error.rs"]}),
     )
     .await;
 
-    // Verify resource_tags persisted
+    // Verify files persisted
     let updated = dispatch_ok(&stores, &tx, &wm, &ic, "learning.get", json!({"id": learning_id})).await;
-    let tags: Vec<String> = serde_json::from_value(updated["resource_tags"].clone()).unwrap();
+    let tags: Vec<String> = serde_json::from_value(updated["files"].clone()).unwrap();
     assert_eq!(tags, vec!["src/error.rs"]);
 }

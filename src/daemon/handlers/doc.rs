@@ -353,8 +353,8 @@ pub(super) async fn accept_plan_markdown(
 ///   3. write_doc_markdown (advisory: log-and-continue on failure)
 ///   4. DaemonEvent broadcast
 ///
-/// The `resource_tags.is_empty()` guard from `handle_work_create` is intentionally
-/// NOT applied here - works from decomposition always have empty resource_tags.
+/// The `files.is_empty()` guard from `handle_work_create` is intentionally
+/// NOT applied here - works from decomposition always have empty files.
 fn persist_hierarchy(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,

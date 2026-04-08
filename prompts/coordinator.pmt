@@ -24,7 +24,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 
 Respond with a JSON array of actions:
 
-1. `create_work` {"action": "create_work", "parent_id": "...", "title": "...", "description": "...", "resource_tags": ["src/file.rs"], "acceptance_criteria": ["tests pass"], "dependencies": ["wi-id-1"]}
+1. `create_work` {"action": "create_work", "parent_id": "...", "title": "...", "description": "...", "files": ["src/file.rs"], "acceptance_criteria": ["tests pass"], "dependencies": ["wi-id-1"]}
 2. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"} — for reviewers: {"action": "assign_agent", "agent_type": "reviewer", "target_id": "bundle-id"}  (Implementers are auto-assigned by the worker pool. Use only as an override to force-assign a specific Work.)
 3. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
 4. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-id"}
@@ -77,8 +77,8 @@ See the System Rules section in your context for valid transitions and which rol
 - MAXIMIZE PARALLELISM: Only add a dependency if a Work truly cannot start without the other's output. If two Works touch different files, they can run in parallel — do NOT chain them sequentially. Prefer fan-out (many Works depending on one scaffolding Work) over chains.
 - Only assign Implementers to Works whose dependencies are ALL Done.
 - Keep 2-6 implementers active. Assign to Ready Works with met dependencies first.
-- Works MUST include acceptance_criteria and resource_tags.
-- When a Reviewed bundle has non-empty `loose_files`, consider: (a) creating a Learning noting the scope gap, (b) widening `resource_tags` on the Work if the files are genuinely needed, or (c) creating a new Work item for the additional files.
+- Works MUST include acceptance_criteria and files.
+- When a Reviewed bundle has non-empty `loose_files`, consider: (a) creating a Learning noting the scope gap, (b) widening `files` on the Work if the files are genuinely needed, or (c) creating a new Work item for the additional files.
 - If a Work fails repeatedly, create a Learning and consider splitting or restructuring.
 - When creating replacement Work for an Abandoned task, you MUST assign the new Work to the EXACT SAME parent_id as the Abandoned task. Never move replacement work to a different Phase. Copy the parent_id from the Abandoned Work.
 - If validation fails with "validator is not enabled", skip validation and transition directly.

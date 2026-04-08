@@ -515,7 +515,7 @@ mod tests {
         init_defaults();
         let p = &store().generation_work;
         assert!(p.contains("Create Works for this Phase"));
-        assert!(p.contains("resource_tags"));
+        assert!(p.contains("files"));
         assert!(p.contains("create_work"));
         assert!(p.contains("parent_id"));
     }
@@ -617,7 +617,7 @@ mod tests {
         init_defaults();
         let p = &store().implementer;
         assert!(p.contains("Workflow"));
-        assert!(p.contains("resource_tags"));
+        assert!(p.contains("files"));
         assert!(p.contains("propose_bundle"));
     }
 

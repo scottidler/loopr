@@ -8,7 +8,7 @@ fn test_plan_create_mapping() {
             description: "A test".to_string(),
             parent: None,
             order: None,
-            resource_tags: vec![],
+            files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
         },
@@ -27,7 +27,7 @@ fn test_spec_create_mapping_with_parent() {
             description: "".to_string(),
             parent: Some("plan-1".to_string()),
             order: None,
-            resource_tags: vec![],
+            files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
         },
@@ -45,7 +45,7 @@ fn test_phase_create_mapping_with_order() {
             description: "".to_string(),
             parent: Some("spec-1".to_string()),
             order: Some(1),
-            resource_tags: vec![],
+            files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
         },
@@ -499,7 +499,7 @@ fn test_crud_spec_with_parent_and_order() {
             description: "JWT tokens".to_string(),
             parent: Some("plan-42".to_string()),
             order: Some(3),
-            resource_tags: vec![],
+            files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
         },
@@ -622,7 +622,7 @@ fn test_work_create_with_parent_uses_parent_id() {
             description: "JWT".to_string(),
             parent: Some("phase-1".to_string()),
             order: None,
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],
         },
@@ -630,27 +630,27 @@ fn test_work_create_with_parent_uses_parent_id() {
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "work.create");
     assert_eq!(params["parent_id"], "phase-1");
-    assert_eq!(params["resource_tags"], json!(["src/"]));
+    assert_eq!(params["files"], json!(["src/"]));
     assert_eq!(params["acceptance_criteria"], json!(["tests pass"]));
 }
 
 #[test]
 fn test_work_create_skips_work_fields_for_non_work() {
-    // resource_tags should NOT appear in plan.create params
+    // files should NOT appear in plan.create params
     let cmd = Command::Plan {
         cmd: CrudCmd::Create {
             title: "Plan".to_string(),
             description: "".to_string(),
             parent: None,
             order: None,
-            resource_tags: vec!["should-be-ignored".to_string()],
+            files: vec!["should-be-ignored".to_string()],
             acceptance_criteria: vec![],
             dependencies: vec![],
         },
     };
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "plan.create");
-    assert!(params.get("resource_tags").is_none());
+    assert!(params.get("files").is_none());
 }
 
 #[test]

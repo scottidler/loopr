@@ -31,7 +31,7 @@ pub struct LearningCreateParams {
     #[serde(default)]
     pub applicable_roles: Option<Vec<Role>>,
     #[serde(default)]
-    pub resource_tags: Option<Vec<String>>,
+    pub files: Option<Vec<String>>,
 }
 
 /// Params for `worktree.refresh` IPC method.
@@ -88,7 +88,7 @@ mod tests {
             scope: LearningScope::Phase,
             source_id: "wi-1".to_string(),
             applicable_roles: Some(vec![Role::Implementer, Role::Reviewer]),
-            resource_tags: Some(vec!["src/main.rs".to_string()]),
+            files: Some(vec!["src/main.rs".to_string()]),
         };
         let json = serde_json::to_value(&params).unwrap();
         let restored: LearningCreateParams = serde_json::from_value(json).unwrap();
@@ -106,7 +106,7 @@ mod tests {
         });
         let params: LearningCreateParams = serde_json::from_value(json).unwrap();
         assert!(params.applicable_roles.is_none());
-        assert!(params.resource_tags.is_none());
+        assert!(params.files.is_none());
     }
 
     #[test]

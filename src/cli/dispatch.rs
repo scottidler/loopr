@@ -285,7 +285,7 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             description,
             parent,
             order,
-            resource_tags,
+            files,
             acceptance_criteria,
             dependencies,
         } => {
@@ -301,8 +301,8 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             }
             // Work-specific fields
             if collection == "work" {
-                if !resource_tags.is_empty() {
-                    params["resource_tags"] = json!(resource_tags);
+                if !files.is_empty() {
+                    params["files"] = json!(files);
                 }
                 if !acceptance_criteria.is_empty() {
                     params["acceptance_criteria"] = json!(acceptance_criteria);

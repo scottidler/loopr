@@ -71,11 +71,11 @@ pub(super) fn handle_learning_create(
             learning.applicable_roles = Some(roles);
         }
 
-        // M4: Parse resource_tags
-        if let Some(tags_val) = req.params.get("resource_tags")
+        // M4: Parse files
+        if let Some(tags_val) = req.params.get("files")
             && let Ok(tags) = serde_json::from_value::<Vec<String>>(tags_val.clone())
         {
-            learning.resource_tags = tags;
+            learning.files = tags;
         }
 
         let learning_json = match serde_json::to_value(&learning) {
@@ -404,8 +404,8 @@ pub(super) fn handle_learning_update(
                 .collect();
             learning.applicable_roles = if parsed.is_empty() { None } else { Some(parsed) };
         }
-        if let Some(tags) = req.params.get("resource_tags").and_then(|v| v.as_array()) {
-            learning.resource_tags = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        if let Some(tags) = req.params.get("files").and_then(|v| v.as_array()) {
+            learning.files = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
         learning.updated_at = crate::id::now_millis();
 
@@ -1007,7 +1007,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let learning_id = create_learning(&stores, &tx, &wm, 1).await;
 
-        // Update content, applicable_roles, and resource_tags
+        // Update content, applicable_roles, and files
         let resp = dispatch(
             &stores,
             &tx,
@@ -1020,7 +1020,7 @@ mod tests {
                     "id": learning_id,
                     "content": "Updated content",
                     "applicable_roles": ["Implementer", "Reviewer"],
-                    "resource_tags": ["src/main.rs", "src/lib.rs"]
+                    "files": ["src/main.rs", "src/lib.rs"]
                 }),
             ),
         )
@@ -1028,7 +1028,7 @@ mod tests {
         assert!(!resp.is_error(), "learning.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["content"], "Updated content");
-        assert_eq!(result["resource_tags"].as_array().unwrap().len(), 2);
+        assert_eq!(result["files"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]

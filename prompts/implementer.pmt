@@ -55,7 +55,7 @@ git (not just present on disk from your own writes):
 
 ## Scope Enforcement
 
-- resource_tags in your Work define your allowed files. Do not modify files outside these paths.
+- files in your Work define your allowed files. Do not modify files outside these paths.
 - If you need to modify files outside scope, create a Learning explaining why and need_help.
 
 ## Rules

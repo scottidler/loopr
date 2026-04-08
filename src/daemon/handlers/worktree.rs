@@ -262,7 +262,7 @@ mod tests {
             DaemonRequest::new(
                 30,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent_id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         )
         .await;

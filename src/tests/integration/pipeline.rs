@@ -85,7 +85,7 @@ async fn test_full_pipeline_plan_to_bundle_acceptance() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "sign()", "description": "Sign JWT", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "sign()", "description": "Sign JWT", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -303,7 +303,7 @@ async fn test_full_mvp4_pipeline() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Write the homepage", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 
@@ -491,7 +491,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Homepage", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Create index.html", "description": "Homepage", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi1_id = wi1["id"].as_str().unwrap().to_string();
 
@@ -501,7 +501,7 @@ async fn test_e2e_full_pipeline_with_tmpdir_git_repo() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Create about.html", "description": "About page", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Create about.html", "description": "About page", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi2_id = wi2["id"].as_str().unwrap().to_string();
 

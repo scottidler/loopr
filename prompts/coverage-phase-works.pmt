@@ -16,7 +16,7 @@ Check for:
 1. **Gaps**: Are there deliverables in the Phase that no Work addresses?
 2. **Granularity**: Are Works small enough for a single agent to implement in one session?
 3. **Dependencies**: Are Work dependencies correct and complete? Are there missing dependencies?
-4. **Resource tags**: Do resource_tags accurately reflect which files each Work will touch?
+4. **Files**: Do files accurately reflect which files each Work will touch?
 5. **Acceptance criteria**: Does each Work have testable acceptance criteria?
 
 Respond with ONLY valid JSON matching this schema:

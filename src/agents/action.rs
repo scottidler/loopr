@@ -105,7 +105,7 @@ pub enum AgentAction {
         applicable_roles: Option<Vec<String>>,
         /// Resource tags for scoped selection (file paths, module names).
         #[serde(default)]
-        resource_tags: Option<Vec<String>>,
+        files: Option<Vec<String>>,
     },
     Done {
         #[serde(default)]
@@ -129,7 +129,7 @@ pub enum AgentAction {
         title: String,
         description: String,
         #[serde(default, deserialize_with = "string_or_vec")]
-        resource_tags: Vec<String>,
+        files: Vec<String>,
         #[serde(default, deserialize_with = "string_or_vec")]
         acceptance_criteria: Vec<String>,
         #[serde(default, deserialize_with = "string_or_vec")]
@@ -311,7 +311,7 @@ mod tests {
             scope: "work".to_string(),
             source_id: "wi-1".to_string(),
             applicable_roles: Some(vec!["implementer".to_string()]),
-            resource_tags: Some(vec!["src/parser.rs".to_string()]),
+            files: Some(vec!["src/parser.rs".to_string()]),
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
@@ -320,14 +320,14 @@ mod tests {
             scope,
             source_id,
             applicable_roles,
-            resource_tags,
+            files,
         } = deserialized
         {
             assert_eq!(content, "Parser needs error recovery");
             assert_eq!(scope, "work");
             assert_eq!(source_id, "wi-1");
             assert_eq!(applicable_roles, Some(vec!["implementer".to_string()]));
-            assert_eq!(resource_tags, Some(vec!["src/parser.rs".to_string()]));
+            assert_eq!(files, Some(vec!["src/parser.rs".to_string()]));
         } else {
             panic!("expected CreateLearning");
         }
@@ -335,17 +335,17 @@ mod tests {
 
     #[test]
     fn test_agent_action_create_learning_backward_compat() {
-        // Old JSON without applicable_roles/resource_tags should deserialize
+        // Old JSON without applicable_roles/files should deserialize
         let json = r#"{"action":"create_learning","content":"x","scope":"global","source_id":"s1"}"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         if let AgentAction::CreateLearning {
             applicable_roles,
-            resource_tags,
+            files,
             ..
         } = action
         {
             assert!(applicable_roles.is_none());
-            assert!(resource_tags.is_none());
+            assert!(files.is_none());
         } else {
             panic!("expected CreateLearning");
         }
@@ -385,7 +385,7 @@ mod tests {
             parent_id: "ph-1".to_string(),
             title: "Add login".to_string(),
             description: "Add login endpoint".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec!["wi-0".to_string()],
         };
@@ -614,19 +614,19 @@ mod tests {
             "parent_id": "p1",
             "title": "Test",
             "description": "desc",
-            "resource_tags": "src/lib.rs",
+            "files": "src/lib.rs",
             "acceptance_criteria": "it works",
             "dependencies": "wi-001"
         }"#;
         let action: AgentAction = serde_json::from_str(json).unwrap();
         if let AgentAction::CreateWork {
-            resource_tags,
+            files,
             acceptance_criteria,
             dependencies,
             ..
         } = action
         {
-            assert_eq!(resource_tags, vec!["src/lib.rs"]);
+            assert_eq!(files, vec!["src/lib.rs"]);
             assert_eq!(acceptance_criteria, vec!["it works"]);
             assert_eq!(dependencies, vec!["wi-001"]);
         } else {

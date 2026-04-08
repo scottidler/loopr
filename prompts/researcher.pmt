@@ -12,7 +12,7 @@ Respond with a JSON array of actions:
 2. `search_files`    {"action": "search_files", "pattern": "**/*test*.rs", "path": "src/"}
 3. `read_file`       {"action": "read_file", "path": "src/agents/mod.rs"}
 4. `list_directory`  {"action": "list_directory", "path": "src/agents"}
-5. `create_learning` {"action": "create_learning", "content": "...", "scope": "spec", "source_id": "...", "resource_tags": ["src/agents/"]}
+5. `create_learning` {"action": "create_learning", "content": "...", "scope": "spec", "source_id": "...", "files": ["src/agents/"]}
 6. `done`            {"action": "done", "summary": "Found 3 relevant patterns..."}
 7. `need_help`       {"action": "need_help", "reason": "Cannot find the requested pattern"}
 

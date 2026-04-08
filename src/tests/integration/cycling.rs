@@ -29,7 +29,7 @@ async fn test_dependency_chain_execution() {
             "parent_id": phase_id,
             "title": "Create base types",
             "description": "Foundation types and traits",
-            "resource_tags": ["src/types.rs"],
+            "files": ["src/types.rs"],
             "acceptance_criteria": ["Types compile"]
         }),
     )
@@ -47,7 +47,7 @@ async fn test_dependency_chain_execution() {
             "parent_id": phase_id,
             "title": "Implement logic",
             "description": "Business logic using base types",
-            "resource_tags": ["src/logic.rs"],
+            "files": ["src/logic.rs"],
             "acceptance_criteria": ["Logic tests pass"],
             "dependencies": [wi_a_id]
         }),
@@ -66,7 +66,7 @@ async fn test_dependency_chain_execution() {
             "parent_id": phase_id,
             "title": "Add integration tests",
             "description": "Integration tests for logic",
-            "resource_tags": ["src/tests.rs"],
+            "files": ["src/tests.rs"],
             "acceptance_criteria": ["Integration tests pass"],
             "dependencies": [wi_b_id]
         }),
@@ -113,7 +113,7 @@ async fn test_duplicate_work_rejection() {
             "parent_id": phase_id,
             "title": "Implement auth",
             "description": "Add JWT auth",
-            "resource_tags": ["src/auth.rs"],
+            "files": ["src/auth.rs"],
             "acceptance_criteria": ["Auth works"]
         }),
     )
@@ -130,7 +130,7 @@ async fn test_duplicate_work_rejection() {
             "parent_id": phase_id,
             "title": "implement auth",
             "description": "Different description",
-            "resource_tags": ["src/auth.rs"],
+            "files": ["src/auth.rs"],
             "acceptance_criteria": ["Auth works"]
         }),
     )
@@ -150,7 +150,7 @@ async fn test_duplicate_work_rejection() {
             "parent_id": phase_id,
             "title": "Implement authorization",
             "description": "Add RBAC",
-            "resource_tags": ["src/authz.rs"],
+            "files": ["src/authz.rs"],
             "acceptance_criteria": ["RBAC works"]
         }),
     )
@@ -248,7 +248,7 @@ async fn test_phase_gate_advances_to_next_phase() {
             "parent_id": phase1_id,
             "title": "Create base types",
             "description": "Foundation types",
-            "resource_tags": ["src/types.rs"],
+            "files": ["src/types.rs"],
             "acceptance_criteria": ["Types compile"]
         }),
     )

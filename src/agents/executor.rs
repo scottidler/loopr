@@ -24,29 +24,29 @@ use crate::worktree::manager::WorktreeManager;
 
 /// Pre-flight acceptance-criteria check.
 ///
-/// Reads the files listed in `work.resource_tags`, presents their contents
+/// Reads the files listed in `work.files`, presents their contents
 /// alongside `work.acceptance_criteria`, and asks haiku whether the current
 /// code already satisfies all of them.
 ///
 /// Returns `Some(true)` if AC are satisfied, `Some(false)` if not, and `None`
-/// if the check cannot run (empty resource_tags, empty AC, missing files, or
+/// if the check cannot run (empty files, empty AC, missing files, or
 /// API error). The caller treats `None` as "fall through to implementer".
 async fn preflight_ac_check(stores: &Arc<Stores>, work_id: &str) -> Option<bool> {
     debug!("preflight_ac_check(work_id={})", work_id);
 
-    let (resource_tags, acceptance_criteria) = {
+    let (files, acceptance_criteria) = {
         let works = stores.read_works().ok()?;
         let work = works.get(work_id)?;
-        if work.resource_tags.is_empty() || work.acceptance_criteria.is_empty() {
-            debug!("preflight_ac_check: skipping {} (no resource_tags or AC)", work_id);
+        if work.files.is_empty() || work.acceptance_criteria.is_empty() {
+            debug!("preflight_ac_check: skipping {} (no files or AC)", work_id);
             return None;
         }
-        (work.resource_tags.clone(), work.acceptance_criteria.clone())
+        (work.files.clone(), work.acceptance_criteria.clone())
     };
 
     let repo_path = stores.config.project.repo_path.clone();
     let mut file_contents: Vec<(String, String)> = Vec::new();
-    for tag in &resource_tags {
+    for tag in &files {
         let path = repo_path.join(tag.trim_start_matches("./"));
         match std::fs::read_to_string(&path) {
             Ok(content) => file_contents.push((tag.clone(), content)),

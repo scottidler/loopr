@@ -57,7 +57,7 @@ async fn test_advisory_review_bundle_accepted_directly() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Work", "description": "work", "resource_tags": ["src/main.rs"]}),
+        json!({"parent_id": phase_id, "title": "Work", "description": "work", "files": ["src/main.rs"]}),
     )
     .await;
     let work_id = work_resp["id"].as_str().unwrap();
@@ -176,7 +176,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "W", "description": "d", "resource_tags": ["src/x.rs"]}),
+        json!({"parent_id": phase_id, "title": "W", "description": "d", "files": ["src/x.rs"]}),
     )
     .await;
     let work_id = work_resp["id"].as_str().unwrap();

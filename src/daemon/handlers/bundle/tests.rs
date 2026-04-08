@@ -69,7 +69,7 @@ async fn create_test_work(
         DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "title": "Parent WI", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "Parent WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
     )
     .await;
@@ -413,7 +413,7 @@ async fn test_bundle_list_filtered_by_work_id() {
         DaemonRequest::new(
             31,
             "work.create",
-            json!({"parent_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "WI 2", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
     )
     .await;
@@ -487,7 +487,7 @@ async fn test_bundle_list_reads_from_taskstore() {
         DaemonRequest::new(
             31,
             "work.create",
-            json!({"parent_id": phase_id, "title": "WI 2", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "WI 2", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
         ),
     )
     .await;

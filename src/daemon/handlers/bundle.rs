@@ -179,12 +179,12 @@ pub(super) fn handle_bundle_create(
             ));
         }
 
-        // Layer 3: Scope validation - touched_paths must be subset of Work's resource_tags.
+        // Layer 3: Scope validation - touched_paths must be subset of Work's files.
         // Phase 1: warn only (log but don't reject).
         {
             let works = stores.read_works()?;
             if let Some(work) = works.get(&work_id)
-                && !work.resource_tags.is_empty()
+                && !work.files.is_empty()
                 && !bundle.touched_paths.is_empty()
             {
                 let violations: Vec<&str> = bundle
@@ -193,7 +193,7 @@ pub(super) fn handle_bundle_create(
                     .filter(|p| {
                         let norm_p = p.strip_prefix("./").unwrap_or(p);
                         !work
-                            .resource_tags
+                            .files
                             .iter()
                             .any(|tag| tag.strip_prefix("./").unwrap_or(tag) == norm_p)
                     })
@@ -201,11 +201,11 @@ pub(super) fn handle_bundle_create(
                     .collect();
                 if !violations.is_empty() {
                     tracing::warn!(
-                        "Bundle {} touches files outside Work {}'s resource_tags: {:?}. Allowed: {:?}",
+                        "Bundle {} touches files outside Work {}'s files: {:?}. Allowed: {:?}",
                         bundle.id,
                         work_id,
                         violations,
-                        work.resource_tags
+                        work.files
                     );
                 }
             }

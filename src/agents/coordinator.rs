@@ -346,7 +346,7 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
         parent_id,
         title,
         description,
-        resource_tags,
+        files,
         acceptance_criteria,
         dependencies,
     } = action
@@ -380,7 +380,7 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
             parent_id: parent_id.clone(),
             title: title.clone(),
             description: description.clone(),
-            resource_tags: resource_tags.clone(),
+            files: files.clone(),
             acceptance_criteria: acceptance_criteria.clone(),
             dependencies: resolved_deps,
         })
@@ -389,12 +389,12 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
     }
 }
 
-/// Fix #6: Prune dependencies between batch-created works whose resource_tags don't overlap.
+/// Fix #6: Prune dependencies between batch-created works whose files don't overlap.
 /// Safety net for when the LLM creates linear chains between independent works.
 fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix: &str) {
     let batch_set: HashSet<&str> = batch_created_ids.iter().map(|s| s.as_str()).collect();
 
-    // Build resource_tags lookup for batch works
+    // Build files lookup for batch works
     let tag_map: HashMap<String, HashSet<String>> = {
         let Ok(works) = stores.read_works() else {
             tracing::error!("works lock poisoned");
@@ -402,15 +402,11 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix:
         };
         batch_created_ids
             .iter()
-            .filter_map(|id| {
-                works
-                    .get(id)
-                    .map(|w| (id.clone(), w.resource_tags.iter().cloned().collect()))
-            })
+            .filter_map(|id| works.get(id).map(|w| (id.clone(), w.files.iter().cloned().collect())))
             .collect()
     };
 
-    // Prune deps between batch works with disjoint resource_tags
+    // Prune deps between batch works with disjoint files
     let Ok(mut works) = stores.write_works() else {
         tracing::error!("works lock poisoned");
         return;

@@ -286,7 +286,7 @@ pub(super) async fn inject_preformed_plan(
             .await;
 
             let mut work_ids = Vec::new();
-            for (work_title, work_desc, resource_tags) in works {
+            for (work_title, work_desc, files) in works {
                 let work = dispatch_ok(
                     stores,
                     tx,
@@ -297,7 +297,7 @@ pub(super) async fn inject_preformed_plan(
                         "parent_id": phase_id,
                         "title": work_title,
                         "description": work_desc,
-                        "resource_tags": resource_tags,
+                        "files": files,
                         "acceptance_criteria": ["tests pass"],
                     }),
                 )

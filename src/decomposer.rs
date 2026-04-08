@@ -1950,10 +1950,10 @@ mod tests {
     }
 
     #[test]
-    fn test_records_to_hierarchy_resource_tags_empty() {
+    fn test_records_to_hierarchy_files_empty() {
         let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
         let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
-        assert!(h.works[0].resource_tags.is_empty());
+        assert!(h.works[0].files.is_empty());
     }
 
     #[test]

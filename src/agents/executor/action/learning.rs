@@ -11,7 +11,7 @@ pub(super) fn handle_create_learning(
     scope: &str,
     source_id: &str,
     applicable_roles: Option<&[String]>,
-    resource_tags: Option<&[String]>,
+    files: Option<&[String]>,
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
 
@@ -34,8 +34,8 @@ pub(super) fn handle_create_learning(
     if let Some(roles) = applicable_roles {
         params["applicable_roles"] = serde_json::json!(roles);
     }
-    if let Some(tags) = resource_tags {
-        params["resource_tags"] = serde_json::json!(tags);
+    if let Some(tags) = files {
+        params["files"] = serde_json::json!(tags);
     }
     let resp = bridge.request("learning.create", params);
     if resp.is_error() {
@@ -64,7 +64,7 @@ mod tests {
             scope: "global".to_string(),
             source_id: "wi-1".to_string(),
             applicable_roles: Some(vec!["implementer".to_string()]),
-            resource_tags: Some(vec!["src/".to_string()]),
+            files: Some(vec!["src/".to_string()]),
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();
@@ -85,7 +85,7 @@ mod tests {
             scope: "work".to_string(),
             source_id: "wi-1".to_string(),
             applicable_roles: None,
-            resource_tags: None,
+            files: None,
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await.unwrap();

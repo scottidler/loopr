@@ -645,7 +645,7 @@ mod tests {
             scope: "global".into(),
             source_id: "s1".into(),
             applicable_roles: None,
-            resource_tags: None,
+            files: None,
         }));
         assert!(is_allowed_researcher_action(&AgentAction::Done {
             summary: "done".into(),

@@ -29,7 +29,7 @@ async fn test_coordinator_state_summary_multi_record() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI-1", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "WI-1", "description": "desc", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
 
     // Add agent session
@@ -128,7 +128,7 @@ async fn test_coordinator_assigns_implementer_completes() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Write hello.txt", "description": "Create hello.txt with content", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 

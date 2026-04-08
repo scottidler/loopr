@@ -194,7 +194,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                 "content": format!("Review feedback ({}): {}", review.verdict, review.summary),
                 "scope": "work",
                 "source_id": work_title,
-                "resource_tags": [feedback_tag],
+                "files": [feedback_tag],
             }),
         );
         if learn_resp.is_error() {

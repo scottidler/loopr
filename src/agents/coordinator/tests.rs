@@ -418,7 +418,7 @@ async fn test_infer_action_level_returns_none_for_create_learning() {
         scope: "global".into(),
         source_id: "test".into(),
         applicable_roles: None,
-        resource_tags: None,
+        files: None,
     };
     assert!(infer_action_level(&action).is_none());
 }
@@ -1371,7 +1371,7 @@ async fn test_resolve_batch_deps_resolves_batch_0() {
         parent_id: "phase-1".into(),
         title: "WI".into(),
         description: "d".into(),
-        resource_tags: vec![],
+        files: vec![],
         acceptance_criteria: vec![],
         dependencies: vec!["batch:0".to_string()],
     };
@@ -1389,7 +1389,7 @@ async fn test_resolve_batch_deps_out_of_range() {
         parent_id: "phase-1".into(),
         title: "WI".into(),
         description: "d".into(),
-        resource_tags: vec![],
+        files: vec![],
         acceptance_criteria: vec![],
         dependencies: vec!["batch:5".to_string()],
     };
@@ -1408,7 +1408,7 @@ async fn test_resolve_batch_deps_no_batch_refs() {
         parent_id: "phase-1".into(),
         title: "WI".into(),
         description: "d".into(),
-        resource_tags: vec![],
+        files: vec![],
         acceptance_criteria: vec![],
         dependencies: vec!["wi-existing".to_string()],
     };
@@ -1431,13 +1431,13 @@ async fn test_prune_independent_deps_removes_disjoint() {
     let dir = TestDir::new("loopr-coord-prune1");
     let stores = test_stores(&dir);
 
-    // Create two works with non-overlapping resource_tags — dep should be pruned
+    // Create two works with non-overlapping files — dep should be pruned
     let mut wi_a = Work::new("phase-1".into(), "Work A".into());
-    wi_a.resource_tags = vec!["src/a.rs".into()];
+    wi_a.files = vec!["src/a.rs".into()];
     let a_id = wi_a.id.clone();
 
     let mut wi_b = Work::new("phase-1".into(), "Work B".into());
-    wi_b.resource_tags = vec!["src/b.rs".into()];
+    wi_b.files = vec!["src/b.rs".into()];
     wi_b.dependencies = vec![a_id.clone()];
     let b_id = wi_b.id.clone();
 
@@ -1457,11 +1457,11 @@ async fn test_prune_independent_deps_keeps_overlapping() {
 
     // Both works touch src/main.rs — dep should be kept
     let mut wi_a = Work::new("phase-1".into(), "Work A".into());
-    wi_a.resource_tags = vec!["src/main.rs".into(), "src/a.rs".into()];
+    wi_a.files = vec!["src/main.rs".into(), "src/a.rs".into()];
     let a_id = wi_a.id.clone();
 
     let mut wi_b = Work::new("phase-1".into(), "Work B".into());
-    wi_b.resource_tags = vec!["src/main.rs".into(), "src/b.rs".into()];
+    wi_b.files = vec!["src/main.rs".into(), "src/b.rs".into()];
     wi_b.dependencies = vec![a_id.clone()];
     let b_id = wi_b.id.clone();
 
@@ -1481,11 +1481,11 @@ async fn test_prune_independent_deps_keeps_external() {
 
     // wi_b depends on an external work (not in batch) — should be kept regardless
     let mut wi_a = Work::new("phase-1".into(), "Work A".into());
-    wi_a.resource_tags = vec!["src/a.rs".into()];
+    wi_a.files = vec!["src/a.rs".into()];
     let a_id = wi_a.id.clone();
 
     let mut wi_b = Work::new("phase-1".into(), "Work B".into());
-    wi_b.resource_tags = vec!["src/b.rs".into()];
+    wi_b.files = vec!["src/b.rs".into()];
     wi_b.dependencies = vec!["wi-external".to_string()];
     let b_id = wi_b.id.clone();
 
@@ -1623,7 +1623,7 @@ async fn test_build_phase_status_includes_failure_learnings() {
         created_at: crate::id::now_millis(),
         updated_at: crate::id::now_millis(),
         applicable_roles: None,
-        resource_tags: vec![],
+        files: vec![],
         confidence: 0.5,
     };
     stores.learnings.write().unwrap().insert(learning.id.clone(), learning);

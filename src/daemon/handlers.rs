@@ -680,7 +680,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 4,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Test Work", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent_id": phase_id, "title": "Test Work", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -783,7 +783,7 @@ pub(crate) mod tests {
             DaemonRequest::new(
                 4,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Work", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent_id": phase_id, "title": "Work", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         )
         .await;

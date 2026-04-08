@@ -52,15 +52,15 @@ pub(super) async fn handle_propose_bundle(
     }
 
     // For normal bundles: auto-commit any pending changes before creating
-    // the bundle, scoped to resource_tags. Skip for noop bundles.
+    // the bundle, scoped to files. Skip for noop bundles.
     let mut loose_files: Vec<String> = Vec::new();
     if !is_noop {
-        // Fetch the Work's resource_tags for scoped staging
-        let resource_tags: Vec<String> = bridge
+        // Fetch the Work's files for scoped staging
+        let files: Vec<String> = bridge
             .stores()
             .read_works()
             .ok()
-            .and_then(|works| works.get(wi_id).map(|w| w.resource_tags.clone()))
+            .and_then(|works| works.get(wi_id).map(|w| w.files.clone()))
             .unwrap_or_default();
 
         let status_output = tokio::process::Command::new("git")
@@ -70,10 +70,10 @@ pub(super) async fn handle_propose_bundle(
             .await;
         if let Ok(output) = status_output {
             let dirty_files = scope::parse_porcelain_status(&String::from_utf8_lossy(&output.stdout));
-            let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty_files, &resource_tags);
+            let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty_files, &files);
 
-            if resource_tags.is_empty() && !in_scope.is_empty() {
-                ctx.warn("Work has no resource_tags, staging all non-artifact dirty files");
+            if files.is_empty() && !in_scope.is_empty() {
+                ctx.warn("Work has no files, staging all non-artifact dirty files");
             }
 
             if !out_of_scope.is_empty() {

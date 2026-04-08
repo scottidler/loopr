@@ -88,7 +88,7 @@ async fn test_full_hierarchy_creation_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Implement sign()", "description": "JWT signing function", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
     assert_eq!(wi["status"], "Ready");
@@ -152,7 +152,7 @@ async fn test_bundle_lifecycle_via_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "Task", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "Task", "description": "desc", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 

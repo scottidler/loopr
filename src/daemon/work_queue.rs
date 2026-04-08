@@ -22,7 +22,7 @@ struct WorkPriority {
 /// - No active (non-terminal) Implementer session on the Work
 ///
 /// Priority (higher score = picked first):
-/// - +100 if no active locks contend with the Work's resource_tags
+/// - +100 if no active locks contend with the Work's files
 /// - +(10 - min(deps, 10)) * 10 for fewer dependencies
 pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>) -> Option<String> {
     let works = stores.read_works().ok()?;
@@ -73,8 +73,8 @@ fn compute_priority(
 ) -> i64 {
     let mut score: i64 = 0;
 
-    // Prefer Works with no resource contention (no active locks on their resource_tags)
-    let has_contention = work.resource_tags.iter().any(|tag| {
+    // Prefer Works with no resource contention (no active locks on their files)
+    let has_contention = work.files.iter().any(|tag| {
         locks
             .values()
             .any(|l| l.resource == *tag && l.status() == LockStatus::Active)
@@ -216,7 +216,7 @@ mod tests {
         // Work A: has contention (active lock on its resource_tag)
         let mut wa = Work::new("phase-1".to_string(), "Work A".to_string());
         wa.force_status(WorkStatus::Ready);
-        wa.resource_tags = vec!["src/main.rs".to_string()];
+        wa.files = vec!["src/main.rs".to_string()];
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
 
@@ -227,7 +227,7 @@ mod tests {
         // Work B: no contention
         let mut wb = Work::new("phase-1".to_string(), "Work B".to_string());
         wb.force_status(WorkStatus::Ready);
-        wb.resource_tags = vec!["src/lib.rs".to_string()];
+        wb.files = vec!["src/lib.rs".to_string()];
         let wb_id = wb.id.clone();
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
@@ -294,7 +294,7 @@ mod tests {
         // Work A: has resource tags that are locked
         let mut wa = Work::new("phase-1".to_string(), "Locked".to_string());
         wa.force_status(WorkStatus::Ready);
-        wa.resource_tags = vec!["contested.rs".to_string()];
+        wa.files = vec!["contested.rs".to_string()];
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
 

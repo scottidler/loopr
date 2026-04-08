@@ -52,16 +52,16 @@ pub async fn execute_action(
             file::handle_read_file(ctx, worktree_path, path, offset, limit).await
         }
         AgentAction::Commit { message, paths } => {
-            let resource_tags = work_id
+            let files = work_id
                 .and_then(|wid| {
                     ctx.bridge
                         .stores()
                         .read_works()
                         .ok()
-                        .and_then(|works| works.get(wid).map(|w| w.resource_tags.clone()))
+                        .and_then(|works| works.get(wid).map(|w| w.files.clone()))
                 })
                 .unwrap_or_default();
-            file::handle_commit(worktree_path, message, paths, &resource_tags).await
+            file::handle_commit(worktree_path, message, paths, &files).await
         }
         AgentAction::ProposeBundle {
             description,
@@ -82,7 +82,7 @@ pub async fn execute_action(
             scope,
             source_id,
             applicable_roles,
-            resource_tags,
+            files,
         } => learning::handle_create_learning(
             ctx,
             work_id,
@@ -90,7 +90,7 @@ pub async fn execute_action(
             scope,
             source_id,
             applicable_roles.as_deref(),
-            resource_tags.as_deref(),
+            files.as_deref(),
         ),
         AgentAction::Done { summary } => Ok(ActionResult::Done(summary.clone())),
         AgentAction::NeedHelp { reason } => Ok(ActionResult::NeedHelp(reason.clone())),
@@ -100,7 +100,7 @@ pub async fn execute_action(
             parent_id,
             title,
             description,
-            resource_tags,
+            files,
             acceptance_criteria,
             dependencies,
         } => work::handle_create_work(
@@ -108,7 +108,7 @@ pub async fn execute_action(
             parent_id,
             title,
             description,
-            resource_tags,
+            files,
             acceptance_criteria,
             dependencies,
         ),

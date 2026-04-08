@@ -226,7 +226,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
@@ -368,7 +368,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap();
@@ -516,7 +516,7 @@ async fn bundle_rejection_at_every_stage() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "D", "resource_tags": ["src/"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
     )
     .await;
     let wi_id = wi["id"].as_str().unwrap();

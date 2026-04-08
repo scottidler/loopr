@@ -190,15 +190,15 @@ pub(super) async fn handle_commit(
     worktree_path: &Path,
     message: &str,
     paths: &[String],
-    resource_tags: &[String],
+    files: &[String],
 ) -> Result<ActionResult> {
     // Determine which files to stage
     let add_args = if !paths.is_empty() {
         // LLM explicitly specified files - trust them
         paths.to_vec()
-    } else if !resource_tags.is_empty() {
-        // No paths from LLM - scope to resource_tags via git status.
-        // We CANNOT blindly pass resource_tags to git add because files
+    } else if !files.is_empty() {
+        // No paths from LLM - scope to files via git status.
+        // We CANNOT blindly pass files to git add because files
         // that haven't been modified or don't exist will cause git add
         // to fail with "fatal: pathspec did not match any files".
         let status_output = tokio::process::Command::new("git")
@@ -207,13 +207,13 @@ pub(super) async fn handle_commit(
             .output()
             .await?;
         let dirty_files = super::scope::parse_porcelain_status(&String::from_utf8_lossy(&status_output.stdout));
-        let (in_scope, _) = super::scope::partition_by_scope(&dirty_files, resource_tags);
+        let (in_scope, _) = super::scope::partition_by_scope(&dirty_files, files);
         if in_scope.is_empty() {
             return Err(eyre!("no in-scope dirty files to commit"));
         }
         in_scope
     } else {
-        tracing::warn!("commit with no paths and no resource_tags, falling back to -A");
+        tracing::warn!("commit with no paths and no files, falling back to -A");
         vec!["-A".to_string()]
     };
 

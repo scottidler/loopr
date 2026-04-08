@@ -3,16 +3,16 @@
 /// them here as defense in depth.
 const LOOPR_ARTIFACTS: &[&str] = &[".taskstore/", ".worktrees/", "loopr.yml"];
 
-/// Partition dirty files into in-scope and out-of-scope relative to resource_tags.
+/// Partition dirty files into in-scope and out-of-scope relative to files.
 ///
 /// Returns (in_scope, out_of_scope). A file is in-scope if:
-///   - It is NOT a Loopr artifact (always filtered, regardless of resource_tags)
+///   - It is NOT a Loopr artifact (always filtered, regardless of files)
 ///   - AND it matches at least one resource_tag as an exact path
-///   - OR resource_tags is empty (backward compat: all non-artifact files are in-scope)
+///   - OR files is empty (backward compat: all non-artifact files are in-scope)
 ///
 /// Both sides are normalized: leading "./" is stripped, paths are compared
 /// case-sensitively (Unix convention).
-pub fn partition_by_scope(dirty_files: &[String], resource_tags: &[String]) -> (Vec<String>, Vec<String>) {
+pub fn partition_by_scope(dirty_files: &[String], files: &[String]) -> (Vec<String>, Vec<String>) {
     let mut in_scope = Vec::new();
     let mut out_of_scope = Vec::new();
     for file in dirty_files {
@@ -22,9 +22,9 @@ pub fn partition_by_scope(dirty_files: &[String], resource_tags: &[String]) -> (
             out_of_scope.push(normalized.to_string());
             continue;
         }
-        // Empty resource_tags = legacy mode: all non-artifact files are in-scope
-        let matches_tag = resource_tags.is_empty()
-            || resource_tags
+        // Empty files = legacy mode: all non-artifact files are in-scope
+        let matches_tag = files.is_empty()
+            || files
                 .iter()
                 .any(|tag| normalized == tag.strip_prefix("./").unwrap_or(tag));
         if matches_tag {

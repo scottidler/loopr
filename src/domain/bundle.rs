@@ -88,7 +88,7 @@ pub struct Bundle {
     #[serde(default)]
     pub head_commit: Option<String>,
     /// Files modified in the worktree but excluded from the bundle because
-    /// they fall outside the Work's resource_tags scope. Observable signal
+    /// they fall outside the Work's files scope. Observable signal
     /// for downstream agents to detect scope gaps.
     #[serde(default)]
     pub loose_files: Vec<String>,

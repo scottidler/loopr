@@ -29,7 +29,7 @@ async fn test_coordinator_creates_work_via_executor() {
             parent_id: phase_id.clone(),
             title: "Add login".into(),
             description: "Add login endpoint".into(),
-            resource_tags: vec!["src/".into()],
+            files: vec!["src/".into()],
             acceptance_criteria: vec!["tests pass".into()],
             dependencies: vec![],
         },
@@ -85,7 +85,7 @@ async fn test_coordinator_accept_bundle_via_executor() {
         &wm,
         &ic,
         "work.create",
-        json!({"parent_id": phase_id, "title": "WI", "description": "d", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        json!({"parent_id": phase_id, "title": "WI", "description": "d", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     ).await;
     let wi_id = wi["id"].as_str().unwrap().to_string();
 

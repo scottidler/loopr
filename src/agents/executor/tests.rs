@@ -124,7 +124,7 @@ pub(crate) fn create_test_hierarchy(bridge: &AgentIpcBridge) -> (String, String,
     );
     let wi_resp = bridge.request(
         "work.create",
-        serde_json::json!({"parent_id": phase_id, "title": "Test WI", "description": "desc", "resource_tags": ["src/"], "acceptance_criteria": ["tests pass"]}),
+        serde_json::json!({"parent_id": phase_id, "title": "Test WI", "description": "desc", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     );
     let wi_id = wi_resp.result.as_ref().unwrap()["id"].as_str().unwrap().to_string();
     (plan_id, spec_id, phase_id, wi_id)

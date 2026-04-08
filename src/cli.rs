@@ -22,9 +22,9 @@ pub enum CrudCmd {
         /// Order (for Phase)
         #[arg(long)]
         order: Option<u32>,
-        /// Resource tags (for Work, repeatable)
-        #[arg(long = "resource-tag")]
-        resource_tags: Vec<String>,
+        /// File paths scoping work (for Work, repeatable)
+        #[arg(long = "file")]
+        files: Vec<String>,
         /// Acceptance criteria (for Work, repeatable)
         #[arg(long = "acceptance-criteria")]
         acceptance_criteria: Vec<String>,
@@ -626,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parses_work_create_with_resource_tags() {
+    fn test_cli_parses_work_create_with_files() {
         let cli = Cli::parse_from([
             "loopr",
             "work",
@@ -634,9 +634,9 @@ mod tests {
             "Task 1",
             "-p",
             "phase-1",
-            "--resource-tag",
+            "--file",
             "src/auth/",
-            "--resource-tag",
+            "--file",
             "src/lib.rs",
             "--acceptance-criteria",
             "tests pass",
@@ -649,7 +649,7 @@ mod tests {
                     CrudCmd::Create {
                         title,
                         parent,
-                        resource_tags,
+                        files,
                         acceptance_criteria,
                         dependencies,
                         ..
@@ -657,11 +657,11 @@ mod tests {
             }) => {
                 assert_eq!(title, "Task 1");
                 assert_eq!(parent, Some("phase-1".to_string()));
-                assert_eq!(resource_tags, vec!["src/auth/", "src/lib.rs"]);
+                assert_eq!(files, vec!["src/auth/", "src/lib.rs"]);
                 assert_eq!(acceptance_criteria, vec!["tests pass"]);
                 assert_eq!(dependencies, vec!["wi-0"]);
             }
-            _ => panic!("expected Work Create with resource tags"),
+            _ => panic!("expected Work Create with file paths"),
         }
     }
 

@@ -57,9 +57,9 @@ pub struct Learning {
     #[serde(default)]
     pub applicable_roles: Option<Vec<Role>>,
 
-    /// Resource tags for scoped selection (file paths, module names).
-    #[serde(default)]
-    pub resource_tags: Vec<String>,
+    /// File paths for scoped selection (formerly resource_tags).
+    #[serde(default, alias = "resource_tags")]
+    pub files: Vec<String>,
 
     /// Computed confidence: reinforcements / (reinforcements + contradictions).
     /// Updated on reinforce() / contradict(). Range 0.0..=1.0.
@@ -83,7 +83,7 @@ impl Learning {
             created_at: now,
             updated_at: now,
             applicable_roles: None,
-            resource_tags: Vec::new(),
+            files: Vec::new(),
             confidence: default_confidence(),
         }
     }
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(learning.created_at, learning.updated_at);
         // MVP4 fields
         assert!(learning.applicable_roles.is_none());
-        assert!(learning.resource_tags.is_empty());
+        assert!(learning.files.is_empty());
         assert!((learning.confidence - 0.5).abs() < f32::EPSILON);
     }
 
@@ -243,7 +243,7 @@ mod tests {
             "Split large tasks into smaller ones".to_string(),
         );
         learning.applicable_roles = Some(vec![Role::Implementer, Role::Reviewer]);
-        learning.resource_tags = vec!["src/main.rs".to_string()];
+        learning.files = vec!["src/main.rs".to_string()];
         learning.confidence = 0.8;
 
         let json = serde_json::to_string(&learning).unwrap();
@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(learning.promoted, deserialized.promoted);
         assert_eq!(learning.created_at, deserialized.created_at);
         assert_eq!(learning.applicable_roles, deserialized.applicable_roles);
-        assert_eq!(learning.resource_tags, deserialized.resource_tags);
+        assert_eq!(learning.files, deserialized.files);
         assert!((learning.confidence - deserialized.confidence).abs() < f32::EPSILON);
     }
 
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_backward_compat_deserialize_pre_mvp4_json() {
-        // Pre-MVP4 JSON: no applicable_roles, resource_tags, or confidence fields
+        // Pre-MVP4 JSON: no applicable_roles, files, or confidence fields
         let json = r#"{
             "id": "learn-old",
             "source_id": "wi-1",
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(learning.reinforcements, 2);
         // Defaults applied for missing MVP4 fields
         assert!(learning.applicable_roles.is_none());
-        assert!(learning.resource_tags.is_empty());
+        assert!(learning.files.is_empty());
         assert!((learning.confidence - 0.5).abs() < f32::EPSILON);
     }
 
@@ -544,11 +544,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resource_tags() {
+    fn test_files() {
         let mut l = Learning::new("wi-1".to_string(), LearningScope::Work, "insight".to_string());
-        l.resource_tags = vec!["src/main.rs".to_string(), "iteration:5".to_string()];
-        assert_eq!(l.resource_tags.len(), 2);
-        assert!(l.resource_tags.contains(&"src/main.rs".to_string()));
+        l.files = vec!["src/main.rs".to_string(), "iteration:5".to_string()];
+        assert_eq!(l.files.len(), 2);
+        assert!(l.files.contains(&"src/main.rs".to_string()));
     }
 
     #[test]

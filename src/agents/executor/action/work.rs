@@ -9,7 +9,7 @@ pub(super) fn handle_create_work(
     phase_id: &str,
     title: &str,
     description: &str,
-    resource_tags: &[String],
+    files: &[String],
     acceptance_criteria: &[String],
     dependencies: &[String],
 ) -> Result<ActionResult> {
@@ -21,7 +21,7 @@ pub(super) fn handle_create_work(
             "parent_id": phase_id,
             "title": title,
             "description": description,
-            "resource_tags": resource_tags,
+            "files": files,
             "acceptance_criteria": acceptance_criteria,
             "dependencies": dependencies,
         }),
@@ -373,7 +373,7 @@ pub(super) fn handle_override_work(
             "scope": "work",
             "source_id": work_id,
             "applicable_roles": ["coordinator"],
-            "resource_tags": ["override", "audit"],
+            "files": ["override", "audit"],
         }),
     );
 
@@ -479,7 +479,7 @@ mod tests {
             parent_id: phase_id,
             title: "New WI".to_string(),
             description: "WI desc".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],
         };
@@ -602,7 +602,7 @@ mod tests {
             parent_id: "nonexistent-phase".to_string(),
             title: "New WI".to_string(),
             description: "desc".to_string(),
-            resource_tags: vec![],
+            files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
         };
@@ -648,7 +648,7 @@ mod tests {
                 "parent_id": phase_id,
                 "title": "Dep WI",
                 "description": "dep desc",
-                "resource_tags": ["src/"],
+                "files": ["src/"],
                 "acceptance_criteria": ["pass"],
             }),
         );
@@ -660,7 +660,7 @@ mod tests {
                 "parent_id": phase_id,
                 "title": "Work WI",
                 "description": "work desc",
-                "resource_tags": ["src/"],
+                "files": ["src/"],
                 "acceptance_criteria": ["pass"],
                 "dependencies": [dep_id],
             }),
@@ -694,7 +694,7 @@ mod tests {
                 "parent_id": phase_id,
                 "title": "Dep WI Done",
                 "description": "dep desc",
-                "resource_tags": ["src/"],
+                "files": ["src/"],
                 "acceptance_criteria": ["pass"],
             }),
         );
@@ -716,7 +716,7 @@ mod tests {
                 "parent_id": phase_id,
                 "title": "Work WI With Met Dep",
                 "description": "work desc",
-                "resource_tags": ["src/"],
+                "files": ["src/"],
                 "acceptance_criteria": ["pass"],
                 "dependencies": [dep_id],
             }),
@@ -748,7 +748,7 @@ mod tests {
             parent_id: phase_id.clone(),
             title: "Dependent WI".to_string(),
             description: "depends on first".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![wi_id.clone()],
         };
@@ -774,7 +774,7 @@ mod tests {
             parent_id: phase_id.clone(),
             title: "Unique WI".to_string(),
             description: "desc".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
@@ -785,7 +785,7 @@ mod tests {
             parent_id: phase_id.clone(),
             title: "Unique WI".to_string(),
             description: "different desc".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
@@ -809,7 +809,7 @@ mod tests {
             parent_id: phase_id.clone(),
             title: "Add Login".to_string(),
             description: "desc".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
@@ -819,7 +819,7 @@ mod tests {
             parent_id: phase_id.clone(),
             title: "add login".to_string(),
             description: "desc".to_string(),
-            resource_tags: vec!["src/".to_string()],
+            files: vec!["src/".to_string()],
             acceptance_criteria: vec!["pass".to_string()],
             dependencies: vec![],
         };
