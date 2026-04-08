@@ -26,7 +26,7 @@ use crate::daemon::context::Stores;
 use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-use crate::domain::markdown::{update_parent_children, write_doc_markdown};
+use crate::domain::markdown::{update_parent_children, write_doc_markdown, write_doc_markdown_body};
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::validator::client::{LlmClient, ReqwestClient};
 use crate::worktree::manager::WorktreeManager;
@@ -363,7 +363,7 @@ fn persist_hierarchy(
     let repo_path = stores.config.project.repo_path.clone();
 
     macro_rules! persist_one {
-        ($writer:expr, $coll:literal, $r:expr) => {{
+        ($writer:expr, $coll:literal, $r:expr, $content:expr) => {{
             let r = $r;
             if let Some(store) = &stores.store {
                 store
@@ -373,7 +373,12 @@ fn persist_hierarchy(
                     .map_err(|e| eyre!("failed to persist {}: {}", $coll, e))?;
             }
             $writer?.insert(r.id.clone(), r.clone());
-            if let Err(e) = write_doc_markdown(&repo_path, &r) {
+            let write_result = if let Some(body) = $content {
+                write_doc_markdown_body(&repo_path, &r, body)
+            } else {
+                write_doc_markdown(&repo_path, &r)
+            };
+            if let Err(e) = write_result {
                 tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
             }
             let _ = event_tx.send(DaemonEvent::record_created($coll, &r.id));
@@ -381,18 +386,22 @@ fn persist_hierarchy(
     }
 
     let plan_id = hierarchy.plan.id.clone();
-    persist_one!(stores.write_plans(), "plan", hierarchy.plan);
+    let plan_content = hierarchy.content.get(&plan_id).cloned();
+    persist_one!(stores.write_plans(), "plan", hierarchy.plan, plan_content.as_deref());
     for r in hierarchy.specs {
+        let content = hierarchy.content.get(&r.id).cloned();
         update_parent_children(&repo_path, &plan_id, &r.id, &r.title);
-        persist_one!(stores.write_specs(), "spec", r);
+        persist_one!(stores.write_specs(), "spec", r, content.as_deref());
     }
     for r in hierarchy.phases {
+        let content = hierarchy.content.get(&r.id).cloned();
         update_parent_children(&repo_path, &r.parent_id, &r.id, &r.title);
-        persist_one!(stores.write_phases(), "phase", r);
+        persist_one!(stores.write_phases(), "phase", r, content.as_deref());
     }
     for r in hierarchy.works {
+        let content = hierarchy.content.get(&r.id).cloned();
         update_parent_children(&repo_path, &r.parent_id, &r.id, &r.title);
-        persist_one!(stores.write_works(), "work", r);
+        persist_one!(stores.write_works(), "work", r, content.as_deref());
     }
 
     Ok(())

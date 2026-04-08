@@ -13,9 +13,6 @@ pub enum CrudCmd {
     Create {
         /// Title
         title: String,
-        /// Description
-        #[arg(short, long, default_value = "")]
-        description: String,
         /// Parent ID (required for spec, phase, work)
         #[arg(short, long)]
         parent: Option<String>,
@@ -547,13 +544,12 @@ mod tests {
 
     #[test]
     fn test_cli_parses_plan_create() {
-        let cli = Cli::parse_from(["loopr", "plan", "create", "My Plan", "-d", "A description"]);
+        let cli = Cli::parse_from(["loopr", "plan", "create", "My Plan"]);
         match cli.command {
             Some(Command::Plan {
-                cmd: CrudCmd::Create { title, description, .. },
+                cmd: CrudCmd::Create { title, .. },
             }) => {
                 assert_eq!(title, "My Plan");
-                assert_eq!(description, "A description");
             }
             _ => panic!("expected Plan Create"),
         }

@@ -419,7 +419,6 @@ mod tests {
             json!({
                 "parent_id": plan_id,
                 "title": "Test Spec",
-                "description": "A spec"
             }),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
@@ -459,11 +458,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let plan_id = create_test_plan(&stores, &tx, &wm).await;
-        let req = DaemonRequest::new(
-            2,
-            "spec.create",
-            json!({"parent_id": plan_id, "description": "no title"}),
-        );
+        let req = DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -494,7 +489,7 @@ mod tests {
         let req = DaemonRequest::new(
             2,
             "spec.create",
-            json!({"parent_id": plan_id, "title": "Persisted Spec", "description": "desc"}),
+            json!({"parent_id": plan_id, "title": "Persisted Spec"}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -1129,7 +1124,6 @@ mod tests {
                 json!({
                     "id": spec_id,
                     "title": "Updated Spec",
-                    "description": "New desc"
                 }),
             ),
         )

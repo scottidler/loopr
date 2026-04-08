@@ -282,7 +282,6 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
     match cmd {
         CrudCmd::Create {
             title,
-            description,
             parent,
             order,
             files,
@@ -291,7 +290,6 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
         } => {
             let mut params = json!({
                 "title": title,
-                "description": description,
             });
             if let Some(parent_id) = parent {
                 params["parent_id"] = json!(parent_id);

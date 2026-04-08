@@ -665,7 +665,7 @@ mod tests {
         let mut params = json!({
             "parent_id": phase_id,
             "title": title,
-            "description": "test",
+
             "files": ["src/"],
             "acceptance_criteria": ["pass"],
         });
@@ -775,8 +775,7 @@ mod tests {
             json!({
                 "parent_id": phase_id,
                 "title": "Implement auth",
-                "description": "Add JWT signing"
-            , "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -797,7 +796,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "title": "Persisted WI", "description": "desc", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "title": "Persisted WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -849,7 +848,7 @@ mod tests {
         let req = DaemonRequest::new(
             30,
             "work.create",
-            json!({"parent_id": phase_id, "description": "no title", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+            json!({"parent_id": phase_id, "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
@@ -1328,7 +1327,7 @@ mod tests {
             DaemonRequest::new(
                 2,
                 "work.create",
-                json!({"parent_id": phase_id, "title": "Transition WI", "description": "Test", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
+                json!({"parent_id": phase_id, "title": "Transition WI", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
             ),
         )
         .await;
@@ -1378,7 +1377,7 @@ mod tests {
                 json!({
                     "id": wi_id,
                     "title": "Updated Work",
-                    "description": "New desc",
+
                     "assignee": "agent-1",
                     "files": ["src/lib.rs"],
                     "acceptance_criteria": ["tests pass"],

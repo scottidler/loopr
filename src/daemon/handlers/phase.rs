@@ -544,7 +544,7 @@ mod tests {
             json!({
                 "parent_id": spec_id,
                 "title": "Test Phase",
-                "description": "A phase",
+
                 "order": 1
             }),
         );
@@ -586,11 +586,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let (_, spec_id) = create_test_spec(&stores, &tx, &wm).await;
-        let req = DaemonRequest::new(
-            20,
-            "phase.create",
-            json!({"parent_id": spec_id, "description": "no title"}),
-        );
+        let req = DaemonRequest::new(20, "phase.create", json!({"parent_id": spec_id}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -623,7 +619,7 @@ mod tests {
         let req = DaemonRequest::new(
             20,
             "phase.create",
-            json!({"parent_id": spec_id, "title": "Persisted Phase", "description": "desc", "order": 1}),
+            json!({"parent_id": spec_id, "title": "Persisted Phase", "order": 1}),
         );
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
@@ -1210,7 +1206,7 @@ mod tests {
                 json!({
                     "id": phase_id,
                     "title": "Updated Phase",
-                    "description": "New desc",
+
                     "order": 5
                 }),
             ),

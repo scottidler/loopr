@@ -5,7 +5,7 @@ fn test_plan_create_mapping() {
     let cmd = Command::Plan {
         cmd: CrudCmd::Create {
             title: "My Plan".to_string(),
-            description: "A test".to_string(),
+
             parent: None,
             order: None,
             files: vec![],
@@ -16,7 +16,6 @@ fn test_plan_create_mapping() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "plan.create");
     assert_eq!(params["title"], "My Plan");
-    assert_eq!(params["description"], "A test");
 }
 
 #[test]
@@ -24,7 +23,7 @@ fn test_spec_create_mapping_with_parent() {
     let cmd = Command::Spec {
         cmd: CrudCmd::Create {
             title: "My Spec".to_string(),
-            description: "".to_string(),
+
             parent: Some("plan-1".to_string()),
             order: None,
             files: vec![],
@@ -42,7 +41,7 @@ fn test_phase_create_mapping_with_order() {
     let cmd = Command::Phase {
         cmd: CrudCmd::Create {
             title: "Phase 1".to_string(),
-            description: "".to_string(),
+
             parent: Some("spec-1".to_string()),
             order: Some(1),
             files: vec![],
@@ -496,7 +495,6 @@ fn test_crud_spec_with_parent_and_order() {
     let cmd = Command::Spec {
         cmd: CrudCmd::Create {
             title: "Auth Spec".to_string(),
-            description: "JWT tokens".to_string(),
             parent: Some("plan-42".to_string()),
             order: Some(3),
             files: vec![],
@@ -507,7 +505,6 @@ fn test_crud_spec_with_parent_and_order() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "spec.create");
     assert_eq!(params["title"], "Auth Spec");
-    assert_eq!(params["description"], "JWT tokens");
     assert_eq!(params["parent_id"], "plan-42");
     assert_eq!(params["order"], 3);
 }
@@ -619,7 +616,6 @@ fn test_work_create_with_parent_uses_parent_id() {
     let cmd = Command::Work {
         cmd: CrudCmd::Create {
             title: "Implement auth".to_string(),
-            description: "JWT".to_string(),
             parent: Some("phase-1".to_string()),
             order: None,
             files: vec!["src/".to_string()],
@@ -640,7 +636,7 @@ fn test_work_create_skips_work_fields_for_non_work() {
     let cmd = Command::Plan {
         cmd: CrudCmd::Create {
             title: "Plan".to_string(),
-            description: "".to_string(),
+
             parent: None,
             order: None,
             files: vec!["should-be-ignored".to_string()],

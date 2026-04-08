@@ -339,7 +339,7 @@ mod tests {
             "plan.create",
             json!({
                 "title": "Test Plan",
-                "description": "A test",
+
                 "acceptance_criteria": "It works"
             }),
         );
@@ -357,7 +357,7 @@ mod tests {
         let (_dir, stores) = test_stores();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(1, "plan.create", json!({"description": "no title"}));
+        let req = DaemonRequest::new(1, "plan.create", json!({}));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("title"));
@@ -381,11 +381,7 @@ mod tests {
         let (_dir, stores) = test_stores_with_taskstore();
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
-        let req = DaemonRequest::new(
-            1,
-            "plan.create",
-            json!({"title": "Persisted Plan", "description": "desc"}),
-        );
+        let req = DaemonRequest::new(1, "plan.create", json!({"title": "Persisted Plan", }));
         let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
         assert!(!resp.is_error());
         let plan_id = resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -462,11 +458,7 @@ mod tests {
         let wm = test_worktree_mgr();
 
         // Create a plan (writes to both TaskStore and HashMap)
-        let create_req = DaemonRequest::new(
-            1,
-            "plan.create",
-            json!({"title": "TaskStore Plan", "description": "persistent"}),
-        );
+        let create_req = DaemonRequest::new(1, "plan.create", json!({"title": "TaskStore Plan", }));
         let create_resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), create_req).await;
         assert!(!create_resp.is_error());
         let plan_id = create_resp.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -1085,7 +1077,7 @@ mod tests {
                 json!({
                     "id": plan_id,
                     "title": "Updated Plan",
-                    "description": "New desc",
+
                     "acceptance_criteria": "New criteria"
                 }),
             ),
