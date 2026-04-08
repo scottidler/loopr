@@ -31,15 +31,6 @@ struct LlmOutOfScopeItem {
     description: String,
 }
 
-/// Parameters for Phase -> Works coverage evaluation.
-pub struct PhaseWorksParams {
-    pub id: String,
-    pub title: String,
-    pub content: String,
-    pub order: u32,
-    pub spec_title: String,
-}
-
 /// Coverage Evaluator - checks parent->children semantic completeness.
 ///
 /// Architecturally parallel to the Doc Validator:
@@ -66,48 +57,53 @@ impl CoverageEvaluator<ReqwestClient> {
 
 impl<H: HttpClient> CoverageEvaluator<H> {
     /// Evaluate coverage of Plan -> Specs.
+    ///
+    /// `parent_markdown_content` is the Plan's full `.md` file.
+    /// `children_markdown_content` is the concatenated Spec `.md` files separated by `---`.
     pub async fn evaluate_plan_specs(
         &self,
         plan_id: &str,
-        plan_title: &str,
-        plan_description: &str,
-        plan_acceptance_criteria: &str,
-        specs_list: &str,
+        parent_markdown_content: &str,
+        children_markdown_content: &str,
         children_ids: Vec<String>,
     ) -> Result<CoverageReport> {
         debug!("CoverageEvaluator::evaluate_plan_specs(plan_id={})", plan_id);
-        let prompt = prompts::plan_specs_prompt(plan_title, plan_description, plan_acceptance_criteria, specs_list);
+        let prompt = prompts::plan_specs_prompt(parent_markdown_content, children_markdown_content);
         self.run_evaluation("plans", plan_id, "specs", children_ids, &prompt)
             .await
     }
 
     /// Evaluate coverage of Spec -> Phases.
+    ///
+    /// `parent_markdown_content` is the Spec's full `.md` file.
+    /// `children_markdown_content` is the concatenated Phase `.md` files separated by `---`.
     pub async fn evaluate_spec_phases(
         &self,
         spec_id: &str,
-        spec_title: &str,
-        spec_description: &str,
-        plan_title: &str,
-        phases_list: &str,
+        parent_markdown_content: &str,
+        children_markdown_content: &str,
         children_ids: Vec<String>,
     ) -> Result<CoverageReport> {
         debug!("CoverageEvaluator::evaluate_spec_phases(spec_id={})", spec_id);
-        let prompt = prompts::spec_phases_prompt(spec_title, spec_description, plan_title, phases_list);
+        let prompt = prompts::spec_phases_prompt(parent_markdown_content, children_markdown_content);
         self.run_evaluation("specs", spec_id, "phases", children_ids, &prompt)
             .await
     }
 
     /// Evaluate coverage of Phase -> Works.
+    ///
+    /// `parent_markdown_content` is the Phase's full `.md` file.
+    /// `children_markdown_content` is the concatenated Work `.md` files separated by `---`.
     pub async fn evaluate_phase_works(
         &self,
-        phase: &PhaseWorksParams,
-        works_list: &str,
+        phase_id: &str,
+        parent_markdown_content: &str,
+        children_markdown_content: &str,
         children_ids: Vec<String>,
     ) -> Result<CoverageReport> {
-        debug!("CoverageEvaluator::evaluate_phase_works(phase_id={})", phase.id);
-        let prompt =
-            prompts::phase_works_prompt(&phase.title, &phase.content, phase.order, &phase.spec_title, works_list);
-        self.run_evaluation("phases", &phase.id, "works", children_ids, &prompt)
+        debug!("CoverageEvaluator::evaluate_phase_works(phase_id={})", phase_id);
+        let prompt = prompts::phase_works_prompt(parent_markdown_content, children_markdown_content);
+        self.run_evaluation("phases", phase_id, "works", children_ids, &prompt)
             .await
     }
 
@@ -269,15 +265,10 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
+        let parent_md = "---\ntitle: Test Plan\nacceptance-criteria:\n  - Must work\n---\n\nA plan";
+        let children_md = "---\ntitle: Spec 1\n---\n\ncovers auth";
         let report = evaluator
-            .evaluate_plan_specs(
-                "pl-123",
-                "Test Plan",
-                "A plan",
-                "Must work",
-                "- Spec 1: covers auth",
-                vec!["sp-1".to_string()],
-            )
+            .evaluate_plan_specs("pl-123", parent_md, children_md, vec!["sp-1".to_string()])
             .await
             .unwrap();
         assert_eq!(report.verdict, CoverageVerdict::Complete);
@@ -297,15 +288,10 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&incomplete_llm_response()));
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
+        let parent_md = "---\ntitle: Bad Plan\nacceptance-criteria:\n  - Auth + logging\n---\n\nDesc";
+        let children_md = "---\ntitle: Spec 1\n---\n\nonly auth";
         let report = evaluator
-            .evaluate_plan_specs(
-                "pl-456",
-                "Bad Plan",
-                "Desc",
-                "Auth + logging",
-                "- Spec 1: only auth",
-                vec!["sp-1".to_string()],
-            )
+            .evaluate_plan_specs("pl-456", parent_md, children_md, vec!["sp-1".to_string()])
             .await
             .unwrap();
         assert_eq!(report.verdict, CoverageVerdict::Incomplete);
@@ -325,15 +311,10 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
+        let parent_md = "---\ntitle: My Spec\nparent-id: pl-123\n---\n\nSpec desc";
+        let children_md = "---\ntitle: Phase 1\norder: 0\n---\n\nPhase body";
         let report = evaluator
-            .evaluate_spec_phases(
-                "sp-123",
-                "My Spec",
-                "Spec desc",
-                "Plan Title",
-                "- Phase 1",
-                vec!["ph-1".to_string()],
-            )
+            .evaluate_spec_phases("sp-123", parent_md, children_md, vec!["ph-1".to_string()])
             .await
             .unwrap();
         assert_eq!(report.verdict, CoverageVerdict::Complete);
@@ -350,15 +331,10 @@ mod tests {
         let mock = MockHttpClient::new(&mock_anthropic_response(&complete_llm_response()));
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
-        let params = PhaseWorksParams {
-            id: "ph-123".into(),
-            title: "My Phase".into(),
-            content: "Phase desc".into(),
-            order: 1,
-            spec_title: "Spec Title".into(),
-        };
+        let parent_md = "---\ntitle: My Phase\norder: 1\nparent-id: sp-456\n---\n\nPhase desc";
+        let children_md = "---\ntitle: Work 1\n---\n\nWork body";
         let report = evaluator
-            .evaluate_phase_works(&params, "- Work 1", vec!["wk-1".to_string()])
+            .evaluate_phase_works("ph-123", parent_md, children_md, vec!["wk-1".to_string()])
             .await
             .unwrap();
         assert_eq!(report.verdict, CoverageVerdict::Complete);
@@ -377,7 +353,12 @@ mod tests {
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
-            .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
+            .evaluate_plan_specs(
+                "pl-1",
+                "---\ntitle: T\n---\n\nD",
+                "---\ntitle: C\n---\n\nspecs",
+                vec!["sp-1".to_string()],
+            )
             .await
             .unwrap();
         assert_eq!(report.verdict, CoverageVerdict::Complete);
@@ -393,7 +374,12 @@ mod tests {
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
-            .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
+            .evaluate_plan_specs(
+                "pl-1",
+                "---\ntitle: T\n---\n\nD",
+                "---\ntitle: C\n---\n\nspecs",
+                vec!["sp-1".to_string()],
+            )
             .await
             .unwrap();
         assert_eq!(report.verdict, CoverageVerdict::Incomplete);
@@ -412,7 +398,12 @@ mod tests {
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
-            .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
+            .evaluate_plan_specs(
+                "pl-1",
+                "---\ntitle: T\n---\n\nD",
+                "---\ntitle: C\n---\n\nspecs",
+                vec!["sp-1".to_string()],
+            )
             .await
             .unwrap();
         assert_eq!(report.model_used, "claude-sonnet-4-6");
@@ -428,7 +419,12 @@ mod tests {
         let evaluator = CoverageEvaluator::with_http_client(config, mock);
 
         let report = evaluator
-            .evaluate_plan_specs("pl-1", "T", "D", "C", "specs", vec!["sp-1".to_string()])
+            .evaluate_plan_specs(
+                "pl-1",
+                "---\ntitle: T\n---\n\nD",
+                "---\ntitle: C\n---\n\nspecs",
+                vec!["sp-1".to_string()],
+            )
             .await
             .unwrap();
         assert!(report.id.starts_with("cr-"));

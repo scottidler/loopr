@@ -1,12 +1,12 @@
 You are evaluating whether a set of Phases fully implements a Spec.
 
 ## Parent Spec
-- Title: {spec_title}
-- Body: {spec_content}
-- Plan context: {plan_title}
+
+{parent_markdown_content}
 
 ## Generated Phases (in order)
-{phases_list}
+
+{children_markdown_content}
 
 ## Task
 Evaluate whether these Phases, executed in order, fully implement the Spec.

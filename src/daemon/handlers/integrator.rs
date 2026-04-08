@@ -8,7 +8,7 @@ use tracing::{debug, instrument};
 
 use crate::agents::integrator::effective_validation_commands;
 use crate::config::IntegratorConfig;
-use crate::domain::markdown::{read_doc_content_or_empty, read_full_markdown_or_empty};
+use crate::domain::markdown::{build_children_markdown_content, read_full_markdown_or_empty};
 use crate::domain::tick::TickStatus;
 use crate::domain::validation::ValidationReport;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
@@ -398,132 +398,68 @@ pub(super) async fn handle_coverage_evaluate(stores: &Arc<Stores>, req: DaemonRe
 
         let report = match parent_collection.as_str() {
             "plan" | "plans" => {
-                let (plan, specs_list, children_ids) = {
+                let children_ids = {
+                    // Verify parent exists
                     let plans = stores.read_plans()?;
-                    let plan = match plans.get(&parent_id) {
-                        Some(p) => p.clone(),
-                        None => {
-                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id)));
-                        }
-                    };
+                    if !plans.contains_key(&parent_id) {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("plan", &parent_id)));
+                    }
                     drop(plans);
                     let specs = stores.read_specs()?;
-                    let child_specs: Vec<_> = specs.values().filter(|s| s.parent_id == parent_id).collect();
-                    let children_ids: Vec<String> = child_specs.iter().map(|s| s.id.clone()).collect();
-                    let repo_path = &stores.config.project.repo_path;
-                    let specs_list = child_specs
-                        .iter()
-                        .map(|s| {
-                            format!(
-                                "- [{}] {}: {}",
-                                s.id,
-                                s.title,
-                                read_doc_content_or_empty(repo_path, &s.id)
-                            )
-                        })
+                    specs
+                        .values()
+                        .filter(|s| s.parent_id == parent_id)
+                        .map(|s| s.id.clone())
                         .collect::<Vec<_>>()
-                        .join("\n");
-                    (plan, specs_list, children_ids)
                 };
-                let ac_str = plan.acceptance_criteria.0.join("\n");
-                let plan_content = read_doc_content_or_empty(&stores.config.project.repo_path, &plan.id);
+                let repo_path = &stores.config.project.repo_path;
+                let parent_md = read_full_markdown_or_empty(repo_path, &parent_id);
+                let children_md = build_children_markdown_content(repo_path, &children_ids);
                 evaluator
-                    .evaluate_plan_specs(
-                        &parent_id,
-                        &plan.title,
-                        &plan_content,
-                        &ac_str,
-                        &specs_list,
-                        children_ids,
-                    )
+                    .evaluate_plan_specs(&parent_id, &parent_md, &children_md, children_ids)
                     .await
             }
             "spec" | "specs" => {
-                let (spec, plan_title, phases_list, children_ids) = {
+                let children_ids = {
                     let specs = stores.read_specs()?;
-                    let spec = match specs.get(&parent_id) {
-                        Some(s) => s.clone(),
-                        None => {
-                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id)));
-                        }
-                    };
+                    if !specs.contains_key(&parent_id) {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("spec", &parent_id)));
+                    }
                     drop(specs);
-                    let plan_title = {
-                        let plans = stores.read_plans()?;
-                        plans.get(&spec.parent_id).map(|p| p.title.clone()).unwrap_or_default()
-                    };
                     let phases = stores.read_phases()?;
-                    let child_phases: Vec<_> = phases.values().filter(|p| p.parent_id == parent_id).collect();
-                    let children_ids: Vec<String> = child_phases.iter().map(|p| p.id.clone()).collect();
-                    let repo_path = &stores.config.project.repo_path;
-                    let phases_list = child_phases
-                        .iter()
-                        .map(|p| {
-                            format!(
-                                "- [{}] {} (order: {}): {}",
-                                p.id,
-                                p.title,
-                                p.order,
-                                read_doc_content_or_empty(repo_path, &p.id)
-                            )
-                        })
+                    phases
+                        .values()
+                        .filter(|p| p.parent_id == parent_id)
+                        .map(|p| p.id.clone())
                         .collect::<Vec<_>>()
-                        .join("\n");
-                    (spec, plan_title, phases_list, children_ids)
                 };
-                let spec_content = read_doc_content_or_empty(&stores.config.project.repo_path, &spec.id);
+                let repo_path = &stores.config.project.repo_path;
+                let parent_md = read_full_markdown_or_empty(repo_path, &parent_id);
+                let children_md = build_children_markdown_content(repo_path, &children_ids);
                 evaluator
-                    .evaluate_spec_phases(
-                        &parent_id,
-                        &spec.title,
-                        &spec_content,
-                        &plan_title,
-                        &phases_list,
-                        children_ids,
-                    )
+                    .evaluate_spec_phases(&parent_id, &parent_md, &children_md, children_ids)
                     .await
             }
             "phase" | "phases" => {
-                let (params, works_list, children_ids) = {
+                let children_ids = {
                     let phases = stores.read_phases()?;
-                    let phase = match phases.get(&parent_id) {
-                        Some(p) => p.clone(),
-                        None => {
-                            return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id)));
-                        }
-                    };
+                    if !phases.contains_key(&parent_id) {
+                        return Ok(DaemonResponse::err(req.id, RpcError::not_found("phase", &parent_id)));
+                    }
                     drop(phases);
-                    let spec_title = {
-                        let specs = stores.read_specs()?;
-                        specs.get(&phase.parent_id).map(|s| s.title.clone()).unwrap_or_default()
-                    };
                     let works = stores.read_works()?;
-                    let child_works: Vec<_> = works.values().filter(|w| w.parent_id == parent_id).collect();
-                    let children_ids: Vec<String> = child_works.iter().map(|w| w.id.clone()).collect();
-                    let repo_path = &stores.config.project.repo_path;
-                    let works_list = child_works
-                        .iter()
-                        .map(|w| {
-                            format!(
-                                "- [{}] {}: {}",
-                                w.id,
-                                w.title,
-                                read_doc_content_or_empty(repo_path, &w.id)
-                            )
-                        })
+                    works
+                        .values()
+                        .filter(|w| w.parent_id == parent_id)
+                        .map(|w| w.id.clone())
                         .collect::<Vec<_>>()
-                        .join("\n");
-                    let phase_content = read_doc_content_or_empty(repo_path, &phase.id);
-                    let params = crate::evaluator::PhaseWorksParams {
-                        id: parent_id.clone(),
-                        title: phase.title,
-                        content: phase_content,
-                        order: phase.order,
-                        spec_title,
-                    };
-                    (params, works_list, children_ids)
                 };
-                evaluator.evaluate_phase_works(&params, &works_list, children_ids).await
+                let repo_path = &stores.config.project.repo_path;
+                let parent_md = read_full_markdown_or_empty(repo_path, &parent_id);
+                let children_md = build_children_markdown_content(repo_path, &children_ids);
+                evaluator
+                    .evaluate_phase_works(&parent_id, &parent_md, &children_md, children_ids)
+                    .await
             }
             _ => {
                 return Ok(DaemonResponse::err(

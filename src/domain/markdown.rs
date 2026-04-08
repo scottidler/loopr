@@ -115,6 +115,25 @@ pub fn read_full_markdown_or_empty(repo_path: &Path, id: &str) -> String {
     })
 }
 
+/// Read and concatenate full `.md` files for multiple child IDs.
+///
+/// Each child's content is separated by `\n\n---\n\n`. Missing files are
+/// skipped with a warning. Used for `{children_markdown_content}` interpolation
+/// in coverage evaluator prompts.
+pub fn build_children_markdown_content(repo_path: &Path, child_ids: &[String]) -> String {
+    child_ids
+        .iter()
+        .filter_map(|id| match read_full_markdown(repo_path, id) {
+            Ok(content) => Some(content),
+            Err(e) => {
+                tracing::warn!("build_children_markdown_content: skipping {}: {}", id, e);
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n")
+}
+
 fn read_body_from_path(path: &Path) -> Result<String> {
     let raw = fs::read_to_string(path).map_err(|e| eyre::eyre!("read_doc_content: {}: {}", path.display(), e))?;
     Ok(extract_body_from_markdown(&raw))

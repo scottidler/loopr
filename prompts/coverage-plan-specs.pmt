@@ -1,12 +1,12 @@
 You are evaluating whether a set of Specs fully covers a Plan.
 
 ## Parent Plan
-- Title: {plan_title}
-- Body: {plan_content}
-- Acceptance Criteria: {plan_acceptance_criteria}
+
+{parent_markdown_content}
 
 ## Generated Specs
-{specs_list}
+
+{children_markdown_content}
 
 ## Task
 Evaluate whether these Specs, taken together, fully address the Plan's acceptance criteria and description.

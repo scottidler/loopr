@@ -1,13 +1,12 @@
 You are evaluating whether a set of Works fully implements a Phase.
 
 ## Parent Phase
-- Title: {phase_title}
-- Body: {phase_content}
-- Order: {phase_order}
-- Spec context: {spec_title}
+
+{parent_markdown_content}
 
 ## Generated Works
-{works_list}
+
+{children_markdown_content}
 
 ## Task
 Evaluate whether these Works, with their dependencies, fully implement the Phase.
