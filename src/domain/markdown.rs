@@ -26,8 +26,7 @@ pub enum FmValue {
 pub trait DocMarkdown {
     fn doc_id(&self) -> &str;
     fn doc_frontmatter(&self) -> Vec<(String, FmValue)>;
-    /// Returns the markdown body. Ownership is needed because Work appends a
-    /// checklist section to the description.
+    /// Returns the markdown body (AC section only; prose body lives in docs/loopr/<id>.md).
     fn doc_body(&self) -> String;
 }
 

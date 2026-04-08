@@ -40,13 +40,6 @@ impl std::fmt::Display for WorkStatus {
     }
 }
 
-/// A single item in a Work's completion checklist.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChecklistItem {
-    pub description: String,
-    pub completed: bool,
-}
-
 /// Concrete unit of work within a Phase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Work {
@@ -59,8 +52,6 @@ pub struct Work {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
-    #[serde(default)]
-    pub checklist: Vec<ChecklistItem>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -117,7 +108,6 @@ impl Work {
             resource_tags: Vec::new(),
             dependencies: Vec::new(),
             acceptance_criteria: AcceptanceCriteria::default(),
-            checklist: Vec::new(),
             created_at: now,
             updated_at: now,
         }
@@ -135,13 +125,6 @@ impl DocMarkdown for Work {
             body.push_str("## Acceptance Criteria\n\n");
             for item in &self.acceptance_criteria.0 {
                 body.push_str(&format!("- [ ] {}\n", item));
-            }
-        }
-        if !self.checklist.is_empty() {
-            body.push_str("\n\n## Checklist\n\n");
-            for item in &self.checklist {
-                let mark = if item.completed { "x" } else { " " };
-                body.push_str(&format!("- [{}] {}\n", mark, item.description));
             }
         }
         body
