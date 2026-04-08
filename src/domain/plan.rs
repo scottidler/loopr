@@ -69,6 +69,8 @@ impl fmt::Display for Tier {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
     pub id: String,
+    #[serde(default)]
+    pub parent_id: Option<String>,
     pub title: String,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
@@ -110,6 +112,7 @@ impl Plan {
         let now = id::now_millis();
         Self {
             id: id::generate_id("pl"),
+            parent_id: None,
             title,
             acceptance_criteria,
             status: HierarchyStatus::Draft,
@@ -139,6 +142,10 @@ impl DocMarkdown for Plan {
     fn doc_frontmatter(&self) -> Vec<(String, FmValue)> {
         let mut m = Vec::new();
         m.push(("id".into(), FmValue::Text(self.id.clone())));
+        m.push((
+            "parent-id".into(),
+            FmValue::Text(self.parent_id.as_deref().unwrap_or("~").to_string()),
+        ));
         m.push(("title".into(), FmValue::Text(self.title.clone())));
         m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
         m.push(("tier".into(), FmValue::Text(format!("{:?}", self.tier))));
@@ -435,6 +442,7 @@ mod tests {
         let fm = plan.doc_frontmatter();
         let keys: Vec<&str> = fm.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"id"));
+        assert!(keys.contains(&"parent-id"));
         assert!(keys.contains(&"title"));
         assert!(keys.contains(&"status"));
         assert!(keys.contains(&"tier"));
