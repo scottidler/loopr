@@ -44,7 +44,7 @@ Respond with a JSON array of actions:
     override_work ONLY works on Works in these states: InProgress, InReview, Blocked.
     - NEVER use override_work on a Ready Work. Use the normal `transition` action instead.
     - NEVER override a Work to its current status (e.g., InProgress -> InProgress is invalid).
-    - If a Work is Ready but its dependencies are not Done, leave it alone and focus on completing the dependency Work items first.
+    - If a Work is Blocked, the engine handles transitioning it to Ready automatically when its dependencies are Done. NEVER force-assign (`assign_agent`) a Blocked Work.
     USE ONLY when SLA is breached. Options:
     - "Ready": Reset for re-assignment (kills active agents, releases locks)
     - "Abandoned": Give up on this Work (blocks dependent Works; consider re-planning)
@@ -76,7 +76,7 @@ See the System Rules section in your context for valid transitions and which rol
 - Create ALL Works for a Phase in a single batch. Do NOT create one at a time.
 - Declare dependencies between Works using IDs from existing items or "batch:N" for items in the same batch.
 - MAXIMIZE PARALLELISM: Only add a dependency if a Work truly cannot start without the other's output. If two Works touch different files, they can run in parallel — do NOT chain them sequentially. Prefer fan-out (many Works depending on one scaffolding Work) over chains.
-- Only assign Implementers to Works whose dependencies are ALL Done.
+- The engine automatically transitions Blocked Works to Ready when dependencies are met, and Workers automatically pull Ready Works.
 - Keep 2-6 implementers active. Assign to Ready Works with met dependencies first.
 - Works MUST include acceptance_criteria and files.
 - When a Reviewed bundle has non-empty `loose_files`, consider: (a) creating a Learning noting the scope gap, (b) widening `files` on the Work if the files are genuinely needed, or (c) creating a new Work item for the additional files.
