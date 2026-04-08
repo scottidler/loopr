@@ -195,6 +195,17 @@ end
 return M
 TESTLUA
 
+    # Minimal stub so `lua test_todo.lua` doesn't crash before agents write the actual tests
+    cat > "${TARGET}/test_todo.lua" <<'TESTTODO'
+local test = require("test")
+
+test("stub", function()
+    assert(true)
+end)
+
+test.summary()
+TESTTODO
+
     (
         cd "${TARGET}"
         git init -q

@@ -46,6 +46,12 @@ A command-line todo application in Python.
 - Include tests using pytest
 README
 
+    # Minimal stub so pytest doesn't exit 5 with "no tests collected" before agents write the real tests
+    cat > "${TARGET}/test_todo.py" <<'TEST'
+def test_stub():
+    pass
+TEST
+
     (
         cd "${TARGET}"
         git init -q

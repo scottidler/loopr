@@ -102,6 +102,12 @@ HTML
 </html>
 HTML
 
+    # Minimal stub so pytest doesn't crash before agents write the actual test suite
+    cat > "${TARGET}/test_scraper.py" <<'TEST'
+def test_stub():
+    pass
+TEST
+
     cat > "${TARGET}/README.md" <<'README'
 # Link Harvester
 

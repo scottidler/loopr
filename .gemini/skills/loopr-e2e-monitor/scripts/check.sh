@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Loopr E2E health check
 # Usage: ./check.sh [target-dir]
-# Defaults to /tmp/loopr-e2e/lua-todo/latest
+# Defaults to /tmp/loopr/e2e/lua-todo/latest
 
-TARGET="${1:-/tmp/loopr-e2e/lua-todo/latest}"
+TARGET="${1:-/tmp/loopr/e2e/lua-todo/latest}"
 
 section() { echo; echo "=== $* ==="; }
 ok()      { echo "[OK]    $*"; }

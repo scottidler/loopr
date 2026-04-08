@@ -51,6 +51,12 @@ services:
       - DATABASE_PATH=/tmp/test_bookmarks.db
 COMPOSE
 
+    # Minimal stub so pytest doesn't crash before agents write the actual test suite
+    cat > "${TARGET}/test_api.py" <<'TEST'
+def test_stub():
+    pass
+TEST
+
     # Minimal stub so docker compose build works before agents write main.py
     cat > "${TARGET}/main.py" <<'MAIN'
 from fastapi import FastAPI

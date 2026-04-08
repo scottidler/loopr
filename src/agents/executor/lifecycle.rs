@@ -203,7 +203,13 @@ pub async fn run_agent_task(
             return;
         };
         if let Some(session) = sessions.get_mut(&session_id) {
-            if let Err(e) = session.transition_to(terminal_status) {
+            let current = session.status();
+            if current.is_terminal() {
+                warn!(
+                    "{} already in terminal state ({:?}), skipping transition to {:?}",
+                    prefix, current, terminal_status
+                );
+            } else if let Err(e) = session.transition_to(terminal_status) {
                 error!("{} failed to transition to {:?}: {}", prefix, terminal_status, e);
                 return;
             }

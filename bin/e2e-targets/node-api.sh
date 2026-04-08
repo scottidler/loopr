@@ -116,6 +116,18 @@ README
 
     mkdir -p "${TARGET}/test" "${TARGET}/data"
 
+    # Minimal stub so Jest doesn't exit 1 with "No tests found" before agents write the real tests
+    cat > "${TARGET}/test/notes.test.js" <<'TEST'
+const app = require('../app');
+describe('stub', () => {
+  test('health returns ok', async () => {
+    const supertest = require('supertest');
+    const res = await supertest(app).get('/health');
+    expect(res.body.status).toBe('ok');
+  });
+});
+TEST
+
     log "Installing npm dependencies..."
     (cd "${TARGET}" && npm install --silent 2>&1 | /usr/bin/tail -3)
 

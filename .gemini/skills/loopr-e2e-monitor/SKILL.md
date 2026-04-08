@@ -78,7 +78,7 @@ The `scripts/check.sh` emits three marker levels: `[OK]`, `[WARN]`, `[ALERT]`.
 
 If you need to investigate a specific target project, run:
 ```bash
-scripts/check.sh /tmp/loopr-e2e/lua-todo/latest
+scripts/check.sh /tmp/loopr/e2e/lua-todo/latest
 ```
 
 ## Critical Alert Conditions
