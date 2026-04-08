@@ -306,7 +306,7 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     {
         let c = ctx.read().await;
         if c.config.agents.pull_based_workers && c.config.agents.enabled {
-            let pool_size = c.config.agents.worker_pool_size;
+            let pool_size = c.config.agents.worker_pool_size.resolve();
             info!("Spawning {} pull-based workers", pool_size);
             for i in 0..pool_size {
                 let s = c.stores.clone();

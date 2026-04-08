@@ -294,6 +294,58 @@ pub struct IntegratorConfig {
     pub session_timeout_secs: Option<u64>,
 }
 
+/// Worker pool size: a fixed count, or "auto"/"nproc" to use available parallelism.
+///
+/// "auto" and "nproc" both resolve to `std::thread::available_parallelism()` at
+/// daemon startup. Falls back to 4 if the OS cannot determine the value.
+///
+/// YAML examples:
+///   worker-pool-size: auto   # use all available cores
+///   worker-pool-size: nproc  # alias for auto
+///   worker-pool-size: 4      # fixed count
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum WorkerPoolSize {
+    Named(String),
+    Fixed(u32),
+}
+
+impl WorkerPoolSize {
+    pub fn resolve(&self) -> u32 {
+        match self {
+            WorkerPoolSize::Fixed(n) => *n,
+            WorkerPoolSize::Named(_) => std::thread::available_parallelism()
+                .map(|n| n.get() as u32)
+                .unwrap_or(4),
+        }
+    }
+}
+
+impl Default for WorkerPoolSize {
+    fn default() -> Self {
+        WorkerPoolSize::Named("auto".to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WorkerPoolSize {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = WorkerPoolSize;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a positive integer or \"auto\"/\"nproc\"")
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<WorkerPoolSize, E> {
+                Ok(WorkerPoolSize::Fixed(v as u32))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<WorkerPoolSize, E> {
+                Ok(WorkerPoolSize::Named(v.to_string()))
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
 /// Agent system configuration — LLM agents running as Tokio tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -305,7 +357,8 @@ pub struct AgentConfig {
     /// push-based AssignAgent. Default false (feature flag).
     pub pull_based_workers: bool,
     /// Number of persistent worker tasks in the pull-based pool.
-    pub worker_pool_size: u32,
+    /// Accepts a fixed count or "auto"/"nproc" to use available parallelism.
+    pub worker_pool_size: WorkerPoolSize,
     pub implementer: AgentRoleConfig,
     pub reviewer: AgentRoleConfig,
     pub coordinator: CoordinatorConfig,
@@ -320,7 +373,7 @@ impl Default for AgentConfig {
             auto_start_implementer: false,
             auto_start_reviewer: false,
             pull_based_workers: false,
-            worker_pool_size: 2,
+            worker_pool_size: WorkerPoolSize::default(),
             implementer: AgentRoleConfig::default_implementer(),
             reviewer: AgentRoleConfig::default_reviewer(),
             coordinator: CoordinatorConfig::default(),
@@ -1249,5 +1302,61 @@ active_interval_secs: 10
         let config = Config::default();
         assert_eq!(config.reconciler.interval_secs, 60);
         assert!(config.reconciler.enabled);
+    }
+
+    #[test]
+    fn test_worker_pool_size_fixed_resolve() {
+        let size = WorkerPoolSize::Fixed(4);
+        assert_eq!(size.resolve(), 4);
+    }
+
+    #[test]
+    fn test_worker_pool_size_auto_resolve() {
+        let size = WorkerPoolSize::Named("auto".to_string());
+        // Should resolve to at least 1
+        assert!(size.resolve() >= 1);
+    }
+
+    #[test]
+    fn test_worker_pool_size_nproc_resolve() {
+        let size = WorkerPoolSize::Named("nproc".to_string());
+        assert!(size.resolve() >= 1);
+    }
+
+    #[test]
+    fn test_worker_pool_size_default_is_auto() {
+        let size = WorkerPoolSize::default();
+        match size {
+            WorkerPoolSize::Named(ref s) => assert_eq!(s, "auto"),
+            WorkerPoolSize::Fixed(_) => panic!("expected Named variant"),
+        }
+    }
+
+    #[test]
+    fn test_worker_pool_size_deserialize_fixed() {
+        let yaml = "4";
+        let size: WorkerPoolSize = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(size.resolve(), 4);
+    }
+
+    #[test]
+    fn test_worker_pool_size_deserialize_auto() {
+        let yaml = "\"auto\"";
+        let size: WorkerPoolSize = serde_yaml::from_str(yaml).unwrap();
+        assert!(size.resolve() >= 1);
+    }
+
+    #[test]
+    fn test_worker_pool_size_deserialize_nproc() {
+        let yaml = "\"nproc\"";
+        let size: WorkerPoolSize = serde_yaml::from_str(yaml).unwrap();
+        assert!(size.resolve() >= 1);
+    }
+
+    #[test]
+    fn test_agent_config_default_worker_pool_size() {
+        let config = AgentConfig::default();
+        // Default is auto, resolves to >= 1
+        assert!(config.worker_pool_size.resolve() >= 1);
     }
 }
