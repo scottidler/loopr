@@ -666,11 +666,11 @@ async fn test_load_or_create_coordinator_state_resumes_existing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_check_fsm_transition_planning_to_activate() {
-    let dir = TestDir::new("loopr-coord-fsm-plan2act");
+async fn test_check_fsm_transition_planning_to_executing() {
+    let dir = TestDir::new("loopr-coord-fsm-plan2exec");
     let stores = test_stores(&dir);
 
-    // Create Plan → Spec → Phase hierarchy (all Active)
+    // Create Plan → Spec hierarchy (all Active)
     let mut plan = Plan::new("Plan".into(), "crit".into());
     plan.force_status(HierarchyStatus::Active);
     let plan_id = plan.id.clone();
@@ -681,54 +681,16 @@ async fn test_check_fsm_transition_planning_to_activate() {
     let spec_id = spec.id.clone();
     stores.specs.write().unwrap().insert(spec_id.clone(), spec);
 
-    let mut phase = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    phase.force_status(HierarchyStatus::Active);
-    stores.phases.write().unwrap().insert(phase.id.clone(), phase);
-
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Planning;
     let config = CoordinatorConfig::default();
 
     let transition = check_fsm_transition(&stores, &coord_state, &config);
-    assert_eq!(transition, Some(CoordinatorFsmState::ActivatePhase));
+    assert_eq!(transition, Some(CoordinatorFsmState::Executing));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_check_fsm_transition_executing_to_phase_gate() {
-    let dir = TestDir::new("loopr-coord-fsm-exec2gate");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    // Create a Done work item in the phase
-    let mut wi = Work::new(phase_id.clone(), "WI 1".into());
-    wi.force_status(WorkStatus::Done);
-    stores.works.write().unwrap().insert(wi.id.clone(), wi);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-    let config = CoordinatorConfig::default();
-
-    let transition = check_fsm_transition(&stores, &coord_state, &config);
-    assert_eq!(transition, Some(CoordinatorFsmState::PhaseGate));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_check_fsm_transition_phase_gate_to_goal_complete() {
-    let dir = TestDir::new("loopr-coord-fsm-gate2done");
-    let stores = test_stores(&dir);
-
-    // No more phases to activate
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
-    let config = CoordinatorConfig::default();
-
-    let transition = check_fsm_transition(&stores, &coord_state, &config);
-    assert_eq!(transition, Some(CoordinatorFsmState::GoalComplete));
-}
+// Tests for ActivatePhase/PhaseGate transitions removed - those states no longer exist.
+// Goal completion is now detected by reconcile() during Executing state.
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_persist_coordinator_state() {
@@ -746,66 +708,8 @@ async fn test_persist_coordinator_state() {
     assert_eq!(retrieved.fsm_state, CoordinatorFsmState::Executing);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_build_phase_status_no_phase() {
-    let dir = TestDir::new("loopr-coord-fsm-nophase");
-    let stores = test_stores(&dir);
-
-    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    let status = build_phase_status(&stores, &coord_state);
-    assert!(status.contains("No active phase"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_build_phase_status_with_works() {
-    let dir = TestDir::new("loopr-coord-fsm-phstatus");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let wi1 = Work::new(phase_id.clone(), "WI 1".into());
-    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into());
-    wi2.force_status(WorkStatus::Done);
-    stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
-    stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let status = build_phase_status(&stores, &coord_state);
-    assert!(status.contains("Build Phase"));
-    assert!(status.contains("2 total"));
-    // Verify grouping: actionable vs terminal sections
-    assert!(status.contains("Actionable Works (eligible for assignment)"));
-    assert!(status.contains("Terminal Works (COMPLETED - do NOT assign agents to these)"));
-    assert!(status.contains("1 actionable, 1 terminal"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_build_phase_status_all_terminal() {
-    let dir = TestDir::new("loopr-coord-fsm-allterm");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Done Phase".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut wi1 = Work::new(phase_id.clone(), "WI 1".into());
-    wi1.force_status(WorkStatus::Done);
-    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into());
-    wi2.force_status(WorkStatus::Abandoned);
-    stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
-    stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let status = build_phase_status(&stores, &coord_state);
-    assert!(status.contains("0 actionable, 2 terminal"));
-    assert!(status.contains("None - all works are in a terminal state"));
-}
+// build_phase_status tests removed - replaced by build_execution_status.
+// build_execution_status shows multi-phase view via Active Plan/Spec/Phase hierarchy.
 
 // =========================================================================
 // Exhaustive FSM transition matrix tests
@@ -870,61 +774,8 @@ async fn test_fsm_planning_stays_when_plan_is_draft() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-// --- ActivatePhase → Executing ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_activate_phase_to_executing_when_wis_exist() {
-    let dir = TestDir::new("loopr-fsm-act2exec");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let wi = Work::new(phase_id.clone(), "WI 1".into());
-    stores.works.write().unwrap().insert(wi.id.clone(), wi);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
-    coord_state.current_phase_id = Some(phase_id);
-    let config = CoordinatorConfig::default();
-
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::Executing)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_activate_phase_stays_when_no_phase_id() {
-    let dir = TestDir::new("loopr-fsm-actnopid");
-    let stores = test_stores(&dir);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
-    // current_phase_id is None
-    let config = CoordinatorConfig::default();
-
-    assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_activate_phase_stays_when_no_wis() {
-    let dir = TestDir::new("loopr-fsm-actnowi");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
-    coord_state.current_phase_id = Some(phase_id);
-    let config = CoordinatorConfig::default();
-
-    // Phase exists but no WIs yet
-    assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
-}
+// ActivatePhase tests removed - that state no longer exists.
+// Planning transitions directly to Executing.
 
 // --- Executing state: all branches ---
 
@@ -949,32 +800,8 @@ async fn test_fsm_executing_stays_when_wis_in_progress() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_executing_to_phase_gate_with_mixed_done_abandoned() {
-    let dir = TestDir::new("loopr-fsm-execmix");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut wi1 = Work::new(phase_id.clone(), "WI Done".into());
-    wi1.force_status(WorkStatus::Done);
-    let mut wi2 = Work::new(phase_id.clone(), "WI Abandoned".into());
-    wi2.force_status(WorkStatus::Abandoned);
-    stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
-    stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-    let config = CoordinatorConfig::default();
-
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::PhaseGate)
-    );
-}
+// test_fsm_executing_to_phase_gate_with_mixed_done_abandoned removed - PhaseGate no longer exists.
+// Goal completion is detected by reconcile().
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fsm_executing_stays_when_partial_done() {
@@ -1000,58 +827,8 @@ async fn test_fsm_executing_stays_when_partial_done() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_executing_to_phase_gate_on_zero_wis() {
-    let dir = TestDir::new("loopr-fsm-exec0wi");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-    // No work items!
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-    let config = CoordinatorConfig::default();
-
-    // BUG FIX: 0 WIs should transition to PhaseGate, not stay stuck
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::PhaseGate)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_executing_to_phase_gate_on_phase_timeout() {
-    let dir = TestDir::new("loopr-fsm-exectimeout");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    // WI in progress — would normally stay Executing
-    let mut wi = Work::new(phase_id.clone(), "WI".into());
-    wi.force_status(WorkStatus::InProgress);
-    stores.works.write().unwrap().insert(wi.id.clone(), wi);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-    // Set phase_activated_at far in the past
-    coord_state.phase_activated_at = Some(crate::id::now_millis() - 7_200_000); // 2 hours ago
-
-    let config = CoordinatorConfig {
-        phase_timeout_secs: 3600, // 1 hour
-        ..CoordinatorConfig::default()
-    };
-
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::PhaseGate)
-    );
-}
+// test_fsm_executing_to_phase_gate_on_zero_wis removed - PhaseGate no longer exists.
+// test_fsm_executing_to_phase_gate_on_phase_timeout removed - phase timeout no longer triggers PhaseGate.
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
@@ -1096,43 +873,7 @@ async fn test_fsm_executing_no_current_phase_stays() {
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
 
-// --- PhaseGate → ActivatePhase (more phases) ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_phase_gate_to_activate_when_more_phases() {
-    let dir = TestDir::new("loopr-fsm-gate2act");
-    let stores = test_stores(&dir);
-
-    let mut plan = Plan::new("P".into(), "c".into());
-    plan.force_status(HierarchyStatus::Active);
-    let plan_id = plan.id.clone();
-    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
-
-    let mut spec = Spec::new(plan_id, "S".into(), 0);
-    spec.force_status(HierarchyStatus::Active);
-    let spec_id = spec.id.clone();
-    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
-
-    let mut phase1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    phase1.force_status(HierarchyStatus::Complete);
-    let phase1_id = phase1.id.clone();
-    stores.phases.write().unwrap().insert(phase1_id.clone(), phase1);
-
-    // Phase 2 stays Draft - ready to activate
-    let phase2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    stores.phases.write().unwrap().insert(phase2.id.clone(), phase2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
-    coord_state.current_phase_id = Some(phase1_id.clone());
-    coord_state.phases_completed.push(phase1_id); // Phase 1 is done
-    let config = CoordinatorConfig::default();
-
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::ActivatePhase)
-    );
-}
+// PhaseGate -> ActivatePhase tests removed - those states no longer exist.
 
 // --- GoalComplete is terminal ---
 
@@ -1149,9 +890,8 @@ async fn test_fsm_goal_complete_returns_none() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
-    // Regression: when ActivatePhase finds no next phase (all phases complete),
-    // the goal must be deactivated so `run` can detect completion via get_goal.
+async fn test_apply_fsm_goal_complete_deactivates_goal() {
+    // When transitioning to GoalComplete, the goal must be deactivated.
     let dir = TestDir::new("loopr-fsm-goaldeact");
     let stores = test_stores(&dir);
 
@@ -1160,11 +900,10 @@ async fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
     stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
 
     let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
 
-    // No phases in stores — find_next_phase_to_activate returns None
     apply_fsm_transition(
-        CoordinatorFsmState::ActivatePhase,
+        CoordinatorFsmState::GoalComplete,
         &mut coord_state,
         &stores,
         TEST_PREFIX,
@@ -1179,42 +918,11 @@ async fn test_apply_fsm_activate_phase_no_next_phase_deactivates_goal() {
     );
 }
 
-// --- Phase timeout vs goal timeout priority ---
+// Phase timeout tests removed - phase timeout no longer produces PhaseGate.
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_phase_timeout_takes_priority_over_wi_check() {
-    let dir = TestDir::new("loopr-fsm-phtopri");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    // All WIs are Done — would normally trigger PhaseGate via WI check
-    let mut wi = Work::new(phase_id.clone(), "WI".into());
-    wi.force_status(WorkStatus::Done);
-    stores.works.write().unwrap().insert(wi.id.clone(), wi);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-    coord_state.phase_activated_at = Some(crate::id::now_millis() - 7_200_000);
-
-    let config = CoordinatorConfig {
-        phase_timeout_secs: 3600,
-        ..CoordinatorConfig::default()
-    };
-
-    // Phase timeout checked BEFORE WI terminal check — both produce PhaseGate
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::PhaseGate)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
-    let dir = TestDir::new("loopr-fsm-goaltopri");
+async fn test_fsm_goal_timeout_triggers_goal_complete() {
+    let dir = TestDir::new("loopr-fsm-goaltimeout");
     let stores = test_stores(&dir);
 
     let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
@@ -1227,250 +935,23 @@ async fn test_fsm_goal_timeout_takes_priority_over_phase_timeout() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-    // Both phase and goal timed out
-    coord_state.phase_activated_at = Some(crate::id::now_millis() - 18_000_000);
+    // Goal started 5 hours ago, timeout is 4 hours
     coord_state.goal_started_at = crate::id::now_millis() - 18_000_000;
 
     let config = CoordinatorConfig {
-        phase_timeout_secs: 3600,
-        goal_timeout_secs: 14400,
+        goal_timeout_secs: 14400, // 4 hours
         ..CoordinatorConfig::default()
     };
 
-    // Phase timeout fires first (checked before goal timeout in code)
-    // Actually — phase timeout returns PhaseGate, which is checked before goal timeout
     let result = check_fsm_transition(&stores, &coord_state, &config);
-    assert_eq!(result, Some(CoordinatorFsmState::PhaseGate));
+    assert_eq!(result, Some(CoordinatorFsmState::GoalComplete));
 }
 
-// --- find_next_phase_to_activate ---
+// find_next_phase_to_activate tests removed - that function no longer exists.
+// Reconciliation loop handles phase promotion (Pending->Active).
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_find_next_phase_skips_completed() {
-    let dir = TestDir::new("loopr-fsm-nextphskip");
-    let stores = test_stores(&dir);
-
-    let mut plan = Plan::new("P".into(), "c".into());
-    plan.force_status(HierarchyStatus::Active);
-    let plan_id = plan.id.clone();
-    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
-
-    let mut spec = Spec::new(plan_id, "S".into(), 0);
-    spec.force_status(HierarchyStatus::Active);
-    let spec_id = spec.id.clone();
-    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
-
-    // p1 is Complete, p2 is Draft - next phase should be p2
-    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    p1.force_status(HierarchyStatus::Complete);
-    let p1_id = p1.id.clone();
-    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
-
-    let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    // p2 stays Draft (default)
-    let p2_id = p2.id.clone();
-    stores.phases.write().unwrap().insert(p2_id.clone(), p2);
-
-    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    let result = find_next_phase_to_activate(&stores, &coord_state);
-    assert!(result.is_some());
-    let (id, title) = result.unwrap();
-    assert_eq!(id, p2_id);
-    assert_eq!(title, "Phase 2");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_find_next_phase_returns_first_non_terminal() {
-    // When a phase is Active (non-terminal), return it - it's the current phase
-    let dir = TestDir::new("loopr-fsm-nextphwait");
-    let stores = test_stores(&dir);
-
-    let mut plan = Plan::new("P".into(), "c".into());
-    plan.force_status(HierarchyStatus::Active);
-    let plan_id = plan.id.clone();
-    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
-
-    let mut spec = Spec::new(plan_id, "S".into(), 0);
-    spec.force_status(HierarchyStatus::Active);
-    let spec_id = spec.id.clone();
-    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
-
-    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    p1.force_status(HierarchyStatus::Active);
-    let p1_id = p1.id.clone();
-    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
-
-    let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
-
-    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    let result = find_next_phase_to_activate(&stores, &coord_state);
-    // p1 is Active (first non-terminal) -> return p1
-    assert!(result.is_some());
-    let (id, title) = result.unwrap();
-    assert_eq!(id, p1_id);
-    assert_eq!(title, "Phase 1");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_find_next_phase_respects_spec_boundaries() {
-    // Phases from Spec 1 must all be terminal before looking at Spec 2
-    let dir = TestDir::new("loopr-fsm-nextphspec");
-    let stores = test_stores(&dir);
-
-    let mut plan = Plan::new("P".into(), "c".into());
-    plan.force_status(HierarchyStatus::Active);
-    let plan_id = plan.id.clone();
-    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
-
-    let mut spec1 = Spec::new(plan_id.clone(), "Spec 1".into(), 0);
-    spec1.force_status(HierarchyStatus::Active);
-    let spec1_id = spec1.id.clone();
-    stores.specs.write().unwrap().insert(spec1_id.clone(), spec1);
-
-    let mut spec2 = Spec::new(plan_id, "Spec 2".into(), 1);
-    spec2.force_status(HierarchyStatus::Active);
-    let spec2_id = spec2.id.clone();
-    stores.specs.write().unwrap().insert(spec2_id.clone(), spec2);
-
-    // Spec 1 has an Active phase (non-terminal)
-    let mut p1 = Phase::new(spec1_id, "S1 Phase 1".into(), 0);
-    p1.force_status(HierarchyStatus::Active);
-    let p1_id = p1.id.clone();
-    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
-
-    // Spec 2 has a Draft phase
-    let p2 = Phase::new(spec2_id, "S2 Phase 1".into(), 0);
-    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
-
-    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    let result = find_next_phase_to_activate(&stores, &coord_state);
-    // Spec 1 still has non-terminal phases - returns Spec 1's phase, NOT Spec 2's
-    assert!(result.is_some());
-    let (id, title) = result.unwrap();
-    assert_eq!(id, p1_id);
-    assert_eq!(title, "S1 Phase 1");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_find_next_phase_all_active_returns_first() {
-    // Bug regression: decomposer creates ALL phases as Active (not Draft).
-    // Old code looked for Draft only -> returned None -> premature GoalComplete.
-    let dir = TestDir::new("loopr-fsm-nextphallactive");
-    let stores = test_stores(&dir);
-
-    let mut plan = Plan::new("P".into(), "c".into());
-    plan.force_status(HierarchyStatus::Active);
-    let plan_id = plan.id.clone();
-    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
-
-    let mut spec = Spec::new(plan_id, "S".into(), 0);
-    spec.force_status(HierarchyStatus::Active);
-    let spec_id = spec.id.clone();
-    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
-
-    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 0);
-    p1.force_status(HierarchyStatus::Active);
-    let p1_id = p1.id.clone();
-    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
-
-    let mut p2 = Phase::new(spec_id.clone(), "Phase 2".into(), 1);
-    p2.force_status(HierarchyStatus::Active);
-    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
-
-    let mut p3 = Phase::new(spec_id, "Phase 3".into(), 2);
-    p3.force_status(HierarchyStatus::Active);
-    stores.phases.write().unwrap().insert(p3.id.clone(), p3);
-
-    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    let result = find_next_phase_to_activate(&stores, &coord_state);
-    assert!(result.is_some());
-    let (id, title) = result.unwrap();
-    assert_eq!(id, p1_id);
-    assert_eq!(title, "Phase 1");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_find_next_phase_returns_none_all_completed() {
-    let dir = TestDir::new("loopr-fsm-nextphnone");
-    let stores = test_stores(&dir);
-
-    // No phases at all
-    let coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    let result = find_next_phase_to_activate(&stores, &coord_state);
-    assert!(result.is_none());
-}
-
-// --- Transition handler integration ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_fsm_transition_handler_complete_phase_on_activate() {
-    // When transitioning PhaseGate → ActivatePhase, the previous phase
-    // should be completed (added to phases_completed).
-    let dir = TestDir::new("loopr-fsm-thcomplete");
-    let stores = test_stores(&dir);
-
-    let mut plan = Plan::new("P".into(), "c".into());
-    plan.force_status(HierarchyStatus::Active);
-    let plan_id = plan.id.clone();
-    stores.plans.write().unwrap().insert(plan_id.clone(), plan);
-
-    let mut spec = Spec::new(plan_id, "S".into(), 0);
-    spec.force_status(HierarchyStatus::Active);
-    let spec_id = spec.id.clone();
-    stores.specs.write().unwrap().insert(spec_id.clone(), spec);
-
-    let mut p1 = Phase::new(spec_id.clone(), "Phase 1".into(), 1);
-    p1.force_status(HierarchyStatus::Complete);
-    let p1_id = p1.id.clone();
-    stores.phases.write().unwrap().insert(p1_id.clone(), p1);
-
-    // Phase 2 stays Draft - ready to activate
-    let p2 = Phase::new(spec_id, "Phase 2".into(), 2);
-    stores.phases.write().unwrap().insert(p2.id.clone(), p2);
-
-    // Coordinator is in PhaseGate with phase 1 as current
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
-    coord_state.current_phase_id = Some(p1_id.clone());
-
-    let config = CoordinatorConfig::default();
-
-    // check_fsm_transition should return ActivatePhase (Phase 2 is Draft)
-    let transition = check_fsm_transition(&stores, &coord_state, &config);
-    assert_eq!(transition, Some(CoordinatorFsmState::ActivatePhase));
-
-    // Simulate the transition handler: complete previous phase
-    if coord_state.current_phase_id.is_some() {
-        coord_state.complete_phase();
-    }
-
-    assert!(coord_state.phases_completed.contains(&p1_id));
-    assert!(coord_state.current_phase_id.is_none());
-}
-
-// --- Fix #12: mark_phase_record_complete tests ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_mark_phase_record_complete() {
-    let dir = TestDir::new("loopr-coord-phasecomplete");
-    let stores = test_stores(&dir);
-
-    let mut phase = Phase::new("spec-1".into(), "Test Phase".into(), 1);
-    phase.force_status(HierarchyStatus::Active);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id.clone());
-
-    mark_phase_record_complete(&stores, &coord_state, TEST_PREFIX);
-
-    let phases = stores.phases.read().unwrap();
-    let updated = phases.get(&phase_id).unwrap();
-    assert_eq!(updated.status(), HierarchyStatus::Complete);
-}
+// Transition handler and mark_phase_record_complete tests removed.
+// Phase completion is now handled by the reconciliation loop.
 
 // --- Fix #2: resolve_batch_dependencies tests ---
 
@@ -1716,63 +1197,7 @@ async fn test_inject_overlap_deps_empty_batch() {
     inject_overlap_deps(&stores, &[], TEST_PREFIX);
 }
 
-// --- Fix #5: build_phase_status dependency info tests ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_build_phase_status_shows_dependencies() {
-    let dir = TestDir::new("loopr-coord-depstatus");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut wi1 = Work::new(phase_id.clone(), "Setup".into());
-    wi1.force_status(WorkStatus::Done);
-    let wi1_id = wi1.id.clone();
-    stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
-
-    let mut wi2 = Work::new(phase_id.clone(), "Build".into());
-    wi2.dependencies = vec![wi1_id.clone()];
-    let wi2_id = wi2.id.clone();
-    stores.works.write().unwrap().insert(wi2_id.clone(), wi2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let status = build_phase_status(&stores, &coord_state);
-    assert!(status.contains("READY"), "dependency met should show READY: {}", status);
-    assert!(status.contains("deps:"), "should show deps info: {}", status);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_build_phase_status_shows_blocked_deps() {
-    let dir = TestDir::new("loopr-coord-depblocked");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let wi1 = Work::new(phase_id.clone(), "Setup".into());
-    // Default status is Draft, not Done
-    let wi1_id = wi1.id.clone();
-    stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
-
-    let mut wi2 = Work::new(phase_id.clone(), "Build".into());
-    wi2.dependencies = vec![wi1_id.clone()];
-    stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let status = build_phase_status(&stores, &coord_state);
-    assert!(
-        status.contains("BLOCKED"),
-        "unmet dependency should show BLOCKED: {}",
-        status
-    );
-}
+// build_phase_status dependency info tests removed - replaced by build_execution_status.
 
 // --- Fix #4: retry enforcement tests ---
 
@@ -1800,54 +1225,7 @@ async fn test_decrement_attempts_on_dependency_not_met() {
     assert_eq!(coord_state.attempts("wi-1"), 0);
 }
 
-// --- Fix #9: failure learnings in build_phase_status ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_build_phase_status_includes_failure_learnings() {
-    let dir = TestDir::new("loopr-coord-learnings");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Build Phase".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut wi1 = Work::new(phase_id.clone(), "Failing WI".into());
-    wi1.force_status(WorkStatus::InProgress);
-    let wi1_id = wi1.id.clone();
-    stores.works.write().unwrap().insert(wi1_id.clone(), wi1);
-
-    // Insert a failure Learning scoped to this WI's phase
-    let learning = crate::domain::learning::Learning {
-        id: crate::id::generate_id("ln"),
-        source_id: wi1_id,
-        scope: LearningScope::Phase,
-        content: "Build failed due to missing dependency".to_string(),
-        reinforcements: 0,
-        contradictions: 0,
-        promoted: false,
-        created_at: crate::id::now_millis(),
-        updated_at: crate::id::now_millis(),
-        applicable_roles: None,
-        files: vec![],
-        confidence: 0.5,
-    };
-    stores.learnings.write().unwrap().insert(learning.id.clone(), learning);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let status = build_phase_status(&stores, &coord_state);
-    assert!(
-        status.contains("failure learnings"),
-        "should include failure learnings section: {}",
-        status
-    );
-    assert!(
-        status.contains("missing dependency"),
-        "should include learning content: {}",
-        status
-    );
-}
+// build_phase_status failure learnings test removed - build_phase_status no longer exists.
 
 // --- C2: Recently Merged Bundles in state summary ---
 
@@ -2071,50 +1449,8 @@ async fn test_sweep_noop_when_no_integrated_works() {
     assert_eq!(unchanged.status(), WorkStatus::Draft);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_sweep_then_fsm_advances_to_phase_gate() {
-    let dir = TestDir::new("loopr-coord-sweep-fsmadv");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    // All Works in phase are Integrated — sweep should transition them to Done
-    let mut wi1 = Work::new(phase_id.clone(), "WI 1".into());
-    wi1.force_status(WorkStatus::Integrated);
-    stores.works.write().unwrap().insert(wi1.id.clone(), wi1);
-
-    let mut wi2 = Work::new(phase_id.clone(), "WI 2".into());
-    wi2.force_status(WorkStatus::Integrated);
-    stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
-
-    let (event_tx, _rx) = broadcast::channel(16);
-    let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
-
-    // Before sweep: FSM should NOT advance (Works are Integrated, not terminal)
-    let config = CoordinatorConfig::default();
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        None,
-        "FSM should not advance while Works are Integrated"
-    );
-
-    // Run sweep
-    sweep_integrated_to_done(&stores, &coord_state, &bridge, TEST_PREFIX);
-
-    // After sweep: FSM should advance to PhaseGate (all Works now Done)
-    assert_eq!(
-        check_fsm_transition(&stores, &coord_state, &config),
-        Some(CoordinatorFsmState::PhaseGate),
-        "FSM should advance to PhaseGate after sweep transitions all Works to Done"
-    );
-}
+// test_sweep_then_fsm_advances_to_phase_gate removed - PhaseGate no longer exists.
+// Goal completion after sweep is now detected by reconcile().
 
 // --- last_error_kind_for_work tests ---
 
@@ -2180,69 +1516,7 @@ async fn test_last_error_kind_for_work_ignores_other_works() {
     assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
 }
 
-// --- phase_missing_test_tool tests ---
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_phase_missing_test_tool_no_validation_commands() {
-    let dir = TestDir::new("loopr-coord-toolguard-novc");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let warning = phase_missing_test_tool(&stores, &coord_state);
-    assert!(warning.is_empty(), "no warning when phase has no validation_commands");
-}
-
-// Phase-level validation_commands removed in domain-model-cleanup Phase 3.
-// phase_missing_test_tool now always returns empty. Test kept as tombstone.
-#[tokio::test(flavor = "multi_thread")]
-async fn test_phase_missing_test_tool_always_empty_after_field_removal() {
-    let dir = TestDir::new("loopr-coord-toolguard-warn");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let warning = phase_missing_test_tool(&stores, &coord_state);
-    assert!(
-        warning.is_empty(),
-        "phase_missing_test_tool always returns empty after field removal"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
-    let dir = TestDir::new("loopr-coord-toolguard-ok");
-    let stores = test_stores(&dir);
-
-    let phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
-    let phase_id = phase.id.clone();
-    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
-
-    // Register a test tool in the runner
-    let tool = crate::config::ToolEntry {
-        name: "test".into(),
-        command: "echo ok".into(),
-        timeout_secs: 300,
-        worktree: true,
-    };
-    *stores.tool_runner.write().unwrap() = Arc::new(crate::tools::ToolRunner::new(&[tool]));
-
-    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-    coord_state.current_phase_id = Some(phase_id);
-
-    let warning = phase_missing_test_tool(&stores, &coord_state);
-    assert!(warning.is_empty(), "no warning when test tool is registered");
-}
+// phase_missing_test_tool tests removed - that function no longer exists.
 
 // --- Phase 1: quality gate tests (goal_abandon_ratio_terminal + check_abandon_gate) ---
 
@@ -2313,7 +1587,7 @@ async fn test_check_abandon_gate_fires_above_threshold() {
     stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
 
     let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
     // Override goal_id to match the plan_id where we put works
     coord_state.goal_id = plan_id.clone();
 
@@ -2384,7 +1658,7 @@ async fn test_apply_fsm_goal_complete_fires_quality_gate() {
     stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
 
     let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
 
     // 5 abandoned / 12 terminal = 41.7% > 40%: same plan_id as goal_id
     for i in 0..7 {
@@ -2430,7 +1704,7 @@ async fn test_apply_fsm_goal_complete_passes_quality_gate() {
     stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
 
     let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
-    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
 
     // 2 abandoned / 5 terminal = 40% (not > 40%): gate passes
     for i in 0..3 {

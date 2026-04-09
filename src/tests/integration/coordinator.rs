@@ -60,8 +60,7 @@ async fn test_coordinator_state_persistence_across_iterations() {
 
     // Create state, advance to Executing
     let mut state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
-    state.transition_to(CoordinatorFsmState::ActivatePhase);
-    state.activate_phase("phase-1".to_string());
+    state.transition_to(CoordinatorFsmState::Executing);
     state.increment_attempts("wi-1");
     state.increment_attempts("wi-1");
     let state_id = state.id.clone();
@@ -84,9 +83,7 @@ async fn test_coordinator_state_persistence_across_iterations() {
     assert_eq!(deserialized.id, state_id);
     assert_eq!(deserialized.goal_id, goal_id);
     assert_eq!(deserialized.fsm_state, CoordinatorFsmState::Executing);
-    assert_eq!(deserialized.current_phase_id.as_deref(), Some("phase-1"));
     assert_eq!(deserialized.attempts("wi-1"), 2);
-    assert!(deserialized.phase_activated_at.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -7,7 +7,7 @@ use crate::agents::AgentAction;
 use crate::agents::context::ContextBuilder;
 use crate::agents::error::AgentErrorKind;
 use crate::agents::executor::{ActionResult, execute_action};
-use crate::agents::generation::{self, build_work_prompt};
+use crate::agents::generation;
 use crate::agents::implementer::{self, ChatMessage, IterationOutcome, LlmClient};
 use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
@@ -15,7 +15,6 @@ use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-use crate::domain::learning::LearningScope;
 use crate::domain::lock::LockStatus;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
@@ -602,34 +601,7 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix:
     }
 }
 
-/// Fix #12: Mark the Phase domain record as Complete before calling coord_state.complete_phase().
-/// This ensures the Phase record status and CoordinatorState are updated together.
-fn mark_phase_record_complete(stores: &Stores, coord_state: &CoordinatorState, prefix: &str) {
-    if let Some(ref phase_id) = coord_state.current_phase_id {
-        // L1: Clone-then-drop-then-persist to avoid deadlock and ensure TaskStore persistence
-        let phase_to_persist = {
-            let Ok(mut phases) = stores.write_phases() else {
-                tracing::error!("phases lock poisoned");
-                return;
-            };
-            if let Some(phase) = phases.get_mut(phase_id) {
-                phase.force_status(HierarchyStatus::Complete);
-                phase.updated_at = crate::id::now_millis();
-                tracing::info!("{} Phase {} marked Complete (record status updated)", prefix, phase_id);
-                Some(phase.clone())
-            } else {
-                None
-            }
-        };
-        if let Some(phase) = phase_to_persist
-            && let Some(ref store) = stores.store
-            && let Ok(mut s) = store.lock().map_err(|_| eyre!("lock poisoned"))
-            && let Err(e) = s.update(phase)
-        {
-            tracing::warn!("{} Failed to persist Phase complete status: {}", prefix, e);
-        }
-    }
-}
+// mark_phase_record_complete removed - reconciliation handles Phase completion.
 
 /// Check if the Coordinator should mark any Phases as complete based on Work status.
 /// Returns summaries of any phases that were detected as complete.
@@ -780,51 +752,10 @@ fn apply_fsm_transition(
         new_state,
         coord_state.goal_id
     );
-    // Handle ActivatePhase: complete previous phase, find and set the next phase
-    if new_state == CoordinatorFsmState::ActivatePhase {
-        // If transitioning from PhaseGate, complete the previous phase
-        if coord_state.current_phase_id.is_some() {
-            mark_phase_record_complete(stores, coord_state, prefix);
-            coord_state.complete_phase();
-        }
-        let next_phase = find_next_phase_to_activate(stores, coord_state);
-        if let Some((phase_id, phase_title)) = next_phase {
-            tracing::info!("{} activating phase: {} ({})", prefix, phase_title, phase_id);
-            coord_state.current_phase_id = Some(phase_id);
-            coord_state.phase_activated_at = Some(crate::id::now_millis());
-            coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
-            coord_state.updated_at = crate::id::now_millis();
-        } else {
-            // No more phases - check quality gate before declaring complete.
-            // This is the primary completion path (ActivatePhase finds no next phase).
-            coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-            if let Some(outcome) = check_abandon_gate(stores, coord_state, prefix) {
-                // Gate fired: goal stays active (not deactivated), needs human help.
-                persist_coordinator_state(stores, coord_state);
-                return Some(outcome);
-            }
-            // Gate passed: deactivate the goal.
-            if let Ok(mut goals) = stores.write_coordinator_goals()
-                && let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id)
-            {
-                goal.deactivate();
-            }
-        }
-    } else if new_state == CoordinatorFsmState::PhaseGate {
-        // Transition to PhaseGate but DON'T complete_phase() yet —
-        // keep current_phase_id so build_phase_status can show context to the LLM.
-        // complete_phase() is called on the NEXT transition out of PhaseGate.
-        coord_state.transition_to(CoordinatorFsmState::PhaseGate);
-    } else if new_state == CoordinatorFsmState::GoalComplete {
-        // Complete current phase if transitioning from PhaseGate
-        if coord_state.current_phase_id.is_some() {
-            mark_phase_record_complete(stores, coord_state, prefix);
-            coord_state.complete_phase();
-        }
+    if new_state == CoordinatorFsmState::GoalComplete {
         coord_state.transition_to(CoordinatorFsmState::GoalComplete);
         // Check quality gate before declaring success.
         if let Some(outcome) = check_abandon_gate(stores, coord_state, prefix) {
-            // Gate fired: goal stays active (not deactivated), needs human help.
             persist_coordinator_state(stores, coord_state);
             return Some(outcome);
         }
@@ -835,18 +766,14 @@ fn apply_fsm_transition(
             goal.deactivate();
         }
         persist_coordinator_state(stores, coord_state);
-        return Some(IterationOutcome::Done(format!(
-            "Goal complete: {} phases completed",
-            coord_state.phases_completed.len()
-        )));
-    } else {
-        coord_state.transition_to(new_state);
+        return Some(IterationOutcome::Done("Goal complete".to_string()));
     }
+    coord_state.transition_to(new_state);
     persist_coordinator_state(stores, coord_state);
     None
 }
 
-/// Deterministic sweep: transition all `Integrated` Works in the current phase to `Done`.
+/// Deterministic sweep: transition all `Integrated` Works to `Done`.
 /// The integrator parks Work at `Integrated` after merge+validation; the coordinator
 /// acknowledges completion. Runs every iteration during `Executing` state.
 fn sweep_integrated_to_done(
@@ -855,31 +782,12 @@ fn sweep_integrated_to_done(
     bridge: &crate::agents::bridge::AgentIpcBridge,
     prefix: &str,
 ) {
-    tracing::debug!(
-        "{} sweep_integrated_to_done(fsm={:?}, phase={:?})",
-        prefix,
-        coord_state.fsm_state,
-        coord_state.current_phase_id,
-    );
+    tracing::debug!("{} sweep_integrated_to_done(fsm={:?})", prefix, coord_state.fsm_state,);
     if coord_state.fsm_state != CoordinatorFsmState::Executing {
         return;
     }
 
-    // Determine the parent ID for filtering Works:
-    // Full mode: current_phase_id (the active Phase)
-    // Brief mode: active Plan ID (Works are parented directly to Plan)
-    let parent_id = if let Some(id) = &coord_state.current_phase_id {
-        id.clone()
-    } else if let Some(plan) = generation::find_active_plan(stores) {
-        if plan.tier == crate::domain::plan::Tier::Brief {
-            plan.id.clone()
-        } else {
-            return; // Full mode with no phase - nothing to sweep
-        }
-    } else {
-        return;
-    };
-
+    // Sweep ALL Integrated Works regardless of parent - reconciliation handles ordering.
     let integrated_ids: Vec<String> = {
         let Ok(works) = stores.read_works() else {
             tracing::error!("works lock poisoned");
@@ -887,7 +795,7 @@ fn sweep_integrated_to_done(
         };
         works
             .values()
-            .filter(|w| w.parent_id == parent_id && w.status() == WorkStatus::Integrated)
+            .filter(|w| w.status() == WorkStatus::Integrated)
             .map(|w| w.id.clone())
             .collect()
     };
@@ -908,12 +816,6 @@ fn sweep_integrated_to_done(
             tracing::info!("{} Work {} transitioned Integrated -> Done", prefix, wi_id);
         }
     }
-}
-
-/// Phase-level validation_commands were removed in domain-model-cleanup Phase 3.
-/// This function now always returns empty - validation commands live only in IntegratorConfig.
-fn phase_missing_test_tool(_stores: &Stores, _coord_state: &CoordinatorState) -> String {
-    String::new()
 }
 
 /// Determine the FSM state footer -- state-specific instructions for the LLM.
@@ -945,271 +847,96 @@ fn build_fsm_footer(
         CoordinatorFsmState::Decomposing => "Background decomposition is in progress. \
              Respond with: [{\"action\": \"done\", \"summary\": \"Waiting for decomposition to complete\"}]"
             .to_string(),
-        CoordinatorFsmState::Planning => {
-            // Decomposition is handled by the Decomposer before the Coordinator starts.
-            // The Planning state is a transient pass-through: the hierarchy already exists.
-            "All planning artifacts have been decomposed by the Decomposer. \
-             Respond with: [{\"action\": \"done\", \"summary\": \"Planning complete, ready to activate first phase\"}]"
-                .to_string()
-        }
-        CoordinatorFsmState::ActivatePhase => {
-            // Find the next phase to activate and generate Works for it
-            let phase_info = find_next_phase_to_activate(stores, coord_state);
-            match phase_info {
-                Some((phase_id, phase_title)) => {
-                    let phase = {
-                        let Ok(phases) = stores.read_phases() else {
-                            return "phases lock poisoned".to_string();
-                        };
-                        phases.get(&phase_id).cloned()
-                    };
-                    if let Some(phase) = phase {
-                        let existing = generation::find_works_for_parent(stores, &phase.id);
-                        if existing.is_empty() {
-                            let phase_md = crate::domain::markdown::read_full_markdown_or_empty(
-                                &stores.config.project.repo_path,
-                                &phase.id,
-                            );
-                            let prompt =
-                                build_work_prompt(&phase, &phase_md, &existing, &HashMap::new(), &[], &[], None, None);
-                            format!(
-                                "## Activating Phase: {} (id: {})\n\n\
-                                 Generate Works for this phase. Each Work should have clear \
-                                 acceptance criteria and declare dependencies on other Works in this phase \
-                                 using their IDs.\n\n{}",
-                                phase_title, phase_id, prompt.user_message
-                            )
-                        } else {
-                            format!(
-                                "Phase '{}' already has {} Works. \
-                                 Respond with: [{{\"action\": \"done\", \"summary\": \"Phase {} Works ready\"}}]",
-                                phase_title,
-                                existing.len(),
-                                phase_title
-                            )
-                        }
-                    } else {
-                        "No phase found to activate. Respond with: [{\"action\": \"done\", \"summary\": \"No phases available\"}]".to_string()
-                    }
-                }
-                None => "All phases have been completed. \
-                     Respond with: [{\"action\": \"done\", \"summary\": \"All phases complete\"}]"
-                    .to_string(),
-            }
-        }
+        CoordinatorFsmState::Planning => "All planning artifacts have been decomposed by the Decomposer. \
+             Respond with: [{\"action\": \"done\", \"summary\": \"Planning complete, ready to execute\"}]"
+            .to_string(),
         CoordinatorFsmState::Executing => {
-            // Build executing context — monitor works, assign agents, triage bundles
-            let phase_status = build_phase_status(stores, coord_state);
-
-            // Phase-level tool guard: warn if validation tools are required but missing
-            let tool_warning = phase_missing_test_tool(stores, coord_state);
-
+            let execution_status = build_execution_status(stores, coord_state);
             format!(
-                "## Executing Phase\n\n{}\n\n{}\
-                 Monitor Work statuses. Assign implementers to Ready Works whose dependencies are all Done. \
+                "## Executing\n\n{}\n\
+                 Monitor Work statuses. Assign implementers to Ready Works. \
                  Triage proposed Bundles. Accept reviewed Bundles. \
                  If a Work is Blocked or has failed, consider retrying.\n\n\
                  Respond with a JSON array of actions.",
-                phase_status, tool_warning
+                execution_status,
             )
         }
-        CoordinatorFsmState::PhaseGate => {
-            let phase_status = build_phase_status(stores, coord_state);
-            format!(
-                "## Phase Gate Check\n\n{}\n\n\
-                 All Works in this phase should be in a terminal state (Done, Abandoned, or NeedHelp). \
-                 If all are Done, the phase is complete. \
-                 Respond with: [{{\"action\": \"done\", \"summary\": \"Phase gate passed\"}}]",
-                phase_status
-            )
-        }
-        CoordinatorFsmState::GoalComplete => {
-            // The LLM never runs in GoalComplete state - apply_fsm_transition returns early.
-            // This branch is kept for completeness but is dead code.
-            format!(
-                "Goal is complete. {} phases were completed. \
-                 Respond with: [{{\"action\": \"done\", \"summary\": \"Goal complete\"}}]",
-                coord_state.phases_completed.len()
-            )
-        }
+        CoordinatorFsmState::GoalComplete => "Goal is complete. \
+             Respond with: [{\"action\": \"done\", \"summary\": \"Goal complete\"}]"
+            .to_string(),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sequential execution model
-// ---------------------------------------------------------------------------
-//
-// The hierarchy is:
-//
-//   Plan
-//     Spec 0  (sequential - one at a time, ordered by spec.order)
-//       Phase 0  (sequential - one at a time, ordered by phase.order)
-//         Work A, B, C  (parallel - constrained by deps / shared files)
-//       Phase 1
-//         Work D, E
-//     Spec 1
-//       Phase 0
-//         Work F, G
-//
-// The coordinator iterates this structure top-down:
-//   - The current spec is Active; all earlier specs are Complete.
-//   - The current phase (within the current spec) is Active; earlier
-//     phases are Complete.
-//   - Works within the active phase run in parallel unless blocked by
-//     dependencies or file contention.
-//
-// Advancement:
-//   - Phase completes -> activate next phase in same spec.
-//   - All phases in a spec complete -> mark spec Complete, activate next
-//     spec, start its first phase.
-//   - All specs exhausted -> goal done.
-//
-// find_next_phase_to_activate() walks the hierarchy in order and returns
-// the first non-terminal phase (Active, Draft, etc.). Phases may start as
-// Active (the decomposer creates them that way) or Draft - either is valid.
-//
-// Invariant: never look at Spec N+1 while Spec N has non-terminal phases.
-// ---------------------------------------------------------------------------
+/// Build execution status showing all Active Phases and their Works.
+/// Replaces build_phase_status - shows multi-phase view instead of single cursor.
+fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> String {
+    let Some(plan) = generation::find_active_plan(stores) else {
+        return "No active plan.".to_string();
+    };
 
-/// Walk the spec/phase hierarchy and return the first non-terminal phase.
-/// Transitions spec status as a side effect.
-fn find_next_phase_to_activate(stores: &Stores, _coord_state: &CoordinatorState) -> Option<(String, String)> {
-    let plan = generation::find_active_plan(stores)?;
+    let mut summary = String::with_capacity(2048);
 
-    let spec_ids_and_orders: Vec<(String, u32)> = {
-        let Ok(all_specs) = stores.read_specs() else {
-            return None;
+    // Brief mode: show works directly under Plan
+    if plan.tier == crate::domain::plan::Tier::Brief {
+        let Ok(works) = stores.read_works() else {
+            return "works lock poisoned".to_string();
         };
-        let mut specs: Vec<_> = all_specs
-            .values()
-            .filter(|s| s.parent_id == plan.id)
-            .filter(|s| !matches!(s.status(), HierarchyStatus::Abandoned))
-            .map(|s| (s.id.clone(), s.order))
-            .collect();
-        specs.sort_by_key(|(_, order)| *order);
-        specs
-    };
-
-    let phase_data: Vec<(String, String, String, u32, HierarchyStatus)> = {
-        let Ok(all_phases) = stores.read_phases() else {
-            return None;
-        };
-        all_phases
-            .values()
-            .map(|p| (p.id.clone(), p.parent_id.clone(), p.title.clone(), p.order, p.status()))
-            .collect()
-    };
-
-    for (spec_id, _) in &spec_ids_and_orders {
-        let mut phases: Vec<_> = phase_data.iter().filter(|(_, pid, _, _, _)| pid == spec_id).collect();
-        phases.sort_by_key(|(_, _, _, order, _)| *order);
-
-        let has_non_terminal = phases
-            .iter()
-            .any(|(_, _, _, _, status)| !matches!(status, HierarchyStatus::Complete | HierarchyStatus::Abandoned));
-
-        if has_non_terminal {
-            // Activate this spec if it's still Draft
-            activate_spec_if_draft(stores, spec_id);
-
-            // Return the first non-terminal phase in this spec
-            for (phase_id, _, title, _, status) in &phases {
-                if !matches!(*status, HierarchyStatus::Complete | HierarchyStatus::Abandoned) {
-                    return Some((phase_id.clone(), title.clone()));
-                }
-            }
-            // has_non_terminal was true but no matching phase found - structurally unreachable
-            tracing::warn!(
-                "find_next_phase_to_activate: has_non_terminal=true for spec {} but no matching phase",
-                spec_id
-            );
-            return None;
-        }
-
-        // All phases in this spec are terminal - mark spec Complete
-        mark_spec_complete(stores, spec_id);
+        let plan_works: Vec<_> = works.values().filter(|w| w.parent_id == plan.id).collect();
+        summary.push_str(&format!("Plan: {} (Brief mode)\n\n", plan.title));
+        append_work_status(&mut summary, &plan_works, coord_state, &works);
+        return summary;
     }
 
-    // All specs exhausted
-    None
-}
-
-/// Activate a spec (Draft -> Active) if it's currently Draft.
-fn activate_spec_if_draft(stores: &Stores, spec_id: &str) {
-    let Ok(mut specs) = stores.write_specs() else {
-        return;
+    // Full mode: show all Active Phases and their Works
+    let Ok(specs) = stores.read_specs() else {
+        return "specs lock poisoned".to_string();
     };
-    if let Some(spec) = specs.get_mut(spec_id)
-        && spec.status() == HierarchyStatus::Draft
-    {
-        spec.force_status(HierarchyStatus::Active);
-        tracing::info!("Spec {} activated (Draft -> Active)", spec_id);
-        let spec_clone = spec.clone();
-        drop(specs);
-        if let Some(ref store) = stores.store
-            && let Ok(mut s) = store.lock()
-        {
-            let _ = s.update(spec_clone);
-        }
-    }
-}
-
-/// Mark a spec Complete when all its phases are terminal.
-fn mark_spec_complete(stores: &Stores, spec_id: &str) {
-    let Ok(mut specs) = stores.write_specs() else {
-        return;
+    let Ok(phases) = stores.read_phases() else {
+        return "phases lock poisoned".to_string();
     };
-    if let Some(spec) = specs.get_mut(spec_id)
-        && spec.status() == HierarchyStatus::Active
-    {
-        spec.force_status(HierarchyStatus::Complete);
-        tracing::info!("Spec {} completed (Active -> Complete)", spec_id);
-        let spec_clone = spec.clone();
-        drop(specs);
-        if let Some(ref store) = stores.store
-            && let Ok(mut s) = store.lock()
-        {
-            let _ = s.update(spec_clone);
-        }
-    }
-}
-
-/// Build a status summary for the current phase's works.
-fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String {
-    // Determine the parent ID and title for the status display.
-    // Full mode: current_phase_id -> Phase title
-    // Brief mode: active Plan ID -> Plan title
-    let (parent_id, parent_title) = if let Some(ref phase_id) = coord_state.current_phase_id {
-        let title = stores
-            .read_phases()
-            .ok()
-            .and_then(|phases| phases.get(phase_id).map(|p| p.title.clone()))
-            .unwrap_or_default();
-        (phase_id.clone(), title)
-    } else if let Some(plan) = generation::find_active_plan(stores) {
-        if plan.tier == crate::domain::plan::Tier::Brief {
-            let title = plan.title.clone();
-            (plan.id.clone(), title)
-        } else {
-            return "No active phase.".to_string();
-        }
-    } else {
-        return "No active phase.".to_string();
-    };
-    let phase_id = &parent_id;
-
-    let phase_title = parent_title;
-
     let Ok(works) = stores.read_works() else {
         return "works lock poisoned".to_string();
     };
-    let phase_wis: Vec<_> = works.values().filter(|w| &w.parent_id == phase_id).collect();
 
-    // Split into actionable vs terminal so the LLM can clearly distinguish
-    // which works need attention and which are finished.
+    let mut active_specs: Vec<_> = specs
+        .values()
+        .filter(|s| s.parent_id == plan.id && s.status() == HierarchyStatus::Active)
+        .collect();
+    active_specs.sort_by_key(|s| s.created_at);
+
+    for spec in &active_specs {
+        let mut spec_phases: Vec<_> = phases
+            .values()
+            .filter(|p| p.parent_id == spec.id && p.status() == HierarchyStatus::Active)
+            .collect();
+        spec_phases.sort_by_key(|p| p.created_at);
+
+        for phase in &spec_phases {
+            summary.push_str(&format!(
+                "### Phase: {} (id: {}, spec: {})\n",
+                phase.title, phase.id, spec.title
+            ));
+            let phase_works: Vec<_> = works.values().filter(|w| w.parent_id == phase.id).collect();
+            append_work_status(&mut summary, &phase_works, coord_state, &works);
+        }
+    }
+
+    if summary.is_empty() {
+        summary.push_str("No active phases. Reconciliation will promote Pending phases when deps are met.\n");
+    }
+    summary
+}
+
+/// Append work status for a set of works - shared between Brief and Full modes.
+fn append_work_status(
+    summary: &mut String,
+    phase_works: &[&crate::domain::work::Work],
+    coord_state: &CoordinatorState,
+    all_works: &std::collections::HashMap<String, crate::domain::work::Work>,
+) {
     let mut actionable = Vec::new();
     let mut terminal = Vec::new();
-    for wi in &phase_wis {
+    for wi in phase_works {
         if matches!(wi.status(), WorkStatus::Done | WorkStatus::Abandoned) {
             terminal.push(*wi);
         } else {
@@ -1217,92 +944,49 @@ fn build_phase_status(stores: &Stores, coord_state: &CoordinatorState) -> String
         }
     }
 
-    let mut summary = format!(
-        "Phase: {} (id: {})\nWorks: {} total ({} actionable, {} terminal)\n\n",
-        phase_title,
-        phase_id,
-        phase_wis.len(),
+    summary.push_str(&format!(
+        "Works: {} total ({} actionable, {} terminal)\n",
+        phase_works.len(),
         actionable.len(),
         terminal.len(),
-    );
+    ));
 
-    // Actionable works: these are the ONLY works eligible for assignment
-    if actionable.is_empty() {
-        summary
-            .push_str("### Actionable Works (eligible for assignment)\nNone - all works are in a terminal state.\n\n");
-    } else {
-        summary.push_str("### Actionable Works (eligible for assignment)\n");
+    if !actionable.is_empty() {
+        summary.push_str("Actionable:\n");
         for wi in &actionable {
             let attempts = coord_state.attempts(&wi.id);
             let attempt_note = if attempts > 0 { format!(" [{} attempts]", attempts) } else { String::new() };
             summary.push_str(&format!(
-                "- [{}] {} (status: {}){}\n",
+                "- [{}] {} ({}){}\n",
                 wi.id,
                 wi.title,
                 wi.status(),
                 attempt_note
             ));
-            // Show dependency info inline
             if !wi.dependencies.is_empty() {
-                let dep_status: Vec<String> = wi
+                let dep_info: Vec<String> = wi
                     .dependencies
                     .iter()
                     .map(|dep_id| {
-                        let status = works
+                        let status = all_works
                             .get(dep_id)
                             .map(|d| format!("{}", d.status()))
                             .unwrap_or_else(|| "unknown".to_string());
                         format!("{}={}", dep_id, status)
                     })
                     .collect();
-                let all_met = wi.dependencies.iter().all(|dep_id| {
-                    works
-                        .get(dep_id)
-                        .map(|d| d.status() == WorkStatus::Done)
-                        .unwrap_or(false)
-                });
-                summary.push_str(&format!(
-                    "    deps: [{}] ({})\n",
-                    dep_status.join(", "),
-                    if all_met { "READY" } else { "BLOCKED" }
-                ));
+                summary.push_str(&format!("    deps: [{}]\n", dep_info.join(", ")));
             }
         }
-        summary.push('\n');
     }
 
-    // Terminal works: DO NOT assign agents to these
     if !terminal.is_empty() {
-        summary.push_str("### Terminal Works (COMPLETED - do NOT assign agents to these)\n");
+        summary.push_str("Terminal (do NOT assign):\n");
         for wi in &terminal {
             summary.push_str(&format!("- [{}] {} ({})\n", wi.id, wi.title, wi.status()));
         }
-        summary.push('\n');
     }
-
-    // Fix #9: Collect WI IDs (owned) before dropping works lock
-    let wi_ids: std::collections::HashSet<String> = phase_wis.iter().map(|w| w.id.clone()).collect();
-    drop(works);
-
-    // Surface phase-specific failure Learnings
-    {
-        let Ok(learnings) = stores.read_learnings() else {
-            return summary;
-        };
-        let phase_failures: Vec<_> = learnings
-            .values()
-            .filter(|l| l.scope == LearningScope::Phase && wi_ids.contains(&l.source_id))
-            .collect();
-
-        if !phase_failures.is_empty() {
-            summary.push_str("Recent failure learnings:\n");
-            for learning in phase_failures.iter().take(5) {
-                summary.push_str(&format!("  - {}\n", learning.content));
-            }
-        }
-    }
-
-    summary
+    summary.push('\n');
 }
 
 /// Advance the FSM state based on the current iteration outcome.
@@ -1320,7 +1004,6 @@ fn check_fsm_transition(
     );
     match coord_state.fsm_state {
         CoordinatorFsmState::Interviewing => {
-            // Transition to Planning when plan_approved is set
             if coord_state.plan_approved {
                 Some(CoordinatorFsmState::Planning)
             } else {
@@ -1328,110 +1011,39 @@ fn check_fsm_transition(
             }
         }
         CoordinatorFsmState::Decomposing => {
-            // Advance to Planning once the background decomposition task has persisted phases.
+            // Advance to Planning once background decomposition has persisted hierarchy.
             let plan = generation::find_active_plan(stores)?;
-            let specs = generation::find_active_specs_for_plan(stores, &plan.id);
-            let has_phases = specs
-                .iter()
-                .any(|s| !generation::find_active_phases_for_spec(stores, &s.id).is_empty());
-            if has_phases { Some(CoordinatorFsmState::Planning) } else { None }
+            let Ok(specs) = stores.read_specs() else { return None };
+            let has_children = specs.values().any(|s| s.parent_id == plan.id);
+            if has_children {
+                Some(CoordinatorFsmState::Planning)
+            } else {
+                // Brief mode: check for works parented to plan
+                let wis = generation::find_works_for_parent(stores, &plan.id);
+                if !wis.is_empty() { Some(CoordinatorFsmState::Planning) } else { None }
+            }
         }
         CoordinatorFsmState::Planning => {
-            // Decomposition is complete before the Coordinator starts.
-            // Transition immediately based on what the Decomposer produced.
+            // Transition to Executing when hierarchy exists.
             let plan = generation::find_active_plan(stores)?;
-
-            // Brief mode: Works are parented to Plan directly
             if plan.tier == crate::domain::plan::Tier::Brief {
                 let wis = generation::find_works_for_parent(stores, &plan.id);
                 return if !wis.is_empty() { Some(CoordinatorFsmState::Executing) } else { None };
             }
-
-            // Full mode: Decomposer already created Specs and Phases - go to ActivatePhase
-            let specs = generation::find_active_specs_for_plan(stores, &plan.id);
-            if specs.is_empty() {
-                return None;
-            }
-            let has_phases = specs
-                .iter()
-                .any(|s| !generation::find_active_phases_for_spec(stores, &s.id).is_empty());
-            if has_phases { Some(CoordinatorFsmState::ActivatePhase) } else { None }
-        }
-        CoordinatorFsmState::ActivatePhase => {
-            // Transition when: Works for current phase exist and are Ready
-            if let Some(ref phase_id) = coord_state.current_phase_id {
-                let wis = generation::find_works_for_parent(stores, phase_id);
-                if !wis.is_empty() {
-                    return Some(CoordinatorFsmState::Executing);
-                }
-            }
-            // If we just set current_phase_id, wait for Works to be created
-            None
+            // Full mode: need Specs to exist
+            let Ok(specs) = stores.read_specs() else { return None };
+            let has_specs = specs.values().any(|s| s.parent_id == plan.id);
+            if has_specs { Some(CoordinatorFsmState::Executing) } else { None }
         }
         CoordinatorFsmState::Executing => {
-            // Brief mode: Works are parented directly to Plan, no phases
-            if let Some(plan) =
-                generation::find_active_plan(stores).filter(|p| p.tier == crate::domain::plan::Tier::Brief)
-            {
-                // Goal timeout
-                let goal_elapsed_ms = crate::id::now_millis() - coord_state.goal_started_at;
-                let goal_timeout_ms = config.goal_timeout_secs as i64 * 1000;
-                if goal_elapsed_ms > goal_timeout_ms {
-                    return Some(CoordinatorFsmState::GoalComplete);
-                }
-
-                let wis = generation::find_works_for_parent(stores, &plan.id);
-                if wis.is_empty() {
-                    return None; // Wait for Works to be generated
-                }
-                if wis
-                    .iter()
-                    .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
-                {
-                    return Some(CoordinatorFsmState::GoalComplete);
-                }
-                return None;
-            }
-
-            // Full mode: phase timeout fires first (local - advance this phase)
-            if let Some(activated_at) = coord_state.phase_activated_at {
-                let elapsed_ms = crate::id::now_millis() - activated_at;
-                let timeout_ms = config.phase_timeout_secs as i64 * 1000;
-                if elapsed_ms > timeout_ms {
-                    return Some(CoordinatorFsmState::PhaseGate);
-                }
-            }
-
-            // Full mode: goal timeout (global - kill the entire goal)
+            // Goal timeout
             let goal_elapsed_ms = crate::id::now_millis() - coord_state.goal_started_at;
             let goal_timeout_ms = config.goal_timeout_secs as i64 * 1000;
             if goal_elapsed_ms > goal_timeout_ms {
                 return Some(CoordinatorFsmState::GoalComplete);
             }
-
-            // Full mode: all WIs in current phase are terminal
-            if let Some(ref phase_id) = coord_state.current_phase_id {
-                let wis = generation::find_works_for_parent(stores, phase_id);
-                if wis.is_empty() {
-                    return Some(CoordinatorFsmState::PhaseGate);
-                }
-                if wis
-                    .iter()
-                    .all(|w| matches!(w.status(), WorkStatus::Done | WorkStatus::Abandoned))
-                {
-                    return Some(CoordinatorFsmState::PhaseGate);
-                }
-            }
+            // Goal complete is detected by reconcile() and handled in run_iteration.
             None
-        }
-        CoordinatorFsmState::PhaseGate => {
-            // Check if there are more phases
-            let next = find_next_phase_to_activate(stores, coord_state);
-            if next.is_some() {
-                Some(CoordinatorFsmState::ActivatePhase)
-            } else {
-                Some(CoordinatorFsmState::GoalComplete)
-            }
         }
         CoordinatorFsmState::GoalComplete => None,
     }

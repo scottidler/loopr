@@ -309,26 +309,15 @@ async fn test_phase_gate_advances_to_next_phase() {
     let wi_final = dispatch_ok(&stores, &tx, &wm, &ic, "work.get", json!({"id": wi_id})).await;
     assert_eq!(wi_final["status"].as_str().unwrap(), "Done");
 
-    // Now simulate Coordinator FSM: Phase 1 complete, advance to Phase 2
+    // Now simulate Coordinator FSM in the new model.
+    // The reconciliation loop handles phase promotion (Pending->Active) and completion detection.
+    // The coordinator FSM stays in Executing while phases are being worked on.
     let goal_id = "test-goal".to_string();
     let mut coord_state = CoordinatorState::new(goal_id, InterviewMode::Interactive);
-    coord_state.activate_phase(phase1_id.clone());
+    coord_state.transition_to(CoordinatorFsmState::Executing);
     assert_eq!(coord_state.fsm_state, CoordinatorFsmState::Executing);
 
-    // All WIs in Phase 1 are Done -> transition to PhaseGate
-    coord_state.transition_to(CoordinatorFsmState::PhaseGate);
-    assert_eq!(coord_state.fsm_state, CoordinatorFsmState::PhaseGate);
-
-    // Complete Phase 1
-    coord_state.complete_phase();
-    assert_eq!(coord_state.phases_completed, vec![phase1_id]);
-    assert!(coord_state.current_phase_id.is_none());
-
-    // Transition back to ActivatePhase for Phase 2
-    coord_state.transition_to(CoordinatorFsmState::ActivatePhase);
-    assert_eq!(coord_state.fsm_state, CoordinatorFsmState::ActivatePhase);
-
-    // Activate Phase 2
+    // Activate Phase 2 via IPC (reconciliation would do this automatically)
     dispatch_ok(
         &stores,
         &tx,
@@ -338,17 +327,8 @@ async fn test_phase_gate_advances_to_next_phase() {
         json!({"id": phase2_id, "target_status": "active"}),
     )
     .await;
-    coord_state.activate_phase(phase2_id.clone());
-    assert_eq!(coord_state.fsm_state, CoordinatorFsmState::Executing);
-    assert_eq!(coord_state.current_phase_id.as_deref(), Some(phase2_id.as_str()));
 
-    // Complete Phase 2 (no WIs to do, but simulate gate)
-    coord_state.transition_to(CoordinatorFsmState::PhaseGate);
-    coord_state.complete_phase();
-    assert_eq!(coord_state.phases_completed.len(), 2);
-    assert_eq!(coord_state.phases_completed[1], phase2_id);
-
-    // No more phases -> GoalComplete
+    // When all phases and works are complete, transition to GoalComplete
     coord_state.transition_to(CoordinatorFsmState::GoalComplete);
     assert!(coord_state.fsm_state.is_terminal());
 }

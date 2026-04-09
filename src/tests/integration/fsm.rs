@@ -73,23 +73,12 @@ async fn test_full_fsm_cycle() {
     let state_id = state.id.clone();
     assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
 
-    // Transition through all states: Interviewing -> Planning -> ActivatePhase -> ...
+    // Transition through all states: Interviewing -> Planning -> Executing -> GoalComplete
     state.transition_to(CoordinatorFsmState::Planning);
     assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
 
-    state.transition_to(CoordinatorFsmState::ActivatePhase);
-    assert_eq!(state.fsm_state, CoordinatorFsmState::ActivatePhase);
-
-    state.activate_phase("phase-1".to_string());
+    state.transition_to(CoordinatorFsmState::Executing);
     assert_eq!(state.fsm_state, CoordinatorFsmState::Executing);
-    assert_eq!(state.current_phase_id.as_deref(), Some("phase-1"));
-
-    state.transition_to(CoordinatorFsmState::PhaseGate);
-    assert_eq!(state.fsm_state, CoordinatorFsmState::PhaseGate);
-
-    state.complete_phase();
-    assert_eq!(state.phases_completed, vec!["phase-1"]);
-    assert!(state.current_phase_id.is_none());
 
     state.transition_to(CoordinatorFsmState::GoalComplete);
     assert!(state.fsm_state.is_terminal());
@@ -110,7 +99,6 @@ async fn test_full_fsm_cycle() {
         .unwrap();
     assert_eq!(retrieved.fsm_state, CoordinatorFsmState::GoalComplete);
     assert_eq!(retrieved.goal_id, goal_id);
-    assert_eq!(retrieved.phases_completed, vec!["phase-1"]);
 }
 
 #[tokio::test]

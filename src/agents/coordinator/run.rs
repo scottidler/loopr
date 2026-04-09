@@ -63,9 +63,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
                     self.previous_summary = Some(summary.clone());
                     // Use active interval for FSM states that need quick transitions
                     match coord_state.fsm_state {
-                        CoordinatorFsmState::Planning
-                        | CoordinatorFsmState::ActivatePhase
-                        | CoordinatorFsmState::PhaseGate => self.config.active_interval_secs,
+                        CoordinatorFsmState::Planning => self.config.active_interval_secs,
                         _ => self.config.idle_interval_secs,
                     }
                 }
@@ -105,10 +103,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             let is_idle_waiting = matches!(&outcome, Ok(IterationOutcome::Done(_)))
                 && matches!(
                     coord_state.fsm_state,
-                    CoordinatorFsmState::Decomposing
-                        | CoordinatorFsmState::Planning
-                        | CoordinatorFsmState::ActivatePhase
-                        | CoordinatorFsmState::PhaseGate
+                    CoordinatorFsmState::Decomposing | CoordinatorFsmState::Planning
                 );
 
             if is_idle_waiting {
@@ -239,12 +234,7 @@ impl<L: LlmClient> CoordinatorAgent<L> {
         let footer = build_fsm_footer(stores, coord_state, &goal, config, &prefix);
 
         // Add FSM state context to state summary
-        let fsm_context = format!(
-            "## Coordinator FSM State: {}\nCurrent Phase: {}\nPhases Completed: {}\n\n",
-            coord_state.fsm_state,
-            coord_state.current_phase_id.as_deref().unwrap_or("none"),
-            coord_state.phases_completed.len()
-        );
+        let fsm_context = format!("## Coordinator FSM State: {}\n\n", coord_state.fsm_state,);
 
         let builder = ContextBuilder::new(stores, Role::Coordinator)
             .with_guidance(&stores.guidance)

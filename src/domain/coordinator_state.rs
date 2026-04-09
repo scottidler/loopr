@@ -23,9 +23,8 @@ pub enum CoordinatorFsmState {
     /// Waiting for background decomposition to complete before advancing to Planning.
     Decomposing,
     Planning,
-    ActivatePhase,
+    /// Reconciliation loop runs here - promotes Pending records, detects completions.
     Executing,
-    PhaseGate,
     GoalComplete,
 }
 
@@ -44,19 +43,23 @@ impl std::fmt::Display for CoordinatorFsmState {
     }
 }
 
-/// Persistent state for the Coordinator's phase-gated control loop.
+/// Persistent state for the Coordinator's reactive execution loop.
 /// Persisted in TaskStore so the Coordinator survives daemon restarts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordinatorState {
     pub id: String,
     pub goal_id: String,
     pub fsm_state: CoordinatorFsmState,
+    /// Legacy field - kept for serde backward compat, always None in new code.
+    #[serde(default)]
     pub current_phase_id: Option<String>,
     pub work_attempts: HashMap<String, u32>,
     /// Wall-clock timestamp (millis since epoch) when each Work was first assigned.
     /// Used for SLA breach detection. NOT overwritten on re-assignment.
     #[serde(default)]
     pub work_first_assigned_at: HashMap<String, i64>,
+    /// Legacy field - kept for serde backward compat, always None in new code.
+    #[serde(default)]
     pub phase_activated_at: Option<i64>,
     /// Error message from the most recent decomposition failure. When set, the coordinator
     /// transitions to NeedsHelp instead of busy-polling. Cleared on re-decompose.
@@ -71,6 +74,8 @@ pub struct CoordinatorState {
     #[serde(default)]
     pub bubble_up_count: u32,
     pub goal_started_at: i64,
+    /// Legacy field - kept for serde backward compat, always empty in new code.
+    #[serde(default)]
     pub phases_completed: Vec<String>,
     /// Interview context accumulated during the Interviewing state.
     #[serde(default)]
@@ -124,25 +129,6 @@ impl CoordinatorState {
     pub fn transition_to(&mut self, new_state: CoordinatorFsmState) {
         tracing::debug!("CoordinatorState::transition_to(id={}, target={})", self.id, new_state);
         self.fsm_state = new_state;
-        self.updated_at = id::now_millis();
-    }
-
-    /// Record that a phase has been activated.
-    pub fn activate_phase(&mut self, phase_id: String) {
-        self.current_phase_id = Some(phase_id);
-        self.phase_activated_at = Some(id::now_millis());
-        self.researcher_spawns.clear();
-        self.fsm_state = CoordinatorFsmState::Executing;
-        self.updated_at = id::now_millis();
-    }
-
-    /// Record that the current phase has completed.
-    pub fn complete_phase(&mut self) {
-        if let Some(ref phase_id) = self.current_phase_id {
-            self.phases_completed.push(phase_id.clone());
-        }
-        self.current_phase_id = None;
-        self.phase_activated_at = None;
         self.updated_at = id::now_millis();
     }
 
@@ -266,21 +252,11 @@ mod tests {
         let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
 
-        state.transition_to(CoordinatorFsmState::ActivatePhase);
-        assert_eq!(state.fsm_state, CoordinatorFsmState::ActivatePhase);
+        state.transition_to(CoordinatorFsmState::Planning);
+        assert_eq!(state.fsm_state, CoordinatorFsmState::Planning);
 
-        state.activate_phase("phase-1".to_string());
+        state.transition_to(CoordinatorFsmState::Executing);
         assert_eq!(state.fsm_state, CoordinatorFsmState::Executing);
-        assert_eq!(state.current_phase_id.as_deref(), Some("phase-1"));
-        assert!(state.phase_activated_at.is_some());
-
-        state.transition_to(CoordinatorFsmState::PhaseGate);
-        assert_eq!(state.fsm_state, CoordinatorFsmState::PhaseGate);
-
-        state.complete_phase();
-        assert!(state.current_phase_id.is_none());
-        assert!(state.phase_activated_at.is_none());
-        assert_eq!(state.phases_completed, vec!["phase-1"]);
 
         state.transition_to(CoordinatorFsmState::GoalComplete);
         assert!(state.fsm_state.is_terminal());
@@ -299,19 +275,9 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_phases_completed() {
-        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        state.activate_phase("phase-1".to_string());
-        state.complete_phase();
-        state.activate_phase("phase-2".to_string());
-        state.complete_phase();
-        assert_eq!(state.phases_completed, vec!["phase-1", "phase-2"]);
-    }
-
-    #[test]
     fn test_serde_roundtrip() {
         let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        state.activate_phase("phase-1".to_string());
+        state.transition_to(CoordinatorFsmState::Executing);
         state.increment_attempts("wi-1");
         state.increment_attempts("wi-1");
 
@@ -320,18 +286,14 @@ mod tests {
         assert_eq!(state.id, deserialized.id);
         assert_eq!(state.goal_id, deserialized.goal_id);
         assert_eq!(state.fsm_state, deserialized.fsm_state);
-        assert_eq!(state.current_phase_id, deserialized.current_phase_id);
         assert_eq!(state.work_attempts, deserialized.work_attempts);
-        assert_eq!(state.phases_completed, deserialized.phases_completed);
     }
 
     #[test]
     fn test_fsm_state_display() {
         assert_eq!(CoordinatorFsmState::Decomposing.to_string(), "Decomposing");
         assert_eq!(CoordinatorFsmState::Planning.to_string(), "Planning");
-        assert_eq!(CoordinatorFsmState::ActivatePhase.to_string(), "ActivatePhase");
         assert_eq!(CoordinatorFsmState::Executing.to_string(), "Executing");
-        assert_eq!(CoordinatorFsmState::PhaseGate.to_string(), "PhaseGate");
         assert_eq!(CoordinatorFsmState::GoalComplete.to_string(), "GoalComplete");
     }
 
@@ -339,9 +301,7 @@ mod tests {
     fn test_fsm_state_is_terminal() {
         assert!(!CoordinatorFsmState::Decomposing.is_terminal());
         assert!(!CoordinatorFsmState::Planning.is_terminal());
-        assert!(!CoordinatorFsmState::ActivatePhase.is_terminal());
         assert!(!CoordinatorFsmState::Executing.is_terminal());
-        assert!(!CoordinatorFsmState::PhaseGate.is_terminal());
         assert!(CoordinatorFsmState::GoalComplete.is_terminal());
     }
 
@@ -552,19 +512,7 @@ mod tests {
         assert_eq!(state.researcher_spawn_count("nonexistent"), 0);
     }
 
-    #[test]
-    fn test_activate_phase_clears_researcher_spawns() {
-        let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
-        state.increment_researcher_spawns("scope-1");
-        state.increment_researcher_spawns("scope-2");
-        assert_eq!(state.researcher_spawn_count("scope-1"), 1);
-        assert_eq!(state.researcher_spawn_count("scope-2"), 1);
-
-        state.activate_phase("phase-2".to_string());
-        assert_eq!(state.researcher_spawn_count("scope-1"), 0);
-        assert_eq!(state.researcher_spawn_count("scope-2"), 0);
-        assert!(state.researcher_spawns.is_empty());
-    }
+    // Note: activate_phase_clears_researcher_spawns test removed - cursor model eliminated.
 
     #[test]
     fn test_serde_roundtrip_with_researcher_spawns() {
