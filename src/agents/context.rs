@@ -657,6 +657,29 @@ impl<'a> ContextBuilder<'a> {
             }
         }
 
+        // --- Spec-Level Contract (for reviewer) ---
+        // Inject ancestor spec AC so the reviewer can verify tests match the spec contract,
+        // not just internal consistency with the implementation.
+        if self.role == Role::Reviewer
+            && let Some(ref spec_id) = self.spec_id
+            && let Ok(specs) = self.stores.read_specs()
+            && let Some(spec) = specs.get(spec_id.as_str())
+            && !spec.acceptance_criteria.is_empty()
+        {
+            msg.push_str(&format!(
+                "## Spec-Level Contract ({})\n\n\
+                 The following acceptance criteria define the spec's contract. \
+                 Verify that the implementation and tests are consistent with these:\n\n{}\n\n",
+                spec.title,
+                spec.acceptance_criteria
+                    .0
+                    .iter()
+                    .map(|ac| format!("- {}", ac))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
+        }
+
         // --- Sibling Works section (after hierarchy) ---
         if let (Some(parent_id), Some(current_wi_id)) = (&self.parent_id, &self.work_id)
             && let Ok(works) = self.stores.read_works()
@@ -822,6 +845,17 @@ impl<'a> ContextBuilder<'a> {
                 msg.push_str(summary);
             }
             msg.push_str("\n\n");
+        }
+
+        // --- Implementer pre-commit checklist ---
+        // Repeat the work AC immediately before shipping to double salience of field names.
+        if self.role == Role::Implementer && !self.work_acceptance_criteria.is_empty() {
+            msg.push_str("## Pre-Commit Checklist\n\n");
+            msg.push_str("Verify your code satisfies each criterion before committing:\n");
+            for ac in &self.work_acceptance_criteria {
+                msg.push_str(&format!("- [ ] {}\n", ac));
+            }
+            msg.push('\n');
         }
 
         // --- Iteration and footer ---

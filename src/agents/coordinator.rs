@@ -524,7 +524,10 @@ fn inject_overlap_deps(stores: &Stores, batch_created_ids: &[String], prefix: &s
         }
 
         // Inject: successor now depends on predecessor
-        dep_graph.entry(successor.clone()).or_default().insert(predecessor.clone());
+        dep_graph
+            .entry(successor.clone())
+            .or_default()
+            .insert(predecessor.clone());
         injected.push((predecessor, successor));
     }
 
@@ -702,8 +705,67 @@ fn persist_coordinator_state(stores: &Stores, state: &CoordinatorState) {
     }
 }
 
+/// Scan parsed coordinator actions for coherence: if an `override_work` with
+/// `target_status: "Abandoned"` mentions creating replacements in the reason
+/// field but no `create_work` action is present, log a warning.
+/// Returns a list of warning strings (empty if coherent).
+pub(crate) fn validate_action_coherence(actions: &[AgentAction], prefix: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let has_create = actions.iter().any(|a| matches!(a, AgentAction::CreateWork { .. }));
+
+    for action in actions {
+        if let AgentAction::OverrideWork {
+            work_id,
+            target_status,
+            reason,
+        } = action
+            && target_status == "Abandoned"
+        {
+            let lower = reason.to_lowercase();
+            let mentions_create = lower.contains("creating")
+                || lower.contains("create_work")
+                || lower.contains("replacement")
+                || lower.contains("replacing")
+                || lower.contains("fix work");
+            if mentions_create && !has_create {
+                let msg = format!(
+                    "{} override_work on {} mentions creating replacements \
+                     but no create_work action in payload",
+                    prefix, work_id,
+                );
+                tracing::warn!("{}", msg);
+                warnings.push(msg);
+            }
+        }
+    }
+    warnings
+}
+
+/// Check the abandon-ratio quality gate for a goal at GoalComplete.
+/// If the terminal-only abandon ratio exceeds the configured threshold, returns
+/// `Some(IterationOutcome::NeedHelp(...))`. Otherwise returns `None` (gate passed).
+/// This is extracted so both GoalComplete code paths use identical gate logic.
+fn check_abandon_gate(stores: &Stores, coord_state: &CoordinatorState, prefix: &str) -> Option<IterationOutcome> {
+    let ratio = generation::goal_abandon_ratio_terminal(stores, &coord_state.goal_id);
+    let max_ratio = stores.config.agents.coordinator.max_abandon_ratio;
+    if ratio > max_ratio {
+        let (done_count, _total_all, terminal_count, abandoned_count) =
+            generation::goal_work_counts(stores, &coord_state.goal_id);
+        let reason = format!(
+            "Quality gate: {abandoned_count}/{terminal_count} terminal works abandoned \
+             ({:.0}% > {:.0}% threshold). {done_count}/{terminal_count} completed.",
+            ratio * 100.0,
+            max_ratio * 100.0,
+        );
+        tracing::warn!("{} {}", prefix, reason);
+        Some(IterationOutcome::NeedHelp(reason))
+    } else {
+        None
+    }
+}
+
 /// Apply an FSM state transition. Returns `Some(IterationOutcome)` if the caller
-/// should return early (GoalComplete), or `None` to continue the iteration.
+/// should return early (GoalComplete or quality gate failure), or `None` to continue.
 fn apply_fsm_transition(
     new_state: CoordinatorFsmState,
     coord_state: &mut CoordinatorState,
@@ -733,9 +795,15 @@ fn apply_fsm_transition(
             coord_state.fsm_state = CoordinatorFsmState::ActivatePhase;
             coord_state.updated_at = crate::id::now_millis();
         } else {
+            // No more phases - check quality gate before declaring complete.
+            // This is the primary completion path (ActivatePhase finds no next phase).
             coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-            // Deactivate the goal - the normal completion path goes through ActivatePhase
-            // (no next phase found), not through the explicit GoalComplete branch below.
+            if let Some(outcome) = check_abandon_gate(stores, coord_state, prefix) {
+                // Gate fired: goal stays active (not deactivated), needs human help.
+                persist_coordinator_state(stores, coord_state);
+                return Some(outcome);
+            }
+            // Gate passed: deactivate the goal.
             if let Ok(mut goals) = stores.write_coordinator_goals()
                 && let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id)
             {
@@ -754,7 +822,13 @@ fn apply_fsm_transition(
             coord_state.complete_phase();
         }
         coord_state.transition_to(CoordinatorFsmState::GoalComplete);
-        // Deactivate the goal
+        // Check quality gate before declaring success.
+        if let Some(outcome) = check_abandon_gate(stores, coord_state, prefix) {
+            // Gate fired: goal stays active (not deactivated), needs human help.
+            persist_coordinator_state(stores, coord_state);
+            return Some(outcome);
+        }
+        // Gate passed: deactivate the goal.
         if let Ok(mut goals) = stores.write_coordinator_goals()
             && let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id)
         {
@@ -950,6 +1024,8 @@ fn build_fsm_footer(
             )
         }
         CoordinatorFsmState::GoalComplete => {
+            // The LLM never runs in GoalComplete state - apply_fsm_transition returns early.
+            // This branch is kept for completeness but is dead code.
             format!(
                 "Goal is complete. {} phases were completed. \
                  Respond with: [{{\"action\": \"done\", \"summary\": \"Goal complete\"}}]",

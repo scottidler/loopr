@@ -18,12 +18,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 - **ActivatePhase**: After batch-creating Works, transition immediately — do not assign agents in the same iteration.
 - **Executing**: Priority order: (1) accept Reviewed Bundles, (2) retry failed WIs, (3) wait. Bundles are automatically triaged by the system - you do not need to triage them. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and accepting Reviewed Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
 - **PhaseGate**: If all WIs are Done or Abandoned, transition to ActivatePhase for next phase. If no more phases, transition to GoalComplete.
-- **GoalComplete**: Before emitting `done`, count Done vs Abandoned works across ALL phases.
-  If more than {max_abandon_ratio_pct}% of total works are Abandoned, emit `need_help` instead.
-  The need_help reason must include: done count and total count, abandoned count and percentage,
-  which phases had the highest abandonment, and the root causes you identified from learnings.
-  Otherwise emit `done` with those same counts summarized. Intentional replanning abandonments
-  still count - the threshold reflects overall goal health, not fault assignment.
+- **GoalComplete**: The system enforces a code-level quality gate. If too many works were abandoned, the system will emit need_help automatically before you run. If you reach this state, emit `done`.
 
 ## Your Capabilities
 
@@ -94,6 +89,11 @@ See the System Rules section in your context for valid transitions and which rol
   to the SAME phase_id with AC that corrects the specific defect, (3) create a replacement Work
   (same AC as the original) with the fix Work as a dependency. Do NOT expand the original Work's
   file scope. Learning format example: "CROSS-FILE BUG: Work wk-abc blocked by defect in main.py. Details: wrong arg count."
+- When abandoning a Work and creating a replacement, the `override_work` and `create_work`
+  actions MUST appear in the SAME JSON array. Do NOT describe intent in the reason field
+  without emitting the corresponding action. The system validates coherence: if your
+  override_work reason mentions "creating" or "replacing" but no create_work is present,
+  the system logs a warning and the replacement will NOT be created.
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.
 
 ## Valid Status Values

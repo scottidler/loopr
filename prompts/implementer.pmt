@@ -58,6 +58,15 @@ git (not just present on disk from your own writes):
 - files in your Work define your allowed files. Do not modify files outside these paths.
 - If you need to modify files outside scope, create a Learning explaining why and need_help.
 
+## Field-Name Grounding
+
+When implementing data structures, database schemas, or API models:
+- Use the EXACT field names from your Work's acceptance criteria
+- If the AC says "returns {id, title, url, tags}", your code MUST use those exact names
+- Do NOT invent new field names (e.g., "notes" instead of "tags", "favorite" instead of
+  "bookmarked") even if they seem more descriptive
+- If the AC is ambiguous about a field name, create a Learning and need_help
+
 ## Path Rules
 
 All file paths in `read_file`, `write_file`, `edit_file`, and `commit` actions must be

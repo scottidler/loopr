@@ -183,20 +183,17 @@ pub fn find_works_for_parent(stores: &Stores, parent_id: &str) -> Vec<Work> {
     works.values().filter(|w| w.parent_id == parent_id).cloned().collect()
 }
 
-/// Check if all Works in a Phase are in a terminal state (Done or Abandoned).
-/// This matches the FSM's check_fsm_transition() predicate exactly.
-/// Compute the fraction of abandoned works across all phases under a given plan.
-/// Used by the coordinator's GoalComplete quality gate prompt interpolation.
-/// Returns 0.0 if there are no works (prevents false positives on empty goals).
-pub fn goal_abandon_ratio(stores: &Stores, plan_id: &str) -> f64 {
+/// Collect all Work items descended from a plan (Brief mode: direct children;
+/// Full mode: via Spec -> Phase -> Work chain). Returns owned Work clones.
+pub fn collect_goal_works(stores: &Stores, plan_id: &str) -> Vec<Work> {
     let Ok(works) = stores.read_works() else {
-        return 0.0;
+        return vec![];
     };
     let Ok(phases) = stores.read_phases() else {
-        return 0.0;
+        return vec![];
     };
     let Ok(specs) = stores.read_specs() else {
-        return 0.0;
+        return vec![];
     };
 
     // Collect spec IDs parented to this plan
@@ -214,20 +211,53 @@ pub fn goal_abandon_ratio(stores: &Stores, plan_id: &str) -> f64 {
         .collect();
 
     // Works under this plan: directly (Brief mode) or via phases (Full mode)
-    let all_works: Vec<_> = works
+    works
         .values()
         .filter(|w| w.parent_id == plan_id || phase_ids.contains(w.parent_id.as_str()))
-        .collect();
+        .cloned()
+        .collect()
+}
 
+/// Compute the fraction of abandoned works across all phases under a given plan.
+/// Uses all works (including non-terminal) as denominator.
+/// Used for logging and status display. Returns 0.0 if there are no works.
+pub fn goal_abandon_ratio(stores: &Stores, plan_id: &str) -> f64 {
+    let all_works = collect_goal_works(stores, plan_id);
     let abandoned = all_works
         .iter()
         .filter(|w| matches!(w.status(), WorkStatus::Abandoned))
         .count();
-
     if all_works.is_empty() {
         return 0.0;
     }
     abandoned as f64 / all_works.len() as f64
+}
+
+/// Compute the fraction of abandoned works using only terminal works (Done + Abandoned)
+/// as the denominator. Used by the GoalComplete quality gate - this is the meaningful
+/// measure at completion time (5/12 not 5/13 if one work is still non-terminal).
+/// Returns 0.0 if there are no terminal works.
+pub fn goal_abandon_ratio_terminal(stores: &Stores, plan_id: &str) -> f64 {
+    let (_, _, terminal_count, abandoned_count) = goal_work_counts(stores, plan_id);
+    if terminal_count == 0 {
+        return 0.0;
+    }
+    abandoned_count as f64 / terminal_count as f64
+}
+
+/// Returns (done_count, total_all, terminal_count, abandoned_count) for works under a plan.
+pub fn goal_work_counts(stores: &Stores, plan_id: &str) -> (usize, usize, usize, usize) {
+    let all_works = collect_goal_works(stores, plan_id);
+    let done = all_works
+        .iter()
+        .filter(|w| matches!(w.status(), WorkStatus::Done))
+        .count();
+    let abandoned = all_works
+        .iter()
+        .filter(|w| matches!(w.status(), WorkStatus::Abandoned))
+        .count();
+    let terminal = done + abandoned;
+    (done, all_works.len(), terminal, abandoned)
 }
 
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {

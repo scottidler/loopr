@@ -1705,10 +1705,7 @@ async fn test_inject_overlap_deps_respects_existing_direction() {
         works[&b_id].dependencies.contains(&a_id),
         "existing LLM-declared dep should be preserved"
     );
-    assert!(
-        !works[&a_id].dependencies.contains(&b_id),
-        "cycle must not be injected"
-    );
+    assert!(!works[&a_id].dependencies.contains(&b_id), "cycle must not be injected");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2245,6 +2242,289 @@ async fn test_phase_missing_test_tool_no_warning_when_tool_registered() {
 
     let warning = phase_missing_test_tool(&stores, &coord_state);
     assert!(warning.is_empty(), "no warning when test tool is registered");
+}
+
+// --- Phase 1: quality gate tests (goal_abandon_ratio_terminal + check_abandon_gate) ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_goal_abandon_ratio_terminal_excludes_non_terminal() {
+    let dir = TestDir::new("loopr-coord-gate-ratio");
+    let stores = test_stores(&dir);
+
+    let plan_id = "plan-1".to_string();
+
+    // 5 terminal (3 Done + 2 Abandoned) + 1 non-terminal (InProgress)
+    // Terminal-only ratio: 2/5 = 40% (not > 40%, so gate should NOT fire)
+    // All-works ratio: 2/6 = 33% (different)
+    for i in 0..3 {
+        let mut w = Work::new(plan_id.clone(), format!("Done {}", i));
+        w.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+    for i in 0..2 {
+        let mut w = Work::new(plan_id.clone(), format!("Abandoned {}", i));
+        w.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+    let mut w_in_progress = Work::new(plan_id.clone(), "InProgress".into());
+    w_in_progress.force_status(WorkStatus::InProgress);
+    stores
+        .works
+        .write()
+        .unwrap()
+        .insert(w_in_progress.id.clone(), w_in_progress);
+
+    let ratio = crate::agents::generation::goal_abandon_ratio_terminal(&stores, &plan_id);
+    // 2 abandoned / 5 terminal = 0.4
+    assert!(
+        (ratio - 0.4).abs() < 1e-6,
+        "terminal-only ratio should be 0.4, got {}",
+        ratio
+    );
+
+    // All-works ratio should be different (2/6 ≈ 0.333)
+    let all_ratio = crate::agents::generation::goal_abandon_ratio(&stores, &plan_id);
+    assert!(
+        (all_ratio - 2.0 / 6.0).abs() < 1e-6,
+        "all-works ratio should be ~0.333, got {}",
+        all_ratio
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_goal_abandon_ratio_terminal_empty_returns_zero() {
+    let dir = TestDir::new("loopr-coord-gate-empty");
+    let stores = test_stores(&dir);
+    let ratio = crate::agents::generation::goal_abandon_ratio_terminal(&stores, "plan-none");
+    assert_eq!(ratio, 0.0, "empty stores should return 0.0");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_abandon_gate_fires_above_threshold() {
+    // 5 abandoned / 12 terminal = 41.7% > 40% -> NeedHelp
+    let dir = TestDir::new("loopr-coord-gate-fires");
+    let stores = test_stores(&dir);
+
+    let plan_id = "plan-1".to_string();
+
+    // Insert a goal so we can look it up
+    let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("test goal".to_string());
+    let goal_id = goal.id.clone();
+    stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
+
+    let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+    // Override goal_id to match the plan_id where we put works
+    coord_state.goal_id = plan_id.clone();
+
+    // 7 Done + 5 Abandoned = 12 terminal, 5/12 ≈ 41.7% > 40%
+    for i in 0..7 {
+        let mut w = Work::new(plan_id.clone(), format!("Done {}", i));
+        w.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+    for i in 0..5 {
+        let mut w = Work::new(plan_id.clone(), format!("Abandoned {}", i));
+        w.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+
+    let outcome = check_abandon_gate(&stores, &coord_state, TEST_PREFIX);
+    assert!(outcome.is_some(), "gate should fire when ratio > threshold");
+    match outcome.unwrap() {
+        IterationOutcome::NeedHelp(reason) => {
+            assert!(
+                reason.contains("Quality gate"),
+                "reason should mention quality gate: {reason}"
+            );
+            assert!(reason.contains("5/12"), "reason should include counts: {reason}");
+        }
+        other => panic!("expected NeedHelp, got {:?}", other),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_check_abandon_gate_passes_below_threshold() {
+    // 2 abandoned / 5 terminal = 40% (not strictly greater than 40%) -> None
+    let dir = TestDir::new("loopr-coord-gate-pass");
+    let stores = test_stores(&dir);
+
+    let plan_id = "plan-pass".to_string();
+
+    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    coord_state.goal_id = plan_id.clone();
+
+    for i in 0..3 {
+        let mut w = Work::new(plan_id.clone(), format!("Done {}", i));
+        w.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+    for i in 0..2 {
+        let mut w = Work::new(plan_id.clone(), format!("Abandoned {}", i));
+        w.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+
+    let outcome = check_abandon_gate(&stores, &coord_state, TEST_PREFIX);
+    assert!(
+        outcome.is_none(),
+        "gate should not fire at exactly 40% (not strictly greater)"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_apply_fsm_goal_complete_fires_quality_gate() {
+    // When apply_fsm_transition targets GoalComplete with >40% abandoned terminal works,
+    // it should return NeedHelp (not Done) and NOT deactivate the goal.
+    let dir = TestDir::new("loopr-coord-qgate-fires");
+    let stores = test_stores(&dir);
+
+    let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("test goal".to_string());
+    let goal_id = goal.id.clone();
+    stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
+
+    let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+
+    // 5 abandoned / 12 terminal = 41.7% > 40%: same plan_id as goal_id
+    for i in 0..7 {
+        let mut w = Work::new(goal_id.clone(), format!("Done {}", i));
+        w.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+    for i in 0..5 {
+        let mut w = Work::new(goal_id.clone(), format!("Abandoned {}", i));
+        w.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+
+    let outcome = apply_fsm_transition(
+        CoordinatorFsmState::GoalComplete,
+        &mut coord_state,
+        &stores,
+        TEST_PREFIX,
+    );
+
+    assert!(outcome.is_some(), "should return an outcome");
+    match outcome.unwrap() {
+        IterationOutcome::NeedHelp(reason) => {
+            assert!(reason.contains("Quality gate"), "got: {reason}");
+        }
+        other => panic!("expected NeedHelp, got {:?}", other),
+    }
+
+    // Goal must NOT be deactivated when gate fires
+    let goals = stores.coordinator_goals.read().unwrap();
+    let goal = goals.get(&goal_id).unwrap();
+    assert!(goal.active, "goal must remain active when quality gate fires");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_apply_fsm_goal_complete_passes_quality_gate() {
+    // When ratio is below threshold, apply_fsm_transition should return Done and deactivate goal.
+    let dir = TestDir::new("loopr-coord-qgate-pass");
+    let stores = test_stores(&dir);
+
+    let goal = crate::domain::coordinator_goal::CoordinatorGoal::new("test goal".to_string());
+    let goal_id = goal.id.clone();
+    stores.coordinator_goals.write().unwrap().insert(goal_id.clone(), goal);
+
+    let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::PhaseGate;
+
+    // 2 abandoned / 5 terminal = 40% (not > 40%): gate passes
+    for i in 0..3 {
+        let mut w = Work::new(goal_id.clone(), format!("Done {}", i));
+        w.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+    for i in 0..2 {
+        let mut w = Work::new(goal_id.clone(), format!("Abandoned {}", i));
+        w.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(w.id.clone(), w);
+    }
+
+    let outcome = apply_fsm_transition(
+        CoordinatorFsmState::GoalComplete,
+        &mut coord_state,
+        &stores,
+        TEST_PREFIX,
+    );
+
+    assert!(outcome.is_some(), "should return an outcome");
+    match outcome.unwrap() {
+        IterationOutcome::Done(_) => {}
+        other => panic!("expected Done, got {:?}", other),
+    }
+
+    // Goal must be deactivated when gate passes
+    let goals = stores.coordinator_goals.read().unwrap();
+    let goal = goals.get(&goal_id).unwrap();
+    assert!(!goal.active, "goal must be deactivated when gate passes");
+}
+
+// --- Phase 2: validate_action_coherence tests ---
+
+#[test]
+fn test_validate_action_coherence_no_warning_with_create_work() {
+    // abandon + create_work in same payload -> no warning
+    let actions = vec![
+        AgentAction::OverrideWork {
+            work_id: "wi-1".into(),
+            target_status: "Abandoned".into(),
+            reason: "Creating a replacement work for this".into(),
+        },
+        AgentAction::CreateWork {
+            parent_id: "phase-1".into(),
+            title: "Replacement".into(),
+            description: "fixed".into(),
+            files: vec![],
+            acceptance_criteria: vec![],
+            dependencies: vec![],
+        },
+    ];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(
+        warnings.is_empty(),
+        "no warnings expected when create_work accompanies override_work"
+    );
+}
+
+#[test]
+fn test_validate_action_coherence_warns_when_promise_without_create() {
+    // abandon with "creating" in reason, no create_work -> warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-1".into(),
+        target_status: "Abandoned".into(),
+        reason: "Creating fix Work and replacement for this item".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert_eq!(warnings.len(), 1, "should warn when promise not backed by action");
+    assert!(warnings[0].contains("wi-1"), "warning should mention the work ID");
+}
+
+#[test]
+fn test_validate_action_coherence_no_warning_clean_abandon() {
+    // abandon with no creation intent -> no warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-2".into(),
+        target_status: "Abandoned".into(),
+        reason: "Blocked by unresolvable dependency".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(warnings.is_empty(), "intentional clean abandons should not warn");
+}
+
+#[test]
+fn test_validate_action_coherence_no_warning_non_abandoned_override() {
+    // override to Ready (not Abandoned) with creating language -> no warning
+    let actions = vec![AgentAction::OverrideWork {
+        work_id: "wi-3".into(),
+        target_status: "Ready".into(),
+        reason: "Creating fresh attempt".into(),
+    }];
+    let warnings = validate_action_coherence(&actions, TEST_PREFIX);
+    assert!(warnings.is_empty(), "non-Abandoned overrides should not warn");
 }
 
 // --- decomposition_error FSM tests ---
