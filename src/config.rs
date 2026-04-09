@@ -453,7 +453,7 @@ impl AgentRoleConfig {
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             max_tokens: 4096,
             max_iterations: 5,
-            max_pool: 2,
+            max_pool: MAX_POOL_UNLIMITED,
             temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
@@ -846,7 +846,7 @@ mod tests {
     fn test_agent_role_config_reviewer_defaults() {
         let rc = AgentRoleConfig::default_reviewer();
         assert_eq!(rc.max_iterations, 5);
-        assert_eq!(rc.max_pool, 2);
+        assert_eq!(rc.max_pool, MAX_POOL_UNLIMITED);
         assert_eq!(rc.max_tokens, 4096);
         assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
         assert_eq!(rc.max_requeries, 3);

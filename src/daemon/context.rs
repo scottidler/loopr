@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 
 use tokio::task::JoinHandle;
 
-use crate::agents::{AgentEvent, AgentSession, AgentStatus};
+use crate::agents::{AgentEvent, AgentKind, AgentSession, AgentStatus};
 use crate::config::Config;
 use crate::config::ToolEntry;
 use crate::domain::bundle::{Bundle, BundleStatus};
@@ -1013,6 +1013,34 @@ impl DaemonContext {
         self.stores.update_reconciliation_stats(checked as u64, fixed as u64, 0);
 
         fixed
+    }
+
+    /// Returns bundle IDs of Triaged bundles with no non-terminal reviewer session.
+    /// Used by the reconciler to identify bundles that need a reviewer spawned.
+    pub fn triaged_bundles_needing_reviewer(&self) -> Vec<String> {
+        let active_reviewer_bundle_ids: HashSet<String> = self
+            .stores
+            .read_agent_sessions()
+            .map(|sessions| {
+                sessions
+                    .values()
+                    .filter(|s| s.agent_type == AgentKind::Reviewer && !s.status().is_terminal())
+                    .filter_map(|s| s.bundle_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        self.stores
+            .read_bundles()
+            .map(|bundles| {
+                bundles
+                    .values()
+                    .filter(|b| b.status() == BundleStatus::Triaged)
+                    .filter(|b| !active_reviewer_bundle_ids.contains(&b.id))
+                    .map(|b| b.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Create a new DaemonContext wrapped in Arc<RwLock> for shared async access.
@@ -2092,5 +2120,47 @@ mod tests {
             AgentStatus::Running,
             "session must stay Running with a live handle"
         );
+    }
+
+    #[test]
+    fn test_triaged_bundles_needing_reviewer_returns_unserviced() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx, "test".into(), std::path::PathBuf::from("/tmp")).unwrap();
+
+        // Create a Triaged bundle with no reviewer session
+        let mut bundle = Bundle::new("wi-1".into(), None, "branch-a".into(), vec![]);
+        bundle.force_status(crate::domain::bundle::BundleStatus::Triaged);
+        let bundle_id = bundle.id.clone();
+        ctx.stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+        let needing = ctx.triaged_bundles_needing_reviewer();
+        assert_eq!(needing, vec![bundle_id]);
+    }
+
+    #[test]
+    fn test_triaged_bundles_needing_reviewer_excludes_with_active_session() {
+        let (_dir, config) = test_config();
+        let (tx, _rx) = broadcast::channel(16);
+        let ctx = DaemonContext::new(config, tx, "test".into(), std::path::PathBuf::from("/tmp")).unwrap();
+
+        // Create a Triaged bundle
+        let mut bundle = Bundle::new("wi-1".into(), None, "branch-a".into(), vec![]);
+        bundle.force_status(crate::domain::bundle::BundleStatus::Triaged);
+        let bundle_id = bundle.id.clone();
+        ctx.stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+        // Create an active reviewer session for this bundle
+        let mut session = AgentSession::new(AgentKind::Reviewer, "test-model".into());
+        session.bundle_id = Some(bundle_id.clone());
+        session.force_status(AgentStatus::Running);
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        let needing = ctx.triaged_bundles_needing_reviewer();
+        assert!(needing.is_empty(), "bundle with active reviewer should not be returned");
     }
 }

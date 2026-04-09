@@ -18,6 +18,7 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::{DaemonContext, Stores};
+use self::handlers::dispatch;
 
 const DAEMON_START_POLL_MS: u64 = 100;
 const GRACEFUL_SHUTDOWN_SECS: u64 = 10;
@@ -255,6 +256,35 @@ async fn run_reconciler(
         let fixed = c.reconcile();
         if fixed > 0 {
             info!("Reconciler: {} record(s) fixed in periodic sweep", fixed);
+        }
+        // Reviewer replenishment: Triaged bundles with no active reviewer
+        if c.config.agents.auto_start_reviewer {
+            let bundles_needing_review = c.triaged_bundles_needing_reviewer();
+            if !bundles_needing_review.is_empty() {
+                let stores = c.stores.clone();
+                let event_tx = c.event_tx.clone();
+                let worktree_mgr = c.worktree_manager.clone();
+                let integrator_config = c.config.integrator.clone();
+                drop(c);
+                for bundle_id in bundles_needing_review {
+                    warn!(
+                        "Reconciler: Triaged bundle {} has no active reviewer, spawning",
+                        bundle_id
+                    );
+                    let start_req = DaemonRequest::new(
+                        0,
+                        "agent.start",
+                        serde_json::json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
+                    );
+                    let resp = dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, start_req).await;
+                    if resp.is_error() {
+                        warn!(
+                            "Reconciler: failed to spawn reviewer for bundle {}: {:?}",
+                            bundle_id, resp.error
+                        );
+                    }
+                }
+            }
         }
     }
     debug!("run_reconciler: exiting");

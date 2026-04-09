@@ -636,7 +636,8 @@ pub(crate) mod tests {
         let config = crate::config::Config::default();
         // Implementer default is MAX_POOL_UNLIMITED, resolved to worker_pool_size (>= 1).
         assert!(max_pool_for(AgentKind::Implementer, &config) >= 1);
-        assert_eq!(max_pool_for(AgentKind::Reviewer, &config), 2);
+        // Reviewer default is now MAX_POOL_UNLIMITED, resolved to worker_pool_size (>= 1).
+        assert!(max_pool_for(AgentKind::Reviewer, &config) >= 1);
         assert_eq!(max_pool_for(AgentKind::Coordinator, &config), 1);
         assert_eq!(max_pool_for(AgentKind::Researcher, &config), 4);
         assert_eq!(max_pool_for(AgentKind::Integrator, &config), 1);
