@@ -293,7 +293,14 @@ async fn auto_start_agents(
                 "agent_type": "reviewer", "bundle_id": bid,
             }),
         );
-        let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
+        let resp = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
+        if resp.is_error() {
+            tracing::warn!(
+                "[auto-start] failed to spawn reviewer for bundle {}: {:?}",
+                bid,
+                resp.error
+            );
+        }
     }
 }
 
