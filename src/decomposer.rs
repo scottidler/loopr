@@ -493,7 +493,6 @@ async fn decompose_into<H: HttpClient + Sync>(
     target_kind: DocKind,
     config: &DecomposerConfig,
     http_client: &H,
-    global_title_to_id: &mut HashMap<String, String>,
 ) -> Result<Vec<ChildRecord>> {
     // Build prompt and call LLM
     let prompt = build_decompose_prompt(target_kind, parent_content)?;
@@ -560,29 +559,43 @@ async fn decompose_into<H: HttpClient + Sync>(
         ));
     }
 
-    // Build the local sibling title-to-id map, then merge into the global map.
+    // Build the local sibling title-to-id map (same-batch, same-parent only).
     let local_title_to_id: HashMap<String, String> =
         records.iter().map(|(r, _)| (r.title.clone(), r.id.clone())).collect();
-    global_title_to_id.extend(local_title_to_id.iter().map(|(k, v)| (k.clone(), v.clone())));
+    // Case-insensitive + whitespace-trimmed fallback: catches the most common LLM errors.
+    let local_lower: HashMap<String, String> = local_title_to_id
+        .iter()
+        .map(|(k, v)| (k.trim().to_lowercase(), v.clone()))
+        .collect();
 
     let mut final_records: Vec<ChildRecord> = Vec::new();
     for (mut record, dep_titles) in records {
         let mut resolved = Vec::new();
         let mut unresolved = Vec::new();
         for title in &dep_titles {
-            if let Some(id) = local_title_to_id.get(title).or_else(|| global_title_to_id.get(title)) {
+            if let Some(id) = local_title_to_id
+                .get(title)
+                .or_else(|| local_lower.get(&title.trim().to_lowercase()))
+            {
                 resolved.push(id.clone());
             } else {
-                warn!(
-                    "dependency '{}' not yet resolvable, deferring to post-merge pass",
-                    title
-                );
                 unresolved.push(title.clone());
             }
         }
         record.dependencies = resolved;
         record.unresolved_dep_titles = unresolved;
         final_records.push(record);
+    }
+
+    // Strict failure: unresolved dep titles mean the LLM referenced a sibling that
+    // doesn't exist in this batch. The retry loop will re-prompt with the error.
+    let unresolved_errors: Vec<String> = final_records
+        .iter()
+        .filter(|r| !r.unresolved_dep_titles.is_empty())
+        .map(|r| format!("'{}' has unresolved deps: {:?}", r.title, r.unresolved_dep_titles))
+        .collect();
+    if !unresolved_errors.is_empty() {
+        bail!("Dependency resolution failed:\n{}", unresolved_errors.join("\n"));
     }
 
     info!(
@@ -625,29 +638,13 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
 
     if brief {
         // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
-        let mut local_map = HashMap::new();
-        let works = decompose_into(
-            plan_markdown,
-            &plan_id,
-            DocKind::Work,
-            config,
-            http_client,
-            &mut local_map,
-        )
-        .await?;
+        let works = decompose_into(plan_markdown, &plan_id, DocKind::Work, config, http_client)
+            .await?;
         all_records.extend(works);
     } else {
         // Full mode: Plan -> Specs (sequential) -> Phases + Works (parallel per spec)
-        let mut spec_map = HashMap::new();
-        let specs = decompose_into(
-            plan_markdown,
-            &plan_id,
-            DocKind::Spec,
-            config,
-            http_client,
-            &mut spec_map,
-        )
-        .await?;
+        let specs =
+            decompose_into(plan_markdown, &plan_id, DocKind::Spec, config, http_client).await?;
         info!("{} specs produced, starting parallel spec branches", specs.len());
 
         let spec_futures: Vec<_> = specs
@@ -656,7 +653,7 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
             .collect();
         let branch_results_raw = join_all(spec_futures).await;
 
-        let mut branch_results: Vec<(Vec<ChildRecord>, HashMap<String, String>)> = Vec::new();
+        let mut branch_results: Vec<Vec<ChildRecord>> = Vec::new();
         let mut branch_error: Option<String> = None;
 
         for (spec, result) in specs.iter().zip(branch_results_raw) {
@@ -680,13 +677,7 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
             );
         }
 
-        // Merge all branch title maps into a single global map for post-pass resolution.
-        let mut global_title_to_id = spec_map;
-        for (_, branch_map) in &branch_results {
-            global_title_to_id.extend(branch_map.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-
-        for (branch_records, _) in branch_results {
+        for branch_records in branch_results {
             all_records.extend(branch_records);
         }
         all_records.extend(specs);
@@ -713,24 +704,15 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
 }
 
 /// Decompose one spec into phases + works concurrently.
-/// Returns (phases + works, merged title-to-id map for this branch).
 #[instrument(skip_all, fields(spec_id = %spec_id))]
 async fn decompose_spec_branch<H: HttpClient + Sync>(
     spec_content: &str,
     spec_id: &str,
     config: &DecomposerConfig,
     http_client: &H,
-) -> Result<(Vec<ChildRecord>, HashMap<String, String>)> {
-    let mut branch_map = HashMap::new();
-    let phases = decompose_into(
-        spec_content,
-        spec_id,
-        DocKind::Phase,
-        config,
-        http_client,
-        &mut branch_map,
-    )
-    .await?;
+) -> Result<Vec<ChildRecord>> {
+    let phases =
+        decompose_into(spec_content, spec_id, DocKind::Phase, config, http_client).await?;
     debug!(
         "spec={} got {} phases, starting parallel phase branches",
         spec_id,
@@ -745,35 +727,25 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
     debug!("spec={} all phase branches complete", spec_id);
 
     let mut all_records = phases;
-    for (works, phase_map) in phase_results {
+    for works in phase_results {
         all_records.extend(works);
-        branch_map.extend(phase_map.into_iter());
     }
 
     debug!("spec={} branch total records={}", spec_id, all_records.len());
-    Ok((all_records, branch_map))
+    Ok(all_records)
 }
 
-/// Decompose one phase into works, returning the works and the local title-to-id map.
+/// Decompose one phase into works.
 #[instrument(skip_all, fields(phase_id = %phase_id))]
 async fn decompose_phase_branch<H: HttpClient + Sync>(
     phase_content: &str,
     phase_id: &str,
     config: &DecomposerConfig,
     http_client: &H,
-) -> Result<(Vec<ChildRecord>, HashMap<String, String>)> {
-    let mut phase_map = HashMap::new();
-    let works = decompose_into(
-        phase_content,
-        phase_id,
-        DocKind::Work,
-        config,
-        http_client,
-        &mut phase_map,
-    )
-    .await?;
+) -> Result<Vec<ChildRecord>> {
+    let works = decompose_into(phase_content, phase_id, DocKind::Work, config, http_client).await?;
     debug!("phase={} got {} works", phase_id, works.len());
-    Ok((works, phase_map))
+    Ok(works)
 }
 
 /// Bottom-up ratification of the decomposition hierarchy (in-memory).
@@ -1169,17 +1141,9 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let mut global_map = HashMap::new();
-        let result = decompose_into(
-            parent_content,
-            &parent_id,
-            DocKind::Spec,
-            &config,
-            &mock,
-            &mut global_map,
-        )
-        .await
-        .unwrap();
+        let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].kind, DocKind::Spec);
         assert_eq!(result[1].kind, DocKind::Spec);
@@ -1189,6 +1153,109 @@ mod tests {
         assert_eq!(result[1].dependencies, vec![result[0].id.clone()]);
         // No files written
         assert_eq!(result[0].content, "# Spec\n\n## Overview\n\nThe core implementation.");
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test]
+    async fn test_decompose_into_unresolved_dep_title_fails() {
+        // A dep title that doesn't match any sibling in the local batch must cause
+        // decompose_into to return an error (strict failure, not silent drop).
+        crate::prompts::init_defaults();
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        let parent_content = "# Plan\n\nTest";
+        let parent_id = crate::id::generate_id("pl");
+
+        let children_json = serde_json::json!([
+            {
+                "title": "Spec A",
+                "content": "# Spec A",
+                "dependencies": ["NonExistentSpec"]
+            }
+        ])
+        .to_string();
+        let validation_json = r#"{"valid": true, "issues": []}"#;
+
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]})
+                    .to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]})
+                    .to_string(),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result =
+            decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock).await;
+        assert!(result.is_err(), "expected error for unresolved dep title");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Dependency resolution failed"),
+            "error must mention dep resolution: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("NonExistentSpec"),
+            "error must name the unresolved dep: {err_msg}"
+        );
+
+        unsafe { std::env::remove_var(&env_key) };
+    }
+
+    #[tokio::test]
+    async fn test_decompose_into_case_insensitive_dep_resolves() {
+        // Dep title with different casing from the sibling title should resolve
+        // via the case-insensitive fallback map.
+        crate::prompts::init_defaults();
+        let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
+        unsafe { std::env::set_var(&env_key, "test-key") };
+
+        let parent_content = "# Plan\n\nTest";
+        let parent_id = crate::id::generate_id("pl");
+
+        let children_json = serde_json::json!([
+            {
+                "title": "Core Module",
+                "content": "# Core Module",
+                "dependencies": []
+            },
+            {
+                "title": "API Layer",
+                "content": "# API Layer",
+                "dependencies": ["core module"]
+            }
+        ])
+        .to_string();
+        let validation_json = r#"{"valid": true, "issues": []}"#;
+
+        let mock = SequenceMockHttp {
+            responses: std::sync::Mutex::new(vec![
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]})
+                    .to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]})
+                    .to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]})
+                    .to_string(),
+            ]),
+        };
+
+        let mut config = test_config();
+        config.api_key_env = env_key.clone();
+
+        let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        // API Layer should have resolved "core module" (lowercase) to Core Module's ID
+        assert_eq!(
+            result[1].dependencies,
+            vec![result[0].id.clone()],
+            "case-insensitive dep should resolve to Core Module's ID"
+        );
 
         unsafe { std::env::remove_var(&env_key) };
     }
@@ -1229,16 +1296,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let mut global_map = HashMap::new();
-        let result = decompose_into(
-            parent_content,
-            &parent_id,
-            DocKind::Spec,
-            &config,
-            &mock,
-            &mut global_map,
-        )
-        .await;
+        let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cycle"));
 
@@ -1274,17 +1332,9 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let mut global_map = HashMap::new();
-        let result = decompose_into(
-            parent_content,
-            &parent_id,
-            DocKind::Work,
-            &config,
-            &mock,
-            &mut global_map,
-        )
-        .await
-        .unwrap();
+        let result = decompose_into(parent_content, &parent_id, DocKind::Work, &config, &mock)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert_eq!(
@@ -1325,17 +1375,9 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let mut local_map = HashMap::new();
-        let result = decompose_into(
-            parent_content,
-            &parent_id,
-            DocKind::Work,
-            &config,
-            &mock,
-            &mut local_map,
-        )
-        .await
-        .unwrap();
+        let result = decompose_into(parent_content, &parent_id, DocKind::Work, &config, &mock)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].kind, DocKind::Work);
         assert!(result[0].id.starts_with("wk-"));
@@ -1345,20 +1387,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_hierarchy_cross_scope_dependency_not_resolved() {
-        // Cross-spec deps are no longer supported (reactive execution model).
+    async fn test_decompose_hierarchy_cross_scope_dependency_fails_branch() {
+        // Cross-spec deps are not supported (reactive execution model, local-only resolution).
         // Work Beta (in Spec B) references "Work Alpha" (in Spec A) by title.
-        // Since deps are same-parent only, this title won't resolve within Phase B's
-        // local branch and the dep will be silently dropped.
+        // Since deps resolve from local sibling batch only, "Work Alpha" is not in Phase B's
+        // local map - the dep fails strict validation, causing Spec B's branch to produce
+        // a partial_err. Spec A's branch succeeds normally.
         crate::prompts::init_defaults();
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
         let plan_markdown =
-            "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify global map.";
+            "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify local-only resolution.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
-        let ratify_json = r#"{"passed": true, "issues": []}"#;
 
         // LLM response sequence (consumed LIFO - last element in Vec is first consumed):
         // Call 1:  decompose plan -> [Spec A, Spec B]
@@ -1370,9 +1412,9 @@ mod tests {
         // Call 7:  validate Work Alpha
         // Call 8:  decompose Spec B -> [Phase B]
         // Call 9:  validate Phase B
-        // Call 10: decompose Phase B -> [Work Beta] (depends on Work Alpha)
-        // Call 11: validate Work Beta
-        // Calls 12-16: ratify Plan, Spec A, Spec B, Phase A, Phase B (order non-deterministic)
+        // Call 10: decompose Phase B -> [Work Beta] (unresolvable dep "Work Alpha")
+        // Call 11: validate Work Beta (validation runs before dep resolution)
+        // Spec B branch fails with dep resolution error - no ratification calls.
         let specs_json = serde_json::json!([
             {"title": "Spec A", "content": "# Spec A\n\n## Overview\n\nFirst spec.", "dependencies": []},
             {"title": "Spec B", "content": "# Spec B\n\n## Overview\n\nSecond spec.", "dependencies": []}
@@ -1407,13 +1449,7 @@ mod tests {
 
         let mock = SequenceMockHttp {
             responses: std::sync::Mutex::new(vec![
-                // Ratifications 12-16 (5 groups, order non-deterministic so all same)
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(ratify_json),
-                // Call 11: validate Work Beta
+                // Call 11: validate Work Beta (consumed before dep resolution fails)
                 mk(valid_json),
                 // Call 10: decompose Phase B -> [Work Beta]
                 mk(&works_b_json),
@@ -1441,29 +1477,29 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) =
+            decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
-            partial_err.is_none(),
-            "expected no partial failure, got: {:?}",
-            partial_err
+            partial_err.is_some(),
+            "expected partial failure for unresolvable cross-spec dep, got None"
+        );
+        let err_msg = partial_err.unwrap();
+        assert!(
+            err_msg.contains("Dependency resolution failed") || err_msg.contains("Work Beta"),
+            "partial_err should mention dep resolution: {err_msg}"
         );
 
-        // Verify both works exist
+        // Spec A's branch succeeded - Work Alpha must exist
         hierarchy
             .works
             .iter()
             .find(|w| w.title == "Work Alpha")
-            .expect("Work Alpha not found");
-        let beta = hierarchy
-            .works
-            .iter()
-            .find(|w| w.title == "Work Beta")
-            .expect("Work Beta not found");
+            .expect("Work Alpha not found in partial hierarchy");
 
+        // Spec B's branch failed - Work Beta must NOT exist
         assert!(
-            beta.dependencies.is_empty(),
-            "Cross-spec dep should NOT resolve: deps are same-parent only. Got: {:?}",
-            beta.dependencies
+            hierarchy.works.iter().all(|w| w.title != "Work Beta"),
+            "Work Beta should not appear - its branch failed"
         );
 
         unsafe { std::env::remove_var(&env_key) };
@@ -1572,10 +1608,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_decompose_hierarchy_cross_spec_deps_not_resolved() {
-        // Cross-spec deps are no longer supported (reactive execution model).
-        // Work Beta (in Spec B) references "Work Alpha" (in Spec A) by title.
-        // Since deps are same-parent only, this title won't resolve within Phase Beta's
-        // branch and the dep will be silently dropped.
+        // Cross-spec deps cause a branch failure under local-only resolution.
+        // Work Beta (in Spec Beta) references "Work Alpha" (in Spec Alpha) by title.
+        // "Work Alpha" is not in Phase Beta's local sibling batch, so dep resolution
+        // fails, producing a partial_err. Spec Alpha's branch succeeds normally.
         crate::prompts::init_defaults();
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
@@ -1584,7 +1620,6 @@ mod tests {
             "# Cross-Spec Plan\n\n## Problem Statement\n\nCross-spec dep test.\n\n## Goals\n\nBeta depends on Alpha.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
-        let ratify_json = r#"{"passed": true, "issues": []}"#;
 
         let specs_json = serde_json::json!([
             {"title": "Spec Alpha", "content": "# Spec Alpha\n\n## Overview\n\nFirst.", "dependencies": []},
@@ -1610,24 +1645,20 @@ mod tests {
 
         let mk = |text: &str| serde_json::json!({"content": [{"type": "text", "text": text}]}).to_string();
 
+        // Responses consumed LIFO (last element first). Spec Beta's branch fails after
+        // dep resolution; no ratification calls are made.
         let mock = SequenceMockHttp {
             responses: std::sync::Mutex::new(vec![
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(ratify_json),
-                mk(valid_json),    // validate Work Beta
+                mk(valid_json),    // validate Work Beta (consumed before dep resolution fails)
                 mk(&works_beta),   // decompose Phase Beta -> works
                 mk(valid_json),    // validate Phase Beta
                 mk(&phases_beta),  // decompose Spec Beta -> phases
-                mk(valid_json),    // validate Spec Beta (from spec branch)
                 mk(valid_json),    // validate Work Alpha
                 mk(&works_alpha),  // decompose Phase Alpha -> works
                 mk(valid_json),    // validate Phase Alpha
                 mk(&phases_alpha), // decompose Spec Alpha -> phases
-                mk(valid_json),    // validate Spec Alpha (from spec branch)
-                mk(valid_json),    // validate Spec Beta (from plan decompose)
+                mk(valid_json),    // validate Spec Beta
+                mk(valid_json),    // validate Spec Alpha
                 mk(&specs_json),   // decompose plan -> specs
             ]),
         };
@@ -1635,29 +1666,24 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) =
+            decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
-            partial_err.is_none(),
-            "expected no partial failure, got: {:?}",
-            partial_err
+            partial_err.is_some(),
+            "expected partial failure for unresolvable cross-spec dep"
         );
 
-        // Verify both works exist
+        // Spec Alpha's branch succeeded - Work Alpha must exist
         hierarchy
             .works
             .iter()
             .find(|w| w.title == "Work Alpha")
-            .expect("Work Alpha not found");
-        let beta = hierarchy
-            .works
-            .iter()
-            .find(|w| w.title == "Work Beta")
-            .expect("Work Beta not found");
+            .expect("Work Alpha not found in partial hierarchy");
 
+        // Spec Beta's branch failed - Work Beta must NOT exist
         assert!(
-            beta.dependencies.is_empty(),
-            "Cross-spec dep should NOT resolve: deps are same-parent only. Got: {:?}",
-            beta.dependencies
+            hierarchy.works.iter().all(|w| w.title != "Work Beta"),
+            "Work Beta should not appear - its branch failed"
         );
 
         unsafe { std::env::remove_var(&env_key) };
@@ -1686,16 +1712,9 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let mut local_map = HashMap::new();
-        let result = decompose_into(
-            parent_content,
-            &parent_id,
-            DocKind::Spec,
-            &config,
-            &SlowMockHttp,
-            &mut local_map,
-        )
-        .await;
+        let result =
+            decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &SlowMockHttp)
+                .await;
 
         assert!(result.is_err(), "expected timeout error, got: {:?}", result);
         let msg = format!("{:?}", result.unwrap_err());
