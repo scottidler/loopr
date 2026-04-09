@@ -703,7 +703,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-spec-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into(), 0);
+        let mock_spec = Spec::new("plan-1".into(), "Test Spec".into());
         let specs_json = serde_json::to_value(vec![mock_spec]).unwrap();
 
         let server = IpcServer::new(&path);
@@ -754,7 +754,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("refresh-phase-{}.sock", crate::id::generate_id("xx")));
 
-        let mock_phase = Phase::new("spec-1".into(), "Phase 1".into(), 1);
+        let mock_phase = Phase::new("spec-1".into(), "Phase 1".into());
         let phases_json = serde_json::to_value(vec![mock_phase]).unwrap();
 
         let server = IpcServer::new(&path);

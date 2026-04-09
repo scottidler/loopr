@@ -283,7 +283,6 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
         CrudCmd::Create {
             title,
             parent,
-            order,
             files,
             acceptance_criteria,
             dependencies,
@@ -293,9 +292,6 @@ fn crud_to_ipc(collection: &str, cmd: &CrudCmd, role: Role) -> (String, serde_js
             });
             if let Some(parent_id) = parent {
                 params["parent_id"] = json!(parent_id);
-            }
-            if let Some(order) = order {
-                params["order"] = json!(order);
             }
             // Work-specific fields
             if collection == "work" {

@@ -60,8 +60,6 @@ pub(super) fn handle_phase_create(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let order = req.params.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-
         if title.is_empty() {
             return Ok(DaemonResponse::err(
                 req.id,
@@ -85,7 +83,7 @@ pub(super) fn handle_phase_create(
             }
         }
 
-        let phase = Phase::new(parent_id, title, order);
+        let phase = Phase::new(parent_id, title);
         let phase_json = match serde_json::to_value(&phase) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),
@@ -329,9 +327,6 @@ pub(super) fn handle_phase_update(
         if let Some(title) = req.params.get("title").and_then(|v| v.as_str()) {
             phase.title = title.to_string();
         }
-        if let Some(order) = req.params.get("order").and_then(|v| v.as_u64()) {
-            phase.order = order as u32;
-        }
         phase.updated_at = crate::id::now_millis();
 
         if let Some(store) = &stores.store
@@ -554,7 +549,7 @@ mod tests {
         assert_eq!(result["title"], "Test Phase");
         assert_eq!(result["parent_id"], spec_id);
         assert_eq!(result["status"], "draft");
-        assert_eq!(result["order"], 1);
+
         assert_eq!(stores.phases.read().unwrap().len(), 1);
     }
 
@@ -666,7 +661,6 @@ mod tests {
         assert!(!get_resp.is_error());
         let result = get_resp.result.unwrap();
         assert_eq!(result["title"], "My Phase");
-        assert_eq!(result["order"], 3);
     }
 
     #[tokio::test]
@@ -1215,7 +1209,6 @@ mod tests {
         assert!(!resp.is_error(), "phase.update failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         assert_eq!(result["title"], "Updated Phase");
-        assert_eq!(result["order"], 5);
     }
 
     #[tokio::test]

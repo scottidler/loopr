@@ -1118,7 +1118,7 @@ async fn test_effective_validation_commands_empty_phase() {
     let dir = TestDir::new("loopr-int-evc-empty");
     let stores = test_stores(&dir);
 
-    let phase = Phase::new("spec-1".into(), "P1".into(), 1);
+    let phase = Phase::new("spec-1".into(), "P1".into());
     let phase_id = phase.id.clone();
     stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 

@@ -99,10 +99,9 @@ async fn test_preformed_todo_app_plan() {
 
     // Verify phase->spec relationships and ordering
     let phase_store = stores.phases.read().unwrap();
-    for (i, (phase_id, _)) in phases.iter().enumerate() {
+    for (phase_id, _) in phases.iter() {
         let phase = &phase_store[phase_id];
         assert_eq!(&phase.parent_id, spec_id);
-        assert_eq!(phase.order, (i + 1) as u32);
         assert_eq!(phase.status().to_string(), "active");
     }
 
@@ -223,10 +222,10 @@ async fn test_preformed_calculator_app_plan() {
         assert_eq!(work.status().to_string(), "Ready");
     }
 
-    // Verify phase ordering within spec
+    // Verify phases exist under spec
     let (_, ref phases) = spec_results[0];
-    for (i, (phase_id, _)) in phases.iter().enumerate() {
-        assert_eq!(phase_store[phase_id].order, (i + 1) as u32);
+    for (phase_id, _) in phases.iter() {
+        assert!(phase_store.contains_key(phase_id));
     }
 }
 

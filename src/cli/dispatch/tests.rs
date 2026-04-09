@@ -7,7 +7,7 @@ fn test_plan_create_mapping() {
             title: "My Plan".to_string(),
 
             parent: None,
-            order: None,
+
             files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
@@ -25,7 +25,7 @@ fn test_spec_create_mapping_with_parent() {
             title: "My Spec".to_string(),
 
             parent: Some("plan-1".to_string()),
-            order: None,
+
             files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
@@ -37,13 +37,11 @@ fn test_spec_create_mapping_with_parent() {
 }
 
 #[test]
-fn test_phase_create_mapping_with_order() {
+fn test_phase_create_mapping_with_parent() {
     let cmd = Command::Phase {
         cmd: CrudCmd::Create {
             title: "Phase 1".to_string(),
-
             parent: Some("spec-1".to_string()),
-            order: Some(1),
             files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
@@ -52,7 +50,6 @@ fn test_phase_create_mapping_with_order() {
     let (method, params) = command_to_ipc(&cmd, Role::Coordinator);
     assert_eq!(method, "phase.create");
     assert_eq!(params["parent_id"], "spec-1");
-    assert_eq!(params["order"], 1);
 }
 
 #[test]
@@ -490,13 +487,11 @@ fn test_coordinator_get_goal_mapping() {
 }
 
 #[test]
-fn test_crud_spec_with_parent_and_order() {
-    // Spec create with both parent (plan_id) and order set
+fn test_crud_spec_with_parent() {
     let cmd = Command::Spec {
         cmd: CrudCmd::Create {
             title: "Auth Spec".to_string(),
             parent: Some("plan-42".to_string()),
-            order: Some(3),
             files: vec![],
             acceptance_criteria: vec![],
             dependencies: vec![],
@@ -506,7 +501,6 @@ fn test_crud_spec_with_parent_and_order() {
     assert_eq!(method, "spec.create");
     assert_eq!(params["title"], "Auth Spec");
     assert_eq!(params["parent_id"], "plan-42");
-    assert_eq!(params["order"], 3);
 }
 
 #[test]
@@ -617,7 +611,7 @@ fn test_work_create_with_parent_uses_parent_id() {
         cmd: CrudCmd::Create {
             title: "Implement auth".to_string(),
             parent: Some("phase-1".to_string()),
-            order: None,
+
             files: vec!["src/".to_string()],
             acceptance_criteria: vec!["tests pass".to_string()],
             dependencies: vec![],
@@ -638,7 +632,7 @@ fn test_work_create_skips_work_fields_for_non_work() {
             title: "Plan".to_string(),
 
             parent: None,
-            order: None,
+
             files: vec!["should-be-ignored".to_string()],
             acceptance_criteria: vec![],
             dependencies: vec![],

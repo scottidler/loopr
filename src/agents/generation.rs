@@ -153,7 +153,7 @@ pub fn find_active_specs_for_plan(stores: &Stores, plan_id: &str) -> Vec<Spec> {
         .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
         .cloned()
         .collect();
-    result.sort_by_key(|s| s.order);
+    result.sort_by_key(|s| s.created_at);
     result
 }
 
@@ -167,7 +167,7 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
         .filter(|p| p.parent_id == spec_id && p.status() == HierarchyStatus::Active)
         .cloned()
         .collect();
-    result.sort_by_key(|p| p.order);
+    result.sort_by_key(|p| p.created_at);
     result
 }
 
@@ -330,14 +330,14 @@ mod tests {
         let dir = TestDir::new("loopr-gen-fasp");
         let stores = test_stores(&dir);
 
-        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into(), 0);
+        let mut spec1 = Spec::new("plan-1".into(), "Active Spec".into());
         spec1.force_status(HierarchyStatus::Active);
         stores.specs.write().unwrap().insert(spec1.id.clone(), spec1);
 
-        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into(), 1);
+        let spec2 = Spec::new("plan-1".into(), "Draft Spec".into());
         stores.specs.write().unwrap().insert(spec2.id.clone(), spec2);
 
-        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into(), 0);
+        let mut spec3 = Spec::new("plan-2".into(), "Other Plan Spec".into());
         spec3.force_status(HierarchyStatus::Active);
         stores.specs.write().unwrap().insert(spec3.id.clone(), spec3);
 
@@ -351,18 +351,21 @@ mod tests {
         let dir = TestDir::new("loopr-gen-faps");
         let stores = test_stores(&dir);
 
-        let mut p2 = Phase::new("spec-1".into(), "Phase 2".into(), 2);
-        p2.force_status(HierarchyStatus::Active);
-        stores.phases.write().unwrap().insert(p2.id.clone(), p2);
-
-        let mut p1 = Phase::new("spec-1".into(), "Phase 1".into(), 1);
+        // Create p1 first so it gets an earlier created_at (sorted by created_at)
+        let mut p1 = Phase::new("spec-1".into(), "Phase 1".into());
         p1.force_status(HierarchyStatus::Active);
+        p1.created_at = 1000;
         stores.phases.write().unwrap().insert(p1.id.clone(), p1);
+
+        let mut p2 = Phase::new("spec-1".into(), "Phase 2".into());
+        p2.force_status(HierarchyStatus::Active);
+        p2.created_at = 2000;
+        stores.phases.write().unwrap().insert(p2.id.clone(), p2);
 
         let phases = find_active_phases_for_spec(&stores, "spec-1");
         assert_eq!(phases.len(), 2);
-        assert_eq!(phases[0].order, 1);
-        assert_eq!(phases[1].order, 2);
+        assert_eq!(phases[0].title, "Phase 1");
+        assert_eq!(phases[1].title, "Phase 2");
     }
 
     #[test]
@@ -496,8 +499,8 @@ mod tests {
         let stores = test_stores(&dir);
 
         // Full mode: plan -> spec -> phase -> works
-        let spec = Spec::new("plan-1".into(), "Spec".into(), 0);
-        let phase = Phase::new(spec.id.clone(), "Phase".into(), 1);
+        let spec = Spec::new("plan-1".into(), "Spec".into());
+        let phase = Phase::new(spec.id.clone(), "Phase".into());
         let phase_id = phase.id.clone();
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);

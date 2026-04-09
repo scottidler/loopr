@@ -570,11 +570,11 @@ mod tests {
         let plan_id = plan.id.clone();
         stores.plans.write().unwrap().insert(plan.id.clone(), plan);
 
-        let spec = Spec::new(plan_id, "Test Spec".into(), 0);
+        let spec = Spec::new(plan_id, "Test Spec".into());
         let spec_id = spec.id.clone();
         stores.specs.write().unwrap().insert(spec.id.clone(), spec);
 
-        let phase = Phase::new(spec_id, "Test Phase".into(), 1);
+        let phase = Phase::new(spec_id, "Test Phase".into());
         let phase_id = phase.id.clone();
         stores.phases.write().unwrap().insert(phase.id.clone(), phase);
 

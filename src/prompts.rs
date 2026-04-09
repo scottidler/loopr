@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_generation_work_prompt_contains_pmt_instructions() {
         init_defaults();
-        let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into(), 1);
+        let phase = crate::domain::phase::Phase::new("s1".into(), "Ph".into());
         let prompt = crate::agents::generation::build_work_prompt(
             &phase,
             "",

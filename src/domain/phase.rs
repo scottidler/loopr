@@ -17,7 +17,6 @@ pub struct Phase {
     pub id: String,
     pub parent_id: String,
     pub title: String,
-    pub order: u32,
     status: PhaseStatus,
     #[serde(default)]
     pub dependencies: Vec<String>,
@@ -55,14 +54,13 @@ impl Phase {
         self.updated_at = crate::id::now_millis();
     }
 
-    pub fn new(parent_id: String, title: String, order: u32) -> Self {
-        tracing::debug!("Phase::new(parent_id={}, title={}, order={})", parent_id, title, order);
+    pub fn new(parent_id: String, title: String) -> Self {
+        tracing::debug!("Phase::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("ph"),
             parent_id,
             title,
-            order,
             status: PhaseStatus::Draft,
             dependencies: Vec::new(),
             activated_at: None,
@@ -95,7 +93,6 @@ impl DocMarkdown for Phase {
         m.push(("parent-id".into(), FmValue::Text(self.parent_id.clone())));
         m.push(("title".into(), FmValue::Text(self.title.clone())));
         m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
-        m.push(("order".into(), FmValue::Text(self.order.to_string())));
         m.push(("dependencies".into(), FmValue::List(self.dependencies.clone())));
         if let Some(at) = self.activated_at {
             m.push(("activated-at".into(), FmValue::Text(millis_to_iso(at))));
@@ -142,10 +139,9 @@ mod tests {
 
     #[test]
     fn test_phase_new() {
-        let phase = Phase::new("spec-123".to_string(), "Token generation".to_string(), 1);
+        let phase = Phase::new("spec-123".to_string(), "Token generation".to_string());
         assert_eq!(phase.parent_id, "spec-123");
         assert_eq!(phase.title, "Token generation");
-        assert_eq!(phase.order, 1);
         assert_eq!(phase.status(), HierarchyStatus::Draft);
         assert!(!phase.id.is_empty());
         assert!(phase.created_at > 0);
@@ -154,13 +150,12 @@ mod tests {
 
     #[test]
     fn test_phase_serde_roundtrip() {
-        let phase = Phase::new("spec-456".to_string(), "Roundtrip Phase".to_string(), 2);
+        let phase = Phase::new("spec-456".to_string(), "Roundtrip Phase".to_string());
         let json = serde_json::to_string(&phase).unwrap();
         let deserialized: Phase = serde_json::from_str(&json).unwrap();
         assert_eq!(phase.id, deserialized.id);
         assert_eq!(phase.parent_id, deserialized.parent_id);
         assert_eq!(phase.title, deserialized.title);
-        assert_eq!(phase.order, deserialized.order);
         assert_eq!(phase.status(), deserialized.status());
         assert_eq!(phase.created_at, deserialized.created_at);
         assert_eq!(phase.updated_at, deserialized.updated_at);
@@ -168,22 +163,16 @@ mod tests {
 
     #[test]
     fn test_phase_unique_ids() {
-        let p1 = Phase::new("spec-1".to_string(), "A".to_string(), 1);
-        let p2 = Phase::new("spec-1".to_string(), "B".to_string(), 2);
+        let p1 = Phase::new("spec-1".to_string(), "A".to_string());
+        let p2 = Phase::new("spec-1".to_string(), "B".to_string());
         assert_ne!(p1.id, p2.id);
     }
 
     #[test]
     fn test_phase_preserves_parent_id() {
         let parent_id = "spec-789".to_string();
-        let phase = Phase::new(parent_id.clone(), "Title".to_string(), 0);
+        let phase = Phase::new(parent_id.clone(), "Title".to_string());
         assert_eq!(phase.parent_id, parent_id);
-    }
-
-    #[test]
-    fn test_phase_order_preserved() {
-        let phase = Phase::new("spec-1".to_string(), "T".to_string(), 42);
-        assert_eq!(phase.order, 42);
     }
 
     // Phase uses the same HierarchyStatus FSM as Plan/Spec - verify transitions work
@@ -242,13 +231,13 @@ mod tests {
 
     #[test]
     fn test_phase_record_id() {
-        let phase = Phase::new("spec-1".into(), "T".into(), 1);
+        let phase = Phase::new("spec-1".into(), "T".into());
         assert_eq!(Record::id(&phase), phase.id);
     }
 
     #[test]
     fn test_phase_record_updated_at() {
-        let phase = Phase::new("spec-1".into(), "T".into(), 1);
+        let phase = Phase::new("spec-1".into(), "T".into());
         assert_eq!(Record::updated_at(&phase), phase.updated_at);
     }
 
@@ -259,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_phase_record_indexed_fields() {
-        let phase = Phase::new("spec-42".into(), "T".into(), 1);
+        let phase = Phase::new("spec-42".into(), "T".into());
         let fields = phase.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
         assert_eq!(
@@ -271,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_phase_record_serde_roundtrip() {
-        let phase = Phase::new("spec-rt".into(), "Roundtrip".into(), 3);
+        let phase = Phase::new("spec-rt".into(), "Roundtrip".into());
         let json = serde_json::to_string(&phase).unwrap();
         let restored: Phase = serde_json::from_str(&json).unwrap();
         assert_eq!(Record::id(&restored), Record::id(&phase));

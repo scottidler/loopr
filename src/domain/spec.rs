@@ -21,8 +21,6 @@ pub struct Spec {
     pub acceptance_criteria: AcceptanceCriteria,
     status: SpecStatus,
     #[serde(default)]
-    pub order: u32,
-    #[serde(default)]
     pub dependencies: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -54,8 +52,8 @@ impl Spec {
         self.updated_at = crate::id::now_millis();
     }
 
-    pub fn new(parent_id: String, title: String, order: u32) -> Self {
-        tracing::debug!("Spec::new(parent_id={}, title={}, order={})", parent_id, title, order);
+    pub fn new(parent_id: String, title: String) -> Self {
+        tracing::debug!("Spec::new(parent_id={}, title={})", parent_id, title);
         let now = id::now_millis();
         Self {
             id: id::generate_id("sp"),
@@ -63,7 +61,6 @@ impl Spec {
             title,
             acceptance_criteria: AcceptanceCriteria::default(),
             status: HierarchyStatus::Draft,
-            order,
             dependencies: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -93,7 +90,6 @@ impl DocMarkdown for Spec {
         m.push(("parent-id".into(), FmValue::Text(self.parent_id.clone())));
         m.push(("title".into(), FmValue::Text(self.title.clone())));
         m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
-        m.push(("order".into(), FmValue::Text(self.order.to_string())));
         m.push(("dependencies".into(), FmValue::List(self.dependencies.clone())));
         m.push((
             "acceptance-criteria".into(),
@@ -137,11 +133,10 @@ mod tests {
 
     #[test]
     fn test_spec_new() {
-        let spec = Spec::new("plan-123".to_string(), "Test Spec".to_string(), 0);
+        let spec = Spec::new("plan-123".to_string(), "Test Spec".to_string());
         assert_eq!(spec.parent_id, "plan-123");
         assert_eq!(spec.title, "Test Spec");
         assert_eq!(spec.status(), HierarchyStatus::Draft);
-        assert_eq!(spec.order, 0);
         assert!(!spec.id.is_empty());
         assert!(spec.created_at > 0);
         assert_eq!(spec.created_at, spec.updated_at);
@@ -149,35 +144,28 @@ mod tests {
 
     #[test]
     fn test_spec_serde_roundtrip() {
-        let spec = Spec::new("plan-456".to_string(), "Roundtrip Spec".to_string(), 1);
+        let spec = Spec::new("plan-456".to_string(), "Roundtrip Spec".to_string());
         let json = serde_json::to_string(&spec).unwrap();
         let deserialized: Spec = serde_json::from_str(&json).unwrap();
         assert_eq!(spec.id, deserialized.id);
         assert_eq!(spec.parent_id, deserialized.parent_id);
         assert_eq!(spec.title, deserialized.title);
         assert_eq!(spec.status(), deserialized.status());
-        assert_eq!(spec.order, deserialized.order);
         assert_eq!(spec.created_at, deserialized.created_at);
         assert_eq!(spec.updated_at, deserialized.updated_at);
     }
 
     #[test]
-    fn test_spec_order_preserved() {
-        let spec = Spec::new("plan-1".to_string(), "T".to_string(), 42);
-        assert_eq!(spec.order, 42);
-    }
-
-    #[test]
     fn test_spec_unique_ids() {
-        let s1 = Spec::new("plan-1".to_string(), "A".to_string(), 0);
-        let s2 = Spec::new("plan-1".to_string(), "B".to_string(), 1);
+        let s1 = Spec::new("plan-1".to_string(), "A".to_string());
+        let s2 = Spec::new("plan-1".to_string(), "B".to_string());
         assert_ne!(s1.id, s2.id);
     }
 
     #[test]
     fn test_spec_preserves_parent_id() {
         let parent_id = "plan-789".to_string();
-        let spec = Spec::new(parent_id.clone(), "Title".to_string(), 0);
+        let spec = Spec::new(parent_id.clone(), "Title".to_string());
         assert_eq!(spec.parent_id, parent_id);
     }
 
@@ -246,13 +234,13 @@ mod tests {
 
     #[test]
     fn test_spec_record_id() {
-        let spec = Spec::new("plan-1".to_string(), "T".to_string(), 0);
+        let spec = Spec::new("plan-1".to_string(), "T".to_string());
         assert_eq!(Record::id(&spec), spec.id);
     }
 
     #[test]
     fn test_spec_record_updated_at() {
-        let spec = Spec::new("plan-1".to_string(), "T".to_string(), 0);
+        let spec = Spec::new("plan-1".to_string(), "T".to_string());
         assert_eq!(Record::updated_at(&spec), spec.updated_at);
     }
 
@@ -263,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_spec_record_indexed_fields() {
-        let spec = Spec::new("plan-42".to_string(), "T".to_string(), 0);
+        let spec = Spec::new("plan-42".to_string(), "T".to_string());
         let fields = spec.indexed_fields();
         assert_eq!(fields.get("status"), Some(&IndexValue::String("draft".to_string())));
         assert_eq!(
@@ -275,7 +263,7 @@ mod tests {
 
     #[test]
     fn test_spec_record_roundtrip_via_serde() {
-        let spec = Spec::new("plan-99".to_string(), "RT".to_string(), 2);
+        let spec = Spec::new("plan-99".to_string(), "RT".to_string());
         let json = serde_json::to_string(&spec).unwrap();
         let deserialized: Spec = serde_json::from_str(&json).unwrap();
         assert_eq!(Record::id(&spec), Record::id(&deserialized));

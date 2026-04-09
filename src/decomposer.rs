@@ -882,11 +882,6 @@ fn records_to_hierarchy(
     let phase_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Phase).collect();
     let work_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Work).collect();
 
-    // Counters kept for backward compat (order field still exists on structs).
-    // Will be removed in Step 6 when order field is dropped.
-    let mut spec_counter: u32 = 0;
-    let mut phase_counters: HashMap<String, u32> = HashMap::new();
-
     for child in spec_records
         .iter()
         .chain(phase_records.iter())
@@ -899,8 +894,7 @@ fn records_to_hierarchy(
 
         match child.kind {
             DocKind::Spec => {
-                let mut spec = Spec::new(parent_id, child.title.clone(), spec_counter);
-                spec_counter += 1;
+                let mut spec = Spec::new(parent_id, child.title.clone());
                 spec.id = child.id.clone();
                 spec.force_status(SpecStatus::Pending);
                 spec.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
@@ -913,10 +907,7 @@ fn records_to_hierarchy(
                 specs.push(spec);
             }
             DocKind::Phase => {
-                let order = phase_counters.entry(parent_id.clone()).or_insert(0);
-                let current_order = *order;
-                *order += 1;
-                let mut phase = Phase::new(parent_id, child.title.clone(), current_order);
+                let mut phase = Phase::new(parent_id, child.title.clone());
                 phase.id = child.id.clone();
                 phase.force_status(PhaseStatus::Pending);
                 phase.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
@@ -2079,8 +2070,7 @@ mod tests {
         let h = records_to_hierarchy(&plan_id, "Plan", "# Plan", ac, &records).unwrap();
 
         assert_eq!(h.phases.len(), 2);
-        assert_eq!(h.phases[0].order, 0);
-        assert_eq!(h.phases[1].order, 1);
+        assert_eq!(h.phases.len(), 2);
     }
 
     // --- build_decompose_prompt ---

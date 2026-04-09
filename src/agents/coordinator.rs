@@ -261,17 +261,16 @@ pub fn build_state_summary_with_sla(
             .values()
             .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
             .collect();
-        non_terminal.sort_by(|a, b| a.order.cmp(&b.order).then(a.created_at.cmp(&b.created_at)));
+        non_terminal.sort_by_key(|p| p.created_at);
         if !non_terminal.is_empty() {
             summary.push_str("### Phases\n");
             for p in &non_terminal {
                 summary.push_str(&format!(
-                    "- [{}] {} ({}, spec: {}, order: {})\n",
+                    "- [{}] {} ({}, spec: {})\n",
                     p.id,
                     p.title,
                     p.status(),
                     p.parent_id,
-                    p.order
                 ));
             }
             summary.push('\n');

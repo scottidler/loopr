@@ -84,8 +84,7 @@ pub(super) fn handle_spec_create(
             }
         }
 
-        let order = req.params.get("order").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let spec = Spec::new(parent_id, title, order);
+        let spec = Spec::new(parent_id, title);
         let spec_json = match serde_json::to_value(&spec) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),

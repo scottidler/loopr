@@ -35,7 +35,7 @@ fn insert_active_plan(stores: &Stores, title: &str) -> String {
 
 /// Insert a Spec with given status and deps. Returns ID.
 fn insert_spec(stores: &Stores, parent_id: &str, title: &str, status: HierarchyStatus, deps: Vec<String>) -> String {
-    let mut spec = Spec::new(parent_id.to_string(), title.to_string(), 0);
+    let mut spec = Spec::new(parent_id.to_string(), title.to_string());
     spec.force_status(status);
     spec.dependencies = deps;
     let id = spec.id.clone();
@@ -45,7 +45,7 @@ fn insert_spec(stores: &Stores, parent_id: &str, title: &str, status: HierarchyS
 
 /// Insert a Phase with given status and deps. Returns ID.
 fn insert_phase(stores: &Stores, parent_id: &str, title: &str, status: HierarchyStatus, deps: Vec<String>) -> String {
-    let mut phase = Phase::new(parent_id.to_string(), title.to_string(), 0);
+    let mut phase = Phase::new(parent_id.to_string(), title.to_string());
     phase.force_status(status);
     phase.dependencies = deps;
     let id = phase.id.clone();
