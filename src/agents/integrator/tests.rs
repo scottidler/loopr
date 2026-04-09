@@ -35,6 +35,7 @@ fn test_config() -> IntegratorConfig {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: None,
+        ..Default::default()
     }
 }
 
@@ -44,6 +45,7 @@ fn failing_config() -> IntegratorConfig {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: None,
+        ..Default::default()
     }
 }
 
@@ -758,6 +760,7 @@ async fn test_cycle_tick_creation_error_handling() {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: None,
+        ..Default::default()
     };
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
@@ -809,6 +812,7 @@ async fn test_cycle_validation_multi_command_sequence() {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: None,
+        ..Default::default()
     };
 
     let mut bundle = Bundle::new("wi-1".into(), None, "feature/x".into(), vec!["claims".into()]);
@@ -836,6 +840,7 @@ async fn test_cycle_validation_multi_command_sequence() {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: None,
+        ..Default::default()
     };
 
     let mut bundle2 = Bundle::new("wi-2".into(), None, "feature/y".into(), vec!["claims".into()]);
@@ -892,6 +897,7 @@ async fn test_run_integrator_cancellation() {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: None,
+        ..Default::default()
     };
 
     let mut agent = test_integrator(&dir, stores.clone(), config);
@@ -918,6 +924,7 @@ async fn test_run_integrator_timeout() {
         interval_secs: 1,
         enabled: true,
         session_timeout_secs: Some(1),
+        ..Default::default()
     };
 
     let mut agent = test_integrator(&dir, stores.clone(), config);
@@ -1364,4 +1371,49 @@ fn test_classify_conflict_empty_touched_paths_returns_none() {
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
     assert!(result.is_none(), "empty touched_paths should return None");
+}
+
+// --- resolve_plan_id tests ---
+
+#[test]
+fn test_resolve_plan_id_traverses_hierarchy() {
+    let dir = TestDir::new("loopr-intg-rpid1");
+    let stores = test_stores(&dir);
+
+    let plan = crate::domain::plan::Plan::new("Test Plan".into(), "criteria".into());
+    let plan_id = plan.id.clone();
+    stores.plans.write().unwrap().insert(plan.id.clone(), plan);
+
+    let spec = crate::domain::spec::Spec::new(plan_id.clone(), "Test Spec".into());
+    let spec_id = spec.id.clone();
+    stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+    let phase = crate::domain::phase::Phase::new(spec_id, "Test Phase".into());
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+    let work = Work::new(phase_id, "Test Work".into());
+    let work_id = work.id.clone();
+    stores.works.write().unwrap().insert(work.id.clone(), work);
+
+    let result = resolve_plan_id(&stores, &work_id);
+    assert_eq!(result, Some(plan_id));
+}
+
+#[test]
+fn test_resolve_plan_id_returns_none_for_orphan() {
+    let dir = TestDir::new("loopr-intg-rpid2");
+    let stores = test_stores(&dir);
+
+    let work = Work::new("nonexistent-phase".into(), "Orphan Work".into());
+    let work_id = work.id.clone();
+    stores.works.write().unwrap().insert(work.id.clone(), work);
+
+    let result = resolve_plan_id(&stores, &work_id);
+    assert!(result.is_none(), "orphaned work should return None");
+}
+
+#[test]
+fn test_integration_branch_name() {
+    assert_eq!(integration_branch_name("pl-abc12"), "integration/pl-abc12");
 }

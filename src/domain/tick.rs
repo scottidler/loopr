@@ -26,10 +26,17 @@ impl std::fmt::Display for TickStatus {
 }
 
 /// An immutable integration checkpoint identified by a Git SHA.
+///
+/// With the integration branch model, a Tick is scoped to a specific Plan's
+/// integration branch, not a global snapshot of main.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tick {
     pub id: String,
     pub number: u32,
+    /// Plan this Tick belongs to. Empty for legacy ticks created before the
+    /// integration branch model.
+    #[serde(default)]
+    pub plan_id: String,
     pub integration_sha: Option<String>,
     pub bundle_ids: Vec<String>,
     #[serde(default)]
@@ -72,6 +79,7 @@ impl Tick {
         Self {
             id: id::generate_id("tk"),
             number,
+            plan_id: String::new(),
             integration_sha: None,
             bundle_ids: Vec::new(),
             attempted_bundle_ids: Vec::new(),
@@ -80,6 +88,14 @@ impl Tick {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Create a Tick scoped to a specific Plan's integration branch.
+    pub fn for_plan(number: u32, plan_id: &str) -> Self {
+        tracing::debug!("Tick::for_plan(number={}, plan_id={})", number, plan_id);
+        let mut tick = Self::new(number);
+        tick.plan_id = plan_id.to_string();
+        tick
     }
 }
 
@@ -165,6 +181,7 @@ mod tests {
     fn test_tick_new() {
         let t = Tick::new(1);
         assert_eq!(t.number, 1);
+        assert!(t.plan_id.is_empty());
         assert!(t.integration_sha.is_none());
         assert!(t.bundle_ids.is_empty());
         assert!(t.validation_log.is_empty());
@@ -172,6 +189,31 @@ mod tests {
         assert!(!t.id.is_empty());
         assert!(t.created_at > 0);
         assert_eq!(t.created_at, t.updated_at);
+    }
+
+    #[test]
+    fn test_tick_for_plan() {
+        let t = Tick::for_plan(3, "pl-abc12");
+        assert_eq!(t.number, 3);
+        assert_eq!(t.plan_id, "pl-abc12");
+        assert_eq!(t.status(), TickStatus::Open);
+    }
+
+    #[test]
+    fn test_tick_serde_backward_compat_without_plan_id() {
+        // Old JSONL records without plan_id should deserialize with empty string (serde default).
+        let json = serde_json::json!({
+            "id": "tk-test",
+            "number": 1,
+            "integration_sha": null,
+            "bundle_ids": [],
+            "validation_log": "",
+            "status": "Open",
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let tick: Tick = serde_json::from_value(json).unwrap();
+        assert!(tick.plan_id.is_empty());
     }
 
     #[test]

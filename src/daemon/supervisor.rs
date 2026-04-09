@@ -150,6 +150,7 @@ mod tests {
             interval_secs: 60,
             enabled: false,
             session_timeout_secs: None,
+            ..Default::default()
         }
     }
 

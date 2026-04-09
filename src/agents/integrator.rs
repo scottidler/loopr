@@ -460,6 +460,16 @@ impl IntegratorAgent {
             }
         }
 
+        // Resolve plan_id for integration branch targeting.
+        // All bundles in the same tick should belong to the same plan.
+        let plan_id: Option<String> = {
+            let bundles = self.ctx.stores.read_bundles()?;
+            valid_bundle_ids
+                .first()
+                .and_then(|id| bundles.get(id.as_str()))
+                .and_then(|b| resolve_plan_id(&self.ctx.stores, &b.work_id))
+        };
+
         // 6. Create Tick
         let tick_number = self.next_tick_number()?;
         let create_resp = self
@@ -515,12 +525,15 @@ impl IntegratorAgent {
             }
         }
 
-        // Update tick with bundle IDs and attempted bundle IDs.
+        // Update tick with bundle IDs, attempted bundle IDs, and plan_id.
         let tick_to_persist = {
             let mut ticks = self.ctx.stores.write_ticks()?;
             if let Some(tick) = ticks.get_mut(&tick_id) {
                 tick.bundle_ids = valid_bundle_ids.clone();
                 tick.attempted_bundle_ids = valid_bundle_ids.clone();
+                if let Some(ref pid) = plan_id {
+                    tick.plan_id = pid.clone();
+                }
                 Some(tick.clone())
             } else {
                 None
@@ -555,8 +568,44 @@ impl IntegratorAgent {
         };
         let repo_path = &self.ctx.stores.config.project.repo_path;
         let is_git_repo = repo_path.join(".git").exists();
+
+        let integ_branch = plan_id.as_ref().map(|pid| integration_branch_name(pid));
+
+        // Record pre-merge SHA for validation rollback (set after branch checkout).
+        let mut pre_merge_sha: Option<String> = None;
+
         if !branches.is_empty() && is_git_repo {
             let _git_guard = self.ctx.stores.lock_git()?;
+
+            // Checkout integration branch (if one exists) before merging.
+            if let Some(ref branch) = integ_branch {
+                let verify = std::process::Command::new("git")
+                    .args(["rev-parse", "--verify", branch])
+                    .current_dir(repo_path)
+                    .output();
+                if let Ok(o) = verify
+                    && o.status.success()
+                {
+                    let checkout = std::process::Command::new("git")
+                        .args(["checkout", branch])
+                        .current_dir(repo_path)
+                        .output();
+                    if let Ok(co) = checkout
+                        && !co.status.success()
+                    {
+                        let stderr = String::from_utf8_lossy(&co.stderr);
+                        return Err(eyre!("failed to checkout integration branch {}: {}", branch, stderr));
+                    }
+                } else {
+                    return Err(eyre!(
+                        "integration branch {} does not exist (deleted or not yet created)",
+                        branch
+                    ));
+                }
+            }
+            // Record pre-merge SHA for validation rollback.
+            pre_merge_sha = get_git_head_sha(repo_path);
+
             match merge_bundle_branches(repo_path, &branches) {
                 Ok(sha) => {
                     let mut ticks = self.ctx.stores.write_ticks()?;
@@ -805,6 +854,33 @@ impl IntegratorAgent {
                 tick_id: tick_id.clone(),
             })
         } else {
+            // Validation failed: rollback integration branch to pre-merge state.
+            // This keeps the integration branch in a known-good state at all times.
+            if let Some(ref sha) = pre_merge_sha {
+                let _git_guard = self.ctx.stores.lock_git().ok();
+                let reset = std::process::Command::new("git")
+                    .args(["reset", "--hard", sha])
+                    .current_dir(repo_path)
+                    .output();
+                match reset {
+                    Ok(o) if o.status.success() => {
+                        self.ctx.info(&format!(
+                            "Rolled back integration branch to pre-merge SHA {} after validation failure",
+                            sha
+                        ));
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        self.ctx
+                            .error(&format!("Failed to rollback integration branch to {}: {}", sha, stderr));
+                    }
+                    Err(e) => {
+                        self.ctx
+                            .error(&format!("Failed to execute git reset --hard {}: {}", sha, e));
+                    }
+                }
+            }
+
             let fail_resp = self.ctx.bridge.request(
                 "tick.transition",
                 serde_json::json!({
@@ -1182,6 +1258,24 @@ impl IntegratorAgent {
     }
 }
 
+/// Traverse the parent chain from a Work to discover its Plan ID.
+///
+/// Bundle -> Work -> Phase -> Spec -> Plan. Returns `None` if any link is broken.
+fn resolve_plan_id(stores: &Stores, work_id: &str) -> Option<String> {
+    let works = stores.read_works().ok()?;
+    let work = works.get(work_id)?;
+    let phases = stores.read_phases().ok()?;
+    let phase = phases.get(work.parent_id.as_str())?;
+    let specs = stores.read_specs().ok()?;
+    let spec = specs.get(phase.parent_id.as_str())?;
+    Some(spec.parent_id.clone()) // Plan ID
+}
+
+/// Derive the integration branch name from a plan ID.
+fn integration_branch_name(plan_id: &str) -> String {
+    format!("integration/{}", plan_id)
+}
+
 /// Classify whether a merge failure is structural (multiple bundles in the same tick
 /// touched the same file) or retryable.
 ///
@@ -1220,8 +1314,10 @@ fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<
     }
 }
 
-/// Gap #14: Merge bundle branches into the integration branch.
-/// Returns the HEAD SHA after all merges succeed.
+/// Merge bundle branches into the current HEAD.
+///
+/// The caller is responsible for checking out the target branch (integration branch
+/// or main) before calling this function. Returns the HEAD SHA after all merges succeed.
 fn merge_bundle_branches(repo_path: &std::path::Path, bundle_branches: &[String]) -> Result<String> {
     tracing::debug!(
         "merge_bundle_branches(repo={}, branches={:?})",

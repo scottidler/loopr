@@ -302,6 +302,20 @@ pub struct IntegratorConfig {
     pub interval_secs: u64,
     pub enabled: bool,
     pub session_timeout_secs: Option<u64>,
+    /// Enable bundle.merged -> implementer rebase propagation (Phase 4).
+    #[serde(default = "default_rebase_on_merge")]
+    pub rebase_on_merge: bool,
+    /// Abandon worktree after N consecutive rebase failures (Phase 4).
+    #[serde(default = "default_max_rebase_lag")]
+    pub max_rebase_lag: u32,
+}
+
+fn default_rebase_on_merge() -> bool {
+    true
+}
+
+fn default_max_rebase_lag() -> u32 {
+    5
 }
 
 /// Worker pool size: a fixed count, or "auto"/"nproc" to use available parallelism.
@@ -640,6 +654,8 @@ impl Default for IntegratorConfig {
             interval_secs: 15,
             enabled: false,
             session_timeout_secs: Some(1200), // 20 min
+            rebase_on_merge: true,
+            max_rebase_lag: 5,
         }
     }
 }

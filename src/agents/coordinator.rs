@@ -389,6 +389,111 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
     }
 }
 
+/// Merge an integration branch to main and clean up.
+///
+/// On success: checks out main, merges --no-ff, deletes the integration branch.
+/// On failure: logs a warning but does not panic - the integration branch persists
+/// for manual intervention.
+fn merge_integration_branch_to_main(
+    repo_path: &std::path::Path,
+    integration_branch: &str,
+    merge_message: &str,
+    prefix: &str,
+) {
+    // Verify the integration branch exists.
+    let verify = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", integration_branch])
+        .current_dir(repo_path)
+        .output();
+    if !matches!(verify, Ok(ref o) if o.status.success()) {
+        tracing::warn!(
+            "{} integration branch {} does not exist, skipping merge to main",
+            prefix,
+            integration_branch
+        );
+        return;
+    }
+
+    // Checkout main.
+    let checkout = std::process::Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(repo_path)
+        .output();
+    if !matches!(checkout, Ok(ref o) if o.status.success()) {
+        tracing::error!("{} failed to checkout main for integration branch merge", prefix);
+        return;
+    }
+
+    // Merge integration branch to main.
+    let merge = std::process::Command::new("git")
+        .args(["merge", "--no-ff", integration_branch, "-m", merge_message])
+        .current_dir(repo_path)
+        .output();
+    match merge {
+        Ok(o) if o.status.success() => {
+            tracing::info!("{} merged {} to main: {}", prefix, integration_branch, merge_message);
+            // Delete the integration branch.
+            let _ = std::process::Command::new("git")
+                .args(["branch", "-d", integration_branch])
+                .current_dir(repo_path)
+                .output();
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            tracing::error!("{} failed to merge {} to main: {}", prefix, integration_branch, stderr);
+            // Abort and leave the branch for manual resolution.
+            let _ = std::process::Command::new("git")
+                .args(["merge", "--abort"])
+                .current_dir(repo_path)
+                .output();
+        }
+        Err(e) => {
+            tracing::error!("{} git merge command failed for {}: {}", prefix, integration_branch, e);
+        }
+    }
+}
+
+/// Delete an integration branch without merging (Plan failure/abandonment).
+fn delete_integration_branch(repo_path: &std::path::Path, integration_branch: &str, prefix: &str) {
+    let verify = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", integration_branch])
+        .current_dir(repo_path)
+        .output();
+    if !matches!(verify, Ok(ref o) if o.status.success()) {
+        return; // Branch doesn't exist, nothing to delete.
+    }
+    // Ensure we're not on the branch we're deleting.
+    let _ = std::process::Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(repo_path)
+        .output();
+    let delete = std::process::Command::new("git")
+        .args(["branch", "-D", integration_branch])
+        .current_dir(repo_path)
+        .output();
+    match delete {
+        Ok(o) if o.status.success() => {
+            tracing::info!(
+                "{} deleted integration branch {} (Plan failed/abandoned)",
+                prefix,
+                integration_branch
+            );
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            tracing::warn!(
+                "{} failed to delete integration branch {}: {}",
+                prefix,
+                integration_branch,
+                stderr
+            );
+        }
+        Err(e) => {
+            tracing::warn!("{} git branch -D failed for {}: {}", prefix, integration_branch, e);
+        }
+    }
+}
+
 /// Check if the Coordinator should mark any Phases as complete based on Work status.
 /// Returns summaries of any phases that were detected as complete.
 pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
@@ -516,6 +621,17 @@ fn check_abandon_gate(stores: &Stores, coord_state: &CoordinatorState, prefix: &
             max_ratio * 100.0,
         );
         tracing::warn!("{} {}", prefix, reason);
+
+        // Clean up integration branch on quality gate failure.
+        if let Some(plan) = crate::agents::generation::find_active_plan(stores) {
+            let integ_branch = format!("integration/{}", plan.id);
+            let repo_path = &stores.config.project.repo_path;
+            if repo_path.join(".git").exists() {
+                let _git_guard = stores.lock_git().ok();
+                delete_integration_branch(repo_path, &integ_branch, prefix);
+            }
+        }
+
         Some(IterationOutcome::NeedHelp(reason))
     } else {
         None
@@ -538,6 +654,40 @@ fn apply_fsm_transition(
         new_state,
         coord_state.goal_id
     );
+
+    // Create integration branch when entering Executing state.
+    if new_state == CoordinatorFsmState::Executing
+        && old_state != CoordinatorFsmState::Executing
+        && let Some(plan) = crate::agents::generation::find_active_plan(stores)
+    {
+        let integ_branch = format!("integration/{}", plan.id);
+        let repo_path = &stores.config.project.repo_path;
+        if repo_path.join(".git").exists() {
+            let _git_guard = stores.lock_git().ok();
+            let create = std::process::Command::new("git")
+                .args(["checkout", "-b", &integ_branch, "main"])
+                .current_dir(repo_path)
+                .output();
+            match create {
+                Ok(o) if o.status.success() => {
+                    tracing::info!("{} created integration branch {}", prefix, integ_branch);
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    tracing::warn!(
+                        "{} failed to create integration branch {}: {}",
+                        prefix,
+                        integ_branch,
+                        stderr
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("{} git checkout -b failed for {}: {}", prefix, integ_branch, e);
+                }
+            }
+        }
+    }
+
     if new_state == CoordinatorFsmState::GoalComplete {
         coord_state.transition_to(CoordinatorFsmState::GoalComplete);
         // Check quality gate before declaring success.
@@ -545,6 +695,18 @@ fn apply_fsm_transition(
             persist_coordinator_state(stores, coord_state);
             return Some(outcome);
         }
+
+        // Merge integration branch to main on Plan completion.
+        if let Some(plan) = crate::agents::generation::find_active_plan(stores) {
+            let integ_branch = format!("integration/{}", plan.id);
+            let repo_path = &stores.config.project.repo_path;
+            if repo_path.join(".git").exists() {
+                let _git_guard = stores.lock_git().ok();
+                let merge_msg = format!("Merge Plan {}: {}", plan.id, plan.title);
+                merge_integration_branch_to_main(repo_path, &integ_branch, &merge_msg, prefix);
+            }
+        }
+
         // Gate passed: deactivate the goal.
         if let Ok(mut goals) = stores.write_coordinator_goals()
             && let Some(goal) = goals.values_mut().find(|g| g.id == coord_state.goal_id)

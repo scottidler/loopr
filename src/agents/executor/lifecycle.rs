@@ -13,7 +13,7 @@ use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
 
 use super::llm::create_llm_client;
-use super::util::{determine_work_handback, persist_session, release_agent_locks, resolve_worktree_base};
+use super::util::{determine_work_handback, persist_session, release_agent_locks};
 
 /// Run an agent task as a Tokio task. This is spawned from the agent.start handler.
 ///
@@ -56,7 +56,7 @@ pub async fn run_agent_task(
     };
 
     if let Some(ref key) = worktree_key {
-        let base_ref = resolve_worktree_base(&stores);
+        let base_ref = super::util::resolve_worktree_base_for(&stores, worktree_key.as_deref());
         info!("Agent {} using worktree base: {}", session_id, base_ref);
         let worktree_path = match worktree_mgr.get_or_create_branch(key, &base_ref) {
             Ok(path) => path,

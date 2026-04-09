@@ -25,7 +25,37 @@ pub(super) fn normalize_collection(collection: &str) -> &str {
 /// Returns the integration SHA of the latest Published Tick,
 /// or "HEAD" if no Ticks have been published yet.
 pub fn resolve_worktree_base(stores: &Stores) -> String {
-    debug!("resolve_worktree_base()");
+    resolve_worktree_base_for(stores, None)
+}
+
+/// Resolve the git ref to base a new worktree on.
+///
+/// When `work_id` is provided, traverses Work -> Phase -> Spec -> Plan to find
+/// the plan_id, then checks if `integration/<plan_id>` exists. If it does,
+/// uses that branch as the base (implementers branch from the integration branch).
+/// Otherwise falls back to the latest published Tick SHA, or HEAD.
+pub fn resolve_worktree_base_for(stores: &Stores, work_id: Option<&str>) -> String {
+    debug!("resolve_worktree_base_for(work_id={:?})", work_id);
+
+    // Prefer integration branch if the Work's Plan has one.
+    if let Some(wid) = work_id
+        && let Some(plan_id) = resolve_plan_id_from_stores(stores, wid)
+    {
+        let branch = format!("integration/{}", plan_id);
+        let repo_path = &stores.config.project.repo_path;
+        let verify = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &branch])
+            .current_dir(repo_path)
+            .output();
+        if let Ok(o) = verify
+            && o.status.success()
+        {
+            debug!("resolve_worktree_base_for: using integration branch {}", branch);
+            return branch;
+        }
+    }
+
+    // Fallback: latest published Tick SHA.
     let Ok(ticks) = stores.read_ticks() else {
         error!("ticks lock poisoned");
         return "HEAD".to_string();
@@ -36,6 +66,18 @@ pub fn resolve_worktree_base(stores: &Stores) -> String {
         .max_by_key(|t| t.number)
         .and_then(|t| t.integration_sha.clone())
         .unwrap_or_else(|| "HEAD".to_string())
+}
+
+/// Traverse the parent chain from a Work to discover its Plan ID.
+/// Bundle -> Work -> Phase -> Spec -> Plan. Returns `None` if any link is broken.
+fn resolve_plan_id_from_stores(stores: &Stores, work_id: &str) -> Option<String> {
+    let works = stores.read_works().ok()?;
+    let work = works.get(work_id)?;
+    let phases = stores.read_phases().ok()?;
+    let phase = phases.get(work.parent_id.as_str())?;
+    let specs = stores.read_specs().ok()?;
+    let spec = specs.get(phase.parent_id.as_str())?;
+    Some(spec.parent_id.clone())
 }
 
 /// Resolve the ID of the latest Published Tick from stores.
