@@ -24,7 +24,10 @@ Respond with a JSON array of phases. Each phase is an object:
 ## Rules
 
 1. Each Phase must follow the template provided in the "## Template" section below EXACTLY - use the same section headings and subsection structure (including ### sub-headings within sections)
-2. Dependencies are Phase titles that must complete before this one can start
+2. Dependencies form a sequential chain of Phase titles within this Spec:
+   - First Phase: dependencies = []
+   - Second Phase: dependencies = ["<first phase title>"]
+   Dependencies are Phase titles within this Spec only. Never reference Phases from other Specs.
 3. Do NOT include any text outside the JSON array
 4. Produce 1-5 Phases for typical Specs
 5. Each Phase must have a clear validation command

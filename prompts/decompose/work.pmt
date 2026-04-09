@@ -26,7 +26,8 @@ Respond with a JSON array of work items. Each work item is an object:
 ## Rules
 
 1. Each Work must follow the template provided in the "## Template" section below EXACTLY - use the same section headings, include all conditional sections that are relevant, and write Acceptance Criteria as assert statements (never prose)
-2. Dependencies are Work titles that must complete before this one can start
+2. Dependencies are same-phase Work titles only. Do NOT reference Works from other Phases.
+   The ONLY valid reason for a dependency is a same-file conflict.
 3. acceptance_criteria must be concrete, testable assertions (assert statements)
 4. Do NOT include any text outside the JSON array
 5. Produce 1-5 Work items per Phase. Prefer fewer, larger items over many small serial items. Two independent items beat five dependent ones.

@@ -25,7 +25,11 @@ Respond with a JSON array of specs. Each spec is an object:
 
 1. Each Spec must follow the template provided in the "## Template" section below EXACTLY - use the same section headings, include all required sections, and follow the structural conventions shown
 2. Every Plan requirement must be covered by at least one Spec
-3. Dependencies are Spec titles that must complete before this one can start
+3. Dependencies form a sequential chain of Spec titles:
+   - First Spec: dependencies = []
+   - Second Spec: dependencies = ["<first spec title>"]
+   - Third Spec: dependencies = ["<second spec title>"]
+   Dependencies are Spec titles only. Never reference Phase or Work titles.
 4. Do NOT include any text outside the JSON array
 5. Produce 1-3 Specs for typical projects
 6. Each Spec must reference which Plan requirements it covers

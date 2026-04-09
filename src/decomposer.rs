@@ -690,7 +690,9 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
             all_records.extend(branch_records);
         }
         all_records.extend(specs);
-        resolve_cross_branch_deps(&mut all_records, &global_title_to_id);
+        // Cross-branch dep resolution removed: deps are same-level, same-parent only.
+        // Spec deps resolve within the Plan->Spec pass. Phase deps resolve within
+        // each Spec->Phase branch. Work deps resolve within each Phase->Work branch.
 
         if let Some(err) = branch_error {
             info!("partial failure plan={} total_records={}", plan_id, all_records.len());
@@ -772,33 +774,6 @@ async fn decompose_phase_branch<H: HttpClient + Sync>(
     .await?;
     debug!("phase={} got {} works", phase_id, works.len());
     Ok((works, phase_map))
-}
-
-/// After all parallel branches finish and maps are merged, resolve any dependency titles
-/// that were deferred because the referenced record was being built in a sibling branch.
-fn resolve_cross_branch_deps(records: &mut [ChildRecord], global_map: &HashMap<String, String>) {
-    debug!(
-        "resolve_cross_branch_deps: checking {} records for unresolved deps",
-        records.len()
-    );
-    for record in records.iter_mut() {
-        if record.unresolved_dep_titles.is_empty() {
-            continue;
-        }
-        let pending = std::mem::take(&mut record.unresolved_dep_titles);
-        debug!(
-            "resolve_cross_branch_deps: record={} has {} unresolved dep titles",
-            record.id,
-            pending.len()
-        );
-        for title in pending {
-            if let Some(id) = global_map.get(&title) {
-                record.dependencies.push(id.clone());
-            } else {
-                warn!("cross-branch dep '{}' could not be resolved after merge", title);
-            }
-        }
-    }
 }
 
 /// Bottom-up ratification of the decomposition hierarchy (in-memory).
@@ -907,6 +882,8 @@ fn records_to_hierarchy(
     let phase_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Phase).collect();
     let work_records: Vec<&ChildRecord> = all_records.iter().filter(|r| r.kind == DocKind::Work).collect();
 
+    // Counters kept for backward compat (order field still exists on structs).
+    // Will be removed in Step 6 when order field is dropped.
     let mut spec_counter: u32 = 0;
     let mut phase_counters: HashMap<String, u32> = HashMap::new();
 
@@ -925,8 +902,14 @@ fn records_to_hierarchy(
                 let mut spec = Spec::new(parent_id, child.title.clone(), spec_counter);
                 spec_counter += 1;
                 spec.id = child.id.clone();
-                spec.force_status(SpecStatus::Active);
+                spec.force_status(SpecStatus::Pending);
                 spec.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
+                spec.dependencies = child
+                    .dependencies
+                    .iter()
+                    .filter(|dep_id| known_ids.contains(dep_id.as_str()))
+                    .cloned()
+                    .collect();
                 specs.push(spec);
             }
             DocKind::Phase => {
@@ -935,14 +918,20 @@ fn records_to_hierarchy(
                 *order += 1;
                 let mut phase = Phase::new(parent_id, child.title.clone(), current_order);
                 phase.id = child.id.clone();
-                phase.force_status(PhaseStatus::Active);
+                phase.force_status(PhaseStatus::Pending);
                 phase.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
+                phase.dependencies = child
+                    .dependencies
+                    .iter()
+                    .filter(|dep_id| known_ids.contains(dep_id.as_str()))
+                    .cloned()
+                    .collect();
                 phases.push(phase);
             }
             DocKind::Work => {
                 let mut work = Work::new(parent_id, child.title.clone());
                 work.id = child.id.clone();
-                work.force_status(WorkStatus::Ready);
+                work.force_status(WorkStatus::Pending);
                 work.acceptance_criteria = AcceptanceCriteria(child.acceptance_criteria.clone());
                 work.dependencies = child
                     .dependencies
@@ -1365,13 +1354,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_hierarchy_cross_scope_dependency_resolved() {
-        // Verify that decompose_hierarchy threads a single global_title_to_id map across
-        // all decompose_into calls so that a Work in Spec B can reference a Work in Spec A.
-        //
-        // This tests the public API (decompose_hierarchy), not the internal loop directly.
-        // If decompose_hierarchy reinitialised the map per-spec, Work Beta's dependency
-        // would be silently dropped and this test would fail.
+    async fn test_decompose_hierarchy_cross_scope_dependency_not_resolved() {
+        // Cross-spec deps are no longer supported (reactive execution model).
+        // Work Beta (in Spec B) references "Work Alpha" (in Spec A) by title.
+        // Since deps are same-parent only, this title won't resolve within Phase B's
+        // local branch and the dep will be silently dropped.
         crate::prompts::init_defaults();
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
@@ -1470,7 +1457,8 @@ mod tests {
             partial_err
         );
 
-        let alpha = hierarchy
+        // Verify both works exist
+        hierarchy
             .works
             .iter()
             .find(|w| w.title == "Work Alpha")
@@ -1481,10 +1469,10 @@ mod tests {
             .find(|w| w.title == "Work Beta")
             .expect("Work Beta not found");
 
-        assert_eq!(
-            beta.dependencies,
-            vec![alpha.id.clone()],
-            "Work Beta must resolve its cross-spec dependency to Work Alpha's domain ID"
+        assert!(
+            beta.dependencies.is_empty(),
+            "Cross-spec dep should NOT resolve: deps are same-parent only. Got: {:?}",
+            beta.dependencies
         );
 
         unsafe { std::env::remove_var(&env_key) };
@@ -1592,12 +1580,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decompose_hierarchy_cross_spec_deps_resolved() {
-        // With parallel spec branches, Work Beta (in Spec B) depends on Work Alpha
-        // (in Spec A). During Spec B's branch, Work Alpha's ID is unknown. The
-        // post-merge pass must resolve it from the merged global map.
-        // This is identical in spirit to test_decompose_hierarchy_cross_scope_dependency_resolved
-        // but explicitly targets the post-merge path (unresolved_dep_titles → dependencies).
+    async fn test_decompose_hierarchy_cross_spec_deps_not_resolved() {
+        // Cross-spec deps are no longer supported (reactive execution model).
+        // Work Beta (in Spec B) references "Work Alpha" (in Spec A) by title.
+        // Since deps are same-parent only, this title won't resolve within Phase Beta's
+        // branch and the dep will be silently dropped.
         crate::prompts::init_defaults();
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
@@ -1664,7 +1651,8 @@ mod tests {
             partial_err
         );
 
-        let alpha = hierarchy
+        // Verify both works exist
+        hierarchy
             .works
             .iter()
             .find(|w| w.title == "Work Alpha")
@@ -1675,10 +1663,10 @@ mod tests {
             .find(|w| w.title == "Work Beta")
             .expect("Work Beta not found");
 
-        assert_eq!(
-            beta.dependencies,
-            vec![alpha.id.clone()],
-            "Work Beta must resolve its cross-spec dep to Work Alpha's domain ID via post-merge pass"
+        assert!(
+            beta.dependencies.is_empty(),
+            "Cross-spec dep should NOT resolve: deps are same-parent only. Got: {:?}",
+            beta.dependencies
         );
 
         unsafe { std::env::remove_var(&env_key) };
@@ -1897,10 +1885,10 @@ mod tests {
 
         use crate::domain::plan::HierarchyStatus;
         assert_eq!(h.plan.status(), HierarchyStatus::Active);
-        assert_eq!(h.specs[0].status(), HierarchyStatus::Active);
-        assert_eq!(h.phases[0].status(), HierarchyStatus::Active);
+        assert_eq!(h.specs[0].status(), HierarchyStatus::Pending);
+        assert_eq!(h.phases[0].status(), HierarchyStatus::Pending);
         use crate::domain::work::WorkStatus;
-        assert_eq!(h.works[0].status(), WorkStatus::Ready);
+        assert_eq!(h.works[0].status(), WorkStatus::Pending);
     }
 
     #[test]
