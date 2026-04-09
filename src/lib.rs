@@ -106,6 +106,15 @@ fn parse_level_filter(s: &str) -> Option<LevelFilter> {
     }
 }
 
+/// Returns true when LLM conversation capture should be active.
+///
+/// Conversation logs are enabled for all levels except INFO and Off.
+/// INFO is the production default. Conversation capture generates large files
+/// and should be opt-in via --log-level debug (or similar).
+pub fn should_capture_conversations(level: LevelFilter) -> bool {
+    level != LevelFilter::Info && level != LevelFilter::Off
+}
+
 /// Set up logging. When `session_id` is provided (daemon), creates a session
 /// directory at `~/.local/share/loopr/sessions/{session_id}/` with `loopr.log`
 /// inside it and updates the `latest` symlink. When None (TUI, one-shot CLI),
@@ -129,6 +138,14 @@ pub fn setup_logging(
         let _ = fs::remove_file(&latest);
         #[cfg(unix)]
         std::os::unix::fs::symlink(sid, &latest).context("Failed to create latest symlink")?;
+
+        // Create conversations/ directory when log level != INFO (opt-in capture).
+        // The presence of this directory signals that conversation logging is active.
+        let level = resolve_log_level(config, cli_log_level);
+        if should_capture_conversations(level) {
+            fs::create_dir_all(session_dir.join("conversations"))
+                .context("Failed to create conversations directory")?;
+        }
 
         session_dir.join("loopr.log")
     } else {
@@ -234,5 +251,35 @@ mod log_level_tests {
     fn test_resolve_log_level_case_insensitive() {
         let config = config_with_level(Some("DEBUG"));
         assert_eq!(resolve_log_level_from(&config, None, None), LevelFilter::Debug);
+    }
+
+    #[test]
+    fn test_should_capture_conversations_false_for_info() {
+        assert!(!should_capture_conversations(LevelFilter::Info));
+    }
+
+    #[test]
+    fn test_should_capture_conversations_false_for_off() {
+        assert!(!should_capture_conversations(LevelFilter::Off));
+    }
+
+    #[test]
+    fn test_should_capture_conversations_true_for_debug() {
+        assert!(should_capture_conversations(LevelFilter::Debug));
+    }
+
+    #[test]
+    fn test_should_capture_conversations_true_for_trace() {
+        assert!(should_capture_conversations(LevelFilter::Trace));
+    }
+
+    #[test]
+    fn test_should_capture_conversations_true_for_warn() {
+        assert!(should_capture_conversations(LevelFilter::Warn));
+    }
+
+    #[test]
+    fn test_should_capture_conversations_true_for_error() {
+        assert!(should_capture_conversations(LevelFilter::Error));
     }
 }

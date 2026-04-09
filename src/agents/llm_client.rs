@@ -1,6 +1,8 @@
 use eyre::{Result, eyre};
 use reqwest::Client;
 use std::future::Future;
+use std::io::Write as _;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 use tracing::{debug, info, instrument, trace, warn};
@@ -22,6 +24,11 @@ pub struct AgentLlmClient {
     api_key: String,
     session_id: String,
     event_tx: broadcast::Sender<DaemonEvent>,
+    /// When set, each request/response pair is appended to `{conversation_log_dir}/{conversation_log_name}.log`.
+    /// Only set when the session's `conversations/` directory exists (log level != INFO).
+    conversation_log_dir: Option<PathBuf>,
+    /// File name stem for the conversation log (e.g. "implement-wk-abc12").
+    conversation_log_name: String,
 }
 
 impl std::fmt::Debug for AgentLlmClient {
@@ -49,7 +56,19 @@ impl AgentLlmClient {
             api_key,
             session_id,
             event_tx,
+            conversation_log_dir: None,
+            conversation_log_name: String::new(),
         })
+    }
+
+    /// Enable LLM conversation capture for this client.
+    ///
+    /// `dir` - the `conversations/` directory for this session.
+    /// `name` - the log file stem (e.g. `"implement-wk-abc12"`).
+    pub fn with_conversation_log(mut self, dir: PathBuf, name: impl Into<String>) -> Self {
+        self.conversation_log_dir = Some(dir);
+        self.conversation_log_name = name.into();
+        self
     }
 
     /// Create with an explicit API key (used in tests).
@@ -67,6 +86,8 @@ impl AgentLlmClient {
             api_key,
             session_id,
             event_tx,
+            conversation_log_dir: None,
+            conversation_log_name: String::new(),
         }
     }
 
@@ -92,6 +113,16 @@ impl AgentLlmClient {
             .send(DaemonEvent::agent_status_changed(&self.session_id, status));
     }
 
+    /// Append content to the conversation log file, if conversation capture is active.
+    fn append_to_conversation_log(&self, content: &str) {
+        if let Some(ref dir) = self.conversation_log_dir {
+            let path = dir.join(format!("{}.log", self.conversation_log_name));
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = file.write_all(content.as_bytes());
+            }
+        }
+    }
+
     /// Call the Anthropic Messages API with SSE streaming and multi-turn message history.
     /// Returns the accumulated full response text.
     #[instrument(skip_all)]
@@ -114,6 +145,16 @@ impl AgentLlmClient {
             "system": system_prompt,
             "messages": api_messages,
         });
+
+        // Conversation capture: log request before HTTP call.
+        if self.conversation_log_dir.is_some() {
+            let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
+            let mut entry = format!("=== REQUEST {} ===\n[system]\n{}\n\n", ts, system_prompt);
+            for m in messages {
+                entry.push_str(&format!("[{}]\n{}\n\n", m.role, m.content));
+            }
+            self.append_to_conversation_log(&entry);
+        }
 
         self.emit_status(AgentStatus::WaitingForLlm);
 
@@ -142,6 +183,13 @@ impl AgentLlmClient {
 
         // Read SSE stream
         let full_text = self.read_sse_stream(response).await?;
+
+        // Conversation capture: log response.
+        if self.conversation_log_dir.is_some() {
+            let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
+            let entry = format!("=== RESPONSE {} ===\n{}\n\n", ts, full_text);
+            self.append_to_conversation_log(&entry);
+        }
 
         // Emit final chunk marker
         self.emit_chunk("", true);
@@ -301,6 +349,31 @@ impl AgenticLlm for AgentLlmClient {
             body["tools"] = serde_json::Value::Array(tool_array);
         }
 
+        // Conversation capture: log request before HTTP call.
+        if self.conversation_log_dir.is_some() {
+            let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
+            let mut entry = format!("=== REQUEST {} ===\n[system]\n{}\n\n", ts, system_prompt);
+            for m in messages {
+                let content_text: String = m
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                entry.push_str(&format!("[{}]\n{}\n\n", m.role, content_text));
+            }
+            if !tools.is_empty() {
+                entry.push_str(&format!(
+                    "[tools]\n{}\n\n",
+                    serde_json::to_string(tools).unwrap_or_default()
+                ));
+            }
+            self.append_to_conversation_log(&entry);
+        }
+
         self.emit_status(AgentStatus::WaitingForLlm);
 
         let response = self
@@ -341,6 +414,21 @@ impl AgenticLlm for AgentLlmClient {
             ttft_ms,
             content_blocks.len()
         );
+
+        // Conversation capture: log response content blocks.
+        if self.conversation_log_dir.is_some() {
+            let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
+            let mut entry = format!("=== RESPONSE {} ===\n", ts);
+            for block in &content_blocks {
+                match block {
+                    ContentBlock::Text { text } => entry.push_str(text),
+                    other => entry.push_str(&serde_json::to_string(other).unwrap_or_default()),
+                }
+                entry.push('\n');
+            }
+            entry.push('\n');
+            self.append_to_conversation_log(&entry);
+        }
 
         Ok((content_blocks, stop_reason))
     }
@@ -815,6 +903,8 @@ mod tests {
             api_key: "test-key".to_string(),
             session_id: "s1".to_string(),
             event_tx,
+            conversation_log_dir: None,
+            conversation_log_name: String::new(),
         };
 
         // Override the URL by calling call_streaming which always uses api.anthropic.com
@@ -928,5 +1018,49 @@ mod tests {
             }
             _ => panic!("expected ToolUse"),
         }
+    }
+
+    // --- conversation log tests ---
+
+    #[test]
+    fn test_append_to_conversation_log_writes_when_dir_set() {
+        let dir = crate::test_util::TestDir::new("loopr-conv-log-test");
+        let config = crate::config::AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string())
+            .with_conversation_log(dir.to_path_buf(), "test-session");
+
+        client.append_to_conversation_log("hello world\n");
+
+        let log_path = dir.join("test-session.log");
+        assert!(log_path.exists(), "log file should be created");
+        let contents = std::fs::read_to_string(&log_path).unwrap();
+        assert_eq!(contents, "hello world\n");
+    }
+
+    #[test]
+    fn test_append_to_conversation_log_noop_when_dir_none() {
+        let config = crate::config::AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string());
+
+        // Should not panic and should write nothing
+        client.append_to_conversation_log("should not appear");
+        // No assertion needed - just verify no panic
+    }
+
+    #[test]
+    fn test_conversation_log_appends_multiple_calls() {
+        let dir = crate::test_util::TestDir::new("loopr-conv-multi-test");
+        let config = crate::config::AgentRoleConfig::default_implementer();
+        let (event_tx, _) = broadcast::channel(16);
+        let client = AgentLlmClient::with_api_key(config, "s1".to_string(), event_tx, "key".to_string())
+            .with_conversation_log(dir.to_path_buf(), "multi");
+
+        client.append_to_conversation_log("line 1\n");
+        client.append_to_conversation_log("line 2\n");
+
+        let contents = std::fs::read_to_string(dir.join("multi.log")).unwrap();
+        assert_eq!(contents, "line 1\nline 2\n");
     }
 }

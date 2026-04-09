@@ -314,15 +314,25 @@ pub(super) async fn run_agent_loop(
         );
     }
 
+    // Derive the conversations dir from session_dir. The dir only exists when log level != INFO.
+    let conversations_dir = stores
+        .session_dir
+        .as_ref()
+        .map(|d| d.join("conversations"))
+        .filter(|d| d.exists());
+
     let (result, iteration) = match agent_type {
         AgentKind::Implementer => {
             let config = stores.config.agents.implementer.clone();
-            let llm = create_llm_client(&config, session_id, event_tx)?;
             let work_id = ctx
                 .session
                 .work_id
                 .clone()
                 .ok_or_else(|| eyre!("implementer session missing work_id"))?;
+            let conv_log = conversations_dir
+                .as_ref()
+                .map(|d| (d.clone(), format!("implement-{}", work_id)));
+            let llm = create_llm_client(&config, session_id, event_tx, conv_log)?;
             let worktree_path = ctx
                 .session
                 .worktree_path
@@ -335,21 +345,30 @@ pub(super) async fn run_agent_loop(
         }
         AgentKind::Reviewer => {
             let config = stores.config.agents.reviewer.clone();
-            let llm = create_llm_client(&config, session_id, event_tx)?;
+            let conv_log = conversations_dir
+                .as_ref()
+                .map(|d| (d.clone(), format!("review-{}", session_id)));
+            let llm = create_llm_client(&config, session_id, event_tx, conv_log)?;
             let mut agent = reviewer::ReviewerAgent::new(ctx, llm, config)?;
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
         AgentKind::Coordinator => {
             let config = stores.config.agents.coordinator.clone();
-            let llm = create_llm_client(&config.role, session_id, event_tx)?;
+            let conv_log = conversations_dir
+                .as_ref()
+                .map(|d| (d.clone(), format!("coordinate-{}", session_id)));
+            let llm = create_llm_client(&config.role, session_id, event_tx, conv_log)?;
             let mut agent = coordinator::CoordinatorAgent::new(ctx, llm, config);
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
         }
         AgentKind::Researcher => {
             let config = stores.config.agents.researcher.clone();
-            let llm = create_llm_client(&config, session_id, event_tx)?;
+            let conv_log = conversations_dir
+                .as_ref()
+                .map(|d| (d.clone(), format!("research-{}", session_id)));
+            let llm = create_llm_client(&config, session_id, event_tx, conv_log)?;
             let mut agent = researcher::ResearcherAgent::new(ctx, llm, config);
             let result = agent.run().await;
             (result, agent.ctx.session.iteration)
