@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use eyre::{Result, eyre};
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +80,131 @@ pub fn parse_review_result(response: &str, prefix: &str) -> Result<ReviewResult>
     Err(eyre!("failed to parse ReviewResult from LLM response"))
 }
 
+/// Extract function signatures from files imported by `work_files` in the repository.
+///
+/// Best-effort, regex-based (Tier-1 languages: Python, JS/TS, Rust).
+/// Hard caps: max 500 lines read per file, max 20 signatures total, max 5 lines per signature.
+/// Returns an empty string if nothing useful can be extracted.
+pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) -> String {
+    const MAX_LINES_PER_FILE: usize = 500;
+    const MAX_SIGS: usize = 20;
+    const MAX_LINES_PER_SIG: usize = 5;
+
+    let mut all_sigs: Vec<String> = Vec::new();
+
+    for work_file in work_files {
+        let file_path = repo_path.join(work_file);
+        let Ok(content) = std::fs::read_to_string(&file_path) else {
+            continue;
+        };
+        let lines: Vec<&str> = content.lines().take(MAX_LINES_PER_FILE).collect();
+
+        // Extract imported module paths (Python-first, then JS/TS, then Rust)
+        let mut imported_modules: Vec<String> = Vec::new();
+
+        for line in &lines {
+            let trimmed = line.trim();
+            // Python: `from module import ...` or `import module`
+            if let Some(rest) = trimmed.strip_prefix("from ") {
+                if let Some(mod_part) = rest.split_whitespace().next()
+                    && !mod_part.starts_with('.')
+                {
+                    imported_modules.push(format!("{}.py", mod_part.replace('.', "/")));
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("import ")
+                && let Some(raw) = rest.split([',', ' ']).next()
+            {
+                let mod_name = raw.trim();
+                if !mod_name.is_empty() && !mod_name.starts_with('"') {
+                    imported_modules.push(format!("{}.py", mod_name.replace('.', "/")));
+                }
+            }
+            // JS/TS: `import ... from "module"`
+            if (trimmed.contains("from \"") || trimmed.contains("from '"))
+                && let Some(from_idx) = trimmed.rfind("from ")
+            {
+                let after = &trimmed[from_idx + 5..];
+                let quoted = after.trim_start_matches('"').trim_start_matches('\'');
+                let mod_path = quoted.trim_end_matches('"').trim_end_matches('\'');
+                if !mod_path.starts_with("node_modules") && mod_path.starts_with('.') {
+                    let path = if mod_path.ends_with(".ts") || mod_path.ends_with(".js") {
+                        mod_path.to_string()
+                    } else {
+                        format!("{}.ts", mod_path)
+                    };
+                    imported_modules.push(path);
+                }
+            }
+            // Rust: `use crate::module` (intra-crate only, skip external)
+            if trimmed.starts_with("use crate::") {
+                // Not file-path resolvable without cargo metadata; skip
+            }
+        }
+
+        // For each imported module, look for it relative to the work file's directory
+        // and relative to the repo root
+        let work_dir = file_path.parent().unwrap_or(repo_path);
+        for mod_file in &imported_modules {
+            if all_sigs.len() >= MAX_SIGS {
+                break;
+            }
+            let candidates = [
+                work_dir.join(mod_file),
+                repo_path.join(mod_file),
+            ];
+            for candidate in &candidates {
+                if !candidate.exists() {
+                    continue;
+                }
+                let Ok(mod_content) = std::fs::read_to_string(candidate) else {
+                    continue;
+                };
+                let mod_lines: Vec<&str> = mod_content.lines().take(MAX_LINES_PER_FILE).collect();
+                for (i, line) in mod_lines.iter().enumerate() {
+                    if all_sigs.len() >= MAX_SIGS {
+                        break;
+                    }
+                    let t = line.trim();
+                    // Python def, JS/TS function/export, Rust fn
+                    if t.starts_with("def ")
+                        || t.starts_with("async def ")
+                        || t.starts_with("export function ")
+                        || t.starts_with("export async function ")
+                        || t.starts_with("function ")
+                        || t.starts_with("pub fn ")
+                        || t.starts_with("pub async fn ")
+                        || t.starts_with("fn ")
+                    {
+                        // Collect up to MAX_LINES_PER_SIG lines of signature
+                        let sig_end = (i + MAX_LINES_PER_SIG).min(mod_lines.len());
+                        let sig_lines: Vec<&str> = mod_lines[i..sig_end].to_vec();
+                        // Trim at the first `{` (Rust) or `:` (Python) line end for body
+                        let sig_text = sig_lines
+                            .iter()
+                            .map(|l| l.trim())
+                            .take_while(|l| !l.ends_with('{') && !l.ends_with(':'))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let sig = if sig_text.is_empty() {
+                            t.to_string()
+                        } else {
+                            sig_text
+                        };
+                        all_sigs.push(format!("  {}", sig));
+                    }
+                }
+                break; // found the module file, stop looking
+            }
+        }
+    }
+
+    if all_sigs.is_empty() {
+        return String::new();
+    }
+
+    format!("\n## Referenced Signatures\n\n(Best-effort extraction — use for cross-module call verification only)\n\n```\n{}\n```\n", all_sigs.join("\n"))
+}
+
 /// The Reviewer agent — single-iteration LLM agent.
 pub struct ReviewerAgent<L: LlmClient> {
     pub ctx: AgentContext,
@@ -124,10 +251,37 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                     .into(),
             );
         let work_title = ctx_builder.work_title().unwrap_or("unknown").to_string();
+
+        // Extract cross-module signatures for the work's declared files.
+        let sig_section = {
+            let work_files: Vec<String> = self
+                .ctx
+                .stores
+                .read_bundles()
+                .ok()
+                .and_then(|bundles| bundles.get(self.bundle_id.as_str()).map(|b| b.work_id.clone()))
+                .and_then(|work_id| {
+                    self.ctx
+                        .stores
+                        .read_works()
+                        .ok()
+                        .and_then(|works| works.get(work_id.as_str()).map(|w| w.files.clone()))
+                })
+                .unwrap_or_default();
+            let repo_path = &self.ctx.stores.config.project.repo_path;
+            extract_referenced_signatures(repo_path, &work_files)
+        };
+
         let assembled = ctx_builder.build(&crate::prompts::store().reviewer)?;
+        // Append referenced signatures (if any) to give the reviewer cross-module visibility.
+        let user_message = if sig_section.is_empty() {
+            assembled.user_message.clone()
+        } else {
+            format!("{}{}", assembled.user_message, sig_section)
+        };
 
         let review = {
-            let mut messages = vec![ChatMessage::user(&assembled.user_message)];
+            let mut messages = vec![ChatMessage::user(&user_message)];
             let mut requeries = 0u32;
 
             loop {

@@ -11,11 +11,16 @@ Your primary job is evaluating the code against the Work's acceptance_criteria.
 4. **Scope** - Does the change stay within the Work's boundaries? Out-of-scope changes are an `error`.
 
 ### Non-Blocking (observations only)
-5. **Loose Files** - If the bundle has `loose_files`, the implementer also modified these files but they were excluded because they fall outside the Work's `files`. Consider whether the scope was too narrow or if these changes are unrelated. Report as `info`.
-6. **Quality & Style** - Idiomatic code, naming conventions, parameter style. These are `info` or `warning` only. They CANNOT block approval.
-7. **Extra Test Coverage** - Tests beyond what acceptance criteria require. Missing nice-to-have tests are `info` only.
-8. **Defensive Coding** - Input validation, type hints, edge-case handling beyond what was requested. These are `info` only.
-9. **Architecture** - Pattern adherence, module boundaries. These are `warning` at most unless they break existing code.
+5. **Cross-Module Calls** - For every function call targeting a module NOT in this Work's `files`,
+   verify the call signature matches the function definition visible in the provided context:
+   - Full signature available and argument count/type mismatch detected: `error` (blocking)
+   - Signature available but incomplete/multi-line/unparsable: `warning` (non-blocking)
+   - Definition not in the provided context: `warning` (cannot verify, best-effort only)
+6. **Loose Files** - If the bundle has `loose_files`, the implementer also modified these files but they were excluded because they fall outside the Work's `files`. Consider whether the scope was too narrow or if these changes are unrelated. Report as `info`.
+7. **Quality & Style** - Idiomatic code, naming conventions, parameter style. These are `info` or `warning` only. They CANNOT block approval.
+8. **Extra Test Coverage** - Tests beyond what acceptance criteria require. Missing nice-to-have tests are `info` only.
+9. **Defensive Coding** - Input validation, type hints, edge-case handling beyond what was requested. These are `info` only.
+10. **Architecture** - Pattern adherence, module boundaries. These are `warning` at most unless they break existing code.
 
 ## Work Context
 
