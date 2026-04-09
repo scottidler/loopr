@@ -178,6 +178,26 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             }
         }
 
+        // Reconciliation: promote Pending records and detect completions.
+        // Runs during Executing state, before the LLM call, so the LLM sees post-reconciliation state.
+        if coord_state.fsm_state == CoordinatorFsmState::Executing {
+            let outcome = super::reconcile::reconcile(stores);
+            if outcome.promoted > 0 || outcome.completed > 0 {
+                self.ctx.info(&format!(
+                    "reconcile: promoted={} completed={} goal_complete={}",
+                    outcome.promoted, outcome.completed, outcome.goal_complete,
+                ));
+            }
+            if outcome.goal_complete {
+                // All Specs (Full) or all Works (Brief) are terminal - trigger GoalComplete.
+                if let Some(fsm_outcome) =
+                    apply_fsm_transition(CoordinatorFsmState::GoalComplete, coord_state, stores, &prefix)
+                {
+                    return Ok(fsm_outcome);
+                }
+            }
+        }
+
         // Decomposing: background task is still running; do not call the LLM.
         // The event-driven wake in run_fsm_loop will re-enter this iteration when
         // decomposition.completed or decomposition.failed is emitted.

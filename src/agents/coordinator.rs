@@ -1437,6 +1437,7 @@ fn check_fsm_transition(
     }
 }
 
+pub(crate) mod reconcile;
 mod run;
 
 impl<L: LlmClient + 'static> Agent for CoordinatorAgent<L> {
