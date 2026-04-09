@@ -600,8 +600,6 @@ fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix:
     }
 }
 
-// mark_phase_record_complete removed - reconciliation handles Phase completion.
-
 /// Check if the Coordinator should mark any Phases as complete based on Work status.
 /// Returns summaries of any phases that were detected as complete.
 pub fn check_phase_completion(stores: &Stores) -> Vec<String> {
@@ -819,9 +817,7 @@ fn sweep_integrated_to_done(
 
 /// Determine the FSM state footer -- state-specific instructions for the LLM.
 ///
-/// `goal` and `config` are retained in the signature for future use
-/// (e.g., re-decomposition prompts during ActivatePhase). The Planning branch no
-/// longer uses them because decomposition happens before the Coordinator starts.
+/// `goal` and `config` are retained in the signature for future use.
 fn build_fsm_footer(
     stores: &Stores,
     coord_state: &CoordinatorState,
@@ -829,7 +825,6 @@ fn build_fsm_footer(
     config: &CoordinatorConfig,
     prefix: &str,
 ) -> String {
-    // Retained for ActivatePhase re-decomposition (future wiring)
     let _ = (goal, config, prefix);
     match coord_state.fsm_state {
         CoordinatorFsmState::Interviewing => {
@@ -867,7 +862,6 @@ fn build_fsm_footer(
 }
 
 /// Build execution status showing all Active Phases and their Works.
-/// Replaces build_phase_status - shows multi-phase view instead of single cursor.
 fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> String {
     let Some(plan) = generation::find_active_plan(stores) else {
         return "No active plan.".to_string();
@@ -1065,10 +1059,7 @@ impl<L: LlmClient + 'static> Agent for CoordinatorAgent<L> {
             // Load or create FSM state
             let result: Result<()> = match load_or_create_coordinator_state(&self.ctx.stores) {
                 Some(state) => {
-                    self.ctx.info(&format!(
-                        "Resuming FSM state: {} (phase: {:?})",
-                        state.fsm_state, state.current_phase_id
-                    ));
+                    self.ctx.info(&format!("Resuming FSM state: {}", state.fsm_state));
                     self.run_fsm_loop(state).await
                 }
                 None => {

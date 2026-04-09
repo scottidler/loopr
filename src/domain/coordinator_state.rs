@@ -50,17 +50,11 @@ pub struct CoordinatorState {
     pub id: String,
     pub goal_id: String,
     pub fsm_state: CoordinatorFsmState,
-    /// Legacy field - kept for serde backward compat, always None in new code.
-    #[serde(default)]
-    pub current_phase_id: Option<String>,
     pub work_attempts: HashMap<String, u32>,
     /// Wall-clock timestamp (millis since epoch) when each Work was first assigned.
     /// Used for SLA breach detection. NOT overwritten on re-assignment.
     #[serde(default)]
     pub work_first_assigned_at: HashMap<String, i64>,
-    /// Legacy field - kept for serde backward compat, always None in new code.
-    #[serde(default)]
-    pub phase_activated_at: Option<i64>,
     /// Error message from the most recent decomposition failure. When set, the coordinator
     /// transitions to NeedsHelp instead of busy-polling. Cleared on re-decompose.
     #[serde(default)]
@@ -74,9 +68,6 @@ pub struct CoordinatorState {
     #[serde(default)]
     pub bubble_up_count: u32,
     pub goal_started_at: i64,
-    /// Legacy field - kept for serde backward compat, always empty in new code.
-    #[serde(default)]
-    pub phases_completed: Vec<String>,
     /// Interview context accumulated during the Interviewing state.
     #[serde(default)]
     pub interview_context: Vec<InterviewExchange>,
@@ -108,16 +99,13 @@ impl CoordinatorState {
             id: id::generate_id("cs"),
             goal_id,
             fsm_state,
-            current_phase_id: None,
             work_attempts: HashMap::new(),
             work_first_assigned_at: HashMap::new(),
-            phase_activated_at: None,
             decomposition_error: None,
             decomposition_attempts: HashMap::new(),
             bubble_up_count: 0,
             researcher_spawns: HashMap::new(),
             goal_started_at: now,
-            phases_completed: Vec::new(),
             interview_context: Vec::new(),
             plan_approved,
             created_at: now,
@@ -239,10 +227,7 @@ mod tests {
         assert!(!state.id.is_empty());
         assert_eq!(state.goal_id, "goal-1");
         assert_eq!(state.fsm_state, CoordinatorFsmState::Interviewing);
-        assert!(state.current_phase_id.is_none());
         assert!(state.work_attempts.is_empty());
-        assert!(state.phase_activated_at.is_none());
-        assert!(state.phases_completed.is_empty());
         assert!(state.created_at > 0);
         assert_eq!(state.created_at, state.updated_at);
     }
@@ -408,11 +393,8 @@ mod tests {
             "id": "test-id",
             "goal_id": "goal-1",
             "fsm_state": "Planning",
-            "current_phase_id": null,
             "work_attempts": {},
-            "phase_activated_at": null,
             "goal_started_at": 1000,
-            "phases_completed": [],
             "created_at": 1000,
             "updated_at": 1000
         });
@@ -456,11 +438,8 @@ mod tests {
             "id": "test-id",
             "goal_id": "goal-1",
             "fsm_state": "Planning",
-            "current_phase_id": null,
             "work_attempts": {},
-            "phase_activated_at": null,
             "goal_started_at": 1000,
-            "phases_completed": [],
             "created_at": 1000,
             "updated_at": 1000
         });
@@ -512,8 +491,6 @@ mod tests {
         assert_eq!(state.researcher_spawn_count("nonexistent"), 0);
     }
 
-    // Note: activate_phase_clears_researcher_spawns test removed - cursor model eliminated.
-
     #[test]
     fn test_serde_roundtrip_with_researcher_spawns() {
         let mut state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
@@ -533,11 +510,8 @@ mod tests {
             "id": "test-id",
             "goal_id": "goal-1",
             "fsm_state": "Planning",
-            "current_phase_id": null,
             "work_attempts": {},
-            "phase_activated_at": null,
             "goal_started_at": 1000,
-            "phases_completed": [],
             "created_at": 1000,
             "updated_at": 1000
         });

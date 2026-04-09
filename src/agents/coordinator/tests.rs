@@ -651,7 +651,6 @@ async fn test_load_or_create_coordinator_state_resumes_existing() {
     // Create an existing state in Executing
     let mut existing = CoordinatorState::new(goal_id.clone(), InterviewMode::Interactive);
     existing.transition_to(CoordinatorFsmState::Executing);
-    existing.current_phase_id = Some("phase-1".to_string());
     let existing_id = existing.id.clone();
     stores
         .coordinator_states
@@ -662,7 +661,6 @@ async fn test_load_or_create_coordinator_state_resumes_existing() {
     let state = load_or_create_coordinator_state(&stores).unwrap();
     assert_eq!(state.id, existing_id);
     assert_eq!(state.fsm_state, CoordinatorFsmState::Executing);
-    assert_eq!(state.current_phase_id.as_deref(), Some("phase-1"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -794,14 +792,10 @@ async fn test_fsm_executing_stays_when_wis_in_progress() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
     let config = CoordinatorConfig::default();
 
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
-
-// test_fsm_executing_to_phase_gate_with_mixed_done_abandoned removed - PhaseGate no longer exists.
-// Goal completion is detected by reconcile().
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fsm_executing_stays_when_partial_done() {
@@ -821,14 +815,10 @@ async fn test_fsm_executing_stays_when_partial_done() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
     let config = CoordinatorConfig::default();
 
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
-
-// test_fsm_executing_to_phase_gate_on_zero_wis removed - PhaseGate no longer exists.
-// test_fsm_executing_to_phase_gate_on_phase_timeout removed - phase timeout no longer triggers PhaseGate.
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
@@ -845,7 +835,6 @@ async fn test_fsm_executing_to_goal_complete_on_goal_timeout() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
     // Goal started 5 hours ago, timeout is 4 hours
     coord_state.goal_started_at = crate::id::now_millis() - 18_000_000;
 
@@ -867,13 +856,10 @@ async fn test_fsm_executing_no_current_phase_stays() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    // current_phase_id is None — shouldn't happen normally, but shouldn't panic
     let config = CoordinatorConfig::default();
 
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
-
-// PhaseGate -> ActivatePhase tests removed - those states no longer exist.
 
 // --- GoalComplete is terminal ---
 
@@ -1405,7 +1391,6 @@ async fn test_sweep_integrated_to_done_transitions_works() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
@@ -1435,7 +1420,6 @@ async fn test_sweep_noop_when_no_integrated_works() {
 
     let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
     coord_state.fsm_state = CoordinatorFsmState::Executing;
-    coord_state.current_phase_id = Some(phase_id);
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
@@ -1448,9 +1432,6 @@ async fn test_sweep_noop_when_no_integrated_works() {
     let unchanged = works.get(&wi_id).unwrap();
     assert_eq!(unchanged.status(), WorkStatus::Draft);
 }
-
-// test_sweep_then_fsm_advances_to_phase_gate removed - PhaseGate no longer exists.
-// Goal completion after sweep is now detected by reconcile().
 
 // --- last_error_kind_for_work tests ---
 
