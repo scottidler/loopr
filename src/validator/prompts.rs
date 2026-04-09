@@ -94,8 +94,8 @@ mod tests {
         let parent_md = "---\ntitle: P\n---\n\nParent";
         let prompt = spec_prompt(md, parent_md);
         assert!(prompt.contains("Technical approach described"));
-        assert!(prompt.contains("Key decisions documented"));
         assert!(prompt.contains("Testability addressed"));
+        assert!(prompt.contains("Key decisions (optional)"));
     }
 
     #[test]

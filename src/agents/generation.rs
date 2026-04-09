@@ -3,7 +3,7 @@
 //! The generation engine was purged in the purge-generation-engine refactor (2026-04-04).
 //! Only build_work_prompt and the live query helpers remain.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::daemon::context::Stores;
 use crate::domain::phase::Phase;
@@ -185,6 +185,51 @@ pub fn find_works_for_parent(stores: &Stores, parent_id: &str) -> Vec<Work> {
 
 /// Check if all Works in a Phase are in a terminal state (Done or Abandoned).
 /// This matches the FSM's check_fsm_transition() predicate exactly.
+/// Compute the fraction of abandoned works across all phases under a given plan.
+/// Used by the coordinator's GoalComplete quality gate prompt interpolation.
+/// Returns 0.0 if there are no works (prevents false positives on empty goals).
+pub fn goal_abandon_ratio(stores: &Stores, plan_id: &str) -> f64 {
+    let Ok(works) = stores.read_works() else {
+        return 0.0;
+    };
+    let Ok(phases) = stores.read_phases() else {
+        return 0.0;
+    };
+    let Ok(specs) = stores.read_specs() else {
+        return 0.0;
+    };
+
+    // Collect spec IDs parented to this plan
+    let spec_ids: HashSet<&str> = specs
+        .values()
+        .filter(|s| s.parent_id == plan_id)
+        .map(|s| s.id.as_str())
+        .collect();
+
+    // Collect phase IDs parented to those specs
+    let phase_ids: HashSet<&str> = phases
+        .values()
+        .filter(|p| spec_ids.contains(p.parent_id.as_str()))
+        .map(|p| p.id.as_str())
+        .collect();
+
+    // Works under this plan: directly (Brief mode) or via phases (Full mode)
+    let all_works: Vec<_> = works
+        .values()
+        .filter(|w| w.parent_id == plan_id || phase_ids.contains(w.parent_id.as_str()))
+        .collect();
+
+    let abandoned = all_works
+        .iter()
+        .filter(|w| matches!(w.status(), WorkStatus::Abandoned))
+        .count();
+
+    if all_works.is_empty() {
+        return 0.0;
+    }
+    abandoned as f64 / all_works.len() as f64
+}
+
 pub fn is_phase_complete(stores: &Stores, phase_id: &str) -> bool {
     let Ok(works) = stores.read_works() else { return false };
     let phase_wis: Vec<_> = works.values().filter(|w| w.parent_id == phase_id).collect();
@@ -388,5 +433,72 @@ mod tests {
         stores.works.write().unwrap().insert(wi2.id.clone(), wi2);
 
         assert!(!is_phase_complete(&stores, "phase-1"));
+    }
+
+    // --- goal_abandon_ratio tests ---
+
+    #[test]
+    fn test_goal_abandon_ratio_empty() {
+        let dir = TestDir::new("loopr-gen-gar-empty");
+        let stores = test_stores(&dir);
+        assert_eq!(goal_abandon_ratio(&stores, "pl-fake"), 0.0);
+    }
+
+    #[test]
+    fn test_goal_abandon_ratio_brief_mode_all_done() {
+        let dir = TestDir::new("loopr-gen-gar-brief-done");
+        let stores = test_stores(&dir);
+
+        // Brief mode: works parented directly to plan
+        let mut w1 = Work::new("plan-1".into(), "W1".into());
+        w1.force_status(WorkStatus::Done);
+        let mut w2 = Work::new("plan-1".into(), "W2".into());
+        w2.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w1.id.clone(), w1);
+        stores.works.write().unwrap().insert(w2.id.clone(), w2);
+
+        assert_eq!(goal_abandon_ratio(&stores, "plan-1"), 0.0);
+    }
+
+    #[test]
+    fn test_goal_abandon_ratio_full_mode_partial_abandon() {
+        let dir = TestDir::new("loopr-gen-gar-full-partial");
+        let stores = test_stores(&dir);
+
+        // Full mode: plan -> spec -> phase -> works
+        let spec = Spec::new("plan-1".into(), "Spec".into(), 0);
+        let phase = Phase::new(spec.id.clone(), "Phase".into(), 1);
+        let phase_id = phase.id.clone();
+        stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+        stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+        let mut w1 = Work::new(phase_id.clone(), "W1".into());
+        w1.force_status(WorkStatus::Done);
+        let mut w2 = Work::new(phase_id.clone(), "W2".into());
+        w2.force_status(WorkStatus::Abandoned);
+        let mut w3 = Work::new(phase_id.clone(), "W3".into());
+        w3.force_status(WorkStatus::Done);
+        stores.works.write().unwrap().insert(w1.id.clone(), w1);
+        stores.works.write().unwrap().insert(w2.id.clone(), w2);
+        stores.works.write().unwrap().insert(w3.id.clone(), w3);
+
+        let ratio = goal_abandon_ratio(&stores, "plan-1");
+        assert!((ratio - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_goal_abandon_ratio_all_abandoned() {
+        let dir = TestDir::new("loopr-gen-gar-all-aband");
+        let stores = test_stores(&dir);
+
+        // Brief mode: all works abandoned
+        let mut w1 = Work::new("plan-x".into(), "W1".into());
+        w1.force_status(WorkStatus::Abandoned);
+        let mut w2 = Work::new("plan-x".into(), "W2".into());
+        w2.force_status(WorkStatus::Abandoned);
+        stores.works.write().unwrap().insert(w1.id.clone(), w1);
+        stores.works.write().unwrap().insert(w2.id.clone(), w2);
+
+        assert_eq!(goal_abandon_ratio(&stores, "plan-x"), 1.0);
     }
 }

@@ -205,10 +205,19 @@ pub struct CoordinatorConfig {
     /// being forced to escalate. Default: 3.
     #[serde(default = "default_max_researcher_spawns")]
     pub max_researcher_spawns: u32,
+    /// Maximum fraction of abandoned works (across all phases) before the GoalComplete
+    /// quality gate fires need_help instead of done. Default: 0.4 (40%).
+    /// A value of 1.0 effectively disables the gate.
+    #[serde(default = "default_max_abandon_ratio")]
+    pub max_abandon_ratio: f64,
 }
 
 fn default_max_researcher_spawns() -> u32 {
     3
+}
+
+fn default_max_abandon_ratio() -> f64 {
+    0.4
 }
 
 impl Default for CoordinatorConfig {
@@ -232,6 +241,7 @@ impl Default for CoordinatorConfig {
             goal_timeout_secs: 14400,
             interview_mode: InterviewMode::default(),
             max_researcher_spawns: default_max_researcher_spawns(),
+            max_abandon_ratio: default_max_abandon_ratio(),
         }
     }
 }

@@ -71,18 +71,22 @@ pub const SECTION_AC: &str = "Acceptance Criteria";
 pub const SECTION_OVERVIEW: &str = "Overview";
 pub const SECTION_IMPLEMENTATION: &str = "Implementation Notes";
 
-/// Replace status value placeholders with canonical VARIANT_NAMES from enums.
-fn interpolate_status_values(content: String) -> String {
+/// Replace status value placeholders with canonical VARIANT_NAMES from enums,
+/// and inject the configured abandon-ratio percentage threshold.
+fn interpolate_status_values(content: String, max_abandon_ratio: f64) -> String {
+    let pct = (max_abandon_ratio * 100.0).round() as u32;
     content
         .replace("{work_status_values}", &WorkStatus::VARIANT_NAMES.join(", "))
         .replace("{bundle_status_values}", &BundleStatus::VARIANT_NAMES.join(", "))
         .replace("{hierarchy_status_values}", &HierarchyStatus::VARIANT_NAMES.join(", "))
         .replace("{work_override_statuses}", "Ready, Abandoned, InReview")
+        .replace("{max_abandon_ratio_pct}", &pct.to_string())
 }
 
 /// Initialize the global prompt store. Call once at startup after config load.
 /// Checks ~/.config/loopr/prompts/ for overrides.
-pub fn init() {
+/// `max_abandon_ratio` is injected into coordinator.pmt as `{max_abandon_ratio_pct}`.
+pub fn init(max_abandon_ratio: f64) {
     let overrides_dir = dirs::config_dir().map(|d| d.join("loopr/prompts"));
 
     let load = |filename: &str, default: &str| -> String {
@@ -106,7 +110,7 @@ pub fn init() {
 
     // OnceLock::set returns Err if already initialized — harmless no-op
     let _ = STORE.set(PromptStore {
-        coordinator: interpolate_status_values(load("coordinator.pmt", DEFAULT_COORDINATOR)),
+        coordinator: interpolate_status_values(load("coordinator.pmt", DEFAULT_COORDINATOR), max_abandon_ratio),
         implementer: load("implementer.pmt", DEFAULT_IMPLEMENTER),
         reviewer: load("reviewer.pmt", DEFAULT_REVIEWER),
         researcher: load("researcher.pmt", DEFAULT_RESEARCHER),
@@ -137,7 +141,7 @@ pub fn init() {
 /// Initialize with compiled-in defaults only (no filesystem). For tests.
 pub fn init_defaults() {
     let _ = STORE.set(PromptStore {
-        coordinator: interpolate_status_values(DEFAULT_COORDINATOR.to_string()),
+        coordinator: interpolate_status_values(DEFAULT_COORDINATOR.to_string(), 0.4),
         implementer: DEFAULT_IMPLEMENTER.to_string(),
         reviewer: DEFAULT_REVIEWER.to_string(),
         researcher: DEFAULT_RESEARCHER.to_string(),
@@ -201,7 +205,7 @@ mod tests {
         // Coordinator is interpolated (status placeholders replaced), so compare against interpolated version
         assert_eq!(
             s.coordinator,
-            interpolate_status_values(DEFAULT_COORDINATOR.to_string())
+            interpolate_status_values(DEFAULT_COORDINATOR.to_string(), 0.4)
         );
         assert_eq!(s.implementer, DEFAULT_IMPLEMENTER);
         assert_eq!(s.reviewer, DEFAULT_REVIEWER);
@@ -655,6 +659,10 @@ mod tests {
         assert!(
             !p.contains("{work_override_statuses}"),
             "un-interpolated {{work_override_statuses}}"
+        );
+        assert!(
+            !p.contains("{max_abandon_ratio_pct}"),
+            "un-interpolated {{max_abandon_ratio_pct}}"
         );
         // Canonical values should appear
         assert!(p.contains("Draft"), "missing Draft in interpolated coordinator prompt");

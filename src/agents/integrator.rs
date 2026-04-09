@@ -1067,10 +1067,10 @@ impl IntegratorAgent {
         // Abandon conflicting works - InReview → Abandoned is a valid coordinator transition.
         let mut phase_id = String::new();
         for wi_id in conflicting_work_ids {
-            if let Ok(works) = self.ctx.stores.read_works() {
-                if let Some(w) = works.get(wi_id.as_str()) {
-                    phase_id = w.parent_id.clone();
-                }
+            if let Ok(works) = self.ctx.stores.read_works()
+                && let Some(w) = works.get(wi_id.as_str())
+            {
+                phase_id = w.parent_id.clone();
             }
             let resp = self.ctx.bridge.request(
                 "work.transition",
@@ -1096,10 +1096,10 @@ impl IntegratorAgent {
         // Reset non-conflicting works to Ready for normal retry.
         if let Ok(bundles) = self.ctx.stores.read_bundles() {
             for bid in all_bundle_ids {
-                if let Some(b) = bundles.get(bid.as_str()) {
-                    if !conflicting_work_ids.contains(&b.work_id) {
-                        self.reset_work_after_bundle_rejection(&b.work_id, "merge conflict (unrelated)");
-                    }
+                if let Some(b) = bundles.get(bid.as_str())
+                    && !conflicting_work_ids.contains(&b.work_id)
+                {
+                    self.reset_work_after_bundle_rejection(&b.work_id, "merge conflict (unrelated)");
                 }
             }
         }
@@ -1136,7 +1136,8 @@ impl IntegratorAgent {
                 learn_resp.error
             ));
         } else {
-            self.ctx.info("escalate_structural_conflict: created STRUCTURAL CONFLICT learning");
+            self.ctx
+                .info("escalate_structural_conflict: created STRUCTURAL CONFLICT learning");
         }
     }
 
@@ -1199,8 +1200,12 @@ fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<
     let mut conflicting_works: HashSet<String> = HashSet::new();
 
     for bid in bundle_ids {
-        let Some(bundle) = bundles.get(bid.as_str()) else { continue };
-        let Some(work) = works.get(bundle.work_id.as_str()) else { continue };
+        let Some(bundle) = bundles.get(bid.as_str()) else {
+            continue;
+        };
+        let Some(work) = works.get(bundle.work_id.as_str()) else {
+            continue;
+        };
         for file in &work.files {
             if let Some(first_work) = file_to_work.get(file) {
                 conflicting_files.insert(file.clone());

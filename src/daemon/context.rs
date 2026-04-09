@@ -2014,18 +2014,33 @@ mod tests {
         session.work_id = Some(wi_id.clone());
         session.force_status(AgentStatus::Running);
         let session_id = session.id.clone();
-        ctx.stores.agent_sessions.write().unwrap().insert(session_id.clone(), session);
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
         // Deliberately NO handle inserted — this is the bug scenario.
 
         // Single sweep: active_work_ids is computed before the session sweep, so the
         // no-handle Running session is excluded immediately. Both the session→Failed
         // correction AND the work→Blocked correction happen in the same reconcile() call.
         let fixed = ctx.reconcile();
-        assert!(fixed >= 1, "single sweep should fix both the orphaned session and the orphaned work");
+        assert!(
+            fixed >= 1,
+            "single sweep should fix both the orphaned session and the orphaned work"
+        );
         let session_status = ctx.stores.agent_sessions.read().unwrap()[&session_id].status();
-        assert_eq!(session_status, AgentStatus::Failed, "session should be Failed after one sweep");
+        assert_eq!(
+            session_status,
+            AgentStatus::Failed,
+            "session should be Failed after one sweep"
+        );
         let work_status = ctx.stores.works.read().unwrap()[&wi_id].status();
-        assert_eq!(work_status, WorkStatus::Blocked, "work should be Blocked after one sweep");
+        assert_eq!(
+            work_status,
+            WorkStatus::Blocked,
+            "work should be Blocked after one sweep"
+        );
     }
 
     /// Positive case: worker registers handle -> session stays Running, work stays InProgress.
@@ -2051,11 +2066,19 @@ mod tests {
         session.work_id = Some(wi_id.clone());
         session.force_status(AgentStatus::Running);
         let session_id = session.id.clone();
-        ctx.stores.agent_sessions.write().unwrap().insert(session_id.clone(), session);
+        ctx.stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session_id.clone(), session);
 
         // Register a live handle (never-completing task) — this is what the fix adds.
         let handle = tokio::spawn(std::future::pending::<()>());
-        ctx.stores.agent_handles.lock().unwrap().insert(session_id.clone(), handle);
+        ctx.stores
+            .agent_handles
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), handle);
 
         let fixed = ctx.reconcile();
         assert_eq!(fixed, 0, "no fixes should be needed with a registered handle");
