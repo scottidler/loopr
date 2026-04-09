@@ -278,30 +278,8 @@ async fn auto_start_agents(
         let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, triage_req)).await;
     }
 
-    if method == "bundle.transition"
-        && let Some(target) = params.get("target_status").and_then(|v| v.as_str())
-        && target.parse::<crate::domain::bundle::BundleStatus>().ok()
-            == Some(crate::domain::bundle::BundleStatus::Triaged)
-        && stores.config.agents.auto_start_reviewer
-        && let Some(bid) = params.get("id").and_then(|v| v.as_str())
-        && bid.starts_with("bd-")
-    {
-        let start_req = DaemonRequest::new(
-            0,
-            "agent.start",
-            json!({
-                "agent_type": "reviewer", "bundle_id": bid,
-            }),
-        );
-        let resp = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
-        if resp.is_error() {
-            tracing::warn!(
-                "[auto-start] failed to spawn reviewer for bundle {}: {:?}",
-                bid,
-                resp.error
-            );
-        }
-    }
+    // Reviewer spawning is now pull-based: workers poll for Triaged bundles
+    // via next_assignment(). The push-based hook has been removed (Phase 7).
 }
 
 #[allow(clippy::unwrap_used)]

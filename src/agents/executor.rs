@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 
 use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::daemon::context::Stores;
+use crate::domain::bundle::BundleStatus;
 use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
@@ -185,6 +186,113 @@ pub async fn run_single_work(
 
     // Register handle so reconciler sees this session as live.
     // Lock ordering: agent_handles is always acquired after agent_sessions.
+    stores.lock_agent_handles()?.insert(session_id.clone(), handle);
+
+    Ok(())
+}
+
+/// Run a single Bundle review through the full Reviewer lifecycle.
+///
+/// This is the pull-based entry point for reviewer work. The bundle must be
+/// Triaged. It:
+/// 1. Verifies bundle is still Triaged
+/// 2. Checks dedup (no non-terminal reviewer already running for this bundle)
+/// 3. Creates an AgentSession
+/// 4. Delegates to `run_agent_task` for the full lifecycle
+pub async fn run_single_review(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    worktree_mgr: &WorktreeManager,
+    reviewer_config: &crate::config::AgentRoleConfig,
+    bundle_id: &str,
+    worker_id: u32,
+) -> Result<()> {
+    info!("Worker {} attempting Review of bundle {}", worker_id, bundle_id);
+
+    // Step 1: Verify bundle is still Triaged.
+    {
+        let bundles = stores.read_bundles()?;
+        match bundles.get(bundle_id) {
+            Some(b) if b.status() == BundleStatus::Triaged => {}
+            Some(b) => {
+                info!(
+                    "Worker {} skipping bundle {} - status is {:?}, expected Triaged",
+                    worker_id,
+                    bundle_id,
+                    b.status()
+                );
+                return Ok(());
+            }
+            None => {
+                info!(
+                    "Worker {} skipping bundle {} - not found in store",
+                    worker_id, bundle_id
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    // Step 2: Dedup - if a reviewer is already running on this bundle, skip.
+    {
+        let sessions = stores.read_agent_sessions()?;
+        let has_existing = sessions.values().any(|s| {
+            s.agent_type == AgentKind::Reviewer
+                && !s.status().is_terminal()
+                && s.bundle_id.as_deref() == Some(bundle_id)
+        });
+        if has_existing {
+            info!(
+                "Worker {} skipping bundle {} - reviewer already running",
+                worker_id, bundle_id
+            );
+            return Ok(());
+        }
+    }
+
+    // Step 3: Create AgentSession.
+    let mut session = AgentSession::new(AgentKind::Reviewer, reviewer_config.model.clone());
+    session.bundle_id = Some(bundle_id.to_string());
+    session.daemon_session_id = stores
+        .session_dir
+        .as_ref()
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()));
+    let session_id = session.id.clone();
+
+    // Persist session.
+    if let Some(store) = &stores.store
+        && let Ok(mut s) = store.lock().map_err(|_| eyre!("store lock poisoned"))
+        && let Err(e) = s.create(session.clone())
+    {
+        warn!("Worker {} failed to persist reviewer session: {}", worker_id, e);
+        return Err(eyre!("failed to create reviewer session: {}", e));
+    }
+    stores.write_agent_sessions()?.insert(session_id.clone(), session);
+    let _ = event_tx.send(DaemonEvent::record_created("agent_session", &session_id));
+    debug!("[agent_status] {}: -> Starting (worker reviewer spawn)", session_id);
+    let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Starting));
+
+    info!(
+        "Worker {} created reviewer session {} for bundle {}",
+        worker_id, session_id, bundle_id
+    );
+
+    // Step 4: Spawn the full agent lifecycle.
+    let task_stores = stores.clone();
+    let task_event_tx = event_tx.clone();
+    let task_worktree_mgr = worktree_mgr.clone();
+    let task_session_id = session_id.clone();
+    let handle = tokio::spawn(async move {
+        run_agent_task(
+            task_session_id,
+            AgentKind::Reviewer,
+            task_stores,
+            task_event_tx,
+            task_worktree_mgr,
+        )
+        .await;
+    });
+
     stores.lock_agent_handles()?.insert(session_id.clone(), handle);
 
     Ok(())

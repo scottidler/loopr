@@ -6,7 +6,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::AgentRoleConfig;
 use crate::daemon::context::Stores;
-use crate::daemon::work_queue;
+use crate::daemon::work_queue::{self, Assignment};
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
 
@@ -19,15 +19,17 @@ pub struct WorkerConfig {
     pub idle_interval_secs: u64,
 }
 
-/// Run a persistent worker that pulls and implements Work items.
+/// Run a persistent worker that pulls Work items or Bundle reviews.
 ///
-/// The worker loops: pull Work → implement → complete → pull next.
+/// The worker loops: pull assignment → implement or review → complete → pull next.
+/// Reviews take priority over implementations (short-lived, unblock pipeline).
 /// Exits when `stores.shutting_down` is set to true.
 pub async fn run_worker(
     stores: Arc<Stores>,
     event_tx: broadcast::Sender<DaemonEvent>,
     worktree_mgr: WorktreeManager,
     implementer_config: AgentRoleConfig,
+    reviewer_config: AgentRoleConfig,
     config: WorkerConfig,
 ) {
     info!("Worker {} started", config.worker_id);
@@ -39,11 +41,11 @@ pub async fn run_worker(
             break;
         }
 
-        // Pull next Ready Work - reconciliation ensures only eligible Works are Ready
-        let work_id = work_queue::next_assignable_work(&stores);
+        // Pull next assignment: reviews first, then implementations
+        let assignment = work_queue::next_assignment(&stores);
 
-        match work_id {
-            Some(wid) => {
+        match assignment {
+            Some(Assignment::Implement(wid)) => {
                 info!("Worker {} pulled Work {}", config.worker_id, wid);
 
                 let result = crate::agents::executor::run_single_work(
@@ -65,12 +67,35 @@ pub async fn run_worker(
                     }
                 }
 
-                // Brief pause before pulling next (avoid hot loop on rapid failures)
+                tokio::time::sleep(Duration::from_secs(config.poll_interval_secs)).await;
+            }
+            Some(Assignment::Review(bid)) => {
+                info!("Worker {} pulled Review for bundle {}", config.worker_id, bid);
+
+                let result = crate::agents::executor::run_single_review(
+                    &stores,
+                    &event_tx,
+                    &worktree_mgr,
+                    &reviewer_config,
+                    &bid,
+                    config.worker_id,
+                )
+                .await;
+
+                match result {
+                    Ok(()) => {
+                        info!("Worker {} spawned Review for bundle {}", config.worker_id, bid);
+                    }
+                    Err(e) => {
+                        warn!("Worker {} failed Review for bundle {}: {}", config.worker_id, bid, e);
+                    }
+                }
+
                 tokio::time::sleep(Duration::from_secs(config.poll_interval_secs)).await;
             }
             None => {
                 // No work available — idle
-                debug!("Worker {} idle, no Ready Work", config.worker_id);
+                debug!("Worker {} idle, no assignments", config.worker_id);
                 tokio::time::sleep(Duration::from_secs(config.idle_interval_secs)).await;
             }
         }
@@ -110,6 +135,7 @@ mod tests {
             event_tx,
             worktree_mgr,
             AgentRoleConfig::default_implementer(),
+            AgentRoleConfig::default_reviewer(),
             config,
         ));
 
@@ -139,6 +165,7 @@ mod tests {
                 event_tx,
                 worktree_mgr,
                 AgentRoleConfig::default_implementer(),
+                AgentRoleConfig::default_reviewer(),
                 config,
             )
             .await;
@@ -179,6 +206,7 @@ mod tests {
                 event_tx,
                 worktree_mgr,
                 AgentRoleConfig::default_implementer(),
+                AgentRoleConfig::default_reviewer(),
                 config,
             )
             .await;

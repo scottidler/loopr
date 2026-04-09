@@ -343,12 +343,13 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
                 let e = event_tx.clone();
                 let w = c.worktree_manager.clone();
                 let ic = c.config.agents.implementer.clone();
+                let rc = c.config.agents.reviewer.clone();
                 let wc = crate::agents::worker::WorkerConfig {
                     worker_id: i,
                     poll_interval_secs: 5,
                     idle_interval_secs: 15,
                 };
-                worker_handles.push(tokio::spawn(crate::agents::worker::run_worker(s, e, w, ic, wc)));
+                worker_handles.push(tokio::spawn(crate::agents::worker::run_worker(s, e, w, ic, rc, wc)));
             }
         }
     }

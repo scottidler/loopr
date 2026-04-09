@@ -4,7 +4,51 @@ use tracing::{debug, warn};
 
 use crate::agents::AgentKind;
 use crate::daemon::context::Stores;
+use crate::domain::bundle::BundleStatus;
 use crate::domain::work::WorkStatus;
+
+/// A worker assignment: either implement a Work item or review a Bundle.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Assignment {
+    Implement(String), // work_id
+    Review(String),    // bundle_id
+}
+
+/// Determine the next assignment for a worker.
+///
+/// Checks two pools in priority order:
+/// 1. Triaged bundles with no active reviewer session -> `Assignment::Review`
+/// 2. Ready works with no active implementer session -> `Assignment::Implement`
+///
+/// Reviews take priority because reviewers are short-lived (~7s) and unblock
+/// the integration pipeline.
+pub fn next_assignment(stores: &Arc<Stores>) -> Option<Assignment> {
+    // Priority 1: Triaged bundles needing a reviewer.
+    if let Some(bundle_id) = next_reviewable_bundle(stores) {
+        return Some(Assignment::Review(bundle_id));
+    }
+    // Priority 2: Ready works needing an implementer.
+    next_assignable_work(stores).map(Assignment::Implement)
+}
+
+/// Find the oldest Triaged bundle with no non-terminal reviewer session.
+fn next_reviewable_bundle(stores: &Arc<Stores>) -> Option<String> {
+    let bundles = stores.read_bundles().ok()?;
+    let sessions = stores.read_agent_sessions().ok()?;
+
+    let active_reviewer_bundle_ids: std::collections::HashSet<String> = sessions
+        .values()
+        .filter(|s| s.agent_type == AgentKind::Reviewer && !s.status().is_terminal())
+        .filter_map(|s| s.bundle_id.clone())
+        .collect();
+
+    bundles
+        .values()
+        .filter(|b| b.status() == BundleStatus::Triaged)
+        .filter(|b| !active_reviewer_bundle_ids.contains(&b.id))
+        .min_by_key(|b| b.created_at)
+        .map(|b| b.id.clone())
+}
 
 /// Priority score for a Ready Work item. Higher = picked first.
 #[derive(Debug, Clone, PartialEq)]
@@ -451,6 +495,68 @@ mod tests {
             next_assignable_work(&stores),
             Some(wb_id),
             "fresh work should be preferred over cycled work"
+        );
+    }
+
+    // --- next_assignment / next_reviewable_bundle tests ---
+
+    #[test]
+    fn test_next_assignment_returns_review_over_implement() {
+        use crate::domain::bundle::Bundle;
+        let stores = test_stores();
+
+        // Create a Ready work
+        let _work_id = ready_work(&stores, "phase-1", "Work A");
+
+        // Create a Triaged bundle
+        let mut bundle = Bundle::new("wi-1".into(), None, "branch-a".into(), vec![]);
+        bundle.force_status(BundleStatus::Triaged);
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+        // Review should take priority
+        let assignment = next_assignment(&stores);
+        assert_eq!(assignment, Some(Assignment::Review(bundle_id)));
+    }
+
+    #[test]
+    fn test_next_assignment_returns_implement_when_no_reviews() {
+        let stores = test_stores();
+        let work_id = ready_work(&stores, "phase-1", "Work A");
+
+        let assignment = next_assignment(&stores);
+        assert_eq!(assignment, Some(Assignment::Implement(work_id)));
+    }
+
+    #[test]
+    fn test_next_assignment_returns_none_when_empty() {
+        let stores = test_stores();
+        assert!(next_assignment(&stores).is_none());
+    }
+
+    #[test]
+    fn test_next_reviewable_bundle_excludes_active_reviewer() {
+        use crate::domain::bundle::Bundle;
+        let stores = test_stores();
+
+        let mut bundle = Bundle::new("wi-1".into(), None, "branch-a".into(), vec![]);
+        bundle.force_status(BundleStatus::Triaged);
+        let bundle_id = bundle.id.clone();
+        stores.bundles.write().unwrap().insert(bundle_id.clone(), bundle);
+
+        // Add an active reviewer session for this bundle
+        let mut session = AgentSession::new(AgentKind::Reviewer, "model".to_string());
+        session.bundle_id = Some(bundle_id.clone());
+        session.force_status(AgentStatus::Running);
+        stores
+            .agent_sessions
+            .write()
+            .unwrap()
+            .insert(session.id.clone(), session);
+
+        assert!(
+            next_reviewable_bundle(&stores).is_none(),
+            "bundle with active reviewer should not be returned"
         );
     }
 }

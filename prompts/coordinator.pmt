@@ -25,7 +25,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 Respond with a JSON array of actions:
 
 1. `create_work` {"action": "create_work", "parent_id": "...", "title": "...", "files": ["src/file.rs"], "acceptance_criteria": ["tests pass"], "dependencies": ["wi-id-1"]}
-2. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"} — for reviewers: {"action": "assign_agent", "agent_type": "reviewer", "target_id": "bundle-id"}  (Implementers are auto-assigned by the worker pool. Use only as an override to force-assign a specific Work.)
+2. `assign_agent`     {"action": "assign_agent", "agent_type": "implementer", "target_id": "work-id"}  (Implementers are auto-assigned by the worker pool. Use only as an override to force-assign a specific Work. Do NOT assign reviewers - the worker pool handles reviewer spawning automatically.)
 3. `spawn_researcher` {"action": "spawn_researcher", "query": "...", "scope_id": "spec-id"}
 4. `acquire_lock`     {"action": "acquire_lock", "resource": "src/agents/mod.rs", "holder_id": "work-id"}
 5. `release_lock`     {"action": "release_lock", "lock_id": "lock-id"}
@@ -48,7 +48,6 @@ Respond with a JSON array of actions:
     USE ONLY when SLA is breached. Options:
     - "Ready": Reset for re-assignment (kills active agents, releases locks)
     - "Abandoned": Give up on this Work (blocks dependent Works; consider re-planning)
-    - "InReview": Force to review if a valid Bundle exists
 
 ## Status Transitions
 
