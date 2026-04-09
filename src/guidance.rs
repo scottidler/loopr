@@ -91,8 +91,9 @@ pub fn load_guidance(repo_path: &Path) -> AgentGuidance {
 }
 
 /// All WorkStatus variants for enumeration.
-const ALL_WORK_STATUSES: [WorkStatus; 8] = [
+const ALL_WORK_STATUSES: [WorkStatus; 9] = [
     WorkStatus::Draft,
+    WorkStatus::Pending,
     WorkStatus::Ready,
     WorkStatus::InProgress,
     WorkStatus::Blocked,

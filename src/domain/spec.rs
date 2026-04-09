@@ -11,7 +11,7 @@ use crate::prompts::SECTION_AC;
 /// Type alias so Spec can name its own status type.
 pub type SpecStatus = HierarchyStatus;
 
-/// Detailed specification derived from a Plan. Ordered by `order` field.
+/// Detailed specification derived from a Plan. Ordered by `dependencies` (linked list).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Spec {
     pub id: String,
@@ -22,6 +22,8 @@ pub struct Spec {
     status: SpecStatus,
     #[serde(default)]
     pub order: u32,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -62,6 +64,7 @@ impl Spec {
             acceptance_criteria: AcceptanceCriteria::default(),
             status: HierarchyStatus::Draft,
             order,
+            dependencies: Vec::new(),
             created_at: now,
             updated_at: now,
         }
@@ -91,6 +94,7 @@ impl DocMarkdown for Spec {
         m.push(("title".into(), FmValue::Text(self.title.clone())));
         m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
         m.push(("order".into(), FmValue::Text(self.order.to_string())));
+        m.push(("dependencies".into(), FmValue::List(self.dependencies.clone())));
         m.push((
             "acceptance-criteria".into(),
             FmValue::List(self.acceptance_criteria.0.clone()),

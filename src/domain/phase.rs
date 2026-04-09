@@ -11,7 +11,7 @@ use crate::prompts::SECTION_AC;
 /// Type alias so Phase can name its own status type.
 pub type PhaseStatus = HierarchyStatus;
 
-/// Implementation phase within a Spec. Ordered by `order` field.
+/// Implementation phase within a Spec. Ordered by `dependencies` (linked list).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Phase {
     pub id: String,
@@ -19,6 +19,10 @@ pub struct Phase {
     pub title: String,
     pub order: u32,
     status: PhaseStatus,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub activated_at: Option<i64>,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
     pub created_at: i64,
@@ -60,6 +64,8 @@ impl Phase {
             title,
             order,
             status: PhaseStatus::Draft,
+            dependencies: Vec::new(),
+            activated_at: None,
             acceptance_criteria: AcceptanceCriteria::default(),
             created_at: now,
             updated_at: now,
@@ -90,6 +96,10 @@ impl DocMarkdown for Phase {
         m.push(("title".into(), FmValue::Text(self.title.clone())));
         m.push(("status".into(), FmValue::Text(format!("{:?}", self.status()))));
         m.push(("order".into(), FmValue::Text(self.order.to_string())));
+        m.push(("dependencies".into(), FmValue::List(self.dependencies.clone())));
+        if let Some(at) = self.activated_at {
+            m.push(("activated-at".into(), FmValue::Text(millis_to_iso(at))));
+        }
         m.push((
             "acceptance-criteria".into(),
             FmValue::List(self.acceptance_criteria.0.clone()),

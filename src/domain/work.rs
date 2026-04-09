@@ -12,8 +12,10 @@ use crate::prompts::SECTION_AC;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
 pub enum WorkStatus {
-    #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
+    #[transitions(Pending(Coordinator), Ready(Coordinator), Abandoned(Coordinator))]
     Draft,
+    #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
+    Pending,
     #[transitions(
         InProgress(Coordinator),
         Blocked(Coordinator),
@@ -650,6 +652,7 @@ mod tests {
             WorkStatus::VARIANT_NAMES,
             &[
                 "Draft",
+                "Pending",
                 "Ready",
                 "InProgress",
                 "Blocked",

@@ -11,13 +11,17 @@ use crate::id;
 use crate::prompts::SECTION_AC;
 
 /// Shared status enum for Plan, Spec, and Phase records.
-/// All three use the same four-state machine with Coordinator-only transitions.
+/// Five-state machine: Draft -> Pending -> Active -> Complete | Abandoned.
+/// Pending is the "waiting for deps + parent" state introduced by the reactive execution model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
 #[serde(rename_all = "lowercase")]
 pub enum HierarchyStatus {
     #[serde(alias = "Draft")]
-    #[transitions(Active(Coordinator), Abandoned(Coordinator))]
+    #[transitions(Pending(Coordinator), Active(Coordinator), Abandoned(Coordinator))]
     Draft,
+    #[serde(alias = "Pending")]
+    #[transitions(Active(Coordinator), Abandoned(Coordinator))]
+    Pending,
     #[serde(alias = "Active")]
     #[transitions(Complete(Coordinator), Abandoned(Coordinator))]
     Active,
@@ -31,6 +35,7 @@ impl fmt::Display for HierarchyStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HierarchyStatus::Draft => write!(f, "draft"),
+            HierarchyStatus::Pending => write!(f, "pending"),
             HierarchyStatus::Active => write!(f, "active"),
             HierarchyStatus::Complete => write!(f, "complete"),
             HierarchyStatus::Abandoned => write!(f, "abandoned"),
@@ -194,6 +199,7 @@ mod tests {
     #[test]
     fn test_hierarchy_status_display() {
         assert_eq!(HierarchyStatus::Draft.to_string(), "draft");
+        assert_eq!(HierarchyStatus::Pending.to_string(), "pending");
         assert_eq!(HierarchyStatus::Active.to_string(), "active");
         assert_eq!(HierarchyStatus::Complete.to_string(), "complete");
         assert_eq!(HierarchyStatus::Abandoned.to_string(), "abandoned");
@@ -203,6 +209,7 @@ mod tests {
     fn test_hierarchy_status_serde_roundtrip() {
         for status in [
             HierarchyStatus::Draft,
+            HierarchyStatus::Pending,
             HierarchyStatus::Active,
             HierarchyStatus::Complete,
             HierarchyStatus::Abandoned,
@@ -216,6 +223,7 @@ mod tests {
     #[test]
     fn test_hierarchy_status_serde_format() {
         assert_eq!(serde_json::to_string(&HierarchyStatus::Draft).unwrap(), "\"draft\"");
+        assert_eq!(serde_json::to_string(&HierarchyStatus::Pending).unwrap(), "\"pending\"");
         assert_eq!(serde_json::to_string(&HierarchyStatus::Active).unwrap(), "\"active\"");
         assert_eq!(
             serde_json::to_string(&HierarchyStatus::Complete).unwrap(),
@@ -231,6 +239,7 @@ mod tests {
     fn test_hierarchy_status_pascal_case_aliases() {
         for (json, expected) in [
             ("\"Draft\"", HierarchyStatus::Draft),
+            ("\"Pending\"", HierarchyStatus::Pending),
             ("\"Active\"", HierarchyStatus::Active),
             ("\"Complete\"", HierarchyStatus::Complete),
             ("\"Abandoned\"", HierarchyStatus::Abandoned),
@@ -245,6 +254,7 @@ mod tests {
     fn test_hierarchy_status_display_matches_serde() {
         for status in [
             HierarchyStatus::Draft,
+            HierarchyStatus::Pending,
             HierarchyStatus::Active,
             HierarchyStatus::Complete,
             HierarchyStatus::Abandoned,
@@ -260,8 +270,26 @@ mod tests {
     // --- HierarchyStatus transition tests (derived via #[derive(Fsm)]) ---
 
     #[test]
+    fn test_valid_transition_draft_to_pending() {
+        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Pending, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Changed);
+    }
+
+    #[test]
     fn test_valid_transition_draft_to_active() {
         let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Active, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Changed);
+    }
+
+    #[test]
+    fn test_valid_transition_pending_to_active() {
+        let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Active, Role::Coordinator);
+        assert_eq!(r.unwrap(), Transition::Changed);
+    }
+
+    #[test]
+    fn test_valid_transition_pending_to_abandoned() {
+        let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
         assert_eq!(r.unwrap(), Transition::Changed);
     }
 
@@ -302,15 +330,24 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_transition_pending_to_complete() {
+        assert!(
+            HierarchyStatus::Pending
+                .validate_transition(HierarchyStatus::Complete, Role::Coordinator)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_invalid_transition_wrong_role() {
         assert!(
             HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Active, Role::Implementer)
+                .validate_transition(HierarchyStatus::Pending, Role::Implementer)
                 .is_err()
         );
         assert!(
             HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Active, Role::Integrator)
+                .validate_transition(HierarchyStatus::Pending, Role::Integrator)
                 .is_err()
         );
     }
@@ -327,6 +364,7 @@ mod tests {
     #[test]
     fn test_is_terminal() {
         assert!(!HierarchyStatus::Draft.is_terminal());
+        assert!(!HierarchyStatus::Pending.is_terminal());
         assert!(!HierarchyStatus::Active.is_terminal());
         assert!(HierarchyStatus::Complete.is_terminal());
         assert!(HierarchyStatus::Abandoned.is_terminal());

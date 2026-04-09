@@ -3,8 +3,9 @@ use crate::domain::plan::{HierarchyStatus, Plan};
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
 
-const ALL_STATES: [HierarchyStatus; 4] = [
+const ALL_STATES: [HierarchyStatus; 5] = [
     HierarchyStatus::Draft,
+    HierarchyStatus::Pending,
     HierarchyStatus::Active,
     HierarchyStatus::Complete,
     HierarchyStatus::Abandoned,
@@ -12,12 +13,30 @@ const ALL_STATES: [HierarchyStatus; 4] = [
 
 const TERMINAL: [HierarchyStatus; 2] = [HierarchyStatus::Complete, HierarchyStatus::Abandoned];
 
-// --- Valid transitions: all 4 with Coordinator ---
+// --- Valid transitions: all with Coordinator ---
+
+#[test]
+fn valid_draft_to_pending() {
+    let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Pending, Role::Coordinator);
+    assert_valid("Draft", "Pending", &r);
+}
 
 #[test]
 fn valid_draft_to_active() {
     let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Active, Role::Coordinator);
     assert_valid("Draft", "Active", &r);
+}
+
+#[test]
+fn valid_pending_to_active() {
+    let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Active, Role::Coordinator);
+    assert_valid("Pending", "Active", &r);
+}
+
+#[test]
+fn valid_pending_to_abandoned() {
+    let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
+    assert_valid("Pending", "Abandoned", &r);
 }
 
 #[test]
@@ -43,9 +62,12 @@ fn valid_active_to_abandoned() {
 #[test]
 fn wrong_role_on_every_valid_transition() {
     let valid_pairs = [
+        (HierarchyStatus::Draft, HierarchyStatus::Pending),
         (HierarchyStatus::Draft, HierarchyStatus::Active),
+        (HierarchyStatus::Pending, HierarchyStatus::Active),
         (HierarchyStatus::Active, HierarchyStatus::Complete),
         (HierarchyStatus::Draft, HierarchyStatus::Abandoned),
+        (HierarchyStatus::Pending, HierarchyStatus::Abandoned),
         (HierarchyStatus::Active, HierarchyStatus::Abandoned),
     ];
     let wrong_roles = [Role::Implementer, Role::Reviewer, Role::Researcher, Role::Integrator];
@@ -96,12 +118,24 @@ fn skip_draft_to_complete_rejected() {
     assert_invalid("Draft", "Complete", &r);
 }
 
+#[test]
+fn skip_pending_to_complete_rejected() {
+    let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Complete, Role::Coordinator);
+    assert_invalid("Pending", "Complete", &r);
+}
+
 // --- Reverse direction ---
 
 #[test]
 fn reverse_active_to_draft_rejected() {
     let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Draft, Role::Coordinator);
     assert_invalid("Active", "Draft", &r);
+}
+
+#[test]
+fn reverse_active_to_pending_rejected() {
+    let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Pending, Role::Coordinator);
+    assert_invalid("Active", "Pending", &r);
 }
 
 // --- Record serde roundtrip ---

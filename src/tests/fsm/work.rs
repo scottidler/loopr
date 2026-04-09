@@ -3,8 +3,9 @@ use crate::domain::role::Role;
 use crate::domain::transition::Transition;
 use crate::domain::work::{Work, WorkStatus};
 
-const ALL_STATES: [WorkStatus; 8] = [
+const ALL_STATES: [WorkStatus; 9] = [
     WorkStatus::Draft,
+    WorkStatus::Pending,
     WorkStatus::Ready,
     WorkStatus::InProgress,
     WorkStatus::Blocked,
@@ -16,12 +17,30 @@ const ALL_STATES: [WorkStatus; 8] = [
 
 const TERMINAL: [WorkStatus; 2] = [WorkStatus::Done, WorkStatus::Abandoned];
 
-// --- All 15 valid transitions ---
+// --- Valid transitions ---
+
+#[test]
+fn valid_draft_to_pending() {
+    let r = WorkStatus::Draft.validate_transition(WorkStatus::Pending, Role::Coordinator);
+    assert_valid("Draft", "Pending", &r);
+}
 
 #[test]
 fn valid_draft_to_ready() {
     let r = WorkStatus::Draft.validate_transition(WorkStatus::Ready, Role::Coordinator);
     assert_valid("Draft", "Ready", &r);
+}
+
+#[test]
+fn valid_pending_to_ready() {
+    let r = WorkStatus::Pending.validate_transition(WorkStatus::Ready, Role::Coordinator);
+    assert_valid("Pending", "Ready", &r);
+}
+
+#[test]
+fn valid_pending_to_abandoned() {
+    let r = WorkStatus::Pending.validate_transition(WorkStatus::Abandoned, Role::Coordinator);
+    assert_valid("Pending", "Abandoned", &r);
 }
 
 #[test]
@@ -78,6 +97,7 @@ fn valid_integrated_to_done_integrator() {
 fn valid_abandoned_from_all_non_terminal() {
     let non_terminal = [
         WorkStatus::Draft,
+        WorkStatus::Pending,
         WorkStatus::Ready,
         WorkStatus::InProgress,
         WorkStatus::Blocked,
@@ -174,6 +194,7 @@ fn wrong_role_integrated_to_done() {
 fn wrong_role_abandoned() {
     let non_terminal = [
         WorkStatus::Draft,
+        WorkStatus::Pending,
         WorkStatus::Ready,
         WorkStatus::InProgress,
         WorkStatus::Blocked,
@@ -199,6 +220,10 @@ fn skip_states_rejected() {
         (WorkStatus::Draft, WorkStatus::InReview),
         (WorkStatus::Draft, WorkStatus::Integrated),
         (WorkStatus::Draft, WorkStatus::Done),
+        (WorkStatus::Pending, WorkStatus::InProgress),
+        (WorkStatus::Pending, WorkStatus::InReview),
+        (WorkStatus::Pending, WorkStatus::Integrated),
+        (WorkStatus::Pending, WorkStatus::Done),
         (WorkStatus::Ready, WorkStatus::InReview),
         (WorkStatus::Ready, WorkStatus::Integrated),
         (WorkStatus::Blocked, WorkStatus::InProgress),
@@ -238,8 +263,11 @@ fn wrong_role_ready_to_done() {
 #[test]
 fn reverse_directions_rejected() {
     let reverse_pairs = [
+        (WorkStatus::Pending, WorkStatus::Draft),
         (WorkStatus::Ready, WorkStatus::Draft),
+        (WorkStatus::Ready, WorkStatus::Pending),
         (WorkStatus::InProgress, WorkStatus::Draft),
+        (WorkStatus::InProgress, WorkStatus::Pending),
         (WorkStatus::InProgress, WorkStatus::Ready),
         (WorkStatus::Integrated, WorkStatus::InReview),
         (WorkStatus::Integrated, WorkStatus::InProgress),
@@ -260,7 +288,8 @@ fn reverse_directions_rejected() {
 #[test]
 fn full_lifecycle_happy_path() {
     let chain: Vec<(WorkStatus, WorkStatus, Role)> = vec![
-        (WorkStatus::Draft, WorkStatus::Ready, Role::Coordinator),
+        (WorkStatus::Draft, WorkStatus::Pending, Role::Coordinator),
+        (WorkStatus::Pending, WorkStatus::Ready, Role::Coordinator),
         (WorkStatus::Ready, WorkStatus::InProgress, Role::Coordinator),
         (WorkStatus::InProgress, WorkStatus::InReview, Role::Implementer),
         (WorkStatus::InReview, WorkStatus::Integrated, Role::Integrator),
