@@ -170,6 +170,10 @@ impl WorktreeManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // Abort the half-rebased state so subsequent git operations aren't blocked.
+            let _ = Command::new("git")
+                .args(["-C", &path.to_string_lossy(), "rebase", "--abort"])
+                .output();
             return Err(WorktreeError::GitCommand(stderr.to_string()));
         }
 

@@ -849,6 +849,14 @@ impl IntegratorAgent {
                 }
             }
 
+            // Emit bundle.merged event so implementers can rebase.
+            let integration_sha = get_git_head_sha(repo_path).unwrap_or_default();
+            let _ = self.ctx.bridge.event_tx().send(DaemonEvent::bundle_merged(
+                &tick_id,
+                &integration_sha,
+                &valid_bundle_ids,
+            ));
+
             self.ctx.info(&format!("Tick {} published successfully", tick_id));
             Ok(IntegratorCycleResult::Published {
                 tick_id: tick_id.clone(),

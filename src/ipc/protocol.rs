@@ -200,6 +200,19 @@ impl DaemonEvent {
         )
     }
 
+    /// Emitted after a Tick is published and its bundles are Merged.
+    /// Implementers drain this to rebase their worktrees against the updated integration branch.
+    pub fn bundle_merged(tick_id: &str, integration_sha: &str, merged_bundle_ids: &[String]) -> Self {
+        Self::new(
+            "bundle.merged",
+            serde_json::json!({
+                "tick_id": tick_id,
+                "integration_sha": integration_sha,
+                "merged_bundle_ids": merged_bundle_ids,
+            }),
+        )
+    }
+
     pub fn tick_published(tick_id: &str, sha: &str) -> Self {
         Self::new(
             "tick.published",

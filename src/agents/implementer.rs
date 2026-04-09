@@ -228,6 +228,8 @@ pub struct ImplementerAgent<L: LlmClient> {
     worktree_path: PathBuf,
     previous_summary: Option<String>,
     has_proposed: bool,
+    /// Consecutive rebase failures. Resets to 0 on successful rebase.
+    rebase_lag: u32,
 }
 
 impl<L: LlmClient> ImplementerAgent<L> {
@@ -240,6 +242,7 @@ impl<L: LlmClient> ImplementerAgent<L> {
             worktree_path,
             previous_summary: None,
             has_proposed: false,
+            rebase_lag: 0,
         }
     }
 
@@ -439,26 +442,49 @@ impl<L: LlmClient> ImplementerAgent<L> {
     }
 }
 
-/// Check a broadcast receiver for `tick.published` events, returning the latest tick ID if found.
-fn drain_tick_published(event_rx: &mut broadcast::Receiver<DaemonEvent>, prefix: &str) -> Option<String> {
-    tracing::debug!("{} drain_tick_published()", prefix);
-    let mut latest_tick_id: Option<String> = None;
+/// Events drained from the broadcast channel in a single pass.
+///
+/// Unified drain prevents event loss: `try_recv()` consumes messages from the channel,
+/// so two separate drain functions would drop events of the type the first doesn't handle.
+struct DrainedEvents {
+    /// Latest tick.published SHA (for staleness detection).
+    latest_tick_id: Option<String>,
+    /// Latest bundle.merged integration SHA (for rebase propagation).
+    latest_integration_sha: Option<String>,
+}
+
+/// Drain all pending events from the broadcast channel in one pass.
+///
+/// Collapses multiple events of the same type to the latest value (debouncing).
+fn drain_events(event_rx: &mut broadcast::Receiver<DaemonEvent>, prefix: &str) -> DrainedEvents {
+    tracing::debug!("{} drain_events()", prefix);
+    let mut result = DrainedEvents {
+        latest_tick_id: None,
+        latest_integration_sha: None,
+    };
     loop {
         match event_rx.try_recv() {
-            Ok(event) if event.event == "tick.published" => {
-                if let Some(tid) = event.data.get("tick_id").and_then(|v| v.as_str()) {
-                    latest_tick_id = Some(tid.to_string());
+            Ok(event) => match event.event.as_str() {
+                "tick.published" => {
+                    if let Some(tid) = event.data.get("tick_id").and_then(|v| v.as_str()) {
+                        result.latest_tick_id = Some(tid.to_string());
+                    }
                 }
-            }
-            Ok(_) => {} // ignore non-tick events
+                "bundle.merged" => {
+                    if let Some(sha) = event.data.get("integration_sha").and_then(|v| v.as_str()) {
+                        result.latest_integration_sha = Some(sha.to_string());
+                    }
+                }
+                _ => {} // discard other event types
+            },
             Err(broadcast::error::TryRecvError::Empty | broadcast::error::TryRecvError::Closed) => break,
             Err(broadcast::error::TryRecvError::Lagged(_)) => {
-                // Missed messages — continue draining from current position
+                // Missed messages - continue draining from current position
                 continue;
             }
         }
     }
-    latest_tick_id
+    result
 }
 
 impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
@@ -500,8 +526,50 @@ impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
                 );
             }
 
+            // Drain all pending events in one pass (tick.published + bundle.merged).
+            let events = drain_events(&mut event_rx, &prefix);
+
+            // Handle bundle.merged: rebase worktree against updated integration branch.
+            if let Some(ref new_sha) = events.latest_integration_sha {
+                let integ_config = &self.ctx.stores.config.integrator;
+                if integ_config.rebase_on_merge {
+                    let worktree_path = &self.worktree_path;
+                    let rebase = std::process::Command::new("git")
+                        .args(["-C", &worktree_path.to_string_lossy(), "rebase", new_sha])
+                        .output();
+                    match rebase {
+                        Ok(o) if o.status.success() => {
+                            self.rebase_lag = 0;
+                            self.ctx
+                                .info(&format!("rebased worktree to integration branch HEAD {}", new_sha));
+                        }
+                        Ok(o) => {
+                            // Rebase failed - abort to leave worktree in clean state.
+                            let _ = std::process::Command::new("git")
+                                .args(["-C", &worktree_path.to_string_lossy(), "rebase", "--abort"])
+                                .output();
+                            if self.rebase_lag >= integ_config.max_rebase_lag {
+                                return Err(eyre!(
+                                    "rebase lag exceeded max ({}), yielding",
+                                    integ_config.max_rebase_lag
+                                ));
+                            }
+                            self.rebase_lag += 1;
+                            let stderr = String::from_utf8_lossy(&o.stderr);
+                            self.ctx.warn(&format!(
+                                "rebase conflict (lag {}): {}. Continuing from pre-rebase state.",
+                                self.rebase_lag, stderr
+                            ));
+                        }
+                        Err(e) => {
+                            self.ctx.warn(&format!("git rebase command failed: {}", e));
+                        }
+                    }
+                }
+            }
+
             // Check for staleness (tick.published events since last iteration)
-            let staleness_note = if let Some(new_tick_id) = drain_tick_published(&mut event_rx, &prefix) {
+            let staleness_note = if let Some(new_tick_id) = events.latest_tick_id {
                 self.ctx
                     .info(&format!("detected stale: new tick {} published", new_tick_id));
                 let _ = self.ctx.event_tx.send(DaemonEvent::agent_staleness_detected(

@@ -423,36 +423,38 @@ async fn test_system_prompt_contains_key_instructions() {
     assert!(prompt.contains("JSON array"));
 }
 
-// --- staleness cascade tests ---
+// --- drain_events tests ---
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_empty() {
+async fn test_drain_events_empty() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     drop(tx);
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert!(result.is_none());
+    let result = drain_events(&mut rx, "[test:test]");
+    assert!(result.latest_tick_id.is_none());
+    assert!(result.latest_integration_sha.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_finds_tick() {
+async fn test_drain_events_finds_tick() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::tick_published("tick-42", "abc123"));
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert_eq!(result, Some("tick-42".to_string()));
+    let result = drain_events(&mut rx, "[test:test]");
+    assert_eq!(result.latest_tick_id, Some("tick-42".to_string()));
+    assert!(result.latest_integration_sha.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_returns_latest() {
+async fn test_drain_events_returns_latest_tick() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::tick_published("tick-1", "aaa"));
     let _ = tx.send(DaemonEvent::tick_published("tick-2", "bbb"));
     let _ = tx.send(DaemonEvent::tick_published("tick-3", "ccc"));
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert_eq!(result, Some("tick-3".to_string()));
+    let result = drain_events(&mut rx, "[test:test]");
+    assert_eq!(result.latest_tick_id, Some("tick-3".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_ignores_other_events() {
+async fn test_drain_events_ignores_other_events() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
     let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
     let _ = tx.send(DaemonEvent::transition_completed(
@@ -462,18 +464,29 @@ async fn test_drain_tick_published_ignores_other_events() {
         "proposed",
         "implementer",
     ));
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert!(result.is_none());
+    let result = drain_events(&mut rx, "[test:test]");
+    assert!(result.latest_tick_id.is_none());
+    assert!(result.latest_integration_sha.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_mixed_events() {
+async fn test_drain_events_captures_both_event_types() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
-    let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
     let _ = tx.send(DaemonEvent::tick_published("tick-5", "sha5"));
-    let _ = tx.send(DaemonEvent::record_updated("bundle", "b-1"));
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert_eq!(result, Some("tick-5".to_string()));
+    let _ = tx.send(DaemonEvent::bundle_merged("tick-5", "integ-sha-abc", &["bd-1".into()]));
+    let _ = tx.send(DaemonEvent::record_created("work", "wi-1"));
+    let result = drain_events(&mut rx, "[test:test]");
+    assert_eq!(result.latest_tick_id, Some("tick-5".to_string()));
+    assert_eq!(result.latest_integration_sha, Some("integ-sha-abc".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_drain_events_debounces_bundle_merged() {
+    let (tx, mut rx) = broadcast::channel::<DaemonEvent>(16);
+    let _ = tx.send(DaemonEvent::bundle_merged("tk-1", "sha-old", &["bd-1".into()]));
+    let _ = tx.send(DaemonEvent::bundle_merged("tk-2", "sha-new", &["bd-2".into()]));
+    let result = drain_events(&mut rx, "[test:test]");
+    assert_eq!(result.latest_integration_sha, Some("sha-new".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -686,28 +699,23 @@ async fn test_action_error_breaks_batch_before_done() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_closed_channel() {
+async fn test_drain_events_closed_channel() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(4);
-    // Send a tick, then close
     let _ = tx.send(DaemonEvent::tick_published("tick-closed", "sha"));
     drop(tx);
-    // Should still find the tick before hitting Closed
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert_eq!(result, Some("tick-closed".to_string()));
+    let result = drain_events(&mut rx, "[test:test]");
+    assert_eq!(result.latest_tick_id, Some("tick-closed".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_drain_tick_published_lagged_channel() {
-    // Create a very small buffer so sending more messages than capacity causes lag
+async fn test_drain_events_lagged_channel() {
     let (tx, mut rx) = broadcast::channel::<DaemonEvent>(2);
-    // Send 4 messages to overflow the buffer of 2 — receiver will lag
     let _ = tx.send(DaemonEvent::record_created("x", "1"));
     let _ = tx.send(DaemonEvent::record_created("x", "2"));
     let _ = tx.send(DaemonEvent::record_created("x", "3"));
     let _ = tx.send(DaemonEvent::tick_published("tick-lagged", "sha"));
-    // drain should recover from lag and find the tick
-    let result = drain_tick_published(&mut rx, "[test:test]");
-    assert_eq!(result, Some("tick-lagged".to_string()));
+    let result = drain_events(&mut rx, "[test:test]");
+    assert_eq!(result.latest_tick_id, Some("tick-lagged".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
