@@ -219,7 +219,6 @@ pub struct AssembledContext {
 struct DependencySummary {
     title: String,
     status: String,
-    files: Vec<String>,
 }
 
 /// Role-agnostic context assembly with token budgeting.
@@ -235,9 +234,8 @@ pub struct ContextBuilder<'a> {
     spec: Option<(String, String)>,
     phase: Option<(String, String)>,
     work: Option<(String, String)>,
-    // Work enrichment: acceptance criteria, file scope, dependency context
+    // Work enrichment: acceptance criteria and dependency context
     work_acceptance_criteria: Vec<String>,
-    work_files: Vec<String>,
     dependency_summaries: Vec<DependencySummary>,
     // Learning scope chain
     scope_ids: Vec<(String, LearningScope)>,
@@ -287,7 +285,6 @@ impl<'a> ContextBuilder<'a> {
             phase: None,
             work: None,
             work_acceptance_criteria: Vec::new(),
-            work_files: Vec::new(),
             dependency_summaries: Vec::new(),
             scope_ids: Vec::new(),
             work_id: None,
@@ -320,7 +317,7 @@ impl<'a> ContextBuilder<'a> {
     /// Load the work hierarchy: Brief (Work -> Plan) or Full (Work -> Phase -> Spec -> Plan).
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_work_hierarchy(work_id={})", work_id);
-        let (wi_title, wi_desc, parent_id, wi_ac, wi_rt, dep_summaries) = {
+        let (wi_title, wi_desc, parent_id, wi_ac, dep_summaries) = {
             let guard = self.stores.read_works()?;
             let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
             let deps: Vec<DependencySummary> = wi
@@ -330,7 +327,6 @@ impl<'a> ContextBuilder<'a> {
                     guard.get(dep_id).map(|dep| DependencySummary {
                         title: dep.title.clone(),
                         status: dep.status().to_string(),
-                        files: dep.files.clone(),
                     })
                 })
                 .collect();
@@ -340,14 +336,12 @@ impl<'a> ContextBuilder<'a> {
                 wi_content,
                 wi.parent_id.clone(),
                 wi.acceptance_criteria.clone(),
-                wi.files.clone(),
                 deps,
             )
         };
 
         self.work = Some((wi_title, wi_desc));
         self.work_acceptance_criteria = wi_ac.0;
-        self.work_files = wi_rt;
         self.dependency_summaries = dep_summaries;
         self.work_id = Some(work_id.to_string());
 
@@ -442,12 +436,9 @@ impl<'a> ContextBuilder<'a> {
             // relevant files from the repo so the Reviewer can verify the
             // codebase state against acceptance criteria.
             let repo_path = &self.stores.config.project.repo_path;
-            let files = {
-                let works = self.stores.read_works()?;
-                works.get(&work_id).map(|w| w.files.clone()).unwrap_or_default()
-            };
-            // Prefer touched_paths (files the Implementer verified) over files
-            let paths_to_read: Vec<String> = if touched_paths.is_empty() { files } else { touched_paths };
+            // Use touched_paths (actual files changed by the implementer).
+            // Without work.files, touched_paths is the only source of file paths.
+            let paths_to_read: Vec<String> = touched_paths;
             let mut file_contents = Vec::new();
             for path in &paths_to_read {
                 let full_path = repo_path.join(path);
@@ -602,19 +593,11 @@ impl<'a> ContextBuilder<'a> {
                 msg.push_str(&fallback);
             }
 
-            // Inline resource tags and dependencies always (fallback metadata)
-            if !self.work_files.is_empty() {
-                msg.push_str("**Allowed Files:**\n");
-                for tag in &self.work_files {
-                    msg.push_str(&format!("- {}\n", tag));
-                }
-                msg.push('\n');
-            }
+            // Inline dependencies always (fallback metadata)
             if !self.dependency_summaries.is_empty() {
                 msg.push_str("**Dependencies:**\n");
                 for dep in &self.dependency_summaries {
-                    let files = dep.files.join(", ");
-                    msg.push_str(&format!("- [{}] {} - files: {}\n", dep.status, dep.title, files));
+                    msg.push_str(&format!("- [{}] {}\n", dep.status, dep.title));
                 }
                 msg.push('\n');
             }

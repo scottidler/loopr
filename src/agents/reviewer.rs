@@ -248,24 +248,17 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
             );
         let work_title = ctx_builder.work_title().unwrap_or("unknown").to_string();
 
-        // Extract cross-module signatures for the work's declared files.
+        // Extract cross-module signatures for files actually touched by the bundle.
         let sig_section = {
-            let work_files: Vec<String> = self
+            let touched: Vec<String> = self
                 .ctx
                 .stores
                 .read_bundles()
                 .ok()
-                .and_then(|bundles| bundles.get(self.bundle_id.as_str()).map(|b| b.work_id.clone()))
-                .and_then(|work_id| {
-                    self.ctx
-                        .stores
-                        .read_works()
-                        .ok()
-                        .and_then(|works| works.get(work_id.as_str()).map(|w| w.files.clone()))
-                })
+                .and_then(|bundles| bundles.get(self.bundle_id.as_str()).map(|b| b.touched_paths.clone()))
                 .unwrap_or_default();
             let repo_path = &self.ctx.stores.config.project.repo_path;
-            extract_referenced_signatures(repo_path, &work_files)
+            extract_referenced_signatures(repo_path, &touched)
         };
 
         let assembled = ctx_builder.build(&crate::prompts::store().reviewer)?;

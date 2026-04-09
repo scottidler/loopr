@@ -626,14 +626,6 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             last_summary = summary;
         }
 
-        // Fix #6: Inject same-file deps first, then prune independent ones.
-        // inject_overlap_deps ensures works sharing a file are serialized (cycle-safe).
-        // prune_independent_deps removes false chain deps between non-overlapping works.
-        if !batch_created_ids.is_empty() {
-            inject_overlap_deps(stores, &batch_created_ids, &prefix);
-            prune_independent_deps(stores, &batch_created_ids, &prefix);
-        }
-
         // Persist state after each iteration
         coord_state.updated_at = crate::id::now_millis();
         persist_coordinator_state(stores, coord_state);

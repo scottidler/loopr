@@ -21,99 +21,17 @@ use crate::agents::{AgentKind, AgentSession, AgentStatus};
 use crate::daemon::context::Stores;
 use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::DaemonEvent;
-use crate::prompts::SECTION_AC;
 use crate::worktree::manager::WorktreeManager;
 
 /// Pre-flight acceptance-criteria check.
 ///
-/// Reads the files listed in `work.files`, presents their contents
-/// alongside `work.acceptance_criteria`, and asks haiku whether the current
-/// code already satisfies all of them.
+/// Disabled in Phase 1: the `files` field was removed from Work (reactive conflict model).
+/// File paths are no longer available at planning time, so we cannot read files to check AC.
+/// TODO: Phase 3 - re-enable by deriving file paths from worktree `touched_paths`.
 ///
-/// Returns `Some(true)` if AC are satisfied, `Some(false)` if not, and `None`
-/// if the check cannot run (empty files, empty AC, missing files, or
-/// API error). The caller treats `None` as "fall through to implementer".
-async fn preflight_ac_check(stores: &Arc<Stores>, work_id: &str) -> Option<bool> {
-    debug!("preflight_ac_check(work_id={})", work_id);
-
-    let (files, acceptance_criteria) = {
-        let works = stores.read_works().ok()?;
-        let work = works.get(work_id)?;
-        if work.files.is_empty() || work.acceptance_criteria.is_empty() {
-            debug!("preflight_ac_check: skipping {} (no files or AC)", work_id);
-            return None;
-        }
-        (work.files.clone(), work.acceptance_criteria.clone())
-    };
-
-    let repo_path = stores.config.project.repo_path.clone();
-    let mut file_contents: Vec<(String, String)> = Vec::new();
-    for tag in &files {
-        let path = repo_path.join(tag.trim_start_matches("./"));
-        match std::fs::read_to_string(&path) {
-            Ok(content) => file_contents.push((tag.clone(), content)),
-            Err(e) => debug!("preflight_ac_check: could not read {}: {}", tag, e),
-        }
-    }
-    if file_contents.is_empty() {
-        debug!("preflight_ac_check: skipping {} (no files readable)", work_id);
-        return None;
-    }
-
-    let api_key_env = &stores.config.agents.implementer.api_key_env;
-    let api_key = std::env::var(api_key_env).ok()?;
-
-    let mut prompt = format!(
-        "Do the following files already satisfy ALL of the acceptance criteria listed below?\n\n\
-         Answer with exactly one word: YES or NO.\n\n\
-         ## {}\n\n",
-        SECTION_AC
-    );
-    for ac in &acceptance_criteria.0 {
-        prompt.push_str(&format!("- {}\n", ac));
-    }
-    prompt.push_str("\n## Current File Contents\n");
-    for (path, content) in &file_contents {
-        let truncated = &content[..content.len().min(4000)];
-        prompt.push_str(&format!("\n### `{}`\n```\n{}\n```\n", path, truncated));
-    }
-
-    let body = serde_json::json!({
-        "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 16,
-        "temperature": 0.0,
-        "messages": [{"role": "user", "content": prompt}],
-    });
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(30))
-        .json(&body)
-        .send()
-        .await
-        .ok()?;
-
-    if !response.status().is_success() {
-        warn!("preflight_ac_check: API returned {}", response.status());
-        return None;
-    }
-
-    let resp_body: serde_json::Value = response.json().await.ok()?;
-    let text = resp_body
-        .get("content")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|block| block.get("text"))
-        .and_then(|t| t.as_str())?
-        .trim()
-        .to_uppercase();
-
-    info!("preflight_ac_check(work_id={}): response={:?}", work_id, text);
-    Some(text.starts_with("YES"))
+/// Returns `None` (fall through to implementer) unconditionally.
+async fn preflight_ac_check(_stores: &Arc<Stores>, _work_id: &str) -> Option<bool> {
+    None
 }
 
 /// Run a single Work item through the full Implementer lifecycle.

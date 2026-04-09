@@ -17,13 +17,11 @@ Create Works for this Phase. Each Work should be:
 - Include:
   - What to implement (specific functions, structs, traits)
   - 2-4 acceptance criteria as testable assertions (e.g., "jwt::sign() returns valid HS256 token")
-- Include files as relative file paths that will be modified (e.g., ["src/auth/jwt.rs", "src/auth/mod.rs"])
 - Declare dependencies between Works:
   - For existing Works: use their exact IDs
   - For Works in this same batch: use "batch:0" (first item), "batch:1" (second), etc.
   - ONLY add a dependency when a Work literally cannot compile or test without
     the other Work's output (e.g., Work B imports a struct defined in Work A's files).
-  - If two Works touch DIFFERENT files, they MUST have NO dependency between them.
   - Prefer fan-out: many Works depending on one scaffolding Work, NOT linear chains.
   - Example - WRONG: A->B->C  RIGHT: A->B, A->C (B and C run in parallel after A)
 

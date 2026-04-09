@@ -131,20 +131,6 @@ pub(super) fn handle_work_create(
             }
         }
 
-        let files: Vec<String> = req
-            .params
-            .get("files")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-
-        // #17: Work must have at least one file
-        if files.is_empty() {
-            return Ok(DaemonResponse::err(
-                req.id,
-                RpcError::precondition_failed("Work must have at least one file"),
-            ));
-        }
-
         let acceptance_criteria: crate::domain::criteria::AcceptanceCriteria = req
             .params
             .get("acceptance_criteria")
@@ -180,7 +166,6 @@ pub(super) fn handle_work_create(
         };
 
         let mut work = Work::new(parent_id, title);
-        work.files = files;
         work.acceptance_criteria = acceptance_criteria.clone();
         work.dependencies = dependencies;
 
@@ -602,9 +587,6 @@ pub(super) fn handle_work_update(
         }
         if let Some(assignee) = req.params.get("assignee").and_then(|v| v.as_str()) {
             wi.assignee = Some(assignee.to_string());
-        }
-        if let Some(tags) = req.params.get("files").and_then(|v| v.as_array()) {
-            wi.files = tags.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
         if let Some(criteria) = req.params.get("acceptance_criteria").and_then(|v| v.as_array()) {
             wi.acceptance_criteria = criteria
@@ -1475,7 +1457,6 @@ mod tests {
         assert_eq!(result["title"], "Updated Work");
         // description is skip_serializing - not in JSON response
         assert_eq!(result["assignee"], "agent-1");
-        assert_eq!(result["files"].as_array().unwrap().len(), 1);
         assert_eq!(result["acceptance_criteria"].as_array().unwrap().len(), 1);
         assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
     }

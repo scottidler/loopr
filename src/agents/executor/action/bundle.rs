@@ -52,17 +52,8 @@ pub(super) async fn handle_propose_bundle(
     }
 
     // For normal bundles: auto-commit any pending changes before creating
-    // the bundle, scoped to files. Skip for noop bundles.
-    let mut loose_files: Vec<String> = Vec::new();
+    // the bundle. Stage all non-artifact dirty files. Skip for noop bundles.
     if !is_noop {
-        // Fetch the Work's files for scoped staging
-        let files: Vec<String> = bridge
-            .stores()
-            .read_works()
-            .ok()
-            .and_then(|works| works.get(wi_id).map(|w| w.files.clone()))
-            .unwrap_or_default();
-
         let status_output = tokio::process::Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(worktree_path)
@@ -70,16 +61,8 @@ pub(super) async fn handle_propose_bundle(
             .await;
         if let Ok(output) = status_output {
             let dirty_files = scope::parse_porcelain_status(&String::from_utf8_lossy(&output.stdout));
-            let (in_scope, out_of_scope) = scope::partition_by_scope(&dirty_files, &files);
-
-            if files.is_empty() && !in_scope.is_empty() {
-                ctx.warn("Work has no files, staging all non-artifact dirty files");
-            }
-
-            if !out_of_scope.is_empty() {
-                ctx.info(&format!("Loose files (not in scope): {:?}", out_of_scope));
-                loose_files = out_of_scope;
-            }
+            // Empty scope = all non-artifact files are in-scope.
+            let (in_scope, _) = scope::partition_by_scope(&dirty_files, &[]);
 
             if !in_scope.is_empty() {
                 let add_out = tokio::process::Command::new("git")
@@ -98,7 +81,7 @@ pub(super) async fn handle_propose_bundle(
                         .await;
                     match commit_out {
                         Ok(out) if out.status.success() => {
-                            ctx.info("Auto-committed in-scope changes before propose_bundle");
+                            ctx.info("Auto-committed pending changes before propose_bundle");
                         }
                         _ => {
                             ctx.info("No pending changes to auto-commit before propose_bundle");
@@ -175,9 +158,6 @@ pub(super) async fn handle_propose_bundle(
     }
     if let Some(tick_id) = &base_tick_id {
         params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
-    }
-    if !loose_files.is_empty() {
-        params["loose_files"] = serde_json::json!(loose_files);
     }
     if !touched_paths.is_empty() {
         params["touched_paths"] = serde_json::json!(touched_paths);

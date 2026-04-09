@@ -1183,18 +1183,17 @@ impl IntegratorAgent {
 }
 
 /// Classify whether a merge failure is structural (multiple bundles in the same tick
-/// declared ownership of the same file) or retryable.
+/// touched the same file) or retryable.
 ///
 /// Returns `Some((conflicting_files, conflicting_work_ids))` for structural conflicts,
 /// or `None` when no file overlap is detected (treat as retryable).
 ///
-/// This uses bundle-declared `work.files` rather than live git conflict markers because
-/// `merge --abort` cleans up conflict state before this function is called.
+/// Uses `bundle.touched_paths` (actual git diff output) rather than the old `work.files`
+/// (LLM-predicted, often empty or inaccurate).
 fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<String>, HashSet<String>)> {
     let bundles = stores.read_bundles().ok()?;
-    let works = stores.read_works().ok()?;
 
-    // Map file → first work_id that claimed it.
+    // Map file → first work_id that touched it.
     let mut file_to_work: HashMap<String, String> = HashMap::new();
     let mut conflicting_files: HashSet<String> = HashSet::new();
     let mut conflicting_works: HashSet<String> = HashSet::new();
@@ -1203,10 +1202,7 @@ fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<
         let Some(bundle) = bundles.get(bid.as_str()) else {
             continue;
         };
-        let Some(work) = works.get(bundle.work_id.as_str()) else {
-            continue;
-        };
-        for file in &work.files {
+        for file in &bundle.touched_paths {
             if let Some(first_work) = file_to_work.get(file) {
                 conflicting_files.insert(file.clone());
                 conflicting_works.insert(first_work.clone());

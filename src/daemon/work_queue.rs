@@ -4,7 +4,6 @@ use tracing::{debug, warn};
 
 use crate::agents::AgentKind;
 use crate::daemon::context::Stores;
-use crate::domain::lock::LockStatus;
 use crate::domain::work::WorkStatus;
 
 /// Priority score for a Ready Work item. Higher = picked first.
@@ -102,19 +101,9 @@ pub fn next_assignable_work(stores: &Arc<Stores>) -> Option<String> {
 /// Higher score = higher priority.
 fn compute_priority(
     work: &crate::domain::work::Work,
-    locks: &std::sync::RwLockReadGuard<'_, std::collections::HashMap<String, crate::domain::lock::Lock>>,
+    _locks: &std::sync::RwLockReadGuard<'_, std::collections::HashMap<String, crate::domain::lock::Lock>>,
 ) -> i64 {
     let mut score: i64 = 0;
-
-    // Prefer Works with no resource contention (no active locks on their files)
-    let has_contention = work.files.iter().any(|tag| {
-        locks
-            .values()
-            .any(|l| l.resource == *tag && l.status() == LockStatus::Active)
-    });
-    if !has_contention {
-        score += 100;
-    }
 
     // Prefer Works with fewer/no dependencies (can start immediately)
     score += (10 - work.dependencies.len().min(10) as i64) * 10;
@@ -132,7 +121,6 @@ fn compute_priority(
 mod tests {
     use super::*;
     use crate::agents::{AgentSession, AgentStatus};
-    use crate::domain::lock::Lock;
     use crate::domain::work::Work;
 
     fn test_stores() -> Arc<Stores> {
@@ -237,27 +225,22 @@ mod tests {
     }
 
     #[test]
-    fn test_priority_no_contention_over_contention() {
+    fn test_priority_fewer_attempts_over_more_attempts() {
         let stores = test_stores();
-        // Work A: has contention (active lock on its resource_tag)
+        // Work A: 3 failed attempts (penalized)
         let mut wa = Work::new("phase-1".to_string(), "Work A".to_string());
         wa.force_status(WorkStatus::Ready);
-        wa.files = vec!["src/main.rs".to_string()];
+        wa.attempt_count = 3;
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
 
-        // Create active lock on src/main.rs
-        let lock = Lock::new("src/main.rs".to_string(), "wi-other".to_string(), "coord".to_string());
-        stores.locks.write().unwrap().insert(lock.id.clone(), lock);
-
-        // Work B: no contention
+        // Work B: no attempts
         let mut wb = Work::new("phase-1".to_string(), "Work B".to_string());
         wb.force_status(WorkStatus::Ready);
-        wb.files = vec!["src/lib.rs".to_string()];
         let wb_id = wb.id.clone();
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
-        // Work B should be picked (no contention = +100)
+        // Work B should be picked (fewer attempts = higher score)
         assert_eq!(next_assignable_work(&stores), Some(wb_id));
     }
 
@@ -276,14 +259,14 @@ mod tests {
         let dep2_id = dep2.id.clone();
         stores.works.write().unwrap().insert(dep2_id.clone(), dep2);
 
-        // Work A: 2 deps (score: 100 + 80 = 180)
+        // Work A: 2 deps (deps score: 80)
         let mut wa = Work::new("phase-1".to_string(), "Work A".to_string());
         wa.force_status(WorkStatus::Ready);
         wa.dependencies = vec![dep1_id.clone(), dep2_id.clone()];
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
 
-        // Work B: 0 deps (score: 100 + 100 = 200)
+        // Work B: 0 deps (deps score: 100)
         let mut wb = Work::new("phase-1".to_string(), "Work B".to_string());
         wb.force_status(WorkStatus::Ready);
         let wb_id = wb.id.clone();
@@ -317,17 +300,14 @@ mod tests {
     fn test_multiple_ready_works_returns_highest_priority() {
         let stores = test_stores();
 
-        // Work A: has resource tags that are locked
-        let mut wa = Work::new("phase-1".to_string(), "Locked".to_string());
+        // Work A: penalized by attempt_count
+        let mut wa = Work::new("phase-1".to_string(), "Penalized".to_string());
         wa.force_status(WorkStatus::Ready);
-        wa.files = vec!["contested.rs".to_string()];
+        wa.attempt_count = 2;
         let wa_id = wa.id.clone();
         stores.works.write().unwrap().insert(wa_id.clone(), wa);
 
-        let lock = Lock::new("contested.rs".to_string(), "other".to_string(), "coord".to_string());
-        stores.locks.write().unwrap().insert(lock.id.clone(), lock);
-
-        // Work B: no contention, no deps
+        // Work B: no penalty, no deps - highest priority
         let mut wb = Work::new("phase-1".to_string(), "Free".to_string());
         wb.force_status(WorkStatus::Ready);
         let wb_id = wb.id.clone();

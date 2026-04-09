@@ -179,48 +179,6 @@ pub(super) fn handle_bundle_create(
             ));
         }
 
-        // Layer 3: Scope validation - touched_paths must be subset of Work's files.
-        // Phase 1: warn only (log but don't reject).
-        {
-            let works = stores.read_works()?;
-            if let Some(work) = works.get(&work_id)
-                && !work.files.is_empty()
-                && !bundle.touched_paths.is_empty()
-            {
-                let violations: Vec<&str> = bundle
-                    .touched_paths
-                    .iter()
-                    .filter(|p| {
-                        let norm_p = p.strip_prefix("./").unwrap_or(p);
-                        !work
-                            .files
-                            .iter()
-                            .any(|tag| tag.strip_prefix("./").unwrap_or(tag) == norm_p)
-                    })
-                    .map(|p| p.as_str())
-                    .collect();
-                if !violations.is_empty() {
-                    tracing::warn!(
-                        "Bundle {} touches files outside Work {}'s files: {:?}. Allowed: {:?}",
-                        bundle.id,
-                        work_id,
-                        violations,
-                        work.files
-                    );
-                }
-            }
-        }
-
-        // Parse and persist loose_files from RPC params
-        if let Some(files) = req.params.get("loose_files").and_then(|v| v.as_array()) {
-            bundle.loose_files = files
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                // Belt-and-suspenders: filter known Loopr artifacts even if Layer 0 missed them
-                .filter(|f| !f.starts_with(".taskstore/") && !f.starts_with(".worktrees/") && f != "loopr.yml")
-                .collect();
-        }
-
         let bundle_json = match serde_json::to_value(&bundle) {
             Ok(v) => v,
             Err(e) => return Ok(DaemonResponse::err(req.id, RpcError::internal(&e.to_string()))),

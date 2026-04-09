@@ -35,8 +35,6 @@ pub struct ChildEntry {
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
-    #[serde(default)]
-    pub files: Vec<String>,
 }
 
 /// In-memory child record produced by decompose_into.
@@ -53,7 +51,6 @@ struct ChildRecord {
     dependencies: Vec<String>,
     unresolved_dep_titles: Vec<String>,
     acceptance_criteria: Vec<String>,
-    files: Vec<String>,
 }
 
 /// Result of a template validation call.
@@ -228,11 +225,6 @@ fn decomposition_tool_schema() -> serde_json::Value {
                                 "items": {"type": "string"},
                                 "description": "Acceptance criteria assertions for this document"
                             },
-                            "files": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Files this work item will create or modify (relative paths)"
-                            }
                         },
                         "required": ["title", "content"]
                     }
@@ -553,7 +545,6 @@ async fn decompose_into<H: HttpClient + Sync>(
                 dependencies: Vec::new(),
                 unresolved_dep_titles: Vec::new(),
                 acceptance_criteria: ac,
-                files: child.files.clone(),
             },
             child.dependencies.clone(),
         ));
@@ -939,7 +930,6 @@ fn records_to_hierarchy(
                     })
                     .cloned()
                     .collect();
-                work.files = child.files.clone();
                 works.push(work);
             }
             DocKind::Plan => continue,
@@ -1081,7 +1071,6 @@ mod tests {
             content: "# Spec\n\n## Overview\n\nThe core.".to_string(),
             dependencies: vec!["Setup".to_string()],
             acceptance_criteria: vec!["it works".to_string()],
-            files: vec!["src/core.py".to_string()],
         };
         let json = serde_json::to_string(&entry).unwrap();
         let restored: ChildEntry = serde_json::from_str(&json).unwrap();
@@ -1095,21 +1084,14 @@ mod tests {
         let entry: ChildEntry = serde_json::from_str(json).unwrap();
         assert!(entry.dependencies.is_empty());
         assert!(entry.acceptance_criteria.is_empty());
-        assert!(entry.files.is_empty());
     }
 
     #[test]
-    fn test_child_entry_files_roundtrip() {
-        let entry = ChildEntry {
-            title: "T".to_string(),
-            content: "C".to_string(),
-            dependencies: vec![],
-            acceptance_criteria: vec![],
-            files: vec!["main.py".to_string(), "test_main.py".to_string()],
-        };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: ChildEntry = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.files, vec!["main.py", "test_main.py"]);
+    fn test_child_entry_backward_compat_ignores_files() {
+        // Old LLM responses that include "files" must still deserialize (serde ignores unknown fields).
+        let json = r#"{"title":"T","content":"C","files":["main.py"]}"#;
+        let entry: ChildEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.title, "T");
     }
 
     // --- decompose with mock LLM ---
@@ -1863,7 +1845,6 @@ mod tests {
             dependencies: vec![],
             unresolved_dep_titles: vec![],
             acceptance_criteria: vec!["spec passes".to_string()],
-            files: vec![],
         };
         let phase = ChildRecord {
             id: phase_id.clone(),
@@ -1874,7 +1855,6 @@ mod tests {
             dependencies: vec![],
             unresolved_dep_titles: vec![],
             acceptance_criteria: vec!["phase passes".to_string()],
-            files: vec![],
         };
         let work = ChildRecord {
             id: work_id,
@@ -1885,7 +1865,6 @@ mod tests {
             dependencies: vec![],
             unresolved_dep_titles: vec![],
             acceptance_criteria: vec!["assert tests pass".to_string()],
-            files: vec![],
         };
 
         let ac = AcceptanceCriteria(vec!["plan passes".to_string()]);
@@ -1966,7 +1945,6 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec![],
-                files: vec![],
             },
             ChildRecord {
                 id: phase_id.clone(),
@@ -1977,7 +1955,6 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec![],
-                files: vec![],
             },
             ChildRecord {
                 id: wa_id.clone(),
@@ -1988,7 +1965,6 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec!["assert a()".to_string()],
-                files: vec![],
             },
             ChildRecord {
                 id: wb_id,
@@ -1999,7 +1975,6 @@ mod tests {
                 dependencies: vec![wa_id.clone()],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec!["assert b()".to_string()],
-                files: vec![],
             },
         ];
 
@@ -2013,10 +1988,10 @@ mod tests {
     }
 
     #[test]
-    fn test_records_to_hierarchy_files_empty() {
+    fn test_records_to_hierarchy_work_produced() {
         let (plan_id, plan_title, plan_markdown, plan_ac, records) = build_test_records();
         let h = records_to_hierarchy(&plan_id, &plan_title, &plan_markdown, plan_ac, &records).unwrap();
-        assert!(h.works[0].files.is_empty());
+        assert!(!h.works.is_empty());
     }
 
     #[test]
@@ -2036,7 +2011,6 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec![],
-                files: vec![],
             },
             ChildRecord {
                 id: phase_id.clone(),
@@ -2047,7 +2021,6 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec![],
-                files: vec![],
             },
             ChildRecord {
                 id: work_id,
@@ -2058,14 +2031,13 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec!["assert module imports".to_string()],
-                files: vec!["src/module.py".to_string(), "tests/test_module.py".to_string()],
             },
         ];
 
         let ac = AcceptanceCriteria(vec![]);
         let h = records_to_hierarchy(&plan_id, "Plan", "# Plan\n\nA plan.", ac, &records).unwrap();
 
-        assert_eq!(h.works[0].files, vec!["src/module.py", "tests/test_module.py"]);
+        assert!(!h.works.is_empty());
     }
 
     #[test]
@@ -2087,7 +2059,6 @@ mod tests {
             dependencies: vec![phase_id.clone()],
             unresolved_dep_titles: vec![],
             acceptance_criteria: vec![],
-            files: vec![],
         }];
 
         let ac = AcceptanceCriteria(vec![]);
@@ -2117,7 +2088,6 @@ mod tests {
                 dependencies: vec![],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec![],
-                files: vec![],
             },
             ChildRecord {
                 id: spec_b_id.clone(),
@@ -2128,7 +2098,6 @@ mod tests {
                 dependencies: vec![spec_a_id.clone()],
                 unresolved_dep_titles: vec![],
                 acceptance_criteria: vec![],
-                files: vec![],
             },
         ];
 

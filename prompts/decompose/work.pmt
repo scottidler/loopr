@@ -17,8 +17,7 @@ Respond with a JSON array of work items. Each work item is an object:
     "title": "Short descriptive title",
     "content": "Full markdown content following the Work template",
     "dependencies": [],
-    "acceptance_criteria": ["criterion 1", "criterion 2"],
-    "files": ["src/main.py", "tests/test_main.py"]
+    "acceptance_criteria": ["criterion 1", "criterion 2"]
   }
 ]
 ```
@@ -27,12 +26,12 @@ Respond with a JSON array of work items. Each work item is an object:
 
 1. Each Work must follow the template provided in the "## Template" section below EXACTLY - use the same section headings, include all conditional sections that are relevant, and write Acceptance Criteria as assert statements (never prose)
 2. Dependencies are same-phase Work titles only. Do NOT reference Works from other Phases.
-   The ONLY valid reason for a dependency is a same-file conflict.
+   The ONLY valid reason for a dependency is when a Work literally cannot compile or
+   test without another Work's output being present in the repo.
 3. acceptance_criteria must be concrete, testable assertions (assert statements)
 4. Do NOT include any text outside the JSON array
 5. Produce 1-5 Work items per Phase. Prefer fewer, larger items over many small serial items. Two independent items beat five dependent ones.
 6. Each Work must have at least one acceptance criterion
-7. Each Work must include a "files" array listing every file it will create or modify. The orchestrator uses this to detect conflicts and schedule non-overlapping items concurrently.
 
 ## Parallelism
 
@@ -43,25 +42,11 @@ This is their primary design purpose. When decomposing:
   output of another work item to start, that is a dependency. If they just
   need to know the interface contract (function signatures, API shape), that
   is NOT a dependency - the contract is already defined in the Spec.
-- A dependency chain of 3+ items (A -> B -> C) is a signal you have
-  over-decomposed. Collapse the chain into one work item.
-- Work items that touch different files can always run in parallel. Declare
-  files accurately so the orchestrator can schedule them concurrently.
-
-## Same-File Rule
-
-If two or more Work items target the SAME file, they MUST have sequential dependencies
-between them. The first item creates the file; each subsequent item depends on the
-previous one. This is non-negotiable - parallel writers on the same file produce
-unresolvable merge conflicts.
-
-Order by: scaffolding/structure first, then content additions, then tests that
-import from earlier content.
-
-Example: if three Works all write to `test_api.py`:
-  - Work A (Fixtures): files=["tests/conftest.py", "tests/test_api.py"], deps=[]
-  - Work B (Health tests): files=["tests/test_api.py"], deps=["Fixtures"]
-  - Work C (CRUD tests): files=["tests/test_api.py"], deps=["Health tests"]
+- Prefer fan-out: many independent Work items, NOT linear chains.
+  Two independent items beat five dependent ones.
+- If multiple Work items write to the same file, that is fine. The Integrator
+  handles merge conflicts at integration time. Do NOT add dependencies
+  between Work items solely because they touch the same file.
 
 ## AC Grounding Rule
 

@@ -51,8 +51,6 @@ pub struct Work {
     pub title: String,
     pub assignee: Option<String>,
     status: WorkStatus,
-    #[serde(alias = "resource_tags")]
-    pub files: Vec<String>,
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
@@ -113,7 +111,6 @@ impl Work {
             title,
             assignee: None,
             status: WorkStatus::Draft,
-            files: Vec::new(),
             dependencies: Vec::new(),
             acceptance_criteria: AcceptanceCriteria::default(),
             attempt_count: 0,
@@ -148,7 +145,6 @@ impl DocMarkdown for Work {
         if let Some(ref assignee) = self.assignee {
             m.push(("assignee".into(), FmValue::Text(assignee.clone())));
         }
-        m.push(("files".into(), FmValue::List(self.files.clone())));
         m.push(("dependencies".into(), FmValue::List(self.dependencies.clone())));
         m.push((
             "acceptance-criteria".into(),
@@ -230,7 +226,6 @@ mod tests {
         assert_eq!(wi.title, "Implement JWT");
         assert_eq!(wi.status(), WorkStatus::Draft);
         assert!(wi.assignee.is_none());
-        assert!(wi.files.is_empty());
         assert!(wi.dependencies.is_empty());
         assert!(!wi.id.is_empty());
         assert!(wi.created_at > 0);
@@ -241,7 +236,6 @@ mod tests {
     fn test_work_serde_roundtrip() {
         let mut wi = Work::new("phase-456".to_string(), "Test WI".to_string());
         wi.assignee = Some("alice".to_string());
-        wi.files = vec!["src/auth.rs".to_string()];
         wi.dependencies = vec!["wi-001".to_string()];
 
         let json = serde_json::to_string(&wi).unwrap();
@@ -249,9 +243,27 @@ mod tests {
         assert_eq!(wi.id, deserialized.id);
         assert_eq!(wi.parent_id, deserialized.parent_id);
         assert_eq!(wi.assignee, deserialized.assignee);
-        assert_eq!(wi.files, deserialized.files);
         assert_eq!(wi.dependencies, deserialized.dependencies);
         assert_eq!(wi.status(), deserialized.status());
+    }
+
+    #[test]
+    fn test_work_serde_backward_compat_ignores_files() {
+        // Old JSONL records with a "files" field must still deserialize (serde ignores unknown fields).
+        let json = serde_json::json!({
+            "id": "wk-test",
+            "parent_id": "phase-1",
+            "title": "Old Work",
+            "status": "Draft",
+            "files": ["src/main.rs"],
+            "dependencies": [],
+            "acceptance_criteria": [],
+            "attempt_count": 0,
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let work: Work = serde_json::from_value(json).unwrap();
+        assert_eq!(work.id, "wk-test");
     }
 
     #[test]

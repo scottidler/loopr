@@ -1034,14 +1034,12 @@ fn setup_stores_with_enrichment(dir: &std::path::Path) -> (Stores, String, Strin
 
     // Dependency work (already done)
     let mut dep_work = Work::new(phase_id.clone(), "Create model".into());
-    dep_work.files = vec!["src/model.rs".into()];
     dep_work.force_status(crate::domain::work::WorkStatus::Done);
     let dep_id = dep_work.id.clone();
     stores.works.write().unwrap().insert(dep_work.id.clone(), dep_work);
 
     // Main work (depends on dep_work)
     let mut wi = Work::new(phase_id, "Write tests".into());
-    wi.files = vec!["tests/model.rs".into()];
     wi.acceptance_criteria =
         crate::domain::criteria::AcceptanceCriteria(vec!["All tests pass".into(), "Coverage above 80%".into()]);
     wi.dependencies = vec![dep_id.clone()];
@@ -1065,11 +1063,9 @@ fn test_load_work_hierarchy_enrichment() {
         builder.work_acceptance_criteria,
         vec!["All tests pass", "Coverage above 80%"]
     );
-    assert_eq!(builder.work_files, vec!["tests/model.rs"]);
     assert_eq!(builder.dependency_summaries.len(), 1);
     assert_eq!(builder.dependency_summaries[0].title, "Create model");
     assert_eq!(builder.dependency_summaries[0].status, "Done");
-    assert_eq!(builder.dependency_summaries[0].files, vec!["src/model.rs"]);
 }
 
 #[test]
@@ -1087,14 +1083,9 @@ fn test_build_renders_enrichment() {
     assert!(assembled.user_message.contains("**Acceptance Criteria:**"));
     assert!(assembled.user_message.contains("- All tests pass"));
     assert!(assembled.user_message.contains("- Coverage above 80%"));
-    assert!(assembled.user_message.contains("**Allowed Files:**"));
-    assert!(assembled.user_message.contains("- tests/model.rs"));
+    assert!(!assembled.user_message.contains("**Allowed Files:**"));
     assert!(assembled.user_message.contains("**Dependencies:**"));
-    assert!(
-        assembled
-            .user_message
-            .contains("[Done] Create model - files: src/model.rs")
-    );
+    assert!(assembled.user_message.contains("[Done] Create model"));
 }
 
 #[test]
@@ -1109,7 +1100,7 @@ fn test_build_omits_empty_enrichment() {
         .with_footer("Go.".to_string());
 
     let assembled = builder.build("system").unwrap();
-    // Work from setup_stores has no acceptance_criteria, files, or dependencies
+    // Work from setup_stores has no acceptance_criteria or dependencies
     assert!(!assembled.user_message.contains("**Acceptance Criteria:**"));
     assert!(!assembled.user_message.contains("**Allowed Files:**"));
     assert!(!assembled.user_message.contains("**Dependencies:**"));

@@ -1264,13 +1264,13 @@ fn test_classify_conflict_no_overlap_returns_none() {
     let dir = TestDir::new("loopr-intg-cc1");
     let stores = test_stores(&dir);
 
-    let mut wk_a = Work::new("phase-1".into(), "Work A".into());
-    wk_a.files = vec!["src/a.rs".into()];
-    let mut wk_b = Work::new("phase-1".into(), "Work B".into());
-    wk_b.files = vec!["src/b.rs".into()];
+    let wk_a = Work::new("phase-1".into(), "Work A".into());
+    let wk_b = Work::new("phase-1".into(), "Work B".into());
 
     let mut bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
+    bundle_a.touched_paths = vec!["src/a.rs".into()];
     let mut bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
+    bundle_b.touched_paths = vec!["src/b.rs".into()];
     bundle_a.force_status(crate::domain::bundle::BundleStatus::Reviewed);
     bundle_b.force_status(crate::domain::bundle::BundleStatus::Reviewed);
 
@@ -1288,7 +1288,7 @@ fn test_classify_conflict_no_overlap_returns_none() {
         .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
-    assert!(result.is_none(), "non-overlapping files should return None");
+    assert!(result.is_none(), "non-overlapping touched_paths should return None");
 }
 
 #[test]
@@ -1296,13 +1296,13 @@ fn test_classify_conflict_with_overlap_returns_some() {
     let dir = TestDir::new("loopr-intg-cc2");
     let stores = test_stores(&dir);
 
-    let mut wk_a = Work::new("phase-1".into(), "Work A".into());
-    wk_a.files = vec!["src/database.py".into(), "src/models.py".into()];
-    let mut wk_b = Work::new("phase-1".into(), "Work B".into());
-    wk_b.files = vec!["src/database.py".into(), "tests/test_db.py".into()]; // database.py is shared
+    let wk_a = Work::new("phase-1".into(), "Work A".into());
+    let wk_b = Work::new("phase-1".into(), "Work B".into());
 
     let mut bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
+    bundle_a.touched_paths = vec!["src/database.py".into(), "src/models.py".into()];
     let mut bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
+    bundle_b.touched_paths = vec!["src/database.py".into(), "tests/test_db.py".into()]; // database.py is shared
     bundle_a.force_status(crate::domain::bundle::BundleStatus::Reviewed);
     bundle_b.force_status(crate::domain::bundle::BundleStatus::Reviewed);
 
@@ -1322,7 +1322,7 @@ fn test_classify_conflict_with_overlap_returns_some() {
         .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
-    assert!(result.is_some(), "overlapping files should return Some");
+    assert!(result.is_some(), "overlapping touched_paths should return Some");
     let (files, works) = result.unwrap();
     assert!(files.contains("src/database.py"));
     assert!(works.contains(&wk_a_id));
@@ -1335,4 +1335,33 @@ fn test_classify_conflict_empty_bundle_list_returns_none() {
     let stores = test_stores(&dir);
     let result = classify_conflict(&stores, &[]);
     assert!(result.is_none(), "empty bundle list should return None");
+}
+
+#[test]
+fn test_classify_conflict_empty_touched_paths_returns_none() {
+    let dir = TestDir::new("loopr-intg-cc4");
+    let stores = test_stores(&dir);
+
+    let wk_a = Work::new("phase-1".into(), "Work A".into());
+    let wk_b = Work::new("phase-1".into(), "Work B".into());
+
+    // Both bundles have empty touched_paths - should not trigger conflict
+    let bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
+    let bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
+
+    stores.works.write().unwrap().insert(wk_a.id.clone(), wk_a);
+    stores.works.write().unwrap().insert(wk_b.id.clone(), wk_b);
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .insert(bundle_a.id.clone(), bundle_a.clone());
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .insert(bundle_b.id.clone(), bundle_b.clone());
+
+    let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
+    assert!(result.is_none(), "empty touched_paths should return None");
 }

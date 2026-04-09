@@ -87,11 +87,6 @@ pub struct Bundle {
     /// and pre-merge verification that the branch still has the expected commits.
     #[serde(default)]
     pub head_commit: Option<String>,
-    /// Files modified in the worktree but excluded from the bundle because
-    /// they fall outside the Work's files scope. Observable signal
-    /// for downstream agents to detect scope gaps.
-    #[serde(default)]
-    pub loose_files: Vec<String>,
     status: BundleStatus,
     pub created_at: i64,
     pub updated_at: i64,
@@ -139,7 +134,6 @@ impl Bundle {
             locks_used: Vec::new(),
             noop_reason: None,
             head_commit: None,
-            loose_files: Vec::new(),
             status: BundleStatus::Proposed,
             created_at: now,
             updated_at: now,
@@ -298,6 +292,26 @@ mod tests {
         });
         let bundle: Bundle = serde_json::from_value(json).unwrap();
         assert!(bundle.head_commit.is_none());
+    }
+
+    #[test]
+    fn test_bundle_serde_backward_compat_ignores_loose_files() {
+        // Old JSONL records with a "loose_files" field must still deserialize (serde ignores unknown fields).
+        let json = serde_json::json!({
+            "id": "bd-test",
+            "work_id": "wi-1",
+            "base_tick_id": null,
+            "branch_name": "agent/wi-1",
+            "touched_paths": [],
+            "claims": [],
+            "verification": "",
+            "loose_files": ["src/extra.rs"],
+            "status": "Proposed",
+            "created_at": 1000,
+            "updated_at": 1000
+        });
+        let bundle: Bundle = serde_json::from_value(json).unwrap();
+        assert_eq!(bundle.id, "bd-test");
     }
 
     #[test]
