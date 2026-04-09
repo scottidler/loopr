@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Loopr E2E health check
-# Usage: ./check.sh [target-dir]
-# Defaults to /tmp/loopr/e2e/lua-todo/latest
+# Usage: ./check.sh <target-dir>
+# Example: ./check.sh /tmp/loopr/e2e/python-api/latest
 
-TARGET="${1:-/tmp/loopr/e2e/lua-todo/latest}"
+TARGET="${1}"
+
+if [ -z "$TARGET" ]; then
+    echo "Usage: $0 <target-dir>"
+    echo "Example: $0 /tmp/loopr/e2e/python-api/latest"
+    exit 1
+fi
 
 section() { echo; echo "=== $* ==="; }
 ok()      { echo "[OK]    $*"; }

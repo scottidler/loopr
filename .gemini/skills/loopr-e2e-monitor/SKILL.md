@@ -72,13 +72,20 @@ To accurately observe the run, follow these 6 keys:
 5. **Don't alert on old data:** The `.taskstore/*.jsonl` files are **append-only event logs**. A work item might have been `InProgress` 5 minutes ago, but if you look at the *latest* entry, the bundle is `Merged`. Deduplicate by ID and only look at the last record before drawing conclusions.
 6. **Correlate Taskstore with CLI Run State:** Always ask, "If the workflow is complete, did the orchestrator exit successfully?" A successful task sequence is a failure if the process hangs. Do not blindly report "Success" just because Works are `Done`.
 
+## Target Discovery & E2E Script
+
+You must dynamically understand the available targets rather than relying on hardcoded paths:
+1. **Target Definitions:** E2E targets are defined as shell scripts in `bin/e2e-targets/` (e.g., `bin/e2e-targets/python-api.sh`).
+2. **E2E Script:** The actual E2E test runner is `bin/e2e`. You can run `bin/e2e ls` to list available targets.
+3. **Run Paths:** The runner automatically outputs runs to `/tmp/loopr/e2e/<target>/<timestamp>`. The easiest way to access the active run is always via the symlink: `/tmp/loopr/e2e/<target>/latest`.
+
 ## Interpreting Script Output
 
 The `scripts/check.sh` emits three marker levels: `[OK]`, `[WARN]`, `[ALERT]`.
 
-If you need to investigate a specific target project, run:
+When asked to investigate a specific target (e.g., `python-api`), resolve its latest run dynamically:
 ```bash
-scripts/check.sh /tmp/loopr/e2e/lua-todo/latest
+scripts/check.sh /tmp/loopr/e2e/python-api/latest
 ```
 
 ## Critical Alert Conditions
@@ -96,7 +103,7 @@ When any `[ALERT]` fires, **verify it against the 6 observation keys above**, th
 
 If asked to monitor continuously:
 1. Re-run `scripts/check.sh` every 30 seconds.
-2. Tail the E2E log (`/tmp/loopr-e2e-output.log`) to observe live FSM transitions and look for hanging processes.
+2. Tail the daemon log (`/tmp/loopr/e2e/<target>/latest/daemon.log`) to observe live FSM transitions and look for hanging processes.
 3. Report only **changes in status** (new alerts, resolved alerts, or state transitions).
 4. Stop when the user says to stop or when the run reaches a terminal state (all works Done AND daemon exits cleanly).
 

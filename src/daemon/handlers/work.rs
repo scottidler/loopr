@@ -367,13 +367,12 @@ fn unblock_dependents(stores: &Arc<Stores>, done_id: &str, event_tx: &broadcast:
             warn!("unblock_dependents: failed to persist {}: {}", unblock_id, e);
             continue;
         }
-        debug!("unblock_dependents: {} Blocked -> Ready (dependency {} Done)", unblock_id, done_id);
+        debug!(
+            "unblock_dependents: {} Blocked -> Ready (dependency {} Done)",
+            unblock_id, done_id
+        );
         let _ = event_tx.send(DaemonEvent::transition_completed(
-            "work",
-            unblock_id,
-            "Blocked",
-            "Ready",
-            "system",
+            "work", unblock_id, "Blocked", "Ready", "system",
         ));
     }
 }

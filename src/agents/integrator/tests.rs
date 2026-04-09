@@ -1276,8 +1276,16 @@ fn test_classify_conflict_no_overlap_returns_none() {
 
     stores.works.write().unwrap().insert(wk_a.id.clone(), wk_a);
     stores.works.write().unwrap().insert(wk_b.id.clone(), wk_b);
-    stores.bundles.write().unwrap().insert(bundle_a.id.clone(), bundle_a.clone());
-    stores.bundles.write().unwrap().insert(bundle_b.id.clone(), bundle_b.clone());
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .insert(bundle_a.id.clone(), bundle_a.clone());
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
     assert!(result.is_none(), "non-overlapping files should return None");
@@ -1302,8 +1310,16 @@ fn test_classify_conflict_with_overlap_returns_some() {
     let wk_b_id = wk_b.id.clone();
     stores.works.write().unwrap().insert(wk_a.id.clone(), wk_a);
     stores.works.write().unwrap().insert(wk_b.id.clone(), wk_b);
-    stores.bundles.write().unwrap().insert(bundle_a.id.clone(), bundle_a.clone());
-    stores.bundles.write().unwrap().insert(bundle_b.id.clone(), bundle_b.clone());
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .insert(bundle_a.id.clone(), bundle_a.clone());
+    stores
+        .bundles
+        .write()
+        .unwrap()
+        .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
     assert!(result.is_some(), "overlapping files should return Some");
