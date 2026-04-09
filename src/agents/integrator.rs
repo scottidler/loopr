@@ -621,6 +621,30 @@ impl IntegratorAgent {
                 }
                 Err(e) => {
                     self.ctx.warn(&format!("merge failed: {}", e));
+
+                    // Reset integration branch to pre-tick HEAD, rolling back any
+                    // partial merges from earlier bundles in this tick.
+                    if let Some(ref sha) = pre_merge_sha {
+                        // Abort any in-progress merge first.
+                        let _ = std::process::Command::new("git")
+                            .args(["merge", "--abort"])
+                            .current_dir(repo_path)
+                            .output();
+                        let reset = std::process::Command::new("git")
+                            .args(["reset", "--hard", sha])
+                            .current_dir(repo_path)
+                            .output();
+                        match reset {
+                            Ok(o) if o.status.success() => {
+                                self.ctx
+                                    .info(&format!("reset integration branch to pre-tick HEAD {}", sha));
+                            }
+                            _ => {
+                                self.ctx.warn(&format!("failed to reset integration branch to {}", sha));
+                            }
+                        }
+                    }
+
                     let fail_resp = self.ctx.bridge.request(
                         "tick.transition",
                         serde_json::json!({
@@ -667,7 +691,7 @@ impl IntegratorAgent {
                                 "structural merge conflict detected: works={:?} files={:?}",
                                 conflicting_work_ids, conflicting_files
                             ));
-                            self.escalate_structural_conflict(
+                            self.combine_conflicting_works(
                                 &conflicting_work_ids,
                                 &conflicting_files,
                                 &valid_bundle_ids,
@@ -1140,28 +1164,185 @@ impl IntegratorAgent {
         }
     }
 
-    /// After rejecting a bundle, reset the parent Work to Ready so it can be re-assigned.
-    /// Escalate a structural merge conflict to the coordinator via a Learning.
+    /// Combine conflicting works into a single new Work after a structural merge conflict.
     ///
-    /// Transitions conflicting works directly to `Abandoned` (standard `InReview → Abandoned`
-    /// transition, Coordinator role) so no worker can re-pick them up before the coordinator
-    /// acts. Non-conflicting works from the same tick are reset to Ready for normal retry.
-    /// A single `STRUCTURAL CONFLICT` Learning is created so the coordinator can detect it
-    /// and create replacement Works with explicit per-file ownership.
-    fn escalate_structural_conflict(
+    /// Instead of escalating to the coordinator (which can't reliably formulate
+    /// override_work + create_work payloads), the integrator mechanically combines
+    /// the conflicting works into one. A fresh implementer writes the file coherently
+    /// in one pass.
+    ///
+    /// Steps:
+    /// 1. Read conflicting Work items
+    /// 2. Create ONE combined Work (title, AC union, deps union minus self-refs)
+    /// 3. Rewire same-Phase sibling dependencies pointing at originals
+    /// 4. Abandon original conflicting Works
+    /// 5. Reset non-conflicting works from the same tick to Ready
+    /// 6. Create Learning documenting the resolution
+    fn combine_conflicting_works(
         &self,
         conflicting_work_ids: &HashSet<String>,
         conflicting_files: &HashSet<String>,
         all_bundle_ids: &[String],
     ) {
-        // Abandon conflicting works - InReview → Abandoned is a valid coordinator transition.
-        let mut phase_id = String::new();
-        for wi_id in conflicting_work_ids {
-            if let Ok(works) = self.ctx.stores.read_works()
-                && let Some(w) = works.get(wi_id.as_str())
-            {
-                phase_id = w.parent_id.clone();
+        // 1. Read all conflicting Work items.
+        struct WorkSnapshot {
+            title: String,
+            parent_id: String,
+            ac: Vec<String>,
+            deps: Vec<String>,
+        }
+        let works_data: Vec<WorkSnapshot> = {
+            let Ok(works) = self.ctx.stores.read_works() else {
+                self.ctx.warn("combine_conflicting_works: cannot read works");
+                return;
+            };
+            let mut sorted_ids: Vec<&String> = conflicting_work_ids.iter().collect();
+            sorted_ids.sort();
+            sorted_ids
+                .iter()
+                .filter_map(|wid| {
+                    works.get(wid.as_str()).map(|w| WorkSnapshot {
+                        title: w.title.clone(),
+                        parent_id: w.parent_id.clone(),
+                        ac: w.acceptance_criteria.0.clone(),
+                        deps: w.dependencies.clone(),
+                    })
+                })
+                .collect()
+        };
+
+        if works_data.is_empty() {
+            self.ctx.warn("combine_conflicting_works: no conflicting works found");
+            return;
+        }
+
+        let parent_id = works_data[0].parent_id.clone();
+
+        // 2. Build combined Work fields.
+        let combined_title = works_data
+            .iter()
+            .map(|w| w.title.as_str())
+            .collect::<Vec<_>>()
+            .join(" + ");
+
+        // Union of all AC lists, cap at 20.
+        let mut combined_ac: Vec<String> = Vec::new();
+        for w in &works_data {
+            for item in &w.ac {
+                if !combined_ac.contains(item) {
+                    combined_ac.push(item.clone());
+                }
             }
+        }
+        if combined_ac.len() > 20 {
+            combined_ac.truncate(20);
+        }
+
+        // Union of all deps, MINUS the IDs being combined (prevent self-ref cycles).
+        let mut combined_deps: Vec<String> = Vec::new();
+        for w in &works_data {
+            for dep in &w.deps {
+                if !conflicting_work_ids.contains(dep) && !combined_deps.contains(dep) {
+                    combined_deps.push(dep.clone());
+                }
+            }
+        }
+
+        // 3. Create the combined Work via IPC.
+        let create_resp = self.ctx.bridge.request(
+            "work.create",
+            serde_json::json!({
+                "parent_id": parent_id,
+                "title": combined_title,
+                "acceptance_criteria": combined_ac,
+                "dependencies": combined_deps,
+            }),
+        );
+
+        let new_work_id = if let Some(id) = create_resp
+            .result
+            .as_ref()
+            .and_then(|v| v.get("id"))
+            .and_then(|v| v.as_str())
+        {
+            id.to_string()
+        } else {
+            self.ctx.warn(&format!(
+                "combine_conflicting_works: failed to create combined work: {:?}",
+                create_resp.error
+            ));
+            return;
+        };
+
+        self.ctx.info(&format!(
+            "combine_conflicting_works: created {} from {:?}",
+            new_work_id, conflicting_work_ids
+        ));
+
+        // 4. Rewire dependencies: for each Work in the same Phase that depends on
+        //    any original, replace the dep with the new combined Work ID.
+        {
+            let sibling_ids: Vec<String> = match self.ctx.stores.read_works() {
+                Err(_) => {
+                    self.ctx
+                        .warn("combine_conflicting_works: cannot read works for dep rewiring");
+                    Vec::new()
+                }
+                Ok(works) => works
+                    .values()
+                    .filter(|w| {
+                        w.parent_id == parent_id
+                            && !conflicting_work_ids.contains(&w.id)
+                            && w.id != new_work_id
+                            && w.dependencies.iter().any(|d| conflicting_work_ids.contains(d))
+                    })
+                    .map(|w| w.id.clone())
+                    .collect(),
+            };
+
+            for sibling_id in sibling_ids {
+                let new_deps: Vec<String> = {
+                    let Ok(works) = self.ctx.stores.read_works() else {
+                        continue;
+                    };
+                    works
+                        .get(sibling_id.as_str())
+                        .map(|w| {
+                            w.dependencies
+                                .iter()
+                                .map(
+                                    |d| {
+                                        if conflicting_work_ids.contains(d) { new_work_id.clone() } else { d.clone() }
+                                    },
+                                )
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+
+                let resp = self.ctx.bridge.request(
+                    "work.update",
+                    serde_json::json!({
+                        "id": sibling_id,
+                        "dependencies": new_deps,
+                    }),
+                );
+                if resp.is_error() {
+                    self.ctx.warn(&format!(
+                        "combine_conflicting_works: failed to rewire deps for {}: {:?}",
+                        sibling_id, resp.error
+                    ));
+                } else {
+                    self.ctx.info(&format!(
+                        "combine_conflicting_works: rewired deps for {} -> {}",
+                        sibling_id, new_work_id
+                    ));
+                }
+            }
+        }
+
+        // 5. Abandon all original conflicting Works.
+        for wi_id in conflicting_work_ids {
             let resp = self.ctx.bridge.request(
                 "work.transition",
                 serde_json::json!({
@@ -1172,18 +1353,18 @@ impl IntegratorAgent {
             );
             if resp.is_error() {
                 self.ctx.warn(&format!(
-                    "escalate_structural_conflict: failed to abandon {}: {:?}",
+                    "combine_conflicting_works: failed to abandon {}: {:?}",
                     wi_id, resp.error
                 ));
             } else {
                 self.ctx.info(&format!(
-                    "escalate_structural_conflict: abandoned {} (structural conflict)",
-                    wi_id
+                    "combine_conflicting_works: abandoned {} (combined into {})",
+                    wi_id, new_work_id
                 ));
             }
         }
 
-        // Reset non-conflicting works to Ready for normal retry.
+        // Reset non-conflicting works from the same tick to Ready for normal retry.
         if let Ok(bundles) = self.ctx.stores.read_bundles() {
             for bid in all_bundle_ids {
                 if let Some(b) = bundles.get(bid.as_str())
@@ -1194,18 +1375,15 @@ impl IntegratorAgent {
             }
         }
 
-        // Create a single structured Learning so the coordinator can detect and redecompose.
+        // 6. Create Learning documenting the resolution.
         let mut files_sorted: Vec<&String> = conflicting_files.iter().collect();
         files_sorted.sort();
         let mut works_sorted: Vec<&String> = conflicting_work_ids.iter().collect();
         works_sorted.sort();
         let content = format!(
-            "STRUCTURAL CONFLICT: Works [{}] both modified [{}]. \
-             Their implementations are incompatible. \
-             Create replacement Works for this phase with explicit file ownership - \
-             each file must be owned by exactly one Work. \
-             Do not retry these works.",
+            "STRUCTURAL CONFLICT RESOLVED: {} combined into {} due to overlapping paths: [{}]",
             works_sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+            new_work_id,
             files_sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
         );
         let learn_resp = self.ctx.bridge.request(
@@ -1213,21 +1391,17 @@ impl IntegratorAgent {
             serde_json::json!({
                 "content": content,
                 "scope": "phase",
-                "source_id": if phase_id.is_empty() {
-                    works_sorted.first().map(|s| s.as_str()).unwrap_or("")
-                } else {
-                    phase_id.as_str()
-                },
+                "source_id": parent_id,
             }),
         );
         if learn_resp.is_error() {
             self.ctx.warn(&format!(
-                "escalate_structural_conflict: failed to create learning: {:?}",
+                "combine_conflicting_works: failed to create learning: {:?}",
                 learn_resp.error
             ));
         } else {
             self.ctx
-                .info("escalate_structural_conflict: created STRUCTURAL CONFLICT learning");
+                .info("combine_conflicting_works: created STRUCTURAL CONFLICT RESOLVED learning");
         }
     }
 

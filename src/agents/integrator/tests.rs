@@ -1417,3 +1417,84 @@ fn test_resolve_plan_id_returns_none_for_orphan() {
 fn test_integration_branch_name() {
     assert_eq!(integration_branch_name("pl-abc12"), "integration/pl-abc12");
 }
+
+// --- combine_conflicting_works tests ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_combine_conflicting_works_creates_combined_work() {
+    let dir = TestDir::new("loopr-intg-combine1");
+    let stores = test_stores(&dir);
+    let intg = test_integrator(&dir, stores.clone(), test_config());
+
+    // Set up hierarchy: phase with two conflicting works.
+    let phase = crate::domain::phase::Phase::new("spec-1".into(), "Phase 1".into());
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+    let mut wk_a = Work::new(phase_id.clone(), "get_db_path + init_db".into());
+    wk_a.acceptance_criteria = vec!["AC-A1".to_string(), "AC-A2".to_string()].into_iter().collect();
+    wk_a.force_status(WorkStatus::InReview);
+    let wk_a_id = wk_a.id.clone();
+
+    let mut wk_b = Work::new(phase_id.clone(), "create_bookmark + list_bookmarks".into());
+    wk_b.acceptance_criteria = vec!["AC-B1".to_string()].into_iter().collect();
+    wk_b.force_status(WorkStatus::InReview);
+    let wk_b_id = wk_b.id.clone();
+
+    // Third work depends on wk_a (should get rewired).
+    let mut wk_c = Work::new(phase_id.clone(), "test_suite".into());
+    wk_c.dependencies = vec![wk_a_id.clone()];
+    wk_c.force_status(WorkStatus::Ready);
+    let wk_c_id = wk_c.id.clone();
+
+    if let Some(ref store) = stores.store {
+        let mut s = store.lock().unwrap();
+        s.create(wk_a.clone()).unwrap();
+        s.create(wk_b.clone()).unwrap();
+        s.create(wk_c.clone()).unwrap();
+    }
+    stores.works.write().unwrap().insert(wk_a_id.clone(), wk_a);
+    stores.works.write().unwrap().insert(wk_b_id.clone(), wk_b);
+    stores.works.write().unwrap().insert(wk_c_id.clone(), wk_c);
+
+    // Create bundles for the conflicting works.
+    let mut bd_a = Bundle::new(wk_a_id.clone(), None, "branch-a".into(), vec![]);
+    bd_a.paths = vec!["src/database.py".into()];
+    bd_a.force_status(crate::domain::bundle::BundleStatus::Rejected);
+    let bd_a_id = bd_a.id.clone();
+    let mut bd_b = Bundle::new(wk_b_id.clone(), None, "branch-b".into(), vec![]);
+    bd_b.paths = vec!["src/database.py".into()];
+    bd_b.force_status(crate::domain::bundle::BundleStatus::Rejected);
+    let bd_b_id = bd_b.id.clone();
+    stores.bundles.write().unwrap().insert(bd_a.id.clone(), bd_a);
+    stores.bundles.write().unwrap().insert(bd_b.id.clone(), bd_b);
+
+    let conflicting_work_ids: HashSet<String> = [wk_a_id.clone(), wk_b_id.clone()].into();
+    let conflicting_files: HashSet<String> = ["src/database.py".to_string()].into();
+
+    intg.combine_conflicting_works(&conflicting_work_ids, &conflicting_files, &[bd_a_id, bd_b_id]);
+
+    // Verify: original works are Abandoned.
+    let works = stores.works.read().unwrap();
+    assert_eq!(works[&wk_a_id].status(), WorkStatus::Abandoned);
+    assert_eq!(works[&wk_b_id].status(), WorkStatus::Abandoned);
+
+    // Verify: a new combined work was created in the same phase with merged AC.
+    let combined = works
+        .values()
+        .find(|w| w.parent_id == phase_id && w.id != wk_a_id && w.id != wk_b_id && w.id != wk_c_id);
+    assert!(combined.is_some(), "combined work should be created");
+    let combined = combined.unwrap();
+    assert!(combined.title.contains('+'), "combined title should join originals");
+    assert!(combined.acceptance_criteria.0.contains(&"AC-A1".to_string()));
+    assert!(combined.acceptance_criteria.0.contains(&"AC-B1".to_string()));
+    assert_eq!(combined.status(), WorkStatus::Ready, "combined work starts Ready");
+
+    // Verify: wk_c's dependency on wk_a was rewired to the combined work.
+    let wk_c_updated = &works[&wk_c_id];
+    assert!(!wk_c_updated.dependencies.contains(&wk_a_id), "old dep should be gone");
+    assert!(
+        wk_c_updated.dependencies.contains(&combined.id),
+        "new dep should point to combined work"
+    );
+}
