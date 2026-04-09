@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use futures::future::{join_all, try_join_all};
 
@@ -638,13 +638,11 @@ pub async fn decompose_hierarchy<H: HttpClient + Sync>(
 
     if brief {
         // Brief mode: Plan -> Works directly (skip Spec/Phase levels)
-        let works = decompose_into(plan_markdown, &plan_id, DocKind::Work, config, http_client)
-            .await?;
+        let works = decompose_into(plan_markdown, &plan_id, DocKind::Work, config, http_client).await?;
         all_records.extend(works);
     } else {
         // Full mode: Plan -> Specs (sequential) -> Phases + Works (parallel per spec)
-        let specs =
-            decompose_into(plan_markdown, &plan_id, DocKind::Spec, config, http_client).await?;
+        let specs = decompose_into(plan_markdown, &plan_id, DocKind::Spec, config, http_client).await?;
         info!("{} specs produced, starting parallel spec branches", specs.len());
 
         let spec_futures: Vec<_> = specs
@@ -711,8 +709,7 @@ async fn decompose_spec_branch<H: HttpClient + Sync>(
     config: &DecomposerConfig,
     http_client: &H,
 ) -> Result<Vec<ChildRecord>> {
-    let phases =
-        decompose_into(spec_content, spec_id, DocKind::Phase, config, http_client).await?;
+    let phases = decompose_into(spec_content, spec_id, DocKind::Phase, config, http_client).await?;
     debug!(
         "spec={} got {} phases, starting parallel phase branches",
         spec_id,
@@ -826,6 +823,18 @@ pub struct DecomposedHierarchy {
     pub content: std::collections::HashMap<String, String>,
 }
 
+/// Returns the expected ID prefix for a dep of the given kind.
+/// Spec deps must point to other Specs (sp-), Phase deps to Phases (ph-),
+/// Work deps to Works (wk-). Used for defense-in-depth prefix validation.
+fn expected_dep_prefix(kind: DocKind) -> &'static str {
+    match kind {
+        DocKind::Spec => "sp-",
+        DocKind::Phase => "ph-",
+        DocKind::Work => "wk-",
+        DocKind::Plan => "pl-",
+    }
+}
+
 /// Convert in-memory `Vec<ChildRecord>` into typed domain records.
 ///
 /// Builds Plan/Spec/Phase/Work using pre-assigned IDs from ChildRecord.
@@ -864,6 +873,7 @@ fn records_to_hierarchy(
             None => continue,
         };
 
+        let prefix = expected_dep_prefix(child.kind);
         match child.kind {
             DocKind::Spec => {
                 let mut spec = Spec::new(parent_id, child.title.clone());
@@ -873,7 +883,16 @@ fn records_to_hierarchy(
                 spec.dependencies = child
                     .dependencies
                     .iter()
-                    .filter(|dep_id| known_ids.contains(dep_id.as_str()))
+                    .filter(|dep_id| {
+                        let ok = known_ids.contains(dep_id.as_str()) && dep_id.starts_with(prefix);
+                        if !ok {
+                            error!(
+                                "records_to_hierarchy: rejecting dep '{}' for spec '{}' (expected prefix '{}')",
+                                dep_id, child.id, prefix
+                            );
+                        }
+                        ok
+                    })
                     .cloned()
                     .collect();
                 specs.push(spec);
@@ -886,7 +905,16 @@ fn records_to_hierarchy(
                 phase.dependencies = child
                     .dependencies
                     .iter()
-                    .filter(|dep_id| known_ids.contains(dep_id.as_str()))
+                    .filter(|dep_id| {
+                        let ok = known_ids.contains(dep_id.as_str()) && dep_id.starts_with(prefix);
+                        if !ok {
+                            error!(
+                                "records_to_hierarchy: rejecting dep '{}' for phase '{}' (expected prefix '{}')",
+                                dep_id, child.id, prefix
+                            );
+                        }
+                        ok
+                    })
                     .cloned()
                     .collect();
                 phases.push(phase);
@@ -899,7 +927,16 @@ fn records_to_hierarchy(
                 work.dependencies = child
                     .dependencies
                     .iter()
-                    .filter(|dep_id| known_ids.contains(dep_id.as_str()))
+                    .filter(|dep_id| {
+                        let ok = known_ids.contains(dep_id.as_str()) && dep_id.starts_with(prefix);
+                        if !ok {
+                            error!(
+                                "records_to_hierarchy: rejecting dep '{}' for work '{}' (expected prefix '{}')",
+                                dep_id, child.id, prefix
+                            );
+                        }
+                        ok
+                    })
                     .cloned()
                     .collect();
                 work.files = child.files.clone();
@@ -1180,18 +1217,15 @@ mod tests {
 
         let mock = SequenceMockHttp {
             responses: std::sync::Mutex::new(vec![
-                serde_json::json!({"content": [{"type": "text", "text": validation_json}]})
-                    .to_string(),
-                serde_json::json!({"content": [{"type": "text", "text": &children_json}]})
-                    .to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]}).to_string(),
             ]),
         };
 
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result =
-            decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock).await;
+        let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock).await;
         assert!(result.is_err(), "expected error for unresolved dep title");
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -1234,12 +1268,9 @@ mod tests {
 
         let mock = SequenceMockHttp {
             responses: std::sync::Mutex::new(vec![
-                serde_json::json!({"content": [{"type": "text", "text": validation_json}]})
-                    .to_string(),
-                serde_json::json!({"content": [{"type": "text", "text": validation_json}]})
-                    .to_string(),
-                serde_json::json!({"content": [{"type": "text", "text": &children_json}]})
-                    .to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": validation_json}]}).to_string(),
+                serde_json::json!({"content": [{"type": "text", "text": &children_json}]}).to_string(),
             ]),
         };
 
@@ -1397,8 +1428,7 @@ mod tests {
         let env_key = format!("TEST_DECOMPOSER_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_key, "test-key") };
 
-        let plan_markdown =
-            "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify local-only resolution.";
+        let plan_markdown = "# Cross-Scope Plan\n\n## Problem Statement\n\nTest cross-spec deps.\n\n## Goals\n\nVerify local-only resolution.";
 
         let valid_json = r#"{"valid": true, "issues": []}"#;
 
@@ -1477,8 +1507,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, partial_err) =
-            decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_some(),
             "expected partial failure for unresolvable cross-spec dep, got None"
@@ -1666,8 +1695,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let (hierarchy, partial_err) =
-            decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
+        let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
             partial_err.is_some(),
             "expected partial failure for unresolvable cross-spec dep"
@@ -1712,9 +1740,7 @@ mod tests {
         let mut config = test_config();
         config.api_key_env = env_key.clone();
 
-        let result =
-            decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &SlowMockHttp)
-                .await;
+        let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &SlowMockHttp).await;
 
         assert!(result.is_err(), "expected timeout error, got: {:?}", result);
         let msg = format!("{:?}", result.unwrap_err());
@@ -2040,6 +2066,80 @@ mod tests {
         let h = records_to_hierarchy(&plan_id, "Plan", "# Plan\n\nA plan.", ac, &records).unwrap();
 
         assert_eq!(h.works[0].files, vec!["src/module.py", "tests/test_module.py"]);
+    }
+
+    #[test]
+    fn test_records_to_hierarchy_cross_type_dep_rejected() {
+        // A Spec with a dep ID starting with "ph-" (a Phase ID) must be filtered out.
+        // After Fix 2, this is structurally unreachable via decompose_into, but
+        // records_to_hierarchy is defense-in-depth.
+        let plan_id = crate::id::generate_id("pl");
+        let spec_a_id = crate::id::generate_id("sp");
+        let phase_id = crate::id::generate_id("ph"); // cross-type dep
+
+        let records = vec![ChildRecord {
+            id: spec_a_id.clone(),
+            kind: DocKind::Spec,
+            parent_id: Some(plan_id.clone()),
+            title: "Spec A".to_string(),
+            content: "# Spec A".to_string(),
+            // dep is a Phase ID - wrong prefix for a Spec dep
+            dependencies: vec![phase_id.clone()],
+            unresolved_dep_titles: vec![],
+            acceptance_criteria: vec![],
+            files: vec![],
+        }];
+
+        let ac = AcceptanceCriteria(vec![]);
+        let h = records_to_hierarchy(&plan_id, "Plan", "# Plan\n\nA plan.", ac, &records).unwrap();
+
+        assert!(
+            h.specs[0].dependencies.is_empty(),
+            "cross-type dep should be filtered out, got: {:?}",
+            h.specs[0].dependencies
+        );
+    }
+
+    #[test]
+    fn test_records_to_hierarchy_same_type_dep_kept() {
+        // A Spec dep pointing to another Spec ID (sp- prefix) must be kept.
+        let plan_id = crate::id::generate_id("pl");
+        let spec_a_id = crate::id::generate_id("sp");
+        let spec_b_id = crate::id::generate_id("sp");
+
+        let records = vec![
+            ChildRecord {
+                id: spec_a_id.clone(),
+                kind: DocKind::Spec,
+                parent_id: Some(plan_id.clone()),
+                title: "Spec A".to_string(),
+                content: "# Spec A".to_string(),
+                dependencies: vec![],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+                files: vec![],
+            },
+            ChildRecord {
+                id: spec_b_id.clone(),
+                kind: DocKind::Spec,
+                parent_id: Some(plan_id.clone()),
+                title: "Spec B".to_string(),
+                content: "# Spec B".to_string(),
+                dependencies: vec![spec_a_id.clone()],
+                unresolved_dep_titles: vec![],
+                acceptance_criteria: vec![],
+                files: vec![],
+            },
+        ];
+
+        let ac = AcceptanceCriteria(vec![]);
+        let h = records_to_hierarchy(&plan_id, "Plan", "# Plan\n\nA plan.", ac, &records).unwrap();
+
+        assert_eq!(
+            h.specs[1].dependencies,
+            vec![spec_a_id.clone()],
+            "same-type dep should be preserved"
+        );
     }
 
     // --- build_decompose_prompt ---

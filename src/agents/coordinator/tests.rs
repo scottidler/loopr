@@ -687,9 +687,6 @@ async fn test_check_fsm_transition_planning_to_executing() {
     assert_eq!(transition, Some(CoordinatorFsmState::Executing));
 }
 
-// Tests for ActivatePhase/PhaseGate transitions removed - those states no longer exist.
-// Goal completion is now detected by reconcile() during Executing state.
-
 #[tokio::test(flavor = "multi_thread")]
 async fn test_persist_coordinator_state() {
     let dir = TestDir::new("loopr-coord-fsm-persist");
@@ -1822,4 +1819,80 @@ async fn test_run_iteration_decomposing_without_error_returns_done_waiting() {
         }
         other => panic!("expected Done(waiting...), got: {:?}", other),
     }
+}
+
+// --- Prefix validation: reconciler Layer 3 defense-in-depth ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reconciler_cross_type_dep_blocks_spec_promotion() {
+    // A Spec with a dep on a Phase ID (ph-*) must NOT be promoted to Active.
+    // all_hierarchy_deps_terminal must reject the cross-type dep and return false.
+    let dir = TestDir::new("loopr-reconcile-crosstype-spec");
+    let stores = test_stores(&dir);
+
+    // Create an Active Plan
+    let mut plan = Plan::new("Goal".to_string(), crate::domain::criteria::AcceptanceCriteria(vec![]));
+    plan.force_status(crate::domain::plan::PlanStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    // Create a Spec with a cross-type dep (a Phase ID)
+    let mut spec = Spec::new(plan_id.clone(), "My Spec".into());
+    spec.force_status(crate::domain::spec::SpecStatus::Pending);
+    let phase_id = crate::id::generate_id("ph");
+    spec.dependencies = vec![phase_id.clone()];
+    let spec_id = spec.id.clone();
+    stores.write_specs().unwrap().insert(spec_id.clone(), spec);
+
+    let outcome = reconcile::reconcile(&stores);
+
+    assert_eq!(outcome.promoted, 0, "cross-type dep should block Spec promotion");
+
+    let specs = stores.read_specs().unwrap();
+    assert_eq!(
+        specs.get(&spec_id).unwrap().status(),
+        crate::domain::spec::SpecStatus::Pending,
+        "Spec should remain Pending when cross-type dep is present"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_reconciler_same_type_dep_promotes_spec() {
+    // A Spec with a dep on a Complete Spec (sp-*) must be promoted to Active.
+    let dir = TestDir::new("loopr-reconcile-sametype-spec");
+    let stores = test_stores(&dir);
+
+    let mut plan = Plan::new("Goal".to_string(), crate::domain::criteria::AcceptanceCriteria(vec![]));
+    plan.force_status(crate::domain::plan::PlanStatus::Active);
+    let plan_id = plan.id.clone();
+    stores.write_plans().unwrap().insert(plan_id.clone(), plan);
+
+    // Create dep Spec in Complete state
+    let mut dep_spec = Spec::new(plan_id.clone(), "Dep Spec".into());
+    dep_spec.force_status(crate::domain::spec::SpecStatus::Complete);
+    let dep_spec_id = dep_spec.id.clone();
+    stores.write_specs().unwrap().insert(dep_spec_id.clone(), dep_spec);
+
+    // Create the Spec under test with dep on a Complete Spec
+    let mut spec = Spec::new(plan_id.clone(), "Dependent Spec".into());
+    spec.force_status(crate::domain::spec::SpecStatus::Pending);
+    spec.dependencies = vec![dep_spec_id.clone()];
+    let spec_id = spec.id.clone();
+    stores.write_specs().unwrap().insert(spec_id.clone(), spec);
+
+    let outcome = reconcile::reconcile(&stores);
+
+    assert!(
+        outcome.promoted > 0,
+        "same-type complete dep should allow Spec promotion"
+    );
+
+    let specs = stores.read_specs().unwrap();
+    let final_status = specs.get(&spec_id).unwrap().status();
+    assert_ne!(
+        final_status,
+        crate::domain::spec::SpecStatus::Pending,
+        "Spec should not remain Pending when dep is Complete (got {:?})",
+        final_status
+    );
 }

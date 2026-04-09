@@ -1,3 +1,5 @@
+use tracing::error;
+
 use crate::agents::generation;
 use crate::daemon::context::Stores;
 use crate::domain::plan::{HierarchyStatus, Tier};
@@ -362,16 +364,32 @@ fn parent_active(stores: &Stores, parent_id: &str) -> bool {
 /// Hierarchy dep check: all deps must be terminal (Complete or Abandoned).
 /// An Abandoned dep does not block advancement - the quality gate at GoalComplete
 /// handles abandon ratios.
+///
+/// Defense-in-depth: rejects cross-type dep IDs at the promotion gate.
+/// A cross-type dep (e.g., a Phase ID in a Spec's deps) will never be found in
+/// the expected store and would create a silent permanent pending state. Log at
+/// error! level so this is never silent, then return false to block promotion.
 fn all_hierarchy_deps_terminal(stores: &Stores, deps: &[String], level: DependencyLevel) -> bool {
     if deps.is_empty() {
         return true;
     }
+    let expected_prefix = match level {
+        DependencyLevel::Spec => "sp-",
+        DependencyLevel::Phase => "ph-",
+    };
     match level {
         DependencyLevel::Spec => {
             let Ok(specs) = stores.read_specs() else {
                 return false;
             };
             deps.iter().all(|dep_id| {
+                if !dep_id.starts_with(expected_prefix) {
+                    error!(
+                        "reconciler: cross-type dep '{}' found in Spec deps (expected prefix '{}') - blocking promotion",
+                        dep_id, expected_prefix
+                    );
+                    return false;
+                }
                 specs
                     .get(dep_id)
                     .map(|s| matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
@@ -383,6 +401,13 @@ fn all_hierarchy_deps_terminal(stores: &Stores, deps: &[String], level: Dependen
                 return false;
             };
             deps.iter().all(|dep_id| {
+                if !dep_id.starts_with(expected_prefix) {
+                    error!(
+                        "reconciler: cross-type dep '{}' found in Phase deps (expected prefix '{}') - blocking promotion",
+                        dep_id, expected_prefix
+                    );
+                    return false;
+                }
                 phases
                     .get(dep_id)
                     .map(|p| matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
