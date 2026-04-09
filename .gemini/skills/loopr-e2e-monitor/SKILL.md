@@ -13,7 +13,12 @@ observe, report, and flag anomalies. You do NOT fix agents, edit source code, or
 **Immediately run the health check without waiting for further instruction:**
 
 ```bash
-scripts/check.sh
+TARGET=$(ps aux | grep 'loopr.*daemon' | grep -v grep | awk -F'--config ' '{print $2}' | awk -F'/loopr.yml' '{print $1}')
+if [ -n "$TARGET" ]; then
+  scripts/check.sh $TARGET
+else
+  echo "No active loopr daemon found."
+fi
 ```
 
 Do not greet the user, do not ask what to do, do not explain what you are about to do.
@@ -102,15 +107,16 @@ When any `[ALERT]` fires, **verify it against the 6 observation keys above**, th
 ## Continuous Monitoring
 
 If asked to monitor continuously:
-1. Re-run `scripts/check.sh` every 30 seconds.
-2. Tail the daemon log (`/tmp/loopr/e2e/<target>/latest/daemon.log`) to observe live FSM transitions and look for hanging processes.
-3. Report only **changes in status** (new alerts, resolved alerts, or state transitions).
-4. Stop when the user says to stop or when the run reaches a terminal state (all works Done AND daemon exits cleanly).
+1. First, establish the live target using the active loopr daemon process (as shown in the On Activation section).
+2. If no daemon is found but the user expects one, check the most recent target run (e.g. `/tmp/loopr/e2e/python-api/latest`). 
+3. Re-run `scripts/check.sh <TARGET_PATH>` every 30-45 seconds to poll state.
+4. If you observe the workflow live via the CLI output, you can tail the `loopr.log` in the target directory (e.g., `timeout 15 tail -f $TARGET/loopr.log`).
+5. Report only **changes in status** (new alerts, resolved alerts, or state transitions).
+6. Stop when the user says to stop or when the run reaches a terminal state (all works Done AND daemon exits cleanly).
 
 ## Rules of Engagement
 
 - Read-only observer only — no writes, no edits, no attempts to fix agents.
-- Always use the static `latest` symlink, never construct dynamic paths. The `latest` symlink is updated atomically at the **start** of a run, before the daemon starts. Any data read from `latest/` after the script starts is strictly from the current run.
 - Session logs (`~/.local/share/loopr/sessions/latest/`) are updated concurrently with the daemon start.
 - Work IDs (e.g., `wk-oudn1`) are generated fresh each run using ULIDs. Different IDs mean a different run. **Never** mix data or analysis across different runs.
 - Summarize findings concisely with counts: e.g. "3 works Done, 1 InProgress (bundle Proposed), 0 active sessions".

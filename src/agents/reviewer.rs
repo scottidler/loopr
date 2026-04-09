@@ -148,10 +148,7 @@ pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) ->
             if all_sigs.len() >= MAX_SIGS {
                 break;
             }
-            let candidates = [
-                work_dir.join(mod_file),
-                repo_path.join(mod_file),
-            ];
+            let candidates = [work_dir.join(mod_file), repo_path.join(mod_file)];
             for candidate in &candidates {
                 if !candidate.exists() {
                     continue;
@@ -185,11 +182,7 @@ pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) ->
                             .take_while(|l| !l.ends_with('{') && !l.ends_with(':'))
                             .collect::<Vec<_>>()
                             .join(" ");
-                        let sig = if sig_text.is_empty() {
-                            t.to_string()
-                        } else {
-                            sig_text
-                        };
+                        let sig = if sig_text.is_empty() { t.to_string() } else { sig_text };
                         all_sigs.push(format!("  {}", sig));
                     }
                 }
@@ -202,7 +195,10 @@ pub fn extract_referenced_signatures(repo_path: &Path, work_files: &[String]) ->
         return String::new();
     }
 
-    format!("\n## Referenced Signatures\n\n(Best-effort extraction — use for cross-module call verification only)\n\n```\n{}\n```\n", all_sigs.join("\n"))
+    format!(
+        "\n## Referenced Signatures\n\n(Best-effort extraction — use for cross-module call verification only)\n\n```\n{}\n```\n",
+        all_sigs.join("\n")
+    )
 }
 
 /// The Reviewer agent — single-iteration LLM agent.
