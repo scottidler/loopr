@@ -389,6 +389,169 @@ fn resolve_batch_dependencies(action: &AgentAction, batch_created_ids: &[String]
     }
 }
 
+/// Safety net for when the LLM omits dependencies between works that share a file.
+///
+/// Algorithm (cycle-safe):
+/// 1. Build file -> Vec<work_id> mapping for works in the batch.
+/// 2. For each file claimed by 2+ works, build the existing dep subgraph.
+/// 3. For pairs with no directed path between them, inject a dep:
+///    - prefer the LLM-declared direction if one already partially exists;
+///    - use batch-creation order (ascending id index) as a tie-breaker for fully disconnected pairs.
+/// 4. After each injection, verify no cycle is introduced (topological sort).
+///    If a cycle would result, skip the edge and log a warning.
+fn inject_overlap_deps(stores: &Stores, batch_created_ids: &[String], prefix: &str) {
+    // Build file -> [work_id] mapping (only for works in this batch)
+    let file_to_works: HashMap<String, Vec<String>> = {
+        let Ok(works) = stores.read_works() else {
+            tracing::error!("inject_overlap_deps: works lock poisoned");
+            return;
+        };
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for id in batch_created_ids {
+            if let Some(w) = works.get(id) {
+                for f in &w.files {
+                    map.entry(f.clone()).or_default().push(id.clone());
+                }
+            }
+        }
+        map
+    };
+
+    // Collect pairs that share at least one file: (earlier_in_batch, later_in_batch)
+    // We'll use batch-index as tie-breaker direction.
+    let batch_index: HashMap<&str, usize> = batch_created_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+
+    // Collect the set of pairs that need a dependency (bidirectional check)
+    let mut pairs_needing_dep: Vec<(String, String)> = Vec::new();
+    for ids in file_to_works.values() {
+        if ids.len() < 2 {
+            continue;
+        }
+        // For each pair, ensure a dependency exists in one direction
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let a = &ids[i];
+                let b = &ids[j];
+                pairs_needing_dep.push((a.clone(), b.clone()));
+            }
+        }
+    }
+    pairs_needing_dep.sort();
+    pairs_needing_dep.dedup();
+
+    if pairs_needing_dep.is_empty() {
+        return;
+    }
+
+    // Read the current dep graph for batch works
+    let mut dep_graph: HashMap<String, HashSet<String>> = {
+        let Ok(works) = stores.read_works() else {
+            return;
+        };
+        batch_created_ids
+            .iter()
+            .filter_map(|id| {
+                works.get(id).map(|w| {
+                    let batch_deps: HashSet<String> = w
+                        .dependencies
+                        .iter()
+                        .filter(|d| batch_index.contains_key(d.as_str()))
+                        .cloned()
+                        .collect();
+                    (id.clone(), batch_deps)
+                })
+            })
+            .collect()
+    };
+
+    /// Returns true if there is a directed path from `from` to `to` in the dep graph.
+    fn has_path(graph: &HashMap<String, HashSet<String>>, from: &str, to: &str) -> bool {
+        let mut visited = HashSet::new();
+        let mut stack = vec![from.to_string()];
+        while let Some(node) = stack.pop() {
+            if node == to {
+                return true;
+            }
+            if visited.contains(&node) {
+                continue;
+            }
+            visited.insert(node.clone());
+            if let Some(deps) = graph.get(&node) {
+                stack.extend(deps.iter().cloned());
+            }
+        }
+        false
+    }
+
+    /// Returns true if adding edge (from -> to) would create a cycle.
+    fn would_create_cycle(graph: &HashMap<String, HashSet<String>>, from: &str, to: &str) -> bool {
+        // A cycle would exist if `from` is already reachable from `to`
+        has_path(graph, to, from)
+    }
+
+    let mut injected = Vec::new();
+
+    for (a, b) in &pairs_needing_dep {
+        // Check if a path already exists in either direction
+        let a_to_b = has_path(&dep_graph, a, b);
+        let b_to_a = has_path(&dep_graph, b, a);
+
+        if a_to_b || b_to_a {
+            // A relationship already exists; no injection needed
+            continue;
+        }
+
+        // No path exists: use batch index to determine direction
+        let (predecessor, successor) = match (batch_index.get(a.as_str()), batch_index.get(b.as_str())) {
+            (Some(&ia), Some(&ib)) if ia <= ib => (a.clone(), b.clone()),
+            (Some(_), Some(_)) => (b.clone(), a.clone()),
+            _ => (a.clone(), b.clone()),
+        };
+
+        // Safety: check that adding predecessor -> successor doesn't create a cycle
+        if would_create_cycle(&dep_graph, &predecessor, &successor) {
+            tracing::warn!(
+                "{} inject_overlap_deps: skipping edge {} -> {} (would create cycle)",
+                prefix,
+                predecessor,
+                successor
+            );
+            continue;
+        }
+
+        // Inject: successor now depends on predecessor
+        dep_graph.entry(successor.clone()).or_default().insert(predecessor.clone());
+        injected.push((predecessor, successor));
+    }
+
+    if injected.is_empty() {
+        return;
+    }
+
+    // Persist the injected deps
+    let Ok(mut works) = stores.write_works() else {
+        tracing::error!("inject_overlap_deps: works lock poisoned on write");
+        return;
+    };
+    for (predecessor, successor) in &injected {
+        if let Some(w) = works.get_mut(successor)
+            && !w.dependencies.contains(predecessor)
+        {
+            w.dependencies.push(predecessor.clone());
+            tracing::info!(
+                "{} inject_overlap_deps: injected dep {} -> {} (shared file)",
+                prefix,
+                predecessor,
+                successor
+            );
+        }
+    }
+}
+
 /// Fix #6: Prune dependencies between batch-created works whose files don't overlap.
 /// Safety net for when the LLM creates linear chains between independent works.
 fn prune_independent_deps(stores: &Stores, batch_created_ids: &[String], prefix: &str) {

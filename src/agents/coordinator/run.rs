@@ -609,8 +609,11 @@ impl<L: LlmClient> CoordinatorAgent<L> {
             last_summary = summary;
         }
 
-        // Fix #6: Prune independent deps after batch Work creation
+        // Fix #6: Inject same-file deps first, then prune independent ones.
+        // inject_overlap_deps ensures works sharing a file are serialized (cycle-safe).
+        // prune_independent_deps removes false chain deps between non-overlapping works.
         if !batch_created_ids.is_empty() {
+            inject_overlap_deps(stores, &batch_created_ids, &prefix);
             prune_independent_deps(stores, &batch_created_ids, &prefix);
         }
 
@@ -781,6 +784,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_coordinator_exits_on_need_help() {
+        crate::prompts::init_defaults();
         let dir = TestDir::new("loopr-coord-runhelp");
         let stores = test_stores(&dir);
         insert_test_goal(&stores);

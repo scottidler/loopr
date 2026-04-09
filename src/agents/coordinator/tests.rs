@@ -1621,6 +1621,104 @@ async fn test_prune_independent_deps_empty_batch() {
     prune_independent_deps(&stores, &[], TEST_PREFIX);
 }
 
+// --- inject_overlap_deps tests ---
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inject_overlap_deps_injects_for_shared_file() {
+    let dir = TestDir::new("loopr-coord-inject1");
+    let stores = test_stores(&dir);
+
+    // Two works sharing test_api.py, no LLM-declared deps
+    let mut wi_a = Work::new("phase-1".into(), "Fixtures".into());
+    wi_a.files = vec!["test_api.py".into()];
+    let a_id = wi_a.id.clone();
+
+    let mut wi_b = Work::new("phase-1".into(), "Health tests".into());
+    wi_b.files = vec!["test_api.py".into()];
+    let b_id = wi_b.id.clone();
+
+    stores.works.write().unwrap().insert(a_id.clone(), wi_a);
+    stores.works.write().unwrap().insert(b_id.clone(), wi_b);
+
+    inject_overlap_deps(&stores, &[a_id.clone(), b_id.clone()], TEST_PREFIX);
+
+    let works = stores.works.read().unwrap();
+    let b = &works[&b_id];
+    assert!(
+        b.dependencies.contains(&a_id),
+        "later work should depend on earlier work sharing test_api.py"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inject_overlap_deps_skips_disjoint_files() {
+    let dir = TestDir::new("loopr-coord-inject2");
+    let stores = test_stores(&dir);
+
+    let mut wi_a = Work::new("phase-1".into(), "Database".into());
+    wi_a.files = vec!["database.py".into()];
+    let a_id = wi_a.id.clone();
+
+    let mut wi_b = Work::new("phase-1".into(), "Routes".into());
+    wi_b.files = vec!["main.py".into()];
+    let b_id = wi_b.id.clone();
+
+    stores.works.write().unwrap().insert(a_id.clone(), wi_a);
+    stores.works.write().unwrap().insert(b_id.clone(), wi_b);
+
+    inject_overlap_deps(&stores, &[a_id.clone(), b_id.clone()], TEST_PREFIX);
+
+    let works = stores.works.read().unwrap();
+    assert!(
+        works[&b_id].dependencies.is_empty(),
+        "disjoint-file works should not get injected deps"
+    );
+    assert!(
+        works[&a_id].dependencies.is_empty(),
+        "disjoint-file works should not get injected deps"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inject_overlap_deps_respects_existing_direction() {
+    let dir = TestDir::new("loopr-coord-inject3");
+    let stores = test_stores(&dir);
+
+    // LLM declared B -> A (B depends on A), which is reverse of batch order
+    let mut wi_a = Work::new("phase-1".into(), "Fixtures".into());
+    wi_a.files = vec!["test_api.py".into()];
+    let a_id = wi_a.id.clone();
+
+    let mut wi_b = Work::new("phase-1".into(), "Setup".into());
+    wi_b.files = vec!["test_api.py".into()];
+    wi_b.dependencies = vec![a_id.clone()]; // LLM declared: B depends on A
+    let b_id = wi_b.id.clone();
+
+    stores.works.write().unwrap().insert(a_id.clone(), wi_a);
+    stores.works.write().unwrap().insert(b_id.clone(), wi_b);
+
+    inject_overlap_deps(&stores, &[a_id.clone(), b_id.clone()], TEST_PREFIX);
+
+    let works = stores.works.read().unwrap();
+    // B already depends on A — no change expected, and no cycle should be injected
+    assert!(
+        works[&b_id].dependencies.contains(&a_id),
+        "existing LLM-declared dep should be preserved"
+    );
+    assert!(
+        !works[&a_id].dependencies.contains(&b_id),
+        "cycle must not be injected"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_inject_overlap_deps_empty_batch() {
+    let dir = TestDir::new("loopr-coord-inject4");
+    let stores = test_stores(&dir);
+    // Empty batch — no-op, must not panic
+    inject_overlap_deps(&stores, &[], TEST_PREFIX);
+}
+
 // --- Fix #5: build_phase_status dependency info tests ---
 
 #[tokio::test(flavor = "multi_thread")]
