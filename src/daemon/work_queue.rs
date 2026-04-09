@@ -23,15 +23,14 @@ struct WorkPriority {
 /// - Phase 2 (write lock): re-verify the winner is still Ready, mark InProgress
 ///
 /// Filters:
-/// - Work must be in Ready state
-/// - Work must be in the current Phase (if specified)
-/// - All Work dependencies must be Done
+/// - Work must be in Ready state (reconciliation ensures only eligible Works are Ready)
+/// - All Work dependencies must be Done (defense-in-depth)
 /// - No active (non-terminal) Implementer session on the Work
 ///
 /// Priority (higher score = picked first):
 /// - +100 if no active locks contend with the Work's files
 /// - +(10 - min(deps, 10)) * 10 for fewer dependencies
-pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>) -> Option<String> {
+pub fn next_assignable_work(stores: &Arc<Stores>) -> Option<String> {
     // Phase 1: score candidates under read lock
     let candidate_id = {
         let works = stores.read_works().ok()?;
@@ -41,7 +40,6 @@ pub fn next_assignable_work(stores: &Arc<Stores>, current_phase_id: Option<&str>
         let mut candidates: Vec<WorkPriority> = works
             .values()
             .filter(|w| w.status() == WorkStatus::Ready)
-            .filter(|w| current_phase_id.map(|pid| w.parent_id == pid).unwrap_or(true))
             // Exclude Works whose dependencies aren't Done
             .filter(|w| {
                 w.dependencies.iter().all(|dep_id| {
@@ -152,29 +150,17 @@ mod tests {
     #[test]
     fn test_no_ready_works_returns_none() {
         let stores = test_stores();
-        assert!(next_assignable_work(&stores, None).is_none());
+        assert!(next_assignable_work(&stores).is_none());
     }
 
     #[test]
     fn test_single_ready_work_returned() {
         let stores = test_stores();
         let id = ready_work(&stores, "phase-1", "Work A");
-        assert_eq!(next_assignable_work(&stores, None), Some(id));
+        assert_eq!(next_assignable_work(&stores), Some(id));
     }
 
-    #[test]
-    fn test_phase_filter_includes_matching() {
-        let stores = test_stores();
-        let id = ready_work(&stores, "phase-1", "Work A");
-        assert_eq!(next_assignable_work(&stores, Some("phase-1")), Some(id));
-    }
-
-    #[test]
-    fn test_phase_filter_excludes_non_matching() {
-        let stores = test_stores();
-        ready_work(&stores, "phase-1", "Work A");
-        assert!(next_assignable_work(&stores, Some("phase-2")).is_none());
-    }
+    // Phase filter tests removed - reconciliation handles phase gating, not work queue.
 
     #[test]
     fn test_dependency_filter_excludes_unmet() {
@@ -192,7 +178,7 @@ mod tests {
         let id = w.id.clone();
         stores.works.write().unwrap().insert(id.clone(), w);
 
-        assert!(next_assignable_work(&stores, None).is_none());
+        assert!(next_assignable_work(&stores).is_none());
     }
 
     #[test]
@@ -211,7 +197,7 @@ mod tests {
         let id = w.id.clone();
         stores.works.write().unwrap().insert(id.clone(), w);
 
-        assert_eq!(next_assignable_work(&stores, None), Some(id));
+        assert_eq!(next_assignable_work(&stores), Some(id));
     }
 
     #[test]
@@ -229,7 +215,7 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        assert!(next_assignable_work(&stores, None).is_none());
+        assert!(next_assignable_work(&stores).is_none());
     }
 
     #[test]
@@ -247,7 +233,7 @@ mod tests {
             .unwrap()
             .insert(session.id.clone(), session);
 
-        assert_eq!(next_assignable_work(&stores, None), Some(id));
+        assert_eq!(next_assignable_work(&stores), Some(id));
     }
 
     #[test]
@@ -272,7 +258,7 @@ mod tests {
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
         // Work B should be picked (no contention = +100)
-        assert_eq!(next_assignable_work(&stores, None), Some(wb_id));
+        assert_eq!(next_assignable_work(&stores), Some(wb_id));
     }
 
     #[test]
@@ -304,7 +290,7 @@ mod tests {
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
         // Work B should be picked (fewer deps)
-        assert_eq!(next_assignable_work(&stores, None), Some(wb_id));
+        assert_eq!(next_assignable_work(&stores), Some(wb_id));
     }
 
     #[test]
@@ -324,7 +310,7 @@ mod tests {
         w3.force_status(WorkStatus::Done);
         stores.works.write().unwrap().insert(w3.id.clone(), w3);
 
-        assert!(next_assignable_work(&stores, None).is_none());
+        assert!(next_assignable_work(&stores).is_none());
     }
 
     #[test]
@@ -347,7 +333,7 @@ mod tests {
         let wb_id = wb.id.clone();
         stores.works.write().unwrap().insert(wb_id.clone(), wb);
 
-        assert_eq!(next_assignable_work(&stores, None), Some(wb_id));
+        assert_eq!(next_assignable_work(&stores), Some(wb_id));
     }
 
     #[test]
@@ -356,7 +342,7 @@ mod tests {
         let id = ready_work(&stores, "phase-1", "Work A");
 
         // Claim the work
-        let result = next_assignable_work(&stores, None);
+        let result = next_assignable_work(&stores);
         assert_eq!(result, Some(id.clone()));
 
         // Verify it was marked InProgress
@@ -369,7 +355,7 @@ mod tests {
         let stores = test_stores();
         let id = ready_work(&stores, "phase-1", "Work A");
 
-        next_assignable_work(&stores, None);
+        next_assignable_work(&stores);
 
         let works = stores.works.read().unwrap();
         assert_eq!(works[&id].assignee, Some("implementer".to_string()));
@@ -381,11 +367,11 @@ mod tests {
         let id = ready_work(&stores, "phase-1", "Work A");
 
         // First call claims it
-        let first = next_assignable_work(&stores, None);
+        let first = next_assignable_work(&stores);
         assert_eq!(first, Some(id));
 
         // Second call finds nothing (work is now InProgress, not Ready)
-        let second = next_assignable_work(&stores, None);
+        let second = next_assignable_work(&stores);
         assert!(second.is_none());
     }
 
@@ -406,11 +392,11 @@ mod tests {
 
         let t1 = thread::spawn(move || {
             b1.wait();
-            next_assignable_work(&stores1, None)
+            next_assignable_work(&stores1)
         });
         let t2 = thread::spawn(move || {
             b2.wait();
-            next_assignable_work(&stores2, None)
+            next_assignable_work(&stores2)
         });
 
         let r1 = t1.join().unwrap();
@@ -482,7 +468,7 @@ mod tests {
 
         // Fresh work should be picked (higher priority due to no attempt penalty)
         assert_eq!(
-            next_assignable_work(&stores, None),
+            next_assignable_work(&stores),
             Some(wb_id),
             "fresh work should be preferred over cycled work"
         );
