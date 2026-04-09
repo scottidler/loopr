@@ -108,7 +108,7 @@ When any `[ALERT]` fires, **verify it against the 6 observation keys above**, th
 
 If asked to monitor continuously:
 1. First, establish the live target using the active loopr daemon process (as shown in the On Activation section).
-2. If no daemon is found but the user expects one, check the most recent target run (e.g. `/tmp/loopr/e2e/python-api/latest`). 
+2. If no daemon is found but the user expects one, check the most recent target run (e.g. `/tmp/loopr/e2e/python-api/latest`).
 3. Re-run `scripts/check.sh <TARGET_PATH>` every 30-45 seconds to poll state.
 4. If you observe the workflow live via the CLI output, you can tail the `loopr.log` in the target directory (e.g., `timeout 15 tail -f $TARGET/loopr.log`).
 5. Report only **changes in status** (new alerts, resolved alerts, or state transitions).
