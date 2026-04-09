@@ -278,14 +278,22 @@ impl IntegratorAgent {
             return Ok(IntegratorCycleResult::Idle);
         }
 
-        // 3. Find all Accepted bundles
+        // 3. Find all Accepted bundles and partition by plan_id
         let accepted_bundles: Vec<(String, Option<String>)> = {
             let bundles = self.ctx.stores.read_bundles()?;
-            bundles
-                .values()
-                .filter(|b| b.status() == BundleStatus::Accepted)
-                .map(|b| (b.id.clone(), b.base_tick_id.clone()))
-                .collect()
+            let mut by_plan: std::collections::BTreeMap<String, Vec<(String, Option<String>)>> = std::collections::BTreeMap::new();
+            
+            for b in bundles.values().filter(|b| b.status() == BundleStatus::Accepted) {
+                let plan_id = resolve_plan_id(&self.ctx.stores, &b.work_id).unwrap_or_else(|| "".to_string());
+                by_plan.entry(plan_id).or_default().push((b.id.clone(), b.base_tick_id.clone()));
+            }
+
+            // Pick one plan's bundles to process per cycle
+            if let Some((_, plan_bundles)) = by_plan.into_iter().next() {
+                plan_bundles
+            } else {
+                Vec::new()
+            }
         };
 
         if accepted_bundles.is_empty() {
