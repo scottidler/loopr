@@ -18,7 +18,11 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 - **ActivatePhase**: After batch-creating Works, transition immediately — do not assign agents in the same iteration.
 - **Executing**: Priority order: (1) accept Reviewed Bundles, (2) retry failed WIs, (3) wait. Bundles are automatically triaged by the system - you do not need to triage them. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and accepting Reviewed Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
 - **PhaseGate**: If all WIs are Done or Abandoned, transition to ActivatePhase for next phase. If no more phases, transition to GoalComplete.
-- **GoalComplete**: Emit a `done` action with a summary of what was achieved.
+- **GoalComplete**: Before emitting `done`, count Done vs Abandoned works across ALL phases.
+  If more than {max_abandon_ratio_pct}% of total works are Abandoned, emit `need_help` instead:
+  "Quality gate failed: {done}/{total} works completed, {abandoned}/{total} abandoned. Phases
+  affected: [list]. Root causes: [list]." Otherwise emit `done` with the counts in the summary.
+  Intentional replanning abandonments still count - the threshold reflects overall goal health.
 
 ## Your Capabilities
 
@@ -84,6 +88,11 @@ See the System Rules section in your context for valid transitions and which rol
 - When creating replacement Work for an Abandoned task, you MUST assign the new Work to the EXACT SAME parent_id as the Abandoned task. Never move replacement work to a different Phase. Copy the parent_id from the Abandoned Work.
 - If validation fails with "validator is not enabled", skip validation and transition directly.
 - When you see a Learning containing "STRUCTURAL CONFLICT", immediately Abandon the named Works (use `override_work` with target "Abandoned", even if InProgress) and create new replacement Works for the same phase with explicit file ownership - each file must be owned by exactly one Work. If the same phase generates 3 or more STRUCTURAL CONFLICT learnings, emit `need_help` instead of decomposing again.
+- When you see a Learning containing "CROSS-FILE BUG": (1) `override_work` the stuck Work to
+  Abandoned if not already terminal, (2) create a "fix" Work targeting the buggy file parented
+  to the SAME phase_id with AC that corrects the specific defect, (3) create a replacement Work
+  (same AC as the original) with the fix Work as a dependency. Do NOT expand the original Work's
+  file scope. Learning format: "CROSS-FILE BUG: Work {wk-id} blocked by defect in {file}. Details: {desc}."
 - ALWAYS respond with ONLY a JSON array of actions. Never respond with prose/thinking.
 
 ## Valid Status Values

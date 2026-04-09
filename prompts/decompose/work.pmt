@@ -46,3 +46,27 @@ This is their primary design purpose. When decomposing:
   over-decomposed. Collapse the chain into one work item.
 - Work items that touch different files can always run in parallel. Declare
   files accurately so the orchestrator can schedule them concurrently.
+
+## Same-File Rule
+
+If two or more Work items target the SAME file, they MUST have sequential dependencies
+between them. The first item creates the file; each subsequent item depends on the
+previous one. This is non-negotiable - parallel writers on the same file produce
+unresolvable merge conflicts.
+
+Order by: scaffolding/structure first, then content additions, then tests that
+import from earlier content.
+
+Example: if three Works all write to `test_api.py`:
+  - Work A (Fixtures): files=["tests/conftest.py", "tests/test_api.py"], deps=[]
+  - Work B (Health tests): files=["tests/test_api.py"], deps=["Fixtures"]
+  - Work C (CRUD tests): files=["tests/test_api.py"], deps=["Health tests"]
+
+## AC Grounding Rule
+
+Every acceptance criterion MUST be derivable from the parent document's Contracts,
+Interfaces, or Outputs sections. Do NOT assert fields, endpoints, or behaviors that
+are not explicitly defined upstream. If the parent says the API returns {id, title, url},
+do NOT assert {id, title, url, created_at} - that field does not exist.
+
+When writing test ACs, reference the exact response shape from the Contracts section.
