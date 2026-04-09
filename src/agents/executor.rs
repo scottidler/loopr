@@ -27,7 +27,7 @@ use crate::worktree::manager::WorktreeManager;
 ///
 /// Disabled in Phase 1: the `files` field was removed from Work (reactive conflict model).
 /// File paths are no longer available at planning time, so we cannot read files to check AC.
-/// TODO: Phase 3 - re-enable by deriving file paths from worktree `touched_paths`.
+/// TODO: Phase 3 - re-enable by deriving file paths from worktree `paths`.
 ///
 /// Returns `None` (fall through to implementer) unconditionally.
 async fn preflight_ac_check(_stores: &Arc<Stores>, _work_id: &str) -> Option<bool> {

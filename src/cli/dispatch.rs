@@ -346,7 +346,7 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             description,
             base_tick_id,
             claims,
-            touched_paths,
+            paths,
         } => {
             let mut params = json!({
                 "work_id": work_id,
@@ -359,8 +359,8 @@ fn bundle_to_ipc(cmd: &BundleCmd, role: Role) -> (String, serde_json::Value) {
             if !claims.is_empty() {
                 params["claims"] = json!(claims);
             }
-            if !touched_paths.is_empty() {
-                params["touched_paths"] = json!(touched_paths);
+            if !paths.is_empty() {
+                params["paths"] = json!(paths);
             }
             ("bundle.create".to_string(), params)
         }

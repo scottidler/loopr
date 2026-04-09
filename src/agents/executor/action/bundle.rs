@@ -116,9 +116,9 @@ pub(super) async fn handle_propose_bundle(
         None
     };
 
-    // Compute touched_paths: all files this branch changed vs main, across all
+    // Compute paths: all files this branch changed vs main, across all
     // iterations. This enables scope enforcement at review and integration time.
-    let touched_paths: Vec<String> = if !is_noop {
+    let paths: Vec<String> = if !is_noop {
         tokio::process::Command::new("git")
             .args(["diff", "--name-only", "main...HEAD"])
             .current_dir(worktree_path)
@@ -137,8 +137,8 @@ pub(super) async fn handle_propose_bundle(
     } else {
         vec![]
     };
-    if !touched_paths.is_empty() {
-        ctx.info(&format!("Touched paths: {:?}", touched_paths));
+    if !paths.is_empty() {
+        ctx.info(&format!("Touched paths: {:?}", paths));
     }
 
     // Fix #1: Resolve base_tick_id from latest Published Tick
@@ -159,8 +159,8 @@ pub(super) async fn handle_propose_bundle(
     if let Some(tick_id) = &base_tick_id {
         params["base_tick_id"] = serde_json::Value::String(tick_id.clone());
     }
-    if !touched_paths.is_empty() {
-        params["touched_paths"] = serde_json::json!(touched_paths);
+    if !paths.is_empty() {
+        params["paths"] = serde_json::json!(paths);
     }
 
     let resp = bridge.request("bundle.create", params.clone());

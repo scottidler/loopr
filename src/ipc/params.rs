@@ -19,7 +19,7 @@ pub struct BundleCreateParams {
     #[serde(default)]
     pub base_tick_id: Option<String>,
     #[serde(default)]
-    pub touched_paths: Vec<String>,
+    pub paths: Vec<String>,
 }
 
 /// Params for `learning.create` IPC method.
@@ -59,7 +59,7 @@ mod tests {
             claims: vec!["claim1".to_string(), "claim2".to_string()],
             description: Some("A test bundle".to_string()),
             base_tick_id: Some("tick-1".to_string()),
-            touched_paths: vec!["src/main.rs".to_string()],
+            paths: vec!["src/main.rs".to_string()],
         };
         let json = serde_json::to_value(&params).unwrap();
         let restored: BundleCreateParams = serde_json::from_value(json).unwrap();
@@ -78,7 +78,7 @@ mod tests {
         let params: BundleCreateParams = serde_json::from_value(json).unwrap();
         assert!(params.description.is_none());
         assert!(params.base_tick_id.is_none());
-        assert!(params.touched_paths.is_empty());
+        assert!(params.paths.is_empty());
     }
 
     #[test]

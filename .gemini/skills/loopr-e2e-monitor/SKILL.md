@@ -74,21 +74,62 @@ To accurately observe the run, follow these 6 keys:
    grep -E ' ERROR | WARN ' "$LOG"         # all warnings and errors
    grep 'failed\|panic'   "$LOG"           # failure lines
    ```
+
+   **LLM conversation logs (only present at DEBUG log level):**
+   ```bash
+   ls -la ~/.local/share/loopr/sessions/latest/conversations/ 2>/dev/null
+   ```
+
+   When the `conversations/` directory exists, it contains full LLM request/response pairs per
+   domain action. Each file is named by context: `implement-<work_id>.log`,
+   `coordinate-<session_id>.log`, `review-<session_id>.log`, `research-<session_id>.log`.
+   These are invaluable for diagnosing bad decomposition or off-track implementer behavior:
+   ```bash
+   # List conversation logs by size (largest = most LLM calls)
+   ls -lhS ~/.local/share/loopr/sessions/latest/conversations/ 2>/dev/null
+   # Read the last request/response pair from a specific implementer
+   /usr/bin/tail -100 ~/.local/share/loopr/sessions/latest/conversations/implement-wk-*.log 2>/dev/null | head -100
+   ```
+
+   Conversation logs are only created when `--log-level debug` is set. At the default INFO level
+   the `conversations/` directory does not exist.
+
 5. **Don't alert on old data:** The `.taskstore/*.jsonl` files are **append-only event logs**. A work item might have been `InProgress` 5 minutes ago, but if you look at the *latest* entry, the bundle is `Merged`. Deduplicate by ID and only look at the last record before drawing conclusions.
 6. **Correlate Taskstore with CLI Run State:** Always ask, "If the workflow is complete, did the orchestrator exit successfully?" A successful task sequence is a failure if the process hangs. Do not blindly report "Success" just because Works are `Done`.
 
+## Run Path - READ THIS FIRST
+
+**CRITICAL: The E2E base directory is `/tmp/loopr/e2e/` - a slash before `e2e`, NOT a hyphen.**
+
+```
+CORRECT:   /tmp/loopr/e2e/<target>/latest
+WRONG:     /tmp/loopr-e2e/<target>/latest   <- does not exist, NEVER use this
+```
+
+Every run is at `/tmp/loopr/e2e/<target>/<timestamp>/`. The `latest` symlink always points to the most recent run. Use it:
+
+```
+/tmp/loopr/e2e/python-api/latest
+/tmp/loopr/e2e/rust-version/latest
+/tmp/loopr/e2e/node-api/latest
+```
+
+If you are unsure of the target name, check the daemon process:
+```bash
+ps aux | grep 'loopr.*daemon' | grep -v grep | awk -F'--config ' '{print $2}' | awk -F'/loopr.yml' '{print $1}'
+```
+
 ## Target Discovery & E2E Script
 
-You must dynamically understand the available targets rather than relying on hardcoded paths:
-1. **Target Definitions:** E2E targets are defined as shell scripts in `bin/e2e-targets/` (e.g., `bin/e2e-targets/python-api.sh`).
-2. **E2E Script:** The actual E2E test runner is `bin/e2e`. You can run `bin/e2e ls` to list available targets.
-3. **Run Paths:** The runner automatically outputs runs to `/tmp/loopr/e2e/<target>/<timestamp>`. The easiest way to access the active run is always via the symlink: `/tmp/loopr/e2e/<target>/latest`.
+1. **Target Definitions:** E2E targets are defined as shell scripts in `bin/e2e-targets/`.
+2. **E2E Script:** The actual E2E test runner is `bin/e2e`. Run `bin/e2e ls` to list targets.
+3. **Run Paths:** `/tmp/loopr/e2e/<target>/<timestamp>/` - access via `/tmp/loopr/e2e/<target>/latest`.
 
 ## Interpreting Script Output
 
 The `scripts/check.sh` emits three marker levels: `[OK]`, `[WARN]`, `[ALERT]`.
 
-When asked to investigate a specific target (e.g., `python-api`), resolve its latest run dynamically:
+For a specific target (e.g., `python-api`):
 ```bash
 scripts/check.sh /tmp/loopr/e2e/python-api/latest
 ```

@@ -141,13 +141,10 @@ pub(super) fn handle_bundle_create(
         bundle.noop_reason = noop_reason;
         bundle.head_commit = head_commit;
 
-        // M8: Accept both "touched_paths" and "files_changed" (normalize param name)
-        let touched_paths_val = req
-            .params
-            .get("touched_paths")
-            .or_else(|| req.params.get("files_changed"));
-        if let Some(files) = touched_paths_val.and_then(|v| v.as_array()) {
-            bundle.touched_paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        // M8: Accept both "paths" and "files_changed" (normalize param name)
+        let paths_val = req.params.get("paths").or_else(|| req.params.get("files_changed"));
+        if let Some(files) = paths_val.and_then(|v| v.as_array()) {
+            bundle.paths = files.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
 
         // Parse loc_changed if provided
@@ -157,12 +154,12 @@ pub(super) fn handle_bundle_create(
 
         // Gap #22: BundleSizePolicy enforcement on create
         let policy = &stores.config.strategy.bundle_size;
-        if !bundle.touched_paths.is_empty() && bundle.touched_paths.len() as u32 > policy.max_files_touched {
+        if !bundle.paths.is_empty() && bundle.paths.len() as u32 > policy.max_files_touched {
             return Ok(DaemonResponse::err(
                 req.id,
                 RpcError::precondition_failed(&format!(
                     "Bundle touches {} files, exceeds max_files_touched={}",
-                    bundle.touched_paths.len(),
+                    bundle.paths.len(),
                     policy.max_files_touched
                 )),
             ));
@@ -313,13 +310,8 @@ pub(super) fn handle_bundle_transition(
         let mut bundles = stores.write_bundles()?;
 
         // Read bundle info first for validation
-        let (from, bundle_wi_id, touched_paths, mut verification) = match bundles.get(&id) {
-            Some(b) => (
-                b.status(),
-                b.work_id.clone(),
-                b.touched_paths.clone(),
-                b.verification.clone(),
-            ),
+        let (from, bundle_wi_id, paths, mut verification) = match bundles.get(&id) {
+            Some(b) => (b.status(), b.work_id.clone(), b.paths.clone(), b.verification.clone()),
             None => return Ok(DaemonResponse::err(req.id, RpcError::not_found("bundle", &id))),
         };
 
@@ -365,7 +357,7 @@ pub(super) fn handle_bundle_transition(
         // Gap #17: Bundle cannot touch locked resources it doesn't own
         if target_status == BundleStatus::Integrating {
             let locks = stores.read_locks()?;
-            for path in &touched_paths {
+            for path in &paths {
                 if let Some(lock) = locks.values().find(|l| l.resource == *path && l.is_active())
                     && lock.holder_id != bundle_wi_id
                 {
@@ -458,11 +450,8 @@ pub(super) fn handle_bundle_update(
         if let Some(desc) = req.params.get("description").and_then(|v| v.as_str()) {
             bundle.description = Some(desc.to_string());
         }
-        // M8: Accept both "touched_paths" and "files_changed" in update
-        let paths_val = req
-            .params
-            .get("touched_paths")
-            .or_else(|| req.params.get("files_changed"));
+        // M8: Accept both "paths" and "files_changed" in update
+        let paths_val = req.params.get("paths").or_else(|| req.params.get("files_changed"));
         if let Some(paths) = paths_val.and_then(|v| v.as_array()) {
             // Gap #22: BundleSizePolicy enforcement on update
             let policy = &stores.config.strategy.bundle_size;
@@ -476,7 +465,7 @@ pub(super) fn handle_bundle_update(
                     )),
                 ));
             }
-            bundle.touched_paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+            bundle.paths = paths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
         }
         // Parse loc_changed if provided
         if let Some(loc) = req.params.get("loc_changed").and_then(|v| v.as_u64()) {

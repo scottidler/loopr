@@ -255,7 +255,7 @@ impl<L: LlmClient + 'static> Agent for ReviewerAgent<L> {
                 .stores
                 .read_bundles()
                 .ok()
-                .and_then(|bundles| bundles.get(self.bundle_id.as_str()).map(|b| b.touched_paths.clone()))
+                .and_then(|bundles| bundles.get(self.bundle_id.as_str()).map(|b| b.paths.clone()))
                 .unwrap_or_default();
             let repo_path = &self.ctx.stores.config.project.repo_path;
             extract_referenced_signatures(repo_path, &touched)
@@ -582,7 +582,7 @@ mod tests {
             vec!["Added test module with basic functionality".into()],
         );
         bundle.force_status(BundleStatus::Triaged);
-        bundle.touched_paths = vec!["src/test.rs".into(), "src/main.rs".into()];
+        bundle.paths = vec!["src/test.rs".into(), "src/main.rs".into()];
         let bundle_id = bundle.id.clone();
         stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 

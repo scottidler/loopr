@@ -246,7 +246,7 @@ pub struct ContextBuilder<'a> {
     spec_id: Option<String>,
     phase_id: Option<String>,
     // Optional sections
-    bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, touched_paths)
+    bundle_info: Option<(String, Vec<String>, Vec<String>)>, // (id, claims, paths)
     bundle_diff: Option<String>,
     bundle_noop_reason: Option<String>,
     /// For noop bundles: file contents read from repo for Reviewer verification.
@@ -414,7 +414,7 @@ impl<'a> ContextBuilder<'a> {
     /// Load hierarchy from a bundle ID: Bundle -> Work -> Phase -> Spec -> Plan.
     pub fn load_bundle_hierarchy(mut self, bundle_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_bundle_hierarchy(bundle_id={})", bundle_id);
-        let (bid, claims, touched_paths, work_id, noop_reason) = {
+        let (bid, claims, paths, work_id, noop_reason) = {
             let guard = self.stores.read_bundles()?;
             let bundle = guard
                 .get(bundle_id)
@@ -422,13 +422,13 @@ impl<'a> ContextBuilder<'a> {
             (
                 bundle.id.clone(),
                 bundle.claims.clone(),
-                bundle.touched_paths.clone(),
+                bundle.paths.clone(),
                 bundle.work_id.clone(),
                 bundle.noop_reason.clone(),
             )
         };
 
-        self.bundle_info = Some((bid, claims, touched_paths.clone()));
+        self.bundle_info = Some((bid, claims, paths.clone()));
         self.bundle_noop_reason = noop_reason.clone();
 
         if noop_reason.is_some() {
@@ -436,9 +436,9 @@ impl<'a> ContextBuilder<'a> {
             // relevant files from the repo so the Reviewer can verify the
             // codebase state against acceptance criteria.
             let repo_path = &self.stores.config.project.repo_path;
-            // Use touched_paths (actual files changed by the implementer).
-            // Without work.files, touched_paths is the only source of file paths.
-            let paths_to_read: Vec<String> = touched_paths;
+            // Use paths (actual files changed by the implementer).
+            // Without work.files, paths is the only source of file paths.
+            let paths_to_read: Vec<String> = paths;
             let mut file_contents = Vec::new();
             for path in &paths_to_read {
                 let full_path = repo_path.join(path);

@@ -1275,9 +1275,9 @@ fn test_classify_conflict_no_overlap_returns_none() {
     let wk_b = Work::new("phase-1".into(), "Work B".into());
 
     let mut bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
-    bundle_a.touched_paths = vec!["src/a.rs".into()];
+    bundle_a.paths = vec!["src/a.rs".into()];
     let mut bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
-    bundle_b.touched_paths = vec!["src/b.rs".into()];
+    bundle_b.paths = vec!["src/b.rs".into()];
     bundle_a.force_status(crate::domain::bundle::BundleStatus::Reviewed);
     bundle_b.force_status(crate::domain::bundle::BundleStatus::Reviewed);
 
@@ -1295,7 +1295,7 @@ fn test_classify_conflict_no_overlap_returns_none() {
         .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
-    assert!(result.is_none(), "non-overlapping touched_paths should return None");
+    assert!(result.is_none(), "non-overlapping paths should return None");
 }
 
 #[test]
@@ -1307,9 +1307,9 @@ fn test_classify_conflict_with_overlap_returns_some() {
     let wk_b = Work::new("phase-1".into(), "Work B".into());
 
     let mut bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
-    bundle_a.touched_paths = vec!["src/database.py".into(), "src/models.py".into()];
+    bundle_a.paths = vec!["src/database.py".into(), "src/models.py".into()];
     let mut bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
-    bundle_b.touched_paths = vec!["src/database.py".into(), "tests/test_db.py".into()]; // database.py is shared
+    bundle_b.paths = vec!["src/database.py".into(), "tests/test_db.py".into()]; // database.py is shared
     bundle_a.force_status(crate::domain::bundle::BundleStatus::Reviewed);
     bundle_b.force_status(crate::domain::bundle::BundleStatus::Reviewed);
 
@@ -1329,7 +1329,7 @@ fn test_classify_conflict_with_overlap_returns_some() {
         .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
-    assert!(result.is_some(), "overlapping touched_paths should return Some");
+    assert!(result.is_some(), "overlapping paths should return Some");
     let (files, works) = result.unwrap();
     assert!(files.contains("src/database.py"));
     assert!(works.contains(&wk_a_id));
@@ -1345,14 +1345,14 @@ fn test_classify_conflict_empty_bundle_list_returns_none() {
 }
 
 #[test]
-fn test_classify_conflict_empty_touched_paths_returns_none() {
+fn test_classify_conflict_empty_paths_returns_none() {
     let dir = TestDir::new("loopr-intg-cc4");
     let stores = test_stores(&dir);
 
     let wk_a = Work::new("phase-1".into(), "Work A".into());
     let wk_b = Work::new("phase-1".into(), "Work B".into());
 
-    // Both bundles have empty touched_paths - should not trigger conflict
+    // Both bundles have empty paths - should not trigger conflict
     let bundle_a = Bundle::new(wk_a.id.clone(), None, "branch-a".into(), vec![]);
     let bundle_b = Bundle::new(wk_b.id.clone(), None, "branch-b".into(), vec![]);
 
@@ -1370,7 +1370,7 @@ fn test_classify_conflict_empty_touched_paths_returns_none() {
         .insert(bundle_b.id.clone(), bundle_b.clone());
 
     let result = classify_conflict(&stores, &[bundle_a.id.clone(), bundle_b.id.clone()]);
-    assert!(result.is_none(), "empty touched_paths should return None");
+    assert!(result.is_none(), "empty paths should return None");
 }
 
 // --- resolve_plan_id tests ---

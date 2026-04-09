@@ -68,9 +68,9 @@ pub enum BundleCmd {
         /// Claims (repeatable)
         #[arg(long = "claim")]
         claims: Vec<String>,
-        /// Touched paths (repeatable)
-        #[arg(long = "touched-path")]
-        touched_paths: Vec<String>,
+        /// Paths (repeatable)
+        #[arg(long = "path")]
+        paths: Vec<String>,
     },
     /// Get a bundle by ID
     Get {
@@ -669,9 +669,9 @@ mod tests {
             "feature/foo",
             "--claim",
             "Add JWT signing",
-            "--touched-path",
+            "--path",
             "src/auth.rs",
-            "--touched-path",
+            "--path",
             "src/lib.rs",
         ]);
         match cli.command {
@@ -681,14 +681,14 @@ mod tests {
                         work_id,
                         branch,
                         claims,
-                        touched_paths,
+                        paths,
                         ..
                     },
             }) => {
                 assert_eq!(work_id, "wi-1");
                 assert_eq!(branch, "feature/foo");
                 assert_eq!(claims, vec!["Add JWT signing"]);
-                assert_eq!(touched_paths, vec!["src/auth.rs", "src/lib.rs"]);
+                assert_eq!(paths, vec!["src/auth.rs", "src/lib.rs"]);
             }
             _ => panic!("expected Bundle Create with claims"),
         }

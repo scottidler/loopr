@@ -1296,7 +1296,7 @@ fn integration_branch_name(plan_id: &str) -> String {
 /// Returns `Some((conflicting_files, conflicting_work_ids))` for structural conflicts,
 /// or `None` when no file overlap is detected (treat as retryable).
 ///
-/// Uses `bundle.touched_paths` (actual git diff output) rather than the old `work.files`
+/// Uses `bundle.paths` (actual git diff output) rather than the old `work.files`
 /// (LLM-predicted, often empty or inaccurate).
 fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<String>, HashSet<String>)> {
     let bundles = stores.read_bundles().ok()?;
@@ -1310,7 +1310,7 @@ fn classify_conflict(stores: &Stores, bundle_ids: &[String]) -> Option<(HashSet<
         let Some(bundle) = bundles.get(bid.as_str()) else {
             continue;
         };
-        for file in &bundle.touched_paths {
+        for file in &bundle.paths {
             if let Some(first_work) = file_to_work.get(file) {
                 conflicting_files.insert(file.clone());
                 conflicting_works.insert(first_work.clone());

@@ -77,7 +77,7 @@ fn test_bundle_create_mapping() {
             description: "A bundle".to_string(),
             base_tick_id: Some("tick-1".to_string()),
             claims: vec![],
-            touched_paths: vec![],
+            paths: vec![],
         },
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
@@ -542,7 +542,7 @@ fn test_bundle_create_with_base_tick_id() {
             description: "No tick".to_string(),
             base_tick_id: None,
             claims: vec![],
-            touched_paths: vec![],
+            paths: vec![],
         },
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
@@ -644,7 +644,7 @@ fn test_work_create_skips_work_fields_for_non_work() {
 }
 
 #[test]
-fn test_bundle_create_with_claims_and_touched_paths() {
+fn test_bundle_create_with_claims_and_paths() {
     let cmd = Command::Bundle {
         cmd: BundleCmd::Create {
             work_id: "wi-1".to_string(),
@@ -652,13 +652,13 @@ fn test_bundle_create_with_claims_and_touched_paths() {
             description: "".to_string(),
             base_tick_id: None,
             claims: vec!["Add JWT".to_string()],
-            touched_paths: vec!["src/auth.rs".to_string()],
+            paths: vec!["src/auth.rs".to_string()],
         },
     };
     let (method, params) = command_to_ipc(&cmd, Role::Implementer);
     assert_eq!(method, "bundle.create");
     assert_eq!(params["claims"], json!(["Add JWT"]));
-    assert_eq!(params["touched_paths"], json!(["src/auth.rs"]));
+    assert_eq!(params["paths"], json!(["src/auth.rs"]));
 }
 
 #[test]

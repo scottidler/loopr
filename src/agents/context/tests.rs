@@ -536,7 +536,7 @@ fn setup_stores_with_bundle(dir: &std::path::Path) -> (Stores, String, String) {
         vec!["Added test module with basic functionality".into()],
     );
     bundle.force_status(BundleStatus::Triaged);
-    bundle.touched_paths = vec!["src/test.rs".into(), "src/main.rs".into()];
+    bundle.paths = vec!["src/test.rs".into(), "src/main.rs".into()];
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 
@@ -947,7 +947,7 @@ fn test_context_builder_noop_bundle_injects_directive() {
     );
     bundle.force_status(BundleStatus::Triaged);
     bundle.noop_reason = Some("Phase 1 already added Tailwind styling".to_string());
-    bundle.touched_paths = vec!["src/main.rs".into()];
+    bundle.paths = vec!["src/main.rs".into()];
     let bundle_id = bundle.id.clone();
     stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
 

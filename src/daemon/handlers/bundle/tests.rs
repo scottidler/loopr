@@ -917,7 +917,7 @@ async fn test_handle_bundle_update_size_policy_rejects_too_many_files() {
             "bundle.update",
             json!({
                 "id": bundle_id,
-                "touched_paths": too_many_paths
+                "paths": too_many_paths
             }),
         ),
     )
