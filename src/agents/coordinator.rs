@@ -12,7 +12,7 @@ use crate::agents::lifeguard::{self, Lifeguard, Verdict};
 use crate::agents::{Agent, AgentContext, AgentKind, AgentStatus};
 use crate::config::CoordinatorConfig;
 use crate::daemon::context::Stores;
-use crate::domain::bundle::BundleStatus;
+use crate::domain::bundle::{Bundle, BundleStatus};
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::lock::LockStatus;
 use crate::domain::plan::HierarchyStatus;
@@ -825,9 +825,12 @@ fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> St
         let Ok(works) = stores.read_works() else {
             return "works lock poisoned".to_string();
         };
+        let Ok(bundles) = stores.read_bundles() else {
+            return "bundles lock poisoned".to_string();
+        };
         let plan_works: Vec<_> = works.values().filter(|w| w.parent_id == plan.id).collect();
         summary.push_str(&format!("Plan: {} (Brief mode)\n\n", plan.title));
-        append_work_status(&mut summary, &plan_works, coord_state, &works);
+        append_work_status(&mut summary, &plan_works, coord_state, &works, &bundles);
         return summary;
     }
 
@@ -840,6 +843,9 @@ fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> St
     };
     let Ok(works) = stores.read_works() else {
         return "works lock poisoned".to_string();
+    };
+    let Ok(bundles) = stores.read_bundles() else {
+        return "bundles lock poisoned".to_string();
     };
 
     let active_specs_raw: Vec<_> = specs
@@ -863,7 +869,7 @@ fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> St
                 phase.title, phase.id, spec.title
             ));
             let phase_works: Vec<_> = works.values().filter(|w| w.parent_id == phase.id).collect();
-            append_work_status(&mut summary, &phase_works, coord_state, &works);
+            append_work_status(&mut summary, &phase_works, coord_state, &works, &bundles);
         }
     }
 
@@ -879,6 +885,7 @@ fn append_work_status(
     phase_works: &[&crate::domain::work::Work],
     coord_state: &CoordinatorState,
     all_works: &std::collections::HashMap<String, crate::domain::work::Work>,
+    bundles: &std::collections::HashMap<String, Bundle>,
 ) {
     let mut actionable = Vec::new();
     let mut terminal = Vec::new();
@@ -902,12 +909,25 @@ fn append_work_status(
         for wi in &actionable {
             let attempts = coord_state.attempts(&wi.id);
             let attempt_note = if attempts > 0 { format!(" [{} attempts]", attempts) } else { String::new() };
+            // For InReview works, append the associated bundle ID so the coordinator
+            // can issue accept_bundle with the correct bd-* ID (not the work ID).
+            let bundle_note = if wi.status() == WorkStatus::InReview {
+                bundles
+                    .values()
+                    .filter(|b| b.work_id == wi.id && !b.status().is_terminal())
+                    .max_by_key(|b| b.updated_at)
+                    .map(|b| format!(" [bundle: {}, {:?}]", b.id, b.status()))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             summary.push_str(&format!(
-                "- [{}] {} ({}){}\n",
+                "- [{}] {} ({}){}{}\n",
                 wi.id,
                 wi.title,
                 wi.status(),
-                attempt_note
+                attempt_note,
+                bundle_note
             ));
             if !wi.dependencies.is_empty() {
                 let dep_info: Vec<String> = wi

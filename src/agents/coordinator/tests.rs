@@ -1714,3 +1714,42 @@ async fn test_reconciler_same_type_dep_promotes_spec() {
         final_status
     );
 }
+
+#[test]
+fn test_append_work_status_includes_bundle_id_for_inreview_work() {
+    use crate::domain::bundle::BundleStatus;
+    use crate::domain::coordinator_state::CoordinatorState;
+    use crate::domain::work::Work;
+    use std::collections::HashMap;
+
+    let mut wi = Work::new("phase-1".into(), "update_bookmark".into());
+    wi.force_status(WorkStatus::InReview);
+    let wi_id = wi.id.clone();
+
+    let mut bundle = Bundle::new(wi_id.clone(), None, "branch-a".into(), vec![]);
+    bundle.force_status(BundleStatus::Triaged);
+    let bundle_id = bundle.id.clone();
+
+    let mut all_works = HashMap::new();
+    all_works.insert(wi_id.clone(), wi.clone());
+
+    let mut bundles = HashMap::new();
+    bundles.insert(bundle_id.clone(), bundle);
+
+    let coord_state = CoordinatorState::new("goal-1".into(), crate::config::InterviewMode::default());
+    let phase_works: Vec<_> = all_works.values().collect();
+
+    let mut summary = String::new();
+    append_work_status(&mut summary, &phase_works, &coord_state, &all_works, &bundles);
+
+    assert!(
+        summary.contains(&bundle_id),
+        "bundle ID should appear in coordinator context for InReview work, got: {}",
+        summary
+    );
+    assert!(
+        summary.contains("Triaged"),
+        "bundle status should appear in coordinator context, got: {}",
+        summary
+    );
+}
