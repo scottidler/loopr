@@ -44,9 +44,13 @@ This is their primary design purpose. When decomposing:
   is NOT a dependency - the contract is already defined in the Spec.
 - Prefer fan-out: many independent Work items, NOT linear chains.
   Two independent items beat five dependent ones.
-- If multiple Work items write to the same file, that is fine. The Integrator
-  handles merge conflicts at integration time. Do NOT add dependencies
-  between Work items solely because they touch the same file.
+- STRONGLY AVOID splitting work on the same file across parallel Work items.
+  If multiple functions, classes, or sections target the same source file,
+  combine them into a single Work item. Same-file parallel writes cause merge
+  conflicts that waste cycles. Only split same-file work if the items are
+  genuinely too large for one implementer (>500 lines of new code each).
+  When you must split same-file work, add explicit dependencies so they
+  execute sequentially, never in parallel.
 
 ## AC Grounding Rule
 
