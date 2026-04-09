@@ -706,9 +706,6 @@ async fn test_persist_coordinator_state() {
     assert_eq!(retrieved.fsm_state, CoordinatorFsmState::Executing);
 }
 
-// build_phase_status tests removed - replaced by build_execution_status.
-// build_execution_status shows multi-phase view via Active Plan/Spec/Phase hierarchy.
-
 // =========================================================================
 // Exhaustive FSM transition matrix tests
 // =========================================================================
@@ -771,9 +768,6 @@ async fn test_fsm_planning_stays_when_plan_is_draft() {
     let config = CoordinatorConfig::default();
     assert_eq!(check_fsm_transition(&stores, &coord_state, &config), None);
 }
-
-// ActivatePhase tests removed - that state no longer exists.
-// Planning transitions directly to Executing.
 
 // --- Executing state: all branches ---
 
@@ -904,8 +898,6 @@ async fn test_apply_fsm_goal_complete_deactivates_goal() {
     );
 }
 
-// Phase timeout tests removed - phase timeout no longer produces PhaseGate.
-
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fsm_goal_timeout_triggers_goal_complete() {
     let dir = TestDir::new("loopr-fsm-goaltimeout");
@@ -932,12 +924,6 @@ async fn test_fsm_goal_timeout_triggers_goal_complete() {
     let result = check_fsm_transition(&stores, &coord_state, &config);
     assert_eq!(result, Some(CoordinatorFsmState::GoalComplete));
 }
-
-// find_next_phase_to_activate tests removed - that function no longer exists.
-// Reconciliation loop handles phase promotion (Pending->Active).
-
-// Transition handler and mark_phase_record_complete tests removed.
-// Phase completion is now handled by the reconciliation loop.
 
 // --- Fix #2: resolve_batch_dependencies tests ---
 
@@ -1182,8 +1168,6 @@ async fn test_inject_overlap_deps_empty_batch() {
     // Empty batch — no-op, must not panic
     inject_overlap_deps(&stores, &[], TEST_PREFIX);
 }
-
-// build_phase_status dependency info tests removed - replaced by build_execution_status.
 
 // --- Fix #4: retry enforcement tests ---
 
@@ -1496,8 +1480,6 @@ async fn test_last_error_kind_for_work_ignores_other_works() {
 
     assert!(last_error_kind_for_work(&stores, "wi-1").is_none());
 }
-
-// phase_missing_test_tool tests removed - that function no longer exists.
 
 // --- Phase 1: quality gate tests (goal_abandon_ratio_terminal + check_abandon_gate) ---
 

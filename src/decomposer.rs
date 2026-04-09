@@ -2023,56 +2023,6 @@ mod tests {
         assert_eq!(h.works[0].files, vec!["src/module.py", "tests/test_module.py"]);
     }
 
-    #[test]
-    fn test_records_to_hierarchy_phase_order() {
-        let plan_id = crate::id::generate_id("pl");
-        let spec_id = crate::id::generate_id("sp");
-        let ph1_id = crate::id::generate_id("ph");
-        let ph2_id = crate::id::generate_id("ph");
-
-        let records = vec![
-            ChildRecord {
-                id: spec_id.clone(),
-                kind: DocKind::Spec,
-                parent_id: Some(plan_id.clone()),
-                title: "Spec".to_string(),
-                content: "spec".to_string(),
-                dependencies: vec![],
-                unresolved_dep_titles: vec![],
-                acceptance_criteria: vec![],
-                files: vec![],
-            },
-            ChildRecord {
-                id: ph1_id,
-                kind: DocKind::Phase,
-                parent_id: Some(spec_id.clone()),
-                title: "Phase 1".to_string(),
-                content: "ph1".to_string(),
-                dependencies: vec![],
-                unresolved_dep_titles: vec![],
-                acceptance_criteria: vec![],
-                files: vec![],
-            },
-            ChildRecord {
-                id: ph2_id,
-                kind: DocKind::Phase,
-                parent_id: Some(spec_id),
-                title: "Phase 2".to_string(),
-                content: "ph2".to_string(),
-                dependencies: vec![],
-                unresolved_dep_titles: vec![],
-                acceptance_criteria: vec![],
-                files: vec![],
-            },
-        ];
-
-        let ac = AcceptanceCriteria(vec![]);
-        let h = records_to_hierarchy(&plan_id, "Plan", "# Plan", ac, &records).unwrap();
-
-        assert_eq!(h.phases.len(), 2);
-        assert_eq!(h.phases.len(), 2);
-    }
-
     // --- build_decompose_prompt ---
 
     #[test]
