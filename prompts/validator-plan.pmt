@@ -10,6 +10,7 @@ You are reviewing a Plan document. Your job is to assess whether this document i
 1. Clear objective stated - the plan should describe a specific, achievable outcome (not vague like 'improve performance').
 2. Measurable acceptance criteria defined - each criterion must be independently verifiable through tests or inspection.
 3. Scope is bounded - the plan explicitly states what is included AND what is excluded.
+4. Optional sections (Non-Goals, Assumptions, Open Questions, Risks, Success Metrics) are conditional - their absence must NOT lower the verdict. Only flag them if their content is present but incorrect or incomplete.
 
 ## Output Format
 
