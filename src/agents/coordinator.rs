@@ -18,6 +18,7 @@ use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::lock::LockStatus;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
+use crate::domain::sort::topo_sort_by_deps;
 use crate::domain::tick::TickStatus;
 use crate::domain::work::WorkStatus;
 use crate::ipc::protocol::DaemonEvent;
@@ -257,11 +258,12 @@ pub fn build_state_summary_with_sla(
         let Ok(phases) = stores.read_phases() else {
             return summary;
         };
-        let mut non_terminal: Vec<_> = phases
+        let non_terminal_raw: Vec<_> = phases
             .values()
             .filter(|p| !matches!(p.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .cloned()
             .collect();
-        non_terminal.sort_by_key(|p| p.created_at);
+        let non_terminal = topo_sort_by_deps(&non_terminal_raw, |p| &p.id, |p| &p.dependencies, |p| p.created_at);
         if !non_terminal.is_empty() {
             summary.push_str("### Phases\n");
             for p in &non_terminal {
@@ -282,11 +284,12 @@ pub fn build_state_summary_with_sla(
         let Ok(specs) = stores.read_specs() else {
             return summary;
         };
-        let mut non_terminal: Vec<_> = specs
+        let non_terminal_raw: Vec<_> = specs
             .values()
             .filter(|s| !matches!(s.status(), HierarchyStatus::Complete | HierarchyStatus::Abandoned))
+            .cloned()
             .collect();
-        non_terminal.sort_by_key(|s| s.created_at);
+        let non_terminal = topo_sort_by_deps(&non_terminal_raw, |s| &s.id, |s| &s.dependencies, |s| s.created_at);
         if !non_terminal.is_empty() {
             summary.push_str("### Specs\n");
             for s in &non_terminal {
@@ -891,18 +894,20 @@ fn build_execution_status(stores: &Stores, coord_state: &CoordinatorState) -> St
         return "works lock poisoned".to_string();
     };
 
-    let mut active_specs: Vec<_> = specs
+    let active_specs_raw: Vec<_> = specs
         .values()
         .filter(|s| s.parent_id == plan.id && s.status() == HierarchyStatus::Active)
+        .cloned()
         .collect();
-    active_specs.sort_by_key(|s| s.created_at);
+    let active_specs = topo_sort_by_deps(&active_specs_raw, |s| &s.id, |s| &s.dependencies, |s| s.created_at);
 
     for spec in &active_specs {
-        let mut spec_phases: Vec<_> = phases
+        let spec_phases_raw: Vec<_> = phases
             .values()
             .filter(|p| p.parent_id == spec.id && p.status() == HierarchyStatus::Active)
+            .cloned()
             .collect();
-        spec_phases.sort_by_key(|p| p.created_at);
+        let spec_phases = topo_sort_by_deps(&spec_phases_raw, |p| &p.id, |p| &p.dependencies, |p| p.created_at);
 
         for phase in &spec_phases {
             summary.push_str(&format!(

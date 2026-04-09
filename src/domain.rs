@@ -12,6 +12,7 @@ pub mod markdown;
 pub mod phase;
 pub mod plan;
 pub mod role;
+pub mod sort;
 pub mod spec;
 pub mod tick;
 pub mod transition;

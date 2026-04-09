@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::daemon::context::Stores;
 use crate::domain::phase::Phase;
 use crate::domain::plan::{HierarchyStatus, Plan};
+use crate::domain::sort::topo_sort_by_deps;
 use crate::domain::spec::Spec;
 use crate::domain::work::{Work, WorkStatus};
 
@@ -148,13 +149,15 @@ pub fn find_active_plan(stores: &Stores) -> Option<Plan> {
 /// Find active Specs for a given Plan.
 pub fn find_active_specs_for_plan(stores: &Stores, plan_id: &str) -> Vec<Spec> {
     let Ok(specs) = stores.read_specs() else { return vec![] };
-    let mut result: Vec<_> = specs
+    let items: Vec<_> = specs
         .values()
         .filter(|s| s.parent_id == plan_id && s.status() == HierarchyStatus::Active)
         .cloned()
         .collect();
-    result.sort_by_key(|s| s.created_at);
-    result
+    topo_sort_by_deps(&items, |s| &s.id, |s| &s.dependencies, |s| s.created_at)
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 /// Find active Phases for a given Spec.
@@ -162,13 +165,15 @@ pub fn find_active_phases_for_spec(stores: &Stores, spec_id: &str) -> Vec<Phase>
     let Ok(phases) = stores.read_phases() else {
         return vec![];
     };
-    let mut result: Vec<_> = phases
+    let items: Vec<_> = phases
         .values()
         .filter(|p| p.parent_id == spec_id && p.status() == HierarchyStatus::Active)
         .cloned()
         .collect();
-    result.sort_by_key(|p| p.created_at);
-    result
+    topo_sort_by_deps(&items, |p| &p.id, |p| &p.dependencies, |p| p.created_at)
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 /// Find all Works whose parent_id matches the given ID.
