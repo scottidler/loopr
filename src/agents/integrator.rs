@@ -278,21 +278,26 @@ impl IntegratorAgent {
             return Ok(IntegratorCycleResult::Idle);
         }
 
-        // 3. Find all Accepted bundles and partition by plan_id
-        let accepted_bundles: Vec<(String, Option<String>)> = {
+        // 3. Find all Accepted bundles, partition by plan_id, pick one plan per cycle.
+        let (cycle_plan_id, accepted_bundles): (Option<String>, Vec<(String, Option<String>)>) = {
             let bundles = self.ctx.stores.read_bundles()?;
-            let mut by_plan: std::collections::BTreeMap<String, Vec<(String, Option<String>)>> = std::collections::BTreeMap::new();
-            
+            let mut by_plan: std::collections::BTreeMap<String, Vec<(String, Option<String>)>> =
+                std::collections::BTreeMap::new();
+
             for b in bundles.values().filter(|b| b.status() == BundleStatus::Accepted) {
-                let plan_id = resolve_plan_id(&self.ctx.stores, &b.work_id).unwrap_or_else(|| "".to_string());
-                by_plan.entry(plan_id).or_default().push((b.id.clone(), b.base_tick_id.clone()));
+                let pid = resolve_plan_id(&self.ctx.stores, &b.work_id).unwrap_or_default();
+                by_plan
+                    .entry(pid)
+                    .or_default()
+                    .push((b.id.clone(), b.base_tick_id.clone()));
             }
 
-            // Pick one plan's bundles to process per cycle
-            if let Some((_, plan_bundles)) = by_plan.into_iter().next() {
-                plan_bundles
+            // Pick one plan's bundles to process per cycle; remaining plans get subsequent cycles.
+            if let Some((pid, plan_bundles)) = by_plan.into_iter().next() {
+                let resolved = if pid.is_empty() { None } else { Some(pid) };
+                (resolved, plan_bundles)
             } else {
-                Vec::new()
+                (None, Vec::new())
             }
         };
 
@@ -468,15 +473,8 @@ impl IntegratorAgent {
             }
         }
 
-        // Resolve plan_id for integration branch targeting.
-        // All bundles in the same tick should belong to the same plan.
-        let plan_id: Option<String> = {
-            let bundles = self.ctx.stores.read_bundles()?;
-            valid_bundle_ids
-                .first()
-                .and_then(|id| bundles.get(id.as_str()))
-                .and_then(|b| resolve_plan_id(&self.ctx.stores, &b.work_id))
-        };
+        // plan_id was resolved during partition (step 3) and threaded here.
+        let plan_id = cycle_plan_id;
 
         // 6. Create Tick
         let tick_number = self.next_tick_number()?;

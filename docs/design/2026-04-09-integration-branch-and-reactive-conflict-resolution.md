@@ -792,6 +792,16 @@ This is acknowledged as a real future scenario but deferred because:
 | Half-rebased worktree blocks implementer | Medium | High | `WorktreeManager::refresh()` must `git rebase --abort` on failure before returning error |
 | `rebase_lag` never resets after successful rebase | Low | Medium | Explicitly reset `rebase_lag = 0` on successful rebase; counter tracks consecutive failures, not total |
 
+## Post-Implementation Addendum (v0.1.111)
+
+### Fix: plan_id partitioning in Integrator (post-audit)
+
+The initial v0.1.111 implementation had a structural defect identified by architectural audit: the Integrator's `run_cycle()` collected all Accepted bundles globally and resolved plan_id from only the first bundle, assuming all bundles belonged to the same Plan. Under concurrent Plan execution (or orphaned bundles from a prior Plan), this would merge bundles from Plan B into `integration/<plan_A>`, causing cross-plan contamination.
+
+**Fix applied:** The partition step now groups Accepted bundles by resolved plan_id into a `BTreeMap<String, Vec<...>>`, picks one plan's group per cycle, and threads the resolved `cycle_plan_id` through to the branch targeting step - eliminating the redundant second `resolve_plan_id()` call that re-derived plan_id from the first valid bundle. Remaining plan groups are processed in subsequent Integrator cycles.
+
+This also removed 3 unnecessary lock acquisitions per cycle (works, phases, specs) that the redundant resolution required.
+
 ## Open Questions
 
 - [ ] Should the integration branch merge to main use `--squash` (single commit) or `--no-ff` (preserve history)? `--no-ff` preserves the full commit graph for debugging; `--squash` gives a clean main history. Recommend `--no-ff` initially with a config option later.
