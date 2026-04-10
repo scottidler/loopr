@@ -580,10 +580,10 @@ impl IntegratorAgent {
         // Record pre-merge SHA for validation rollback (set after branch checkout).
         let mut pre_merge_sha: Option<String> = None;
 
-        if !branches.is_empty() && is_git_repo {
+        if is_git_repo {
             let _git_guard = self.ctx.stores.lock_git()?;
 
-            // Checkout integration branch (if one exists) before merging.
+            // Always checkout integration branch (needed for validation + SHA).
             if let Some(ref branch) = integ_branch {
                 let verify = std::process::Command::new("git")
                     .args(["rev-parse", "--verify", branch])
@@ -612,109 +612,132 @@ impl IntegratorAgent {
             // Record pre-merge SHA for validation rollback.
             pre_merge_sha = get_git_head_sha(repo_path);
 
-            match merge_bundle_branches(repo_path, &branches) {
-                Ok(sha) => {
-                    let mut ticks = self.ctx.stores.write_ticks()?;
-                    if let Some(tick) = ticks.get_mut(&tick_id) {
-                        tick.integration_sha = Some(sha);
-                    }
-                }
-                Err(e) => {
-                    self.ctx.warn(&format!("merge failed: {}", e));
-
-                    // Reset integration branch to pre-tick HEAD, rolling back any
-                    // partial merges from earlier bundles in this tick.
-                    if let Some(ref sha) = pre_merge_sha {
-                        // Abort any in-progress merge first.
-                        let _ = std::process::Command::new("git")
-                            .args(["merge", "--abort"])
-                            .current_dir(repo_path)
-                            .output();
-                        let reset = std::process::Command::new("git")
-                            .args(["reset", "--hard", sha])
-                            .current_dir(repo_path)
-                            .output();
-                        match reset {
-                            Ok(o) if o.status.success() => {
-                                self.ctx
-                                    .info(&format!("reset integration branch to pre-tick HEAD {}", sha));
-                            }
-                            _ => {
-                                self.ctx.warn(&format!("failed to reset integration branch to {}", sha));
-                            }
+            if !branches.is_empty() {
+                match merge_bundle_branches(repo_path, &branches) {
+                    Ok(sha) => {
+                        let mut ticks = self.ctx.stores.write_ticks()?;
+                        if let Some(tick) = ticks.get_mut(&tick_id) {
+                            tick.integration_sha = Some(sha);
                         }
                     }
+                    Err(e) => {
+                        self.ctx.warn(&format!("merge failed: {}", e));
 
-                    let fail_resp = self.ctx.bridge.request(
-                        "tick.transition",
-                        serde_json::json!({
-                            "id": tick_id,
-                            "target_status": "Failed",
-                            "role": "integrator",
-                        }),
-                    );
-                    if fail_resp.is_error() {
-                        let msg = fail_resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                        return Err(eyre!(
-                            "failed to transition tick {} to Failed after merge failure: {}",
-                            tick_id,
-                            msg
-                        ));
-                    }
-
-                    // Classify the conflict before rejecting bundles (while we still have context).
-                    let conflict_kind = classify_conflict(&self.ctx.stores, &valid_bundle_ids);
-
-                    for bundle_id in &valid_bundle_ids {
-                        let resp = self.ctx.bridge.request(
-                            "bundle.transition",
-                            serde_json::json!({
-                                "id": bundle_id,
-                                "target_status": "Rejected",
-                                "role": "integrator",
-                            }),
-                        );
-                        if resp.is_error() {
-                            let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
-                            return Err(eyre!(
-                                "failed to reject bundle {} after merge failure: {}",
-                                bundle_id,
-                                msg
-                            ));
-                        }
-                    }
-
-                    // Handle work reset based on conflict type.
-                    match conflict_kind {
-                        Some((conflicting_files, conflicting_work_ids)) => {
-                            self.ctx.warn(&format!(
-                                "structural merge conflict detected: works={:?} files={:?}",
-                                conflicting_work_ids, conflicting_files
-                            ));
-                            self.combine_conflicting_works(
-                                &conflicting_work_ids,
-                                &conflicting_files,
-                                &valid_bundle_ids,
-                            );
-                        }
-                        None => {
-                            // Retryable conflict - reset all works to Ready.
-                            if let Ok(bundles) = self.ctx.stores.read_bundles() {
-                                for bundle_id in &valid_bundle_ids {
-                                    let wi_id = bundles
-                                        .get(bundle_id.as_str())
-                                        .map(|b| b.work_id.clone())
-                                        .unwrap_or_default();
-                                    self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
+                        // Reset integration branch to pre-tick HEAD, rolling back any
+                        // partial merges from earlier bundles in this tick.
+                        if let Some(ref sha) = pre_merge_sha {
+                            // Abort any in-progress merge first.
+                            let _ = std::process::Command::new("git")
+                                .args(["merge", "--abort"])
+                                .current_dir(repo_path)
+                                .output();
+                            let reset = std::process::Command::new("git")
+                                .args(["reset", "--hard", sha])
+                                .current_dir(repo_path)
+                                .output();
+                            match reset {
+                                Ok(o) if o.status.success() => {
+                                    self.ctx
+                                        .info(&format!("reset integration branch to pre-tick HEAD {}", sha));
+                                }
+                                _ => {
+                                    self.ctx.warn(&format!("failed to reset integration branch to {}", sha));
                                 }
                             }
                         }
-                    }
 
-                    return Ok(IntegratorCycleResult::ValidationFailed {
-                        tick_id,
-                        log: format!("Merge failed: {}", e),
-                    });
+                        let fail_resp = self.ctx.bridge.request(
+                            "tick.transition",
+                            serde_json::json!({
+                                "id": tick_id,
+                                "target_status": "Failed",
+                                "role": "integrator",
+                            }),
+                        );
+                        if fail_resp.is_error() {
+                            let msg = fail_resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                            return Err(eyre!(
+                                "failed to transition tick {} to Failed after merge failure: {}",
+                                tick_id,
+                                msg
+                            ));
+                        }
+
+                        // Classify the conflict before rejecting bundles (while we still have context).
+                        let conflict_kind = classify_conflict(&self.ctx.stores, &valid_bundle_ids);
+
+                        for bundle_id in &valid_bundle_ids {
+                            let resp = self.ctx.bridge.request(
+                                "bundle.transition",
+                                serde_json::json!({
+                                    "id": bundle_id,
+                                    "target_status": "Rejected",
+                                    "role": "integrator",
+                                }),
+                            );
+                            if resp.is_error() {
+                                let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+                                return Err(eyre!(
+                                    "failed to reject bundle {} after merge failure: {}",
+                                    bundle_id,
+                                    msg
+                                ));
+                            }
+                        }
+
+                        // Handle work reset based on conflict type.
+                        match conflict_kind {
+                            Some((conflicting_files, conflicting_work_ids)) => {
+                                self.ctx.warn(&format!(
+                                    "structural merge conflict detected: works={:?} files={:?}",
+                                    conflicting_work_ids, conflicting_files
+                                ));
+                                self.combine_conflicting_works(
+                                    &conflicting_work_ids,
+                                    &conflicting_files,
+                                    &valid_bundle_ids,
+                                );
+                            }
+                            None => {
+                                // Retryable conflict - reset all works to Ready.
+                                if let Ok(bundles) = self.ctx.stores.read_bundles() {
+                                    for bundle_id in &valid_bundle_ids {
+                                        let wi_id = bundles
+                                            .get(bundle_id.as_str())
+                                            .map(|b| b.work_id.clone())
+                                            .unwrap_or_default();
+                                        self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
+                                    }
+                                }
+                            }
+                        }
+
+                        return Ok(IntegratorCycleResult::ValidationFailed {
+                            tick_id,
+                            log: format!("Merge failed: {}", e),
+                        });
+                    }
+                }
+            } else {
+                // Noop tick: no merge needed, but record integration branch HEAD
+                self.ctx
+                    .info("All bundles are noop - skipping merge, recording HEAD SHA");
+                let sha = get_git_head_sha(repo_path);
+                let tick_to_persist = {
+                    let mut ticks = self.ctx.stores.write_ticks()?;
+                    if let Some(tick) = ticks.get_mut(&tick_id) {
+                        tick.integration_sha = sha;
+                        Some(tick.clone())
+                    } else {
+                        None
+                    }
+                };
+                // Persist immediately so crash between here and publish doesn't lose SHA
+                if let Some(tick) = tick_to_persist
+                    && let Some(ref store) = self.ctx.stores.store
+                    && let Ok(mut s) = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
+                {
+                    let _ = s.update(tick);
                 }
             }
         }
@@ -772,9 +795,30 @@ impl IntegratorAgent {
 
         // 11. Publish or Fail
         if passed {
-            let sha =
-                get_git_head_sha(&self.ctx.stores.config.project.repo_path).unwrap_or_else(|| "unknown".to_string());
+            // Defensive: ensure integration_sha is set before publish transition.
+            // Normal ticks already have it from merge. Noop ticks have it from
+            // checkout block above. This catches any remaining gap.
+            //
+            // IMPORTANT: Fetch SHA outside the write lock to avoid blocking the
+            // daemon's state access with a synchronous subprocess spawn.
+            let missing_sha = {
+                let ticks = self.ctx.stores.read_ticks()?;
+                ticks.get(&tick_id).is_some_and(|t| t.integration_sha.is_none())
+            };
 
+            if missing_sha {
+                let sha = get_git_head_sha(repo_path).unwrap_or_else(|| "unknown".to_string());
+                self.ctx.warn(&format!(
+                    "integration_sha was None before publish - setting to {} (defensive)",
+                    sha
+                ));
+                let mut ticks = self.ctx.stores.write_ticks()?;
+                if let Some(tick) = ticks.get_mut(&tick_id) {
+                    tick.integration_sha = Some(sha);
+                }
+            }
+
+            // NOW transition to Published - the handler persists the tick with SHA populated
             let pub_resp = self.ctx.bridge.request(
                 "tick.transition",
                 serde_json::json!({
@@ -787,23 +831,14 @@ impl IntegratorAgent {
                 return Err(eyre!("Failed to publish tick {}: {:?}", tick_id, pub_resp.error));
             }
 
-            let tick_to_persist = {
-                let mut ticks = self.ctx.stores.write_ticks()?;
-                if let Some(tick) = ticks.get_mut(&tick_id) {
-                    tick.integration_sha = Some(sha);
-                    Some(tick.clone())
-                } else {
-                    None
-                }
-            };
-
-            if let Some(tick) = tick_to_persist
-                && let Some(ref store) = self.ctx.stores.store
-                && let Ok(mut s) = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))
-                && let Err(e) = s.update(tick)
-            {
-                self.ctx.warn(&format!("Failed to persist tick integration_sha: {}", e));
-            }
+            // SHA was set before publish - verify invariant holds
+            debug_assert!(
+                self.ctx
+                    .stores
+                    .read_ticks()
+                    .is_ok_and(|ts| ts.get(&tick_id).is_some_and(|t| t.integration_sha.is_some())),
+                "integration_sha should be set after publish"
+            );
 
             for bundle_id in &valid_bundle_ids {
                 let resp = self.ctx.bridge.request(
@@ -1002,7 +1037,8 @@ impl IntegratorAgent {
     }
 
     /// Check that every non-terminal Bundle still has its agent branch in git.
-    /// Recoverable: missing branch → force Bundle to Rejected.
+    /// Recoverable: missing branch -> force Bundle to Rejected.
+    /// Noop bundles (with noop_reason set) are skipped - they have no agent branch.
     fn audit_branches(&self, repo_path: &std::path::Path, catastrophic: &mut bool) {
         let _ = catastrophic; // branch audit is recoverable only
         let bundles: Vec<(String, String, String)> = {
@@ -1015,6 +1051,8 @@ impl IntegratorAgent {
                             BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
                         )
                     })
+                    // Skip noop bundles - they have no agent branch by design
+                    .filter(|b| b.noop_reason.is_none())
                     .map(|b| (b.id.clone(), b.work_id.clone(), format!("{:?}", b.status())))
                     .collect(),
                 Err(_) => return,

@@ -4,6 +4,8 @@ use crate::agents::{AgentContext, AgentKind, AgentSession, AgentStatus};
 use crate::config::{Config, ProjectConfig};
 use crate::daemon::context::Stores;
 use crate::domain::bundle::Bundle;
+use crate::domain::phase::Phase;
+use crate::domain::spec::Spec;
 use crate::domain::tick::Tick;
 use crate::domain::work::{Work, WorkStatus};
 use crate::test_util::TestDir;
@@ -1497,4 +1499,151 @@ async fn test_combine_conflicting_works_creates_combined_work() {
         wk_c_updated.dependencies.contains(&combined.id),
         "new dep should point to combined work"
     );
+}
+
+// --- Noop tick lifecycle tests (Fix 2+3) ---
+
+/// Verify that a noop bundle (empty branch, noop_reason set) completes the tick lifecycle.
+/// In a non-git test dir, the defensive fallback in Fix 3 sets integration_sha to "unknown".
+#[tokio::test(flavor = "multi_thread")]
+async fn test_noop_tick_publishes() {
+    let dir = TestDir::new("loopr-intg-noop1");
+    let stores = test_stores(&dir);
+
+    let mut bundle = Bundle::new("wi-1".into(), None, String::new(), vec!["already exists".into()]);
+    bundle.noop_reason = Some("File already exists in scaffold".to_string());
+    bundle.force_status(BundleStatus::Accepted);
+    let bundle_id = bundle.id.clone();
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let agent = test_integrator(&dir, stores.clone(), test_config());
+    let result = agent.run_cycle().unwrap();
+    assert!(
+        matches!(result, IntegratorCycleResult::Published { .. }),
+        "expected Published, got {:?}",
+        result
+    );
+
+    // Bundle should be Merged
+    let bundles = stores.bundles.read().unwrap();
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Merged);
+    drop(bundles);
+
+    // Tick should have integration_sha set (defensive fallback for non-git dirs)
+    let ticks = stores.ticks.read().unwrap();
+    let tick = ticks.values().find(|t| t.status() == TickStatus::Published);
+    assert!(tick.is_some(), "should have a Published tick");
+    assert!(
+        tick.unwrap().integration_sha.is_some(),
+        "integration_sha should be set on Published tick (even for noop bundles)"
+    );
+}
+
+/// Verify that noop tick sets integration_sha from actual git HEAD in a real repo.
+/// Creates the full Plan -> Spec -> Phase -> Work hierarchy so plan_id resolves
+/// and the integration branch checkout path is exercised.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_noop_tick_sha_in_git_repo() {
+    let dir = TestDir::new("loopr-intg-noop-git");
+
+    // Initialize a real git repo with an initial commit
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&*dir)
+            .output()
+            .unwrap()
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "test@test.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(dir.join("README.md"), "# test").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "initial"]);
+
+    // Build Plan -> Spec -> Phase -> Work hierarchy so resolve_plan_id works
+    let plan_id = "plan-noop-test";
+
+    // Create an integration branch named after the plan
+    let integ_branch = format!("integration/{}", plan_id);
+    git(&["checkout", "-b", &integ_branch]);
+    std::fs::write(dir.join("file.txt"), "content").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "integration commit"]);
+
+    // Capture expected SHA (HEAD of integration branch)
+    let head_out = git(&["rev-parse", "HEAD"]);
+    let expected_sha = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+
+    let stores = test_stores(&dir);
+
+    // Create the hierarchy: Spec -> Phase -> Work
+    let spec = Spec::new(plan_id.to_string(), "Test Spec".into());
+    let spec_id = spec.id.clone();
+    stores.specs.write().unwrap().insert(spec.id.clone(), spec);
+
+    let phase = Phase::new(spec_id.clone(), "Test Phase".into());
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase.id.clone(), phase);
+
+    let mut work = Work::new(phase_id.clone(), "Test Work".into());
+    work.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
+    let work_id = work.id.clone();
+    stores.works.write().unwrap().insert(work.id.clone(), work);
+
+    // Create a noop bundle (base_tick_id=None, empty branch)
+    let mut bundle = Bundle::new(work_id.clone(), None, String::new(), vec!["already exists".into()]);
+    bundle.noop_reason = Some("File pre-exists".to_string());
+    bundle.force_status(BundleStatus::Accepted);
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let agent = test_integrator(&dir, stores.clone(), test_config());
+    let result = agent.run_cycle().unwrap();
+    assert!(
+        matches!(result, IntegratorCycleResult::Published { .. }),
+        "expected Published, got {:?}",
+        result
+    );
+
+    // Tick's integration_sha should be the actual git HEAD of the integration branch
+    let ticks = stores.ticks.read().unwrap();
+    let tick = ticks.values().find(|t| t.status() == TickStatus::Published).unwrap();
+    assert_eq!(
+        tick.integration_sha.as_deref(),
+        Some(expected_sha.as_str()),
+        "integration_sha should match integration branch HEAD"
+    );
+}
+
+/// Verify that a noop tick with failing validation correctly rejects bundles.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_noop_tick_validation_failure() {
+    let dir = TestDir::new("loopr-intg-noop-fail");
+    let stores = test_stores(&dir);
+
+    let mut bundle = Bundle::new("wi-1".into(), None, String::new(), vec!["noop claim".into()]);
+    bundle.noop_reason = Some("Already satisfied".to_string());
+    bundle.force_status(BundleStatus::Accepted);
+    let bundle_id = bundle.id.clone();
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    // Create a work so the rejection reset doesn't panic
+    let mut wi = Work::new("ph-1".into(), "Task".into());
+    wi.id = "wi-1".to_string();
+    wi.force_status(WorkStatus::InReview);
+    wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
+    stores.works.write().unwrap().insert(wi.id.clone(), wi);
+
+    // Use failing_config so validation fails
+    let agent = test_integrator(&dir, stores.clone(), failing_config());
+    let result = agent.run_cycle().unwrap();
+    assert!(
+        matches!(result, IntegratorCycleResult::ValidationFailed { .. }),
+        "expected ValidationFailed, got {:?}",
+        result
+    );
+
+    // Bundle should be Rejected
+    let bundles = stores.bundles.read().unwrap();
+    assert_eq!(bundles[&bundle_id].status(), BundleStatus::Rejected);
 }
