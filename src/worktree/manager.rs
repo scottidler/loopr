@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Information about an active Git worktree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,10 +76,27 @@ impl WorktreeManager {
 
         let output = if branch_exists {
             debug!("branch {} exists, creating worktree on existing branch", branch);
-            Command::new("git")
+            let out = Command::new("git")
                 .args(["worktree", "add", &path.to_string_lossy(), &branch])
                 .current_dir(&self.repo_path)
-                .output()?
+                .output()?;
+            if out.status.success() {
+                // Rebase existing branch onto new base_ref so retried
+                // implementers see sibling work merged since the last attempt.
+                if let Err(e) = self.refresh(work_id, base_ref) {
+                    warn!(
+                        "rebase failed for {} - resetting branch to {}: {}",
+                        work_id, base_ref, e
+                    );
+                    let reset = Command::new("git")
+                        .args(["-C", &path.to_string_lossy(), "reset", "--hard", base_ref])
+                        .output();
+                    if let Err(re) = reset {
+                        warn!("branch reset also failed for {}: {}", work_id, re);
+                    }
+                }
+            }
+            out
         } else {
             Command::new("git")
                 .args(["worktree", "add", &path.to_string_lossy(), "-b", &branch, base_ref])
@@ -755,6 +772,94 @@ branch refs/heads/agent/wi-001
         let result = mgr.delete_branch("wi-nonexistent");
         assert!(result.is_ok(), "deleting missing branch should be Ok");
 
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_create_rebases_existing_branch_onto_new_base() {
+        let repo = init_test_repo("loopr-wt-rebase-on-retry");
+        let wt_dir = repo.join(".worktrees");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let mgr = WorktreeManager::new(repo.clone(), wt_dir);
+
+        let run = |args: &[&str], dir: &Path| {
+            Command::new("git").args(args).current_dir(dir).output().unwrap();
+        };
+
+        // First attempt: create worktree and commit a file
+        let path1 = mgr.create_branch("wi-001", "HEAD").unwrap();
+        std::fs::write(path1.join("hello.txt"), "world").unwrap();
+        run(&["add", "-A"], &path1);
+        run(&["commit", "-m", "add hello.txt"], &path1);
+
+        // Cleanup worktree (simulates session end)
+        mgr.cleanup("wi-001").unwrap();
+
+        // Simulate sibling work merged into main (the integration branch tip)
+        std::fs::write(repo.join("sibling.txt"), "sibling content").unwrap();
+        run(&["add", "-A"], &repo);
+        run(&["commit", "-m", "add sibling.txt"], &repo);
+
+        // Retry: create worktree again with base_ref = main (not "HEAD" -
+        // refresh runs git -C <worktree> where HEAD would be the agent branch)
+        let path2 = mgr.create_branch("wi-001", "main").unwrap();
+
+        // Rebase should have brought sibling.txt into the agent branch
+        assert!(
+            path2.join("sibling.txt").exists(),
+            "sibling.txt should exist after rebase onto new base"
+        );
+        // Previous implementer commits should be preserved
+        assert!(
+            path2.join("hello.txt").exists(),
+            "hello.txt from first session should survive rebase"
+        );
+
+        mgr.cleanup("wi-001").unwrap();
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn test_create_rebase_conflict_resets_to_base() {
+        let repo = init_test_repo("loopr-wt-rebase-conflict-reset");
+        let wt_dir = repo.join(".worktrees");
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        let mgr = WorktreeManager::new(repo.clone(), wt_dir);
+
+        let run = |args: &[&str], dir: &Path| {
+            Command::new("git").args(args).current_dir(dir).output().unwrap();
+        };
+
+        // First attempt: create worktree, modify README.md and add hello.txt
+        let path1 = mgr.create_branch("wi-001", "HEAD").unwrap();
+        std::fs::write(path1.join("README.md"), "agent version").unwrap();
+        std::fs::write(path1.join("hello.txt"), "agent file").unwrap();
+        run(&["add", "-A"], &path1);
+        run(&["commit", "-m", "agent changes"], &path1);
+
+        mgr.cleanup("wi-001").unwrap();
+
+        // On main, modify README.md differently (creates conflict)
+        std::fs::write(repo.join("README.md"), "main version").unwrap();
+        run(&["add", "-A"], &repo);
+        run(&["commit", "-m", "main changes to README"], &repo);
+
+        // Retry: rebase will conflict on README.md, should fall back to reset
+        let path2 = mgr.create_branch("wi-001", "main").unwrap();
+
+        // After reset to base_ref, README.md should have main's content
+        let readme = std::fs::read_to_string(path2.join("README.md")).unwrap();
+        assert_eq!(
+            readme, "main version",
+            "README.md should have main's content after reset fallback"
+        );
+        // hello.txt from the agent's rejected attempt should be gone
+        assert!(
+            !path2.join("hello.txt").exists(),
+            "hello.txt should be gone after reset to base_ref"
+        );
+
+        mgr.cleanup("wi-001").unwrap();
         let _ = std::fs::remove_dir_all(&repo);
     }
 }
