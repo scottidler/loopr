@@ -81,19 +81,28 @@ impl WorktreeManager {
                 .current_dir(&self.repo_path)
                 .output()?;
             if out.status.success() {
-                // Rebase existing branch onto new base_ref so retried
-                // implementers see sibling work merged since the last attempt.
-                if let Err(e) = self.refresh(work_id, base_ref) {
-                    warn!(
-                        "rebase failed for {} - resetting branch to {}: {}",
-                        work_id, base_ref, e
-                    );
-                    let reset = Command::new("git")
-                        .args(["-C", &path.to_string_lossy(), "reset", "--hard", base_ref])
-                        .output();
-                    if let Err(re) = reset {
-                        warn!("branch reset also failed for {}: {}", work_id, re);
-                    }
+                // Hard-reset the existing branch to base_ref so retried
+                // implementers start from the current integration tip.
+                // Previous session's commits were rejected and have no value;
+                // keeping them causes the NO-OP loop (implementer sees stale
+                // work as "already done" and proposes a noop bundle).
+                //
+                // Resolve base_ref to a SHA in the repo context first:
+                // inside the worktree, "HEAD" would resolve to the agent
+                // branch's tip (a no-op), not the intended base commit.
+                let reset_target = Command::new("git")
+                    .args(["rev-parse", base_ref])
+                    .current_dir(&self.repo_path)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+                let target = reset_target.as_deref().unwrap_or(base_ref);
+                let reset = Command::new("git")
+                    .args(["-C", &path.to_string_lossy(), "reset", "--hard", target])
+                    .output();
+                if let Err(e) = reset {
+                    warn!("branch reset to {} failed for {}: {}", base_ref, work_id, e);
                 }
             }
             out
@@ -573,8 +582,8 @@ branch refs/heads/agent/wi-001
     }
 
     #[test]
-    fn test_create_preserves_existing_branch_commits() {
-        let repo = init_test_repo("loopr-wt-preserve-branch");
+    fn test_create_resets_existing_branch_on_retry() {
+        let repo = init_test_repo("loopr-wt-reset-branch");
         let wt_dir = repo.join(".worktrees");
         std::fs::create_dir_all(&wt_dir).unwrap();
         let mgr = WorktreeManager::new(repo.clone(), wt_dir);
@@ -593,33 +602,17 @@ branch refs/heads/agent/wi-001
             .output()
             .unwrap();
 
-        // Record the commit SHA
-        let sha_out = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&path1)
-            .output()
-            .unwrap();
-        let commit_sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
-
         // Cleanup the worktree (simulates implementer finishing)
         mgr.cleanup("wi-001").unwrap();
 
-        // Verify branch still exists with the commit
-        let branch_sha = Command::new("git")
-            .args(["rev-parse", "agent/wi-001"])
-            .current_dir(&repo)
-            .output()
-            .unwrap();
-        let branch_sha = String::from_utf8_lossy(&branch_sha.stdout).trim().to_string();
-        assert_eq!(commit_sha, branch_sha, "branch should retain the commit after cleanup");
-
-        // Create second worktree on same work (simulates retry)
+        // Create second worktree on same work (simulates retry after rejection)
         let path2 = mgr.create_branch("wi-001", "HEAD").unwrap();
 
-        // Verify the file from the first session is still there
+        // The rejected session's file must be destroyed - hard reset to base_ref
+        // discards all prior commits so the new implementer starts clean.
         assert!(
-            path2.join("hello.txt").exists(),
-            "hello.txt from first session should persist on the reused branch"
+            !path2.join("hello.txt").exists(),
+            "hello.txt from rejected session must be destroyed on retry"
         );
 
         // Cleanup
@@ -776,8 +769,8 @@ branch refs/heads/agent/wi-001
     }
 
     #[test]
-    fn test_create_rebases_existing_branch_onto_new_base() {
-        let repo = init_test_repo("loopr-wt-rebase-on-retry");
+    fn test_create_resets_existing_branch_onto_new_base() {
+        let repo = init_test_repo("loopr-wt-reset-on-retry");
         let wt_dir = repo.join(".worktrees");
         std::fs::create_dir_all(&wt_dir).unwrap();
         let mgr = WorktreeManager::new(repo.clone(), wt_dir);
@@ -800,19 +793,18 @@ branch refs/heads/agent/wi-001
         run(&["add", "-A"], &repo);
         run(&["commit", "-m", "add sibling.txt"], &repo);
 
-        // Retry: create worktree again with base_ref = main (not "HEAD" -
-        // refresh runs git -C <worktree> where HEAD would be the agent branch)
+        // Retry: create worktree again with base_ref = current main tip
         let path2 = mgr.create_branch("wi-001", "main").unwrap();
 
-        // Rebase should have brought sibling.txt into the agent branch
+        // Hard reset brings sibling.txt from the new base
         assert!(
             path2.join("sibling.txt").exists(),
-            "sibling.txt should exist after rebase onto new base"
+            "sibling.txt should exist after reset to new base"
         );
-        // Previous implementer commits should be preserved
+        // Rejected session's commits are destroyed - no ghost files
         assert!(
-            path2.join("hello.txt").exists(),
-            "hello.txt from first session should survive rebase"
+            !path2.join("hello.txt").exists(),
+            "hello.txt from rejected session must be destroyed on retry"
         );
 
         mgr.cleanup("wi-001").unwrap();
@@ -820,8 +812,8 @@ branch refs/heads/agent/wi-001
     }
 
     #[test]
-    fn test_create_rebase_conflict_resets_to_base() {
-        let repo = init_test_repo("loopr-wt-rebase-conflict-reset");
+    fn test_create_reset_with_conflicting_changes() {
+        let repo = init_test_repo("loopr-wt-reset-conflict");
         let wt_dir = repo.join(".worktrees");
         std::fs::create_dir_all(&wt_dir).unwrap();
         let mgr = WorktreeManager::new(repo.clone(), wt_dir);
@@ -839,24 +831,24 @@ branch refs/heads/agent/wi-001
 
         mgr.cleanup("wi-001").unwrap();
 
-        // On main, modify README.md differently (creates conflict)
+        // On main, modify README.md differently (would conflict if rebased)
         std::fs::write(repo.join("README.md"), "main version").unwrap();
         run(&["add", "-A"], &repo);
         run(&["commit", "-m", "main changes to README"], &repo);
 
-        // Retry: rebase will conflict on README.md, should fall back to reset
+        // Retry: hard reset discards rejected commits unconditionally
         let path2 = mgr.create_branch("wi-001", "main").unwrap();
 
-        // After reset to base_ref, README.md should have main's content
+        // README.md should have main's content (from hard reset)
         let readme = std::fs::read_to_string(path2.join("README.md")).unwrap();
         assert_eq!(
             readme, "main version",
-            "README.md should have main's content after reset fallback"
+            "README.md should have main's content after hard reset"
         );
-        // hello.txt from the agent's rejected attempt should be gone
+        // hello.txt from the rejected attempt is gone
         assert!(
             !path2.join("hello.txt").exists(),
-            "hello.txt should be gone after reset to base_ref"
+            "hello.txt must be destroyed after hard reset to base_ref"
         );
 
         mgr.cleanup("wi-001").unwrap();

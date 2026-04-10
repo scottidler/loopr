@@ -150,16 +150,17 @@ fn test_normal_bundle_creates_divergent_branch() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 2: Stale rejection -> rebase -> agent branch aligned
+// Test 2: Stale rejection -> hard reset -> agent branch clean
 // ---------------------------------------------------------------------------
 
-/// After a stale base tick rejection, rebasing the agent branch onto the new
-/// integration HEAD should preserve the implementer's commits while aligning
-/// with the current state.
+/// After a stale base tick rejection, retrying the worktree hard-resets the
+/// agent branch to the current integration tip. The rejected session's
+/// commits are destroyed so the implementer starts from a clean slate that
+/// includes sibling work merged since the last attempt.
 ///
 /// This test exercises Fix 2 from the design doc.
 #[test]
-fn test_stale_rejection_rebase_preserves_work() {
+fn test_stale_rejection_reset_destroys_rejected_work() {
     let (_tmp, repo) = setup_repo();
     let plan_id = "pl-test2";
     create_integration_branch(&repo, plan_id);
@@ -184,46 +185,39 @@ fn test_stale_rejection_rebase_preserves_work() {
     git(&repo, &["merge", "agent/wk-b", "-m", "merge wk-b"]);
     let new_integ_head = branch_head(&repo, &integ_branch);
 
-    // Verify A's branch is stale (not based on new integration HEAD)
-    assert!(
-        !is_ancestor(&repo, &new_integ_head, "agent/wk-a"),
-        "Before rebase: agent/wk-a should NOT have new integration HEAD as ancestor"
-    );
-
-    // SIMULATE Fix 2: rebase agent/wk-a onto new integration HEAD
-    let rebase_ok = git_try(&repo, &["rebase", &integ_branch, "agent/wk-a"]);
-    assert!(rebase_ok, "Rebase should succeed (no conflict)");
-    // Rebase leaves agent/wk-a checked out - restore integration branch
-    git(&repo, &["checkout", &integ_branch]);
-
-    // After rebase: agent/wk-a should have the new integration HEAD as ancestor
-    assert!(
-        is_ancestor(&repo, &new_integ_head, "agent/wk-a"),
-        "After rebase: agent/wk-a should have new integration HEAD as ancestor"
-    );
-
-    // The CRUD code should still exist on the rebased branch
+    // Retry work A: get_or_create_branch hard-resets to integration tip
     let wt_a2 = mgr.get_or_create_branch("wk-a", &integ_branch).unwrap();
-    let content = std::fs::read_to_string(wt_a2.join("database.py")).unwrap();
-    assert!(content.contains("crud"), "CRUD code should survive rebase");
 
-    // main.py from work B should also be visible (rebased onto new HEAD)
+    // Agent branch should now match the integration HEAD exactly
+    let agent_head = branch_head(&wt_a2, "HEAD");
+    assert_eq!(
+        new_integ_head, agent_head,
+        "After reset: agent/wk-a should match integration HEAD"
+    );
+
+    // Rejected session's database.py is destroyed - no ghosts
+    assert!(
+        !wt_a2.join("database.py").exists(),
+        "Rejected session's database.py must be destroyed on retry"
+    );
+
+    // main.py from integrated work B should be visible (from integration tip)
     assert!(
         wt_a2.join("main.py").exists(),
-        "main.py from integrated work B should be visible after rebase"
+        "main.py from integrated work B should be visible after reset"
     );
 
     mgr.cleanup("wk-a").unwrap();
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Stale rejection + rebase conflict -> branch deleted
+// Test 3: Git mechanics proof - conflicting branch can be deleted and recreated
 // ---------------------------------------------------------------------------
 
-/// When rebase fails due to conflict, the agent branch should be deleted
-/// so the next session starts from a clean state.
-///
-/// This test exercises the conflict fallback in Fix 2.
+/// Prove the git-level invariant: when an agent branch conflicts with the
+/// integration branch, deleting and recreating the branch yields a clean
+/// worktree with the integrated state. This is a belt-and-suspenders proof;
+/// the production code path uses unconditional hard-reset (not rebase+delete).
 #[test]
 fn test_stale_rejection_rebase_conflict_deletes_branch() {
     let (_tmp, repo) = setup_repo();
@@ -272,15 +266,18 @@ fn test_stale_rejection_rebase_conflict_deletes_branch() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: False noop detection
+// Test 4: Hard reset eliminates false noop at the source
 // ---------------------------------------------------------------------------
 
-/// When an agent branch has commits that differ from the integration HEAD,
-/// a noop bundle proposal should be auto-converted to a normal bundle.
+/// After a rejected session, retrying the worktree hard-resets the agent
+/// branch to the integration tip. This means there are NO divergent commits
+/// and therefore no false noop can occur. The false noop guard in bundle.rs
+/// is a safety net; the hard reset is the primary fix.
 ///
-/// This test exercises Fix 1 from the design doc.
+/// This test proves the primary fix works: after retry, the branch matches
+/// the integration HEAD exactly.
 #[test]
-fn test_false_noop_detected_when_branch_diverges() {
+fn test_hard_reset_eliminates_false_noop() {
     let (_tmp, repo) = setup_repo();
     let plan_id = "pl-test4";
     create_integration_branch(&repo, plan_id);
@@ -298,23 +295,28 @@ fn test_false_noop_detected_when_branch_diverges() {
     // Session 2: reuse branch (simulating post-rejection retry)
     let wt2 = mgr.get_or_create_branch("wk-a", &integ_branch).unwrap();
 
-    // Verify: the branch has divergent commits
+    // After hard reset: branch matches integration HEAD exactly
     let integ_head = branch_head(&repo, &integ_branch);
     assert!(
-        !refs_identical(&wt2, &integ_head, "HEAD"),
-        "Agent branch HEAD should differ from integration HEAD"
+        refs_identical(&wt2, &integ_head, "HEAD"),
+        "Agent branch HEAD should match integration HEAD after hard reset"
     );
 
-    // The false noop guard (Fix 1) would detect this divergence via:
-    //   git diff --quiet <LOOPR_BASE_REF> HEAD  (exit code 1 = differences)
+    // git diff --quiet returns exit 0 (no differences) - no false noop possible
     let diff_check = Command::new("git")
         .args(["diff", "--quiet", &integ_head, "HEAD"])
         .current_dir(&wt2)
         .output()
         .unwrap();
     assert!(
-        !diff_check.status.success(),
-        "git diff --quiet should return exit 1 when branch diverges from integration HEAD"
+        diff_check.status.success(),
+        "git diff --quiet should return exit 0 after hard reset (no divergence)"
+    );
+
+    // Rejected session's file is gone
+    assert!(
+        !wt2.join("database.py").exists(),
+        "Rejected session's database.py must be destroyed"
     );
 
     mgr.cleanup("wk-a").unwrap();
@@ -421,15 +423,15 @@ async fn test_session_failure_count_blocks_work() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Worktree reuse preserves commits from previous session
+// Test 7: Worktree reuse destroys rejected commits on retry
 // ---------------------------------------------------------------------------
 
-/// Verify the existing behavior that get_or_create_branch reuses an
-/// existing agent branch, preserving commits from a prior session.
-/// This is the mechanism that causes false noops when combined with
-/// stale rejection - understanding it is key to the fix.
+/// Verify that get_or_create_branch hard-resets the existing agent branch
+/// to base_ref, destroying all commits from the rejected session.
+/// This prevents the NO-OP loop where the implementer sees stale work
+/// as "already done" and proposes a noop bundle.
 #[test]
-fn test_worktree_reuse_preserves_prior_commits() {
+fn test_worktree_reuse_destroys_rejected_commits() {
     let (_tmp, repo) = setup_repo();
     let plan_id = "pl-test7";
     create_integration_branch(&repo, plan_id);
@@ -442,21 +444,23 @@ fn test_worktree_reuse_preserves_prior_commits() {
     // Session 1: create worktree, commit code, cleanup
     let wt1 = mgr.create_branch("wk-reuse", &integ_branch).unwrap();
     commit_file(&wt1, "code.py", "print('hello')\n", "feat: code");
-    let session1_head = branch_head(&wt1, "HEAD");
     mgr.cleanup("wk-reuse").unwrap();
 
-    // Session 2: get_or_create reuses existing branch
+    // Session 2: get_or_create reuses existing branch but resets it
     let wt2 = mgr.get_or_create_branch("wk-reuse", &integ_branch).unwrap();
 
-    // The file from session 1 should still exist
-    let content = std::fs::read_to_string(wt2.join("code.py")).unwrap();
-    assert_eq!(content, "print('hello')\n", "Prior session's code should persist");
+    // The rejected session's file must be gone - no ghosts
+    assert!(
+        !wt2.join("code.py").exists(),
+        "Rejected session's code.py must be destroyed on retry"
+    );
 
-    // HEAD should match session 1's commit
+    // HEAD should match the integration branch (hard reset target)
+    let integ_head = branch_head(&repo, &integ_branch);
     let session2_head = branch_head(&wt2, "HEAD");
     assert_eq!(
-        session1_head, session2_head,
-        "Branch HEAD should be preserved across sessions"
+        integ_head, session2_head,
+        "Branch HEAD should match integration tip after hard reset"
     );
 
     mgr.cleanup("wk-reuse").unwrap();
