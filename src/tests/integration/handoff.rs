@@ -355,7 +355,6 @@ fn test_true_noop_when_branch_matches_integration() {
 /// max_session_failures, the Work should transition to Blocked.
 ///
 /// This test exercises Fix 3 from the design doc.
-#[ignore = "requires Fix 3: session_failure_count field on Work"]
 #[tokio::test]
 async fn test_session_failure_count_blocks_work() {
     let stores = test_stores();
@@ -394,14 +393,15 @@ async fn test_session_failure_count_blocks_work() {
     )
     .await;
 
-    // Verify the Work exists and is Ready.
-    // When Fix 3 lands, this test will also assert:
-    //   work.session_failure_count == 0  (default)
-    //   After 3 simulated failures: work.status() == Blocked
+    // Verify the Work exists, is Ready, and has session_failure_count = 0
     {
         let works = stores.works.read().unwrap();
         let work = works.get(work_id.as_str()).unwrap();
         assert_eq!(work.status(), crate::domain::work::WorkStatus::Ready);
+        assert_eq!(
+            work.session_failure_count, 0,
+            "session_failure_count should default to 0"
+        );
     }
 }
 

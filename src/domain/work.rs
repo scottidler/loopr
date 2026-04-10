@@ -58,6 +58,11 @@ pub struct Work {
     /// Used by the work queue to penalize cycling items and as a hard-limit backstop.
     #[serde(default)]
     pub attempt_count: u32,
+    /// Number of consecutive agent session failures (crash/cancel before bundle
+    /// creation). Independent of max_bundle_rejections. Reset to 0 on successful
+    /// session completion.
+    #[serde(default)]
+    pub session_failure_count: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -114,6 +119,7 @@ impl Work {
             dependencies: Vec::new(),
             acceptance_criteria: AcceptanceCriteria::default(),
             attempt_count: 0,
+            session_failure_count: 0,
             created_at: now,
             updated_at: now,
         }

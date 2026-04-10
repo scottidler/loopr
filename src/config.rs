@@ -151,6 +151,15 @@ pub struct StrategyConfig {
     pub max_bubble_up_depth: u32,
     /// Goal clarity gate configuration.
     pub clarity_gate: ClarityGateConfig,
+    /// Maximum consecutive agent session failures before Work transitions to
+    /// Blocked. Catches crash-before-bundle loops independently of
+    /// max_bundle_rejections.
+    #[serde(default = "default_max_session_failures")]
+    pub max_session_failures: u32,
+}
+
+fn default_max_session_failures() -> u32 {
+    3
 }
 
 impl Default for StrategyConfig {
@@ -168,6 +177,7 @@ impl Default for StrategyConfig {
             max_decomposition_attempts: 3,
             max_bubble_up_depth: 2,
             clarity_gate: ClarityGateConfig::default(),
+            max_session_failures: default_max_session_failures(),
         }
     }
 }

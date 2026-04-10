@@ -286,6 +286,63 @@ pub async fn run_agent_task(
         info!("{} created failure learning {} on '{}'", prefix, learning_id, wi_title);
     }
 
+    // Fix 3 (bundle-state-alignment): Track consecutive session failures on the
+    // Work. If the counter reaches max_session_failures, transition to Blocked.
+    // This catches crash-before-bundle loops independently of max_bundle_rejections.
+    if matches!(terminal_status, AgentStatus::Failed | AgentStatus::Cancelled)
+        && let Some(ref wi_id) = worktree_key
+    {
+        let max_failures = stores.config.strategy.max_session_failures;
+        let should_block = {
+            if let Ok(mut works) = stores.write_works()
+                && let Some(work) = works.get_mut(wi_id.as_str())
+            {
+                work.session_failure_count += 1;
+                work.updated_at = crate::id::now_millis();
+                // Persist under the lock
+                if let Ok(Some(mut sg)) = stores.lock_store() {
+                    let _ = sg.update(work.clone());
+                }
+                let count = work.session_failure_count;
+                info!(
+                    "{} session_failure_count for {} incremented to {}",
+                    prefix, wi_id, count
+                );
+                count >= max_failures
+            } else {
+                false
+            }
+        };
+        if should_block {
+            error!(
+                "{} Work {} reached max_session_failures ({}) - transitioning to Blocked",
+                prefix, wi_id, max_failures
+            );
+            let _ = bridge.request(
+                "work.transition",
+                serde_json::json!({
+                    "id": wi_id,
+                    "target_status": "Blocked",
+                    "role": "coordinator",
+                    "override": true,
+                }),
+            );
+        }
+    }
+    // On successful completion, reset session_failure_count to 0.
+    if terminal_status == AgentStatus::Completed
+        && let Some(ref wi_id) = worktree_key
+        && let Ok(mut works) = stores.write_works()
+        && let Some(work) = works.get_mut(wi_id.as_str())
+        && work.session_failure_count > 0
+    {
+        work.session_failure_count = 0;
+        work.updated_at = crate::id::now_millis();
+        if let Ok(Some(mut sg)) = stores.lock_store() {
+            let _ = sg.update(work.clone());
+        }
+    }
+
     debug!("[agent_status] {}: -> {:?} (terminal)", session_id, terminal_status);
     if terminal_status == AgentStatus::Failed {
         let error = result.as_ref().err().map(|e| e.to_string());
