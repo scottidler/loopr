@@ -233,24 +233,9 @@ pub async fn run_single_review(
         }
     }
 
-    // Step 2: Dedup - if a reviewer is already running on this bundle, skip.
-    {
-        let sessions = stores.read_agent_sessions()?;
-        let has_existing = sessions.values().any(|s| {
-            s.agent_type == AgentKind::Reviewer
-                && !s.status().is_terminal()
-                && s.bundle_id.as_deref() == Some(bundle_id)
-        });
-        if has_existing {
-            info!(
-                "Worker {} skipping bundle {} - reviewer already running",
-                worker_id, bundle_id
-            );
-            return Ok(());
-        }
-    }
-
-    // Step 3: Create AgentSession.
+    // Steps 2+3: Atomic dedup check + session creation under a single write lock.
+    // Without this, multiple workers polling next_assignment() concurrently can
+    // all see "no active reviewer" and double-spawn (TOCTOU race).
     let mut session = AgentSession::new(AgentKind::Reviewer, reviewer_config.model.clone());
     session.bundle_id = Some(bundle_id.to_string());
     session.daemon_session_id = stores
@@ -259,15 +244,37 @@ pub async fn run_single_review(
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().to_string()));
     let session_id = session.id.clone();
 
-    // Persist session.
-    if let Some(store) = &stores.store
-        && let Ok(mut s) = store.lock().map_err(|_| eyre!("store lock poisoned"))
-        && let Err(e) = s.create(session.clone())
     {
-        warn!("Worker {} failed to persist reviewer session: {}", worker_id, e);
-        return Err(eyre!("failed to create reviewer session: {}", e));
+        let mut sessions = stores.write_agent_sessions()?;
+
+        // Dedup: if a reviewer is already running on this bundle, abort.
+        let has_existing = sessions.values().any(|s| {
+            s.agent_type == AgentKind::Reviewer
+                && !s.status().is_terminal()
+                && s.bundle_id.as_deref() == Some(bundle_id)
+        });
+        if has_existing {
+            info!(
+                "Worker {} skipping bundle {} - reviewer already running (dedup under write lock)",
+                worker_id, bundle_id
+            );
+            return Ok(());
+        }
+
+        // Persist to TaskStore while holding the sessions lock (write-ordering rule:
+        // TaskStore write must happen before in-memory insert, both under the same lock).
+        if let Some(store) = &stores.store
+            && let Ok(mut s) = store.lock().map_err(|_| eyre!("store lock poisoned"))
+            && let Err(e) = s.create(session.clone())
+        {
+            warn!("Worker {} failed to persist reviewer session: {}", worker_id, e);
+            return Err(eyre!("failed to create reviewer session: {}", e));
+        }
+
+        // In-memory insert only after durable write succeeds.
+        sessions.insert(session_id.clone(), session);
     }
-    stores.write_agent_sessions()?.insert(session_id.clone(), session);
+
     let _ = event_tx.send(DaemonEvent::record_created("agent_session", &session_id));
     debug!("[agent_status] {}: -> Starting (worker reviewer spawn)", session_id);
     let _ = event_tx.send(DaemonEvent::agent_status_changed(&session_id, AgentStatus::Starting));
