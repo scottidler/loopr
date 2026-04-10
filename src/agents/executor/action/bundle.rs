@@ -20,7 +20,7 @@ pub(super) async fn handle_propose_bundle(
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
 
-    let is_noop = noop_reason.is_some();
+    let mut is_noop = noop_reason.is_some();
     let wi_id = work_id.ok_or_else(|| eyre!("propose_bundle requires work_id"))?;
 
     // Guard: reject noop bundles with uncommitted changes.
@@ -48,6 +48,34 @@ pub(super) async fn handle_propose_bundle(
                      noop_reason). Do NOT use noop_reason if you made any changes.",
                     status.trim()
                 )));
+            }
+        }
+    }
+
+    // Fix 1 (bundle-state-alignment): Auto-convert false noops to normal bundles.
+    // When the agent branch has commits that differ from the integration HEAD,
+    // this is NOT a noop - the previous session's work exists on this branch.
+    // Auto-converting captures branch_name and head_commit, sending the bundle
+    // through the normal review path where the reviewer gets a real git diff.
+    if is_noop {
+        let base_ref = ctx.session.base_ref.as_deref().unwrap_or_default().to_string();
+        if !base_ref.is_empty() {
+            let diff_check = tokio::process::Command::new("git")
+                .args(["diff", "--quiet", &base_ref, "HEAD"])
+                .current_dir(worktree_path)
+                .output()
+                .await;
+            if let Ok(output) = diff_check
+                && !output.status.success()
+            {
+                // Exit code 1 = there ARE differences between commits
+                ctx.info(
+                    "Auto-converting false noop to normal bundle: agent branch \
+                     has commits that differ from integration HEAD",
+                );
+                is_noop = false;
+                // Fall through to normal bundle path below, which captures
+                // branch_name and head_commit automatically
             }
         }
     }

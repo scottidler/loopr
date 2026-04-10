@@ -263,7 +263,6 @@ fn test_stale_rejection_rebase_conflict_deletes_branch() {
 /// a noop bundle proposal should be auto-converted to a normal bundle.
 ///
 /// This test exercises Fix 1 from the design doc.
-#[ignore = "requires Fix 1: false noop auto-conversion"]
 #[test]
 fn test_false_noop_detected_when_branch_diverges() {
     let (_tmp, repo) = setup_repo();

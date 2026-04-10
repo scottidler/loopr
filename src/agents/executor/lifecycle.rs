@@ -92,6 +92,27 @@ pub async fn run_agent_task(
             }
             info!("Agent {} worktree created at {}", session_id, worktree_path.display());
         }
+
+        // Fix 1 (bundle-state-alignment): Store the base_ref on the session so
+        // handle_propose_bundle can detect false noops (agent branch diverges
+        // from integration HEAD). Resolve to SHA for stable comparison.
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", &base_ref])
+            .current_dir(&stores.config.project.repo_path)
+            .output()
+            && output.status.success()
+        {
+            let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let Ok(mut sessions) = stores.write_agent_sessions() else {
+                error!("agent_sessions lock poisoned");
+                return;
+            };
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.base_ref = Some(sha.clone());
+                persist_session(&stores, session);
+            }
+            debug!("Set session.base_ref={} (from {})", sha, base_ref);
+        }
     }
 
     // Retain a copy of the worktree manager for cleanup after the agent loop exits.

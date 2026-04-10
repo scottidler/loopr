@@ -37,6 +37,11 @@ pub struct AgentSession {
     /// Classified error kind for Coordinator dispatch (set on failure).
     #[serde(default)]
     pub error_kind: Option<crate::agents::error::AgentErrorKind>,
+    /// Integration branch HEAD SHA at worktree creation time. Used by the
+    /// false-noop guard in handle_propose_bundle to detect when the agent
+    /// branch diverges from the integration state.
+    #[serde(default)]
+    pub base_ref: Option<String>,
 }
 
 impl AgentSession {
@@ -58,6 +63,7 @@ impl AgentSession {
             query: None,
             daemon_session_id: None,
             error_kind: None,
+            base_ref: None,
         }
     }
 
