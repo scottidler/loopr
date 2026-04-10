@@ -345,6 +345,9 @@ impl IntegratorAgent {
                             .map(|b| b.work_id.clone())
                             .unwrap_or_default();
                         self.reset_work_after_bundle_rejection(&wi_id, "stale base tick");
+                        if let Ok(_guard) = self.ctx.stores.lock_git() {
+                            self.rebase_agent_branch(&wi_id);
+                        }
                     }
                 }
                 crate::config::StalePolicy::ReplanAtSafePoint => {
@@ -372,6 +375,9 @@ impl IntegratorAgent {
                             serde_json::json!({"bundle_id": stale_id, "work_id": wi_id, "reason": "stale_base_tick"}),
                         ));
                         self.reset_work_after_bundle_rejection(&wi_id, "stale base tick");
+                        if let Ok(_guard) = self.ctx.stores.lock_git() {
+                            self.rebase_agent_branch(&wi_id);
+                        }
                         self.ctx
                             .info(&format!("rejected stale bundle {} (replan at safe point)", stale_id));
                     }
@@ -415,6 +421,9 @@ impl IntegratorAgent {
                             ));
                         }
                         self.reset_work_after_bundle_rejection(&wi_id, "auto-replay failed");
+                        if let Ok(_guard) = self.ctx.stores.lock_git() {
+                            self.rebase_agent_branch(&wi_id);
+                        }
                         self.ctx
                             .warn(&format!("auto-replay failed for bundle {}, rejected", stale_id));
                     } else {
@@ -700,14 +709,19 @@ impl IntegratorAgent {
                             }
                             None => {
                                 // Retryable conflict - reset all works to Ready.
-                                if let Ok(bundles) = self.ctx.stores.read_bundles() {
-                                    for bundle_id in &valid_bundle_ids {
-                                        let wi_id = bundles
-                                            .get(bundle_id.as_str())
-                                            .map(|b| b.work_id.clone())
-                                            .unwrap_or_default();
-                                        self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
-                                    }
+                                // Collect work IDs first, drop the read guard, then iterate.
+                                // This avoids holding a RwLockReadGuard across IPC calls.
+                                let work_ids: Vec<String> = match self.ctx.stores.read_bundles() {
+                                    Ok(bundles) => valid_bundle_ids
+                                        .iter()
+                                        .filter_map(|bid| bundles.get(bid.as_str()).map(|b| b.work_id.clone()))
+                                        .collect(),
+                                    Err(_) => Vec::new(),
+                                };
+                                for wi_id in &work_ids {
+                                    self.reset_work_after_bundle_rejection(wi_id, "merge conflict");
+                                    // git lock already held by outer _git_guard - no re-acquisition
+                                    self.rebase_agent_branch(wi_id);
                                 }
                             }
                         }
@@ -992,6 +1006,9 @@ impl IntegratorAgent {
                         .map(|b| b.work_id.clone())
                         .unwrap_or_default();
                     self.reset_work_after_bundle_rejection(&wi_id, "validation failure");
+                    if let Ok(_guard) = self.ctx.stores.lock_git() {
+                        self.rebase_agent_branch(&wi_id);
+                    }
                 }
             }
 
@@ -1403,14 +1420,21 @@ impl IntegratorAgent {
         }
 
         // Reset non-conflicting works from the same tick to Ready for normal retry.
-        if let Ok(bundles) = self.ctx.stores.read_bundles() {
-            for bid in all_bundle_ids {
-                if let Some(b) = bundles.get(bid.as_str())
-                    && !conflicting_work_ids.contains(&b.work_id)
-                {
-                    self.reset_work_after_bundle_rejection(&b.work_id, "merge conflict (unrelated)");
-                }
-            }
+        // Collect work IDs first, drop the read guard, then iterate to avoid
+        // holding a RwLockReadGuard across IPC calls.
+        let unrelated_work_ids: Vec<String> = match self.ctx.stores.read_bundles() {
+            Ok(bundles) => all_bundle_ids
+                .iter()
+                .filter_map(|bid| bundles.get(bid.as_str()))
+                .filter(|b| !conflicting_work_ids.contains(&b.work_id))
+                .map(|b| b.work_id.clone())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        for wi_id in &unrelated_work_ids {
+            self.reset_work_after_bundle_rejection(wi_id, "merge conflict (unrelated)");
+            // git lock already held by caller's _git_guard in process_tick
+            self.rebase_agent_branch(wi_id);
         }
 
         // 6. Create Learning documenting the resolution.
@@ -1481,10 +1505,15 @@ impl IntegratorAgent {
                 work_id
             ));
         }
+    }
 
-        // Fix 2 (bundle-state-alignment): Rebase the agent branch onto the
-        // current integration HEAD to prevent false-noop loops. If the rebase
-        // fails (conflict), delete the branch so the next session starts clean.
+    /// Rebase the agent branch for `work_id` onto the current integration HEAD.
+    /// If the rebase fails (conflict), delete the branch so the next session starts clean.
+    ///
+    /// **The caller must hold (or explicitly acquire) the git lock before calling this.**
+    /// This function performs git operations but does NOT call `lock_git()` itself,
+    /// to avoid re-entrancy deadlocks when called from within a `_git_guard` scope.
+    fn rebase_agent_branch(&self, work_id: &str) {
         let branch = format!("agent/{}", work_id);
         let repo_path = &self.ctx.stores.config.project.repo_path;
 
@@ -1495,52 +1524,52 @@ impl IntegratorAgent {
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-        if branch_exists && let Some(plan_id) = resolve_plan_id(&self.ctx.stores, work_id) {
-            let integ_ref = format!("integration/{}", plan_id);
+        if !branch_exists {
+            return;
+        }
 
-            // Acquire git lock to prevent concurrent operations
-            let _git_guard = match self.ctx.stores.lock_git() {
-                Ok(g) => Some(g),
-                Err(e) => {
-                    self.ctx.warn(&format!("cannot acquire git lock for rebase: {}", e));
-                    None
-                }
-            };
+        let Some(plan_id) = resolve_plan_id(&self.ctx.stores, work_id) else {
+            self.ctx.warn(&format!(
+                "rebase_agent_branch: cannot resolve plan_id for {} - skipping rebase",
+                work_id
+            ));
+            return;
+        };
 
-            let rebase_ok = std::process::Command::new("git")
-                .args(["rebase", &integ_ref, &branch])
-                .current_dir(repo_path)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
+        let integ_ref = format!("integration/{}", plan_id);
 
-            if rebase_ok {
-                self.ctx
-                    .info(&format!("Rebased {} onto {} after bundle rejection", branch, integ_ref));
-            } else {
-                // Abort the failed rebase, then delete the branch
-                let _ = std::process::Command::new("git")
-                    .args(["rebase", "--abort"])
-                    .current_dir(repo_path)
-                    .output();
-                let _ = std::process::Command::new("git")
-                    .args(["branch", "-D", &branch])
-                    .current_dir(repo_path)
-                    .output();
-                self.ctx.warn(&format!(
-                    "Rebase of {} failed (conflict) - deleted branch; next session starts clean",
-                    branch
-                ));
-            }
+        let rebase_ok = std::process::Command::new("git")
+            .args(["rebase", &integ_ref, &branch])
+            .current_dir(repo_path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
-            // Rebase (or abort) leaves the agent branch checked out. Restore
-            // the integration branch so worktree creation works for the next
-            // implementer session.
+        if rebase_ok {
+            self.ctx
+                .info(&format!("Rebased {} onto {} after bundle rejection", branch, integ_ref));
+        } else {
+            // Abort the failed rebase, then delete the branch
             let _ = std::process::Command::new("git")
-                .args(["checkout", &integ_ref])
+                .args(["rebase", "--abort"])
                 .current_dir(repo_path)
                 .output();
+            let _ = std::process::Command::new("git")
+                .args(["branch", "-D", &branch])
+                .current_dir(repo_path)
+                .output();
+            self.ctx.warn(&format!(
+                "Rebase of {} failed (conflict) - deleted branch; next session starts clean",
+                branch
+            ));
         }
+
+        // Rebase (or abort) leaves the agent branch checked out. Restore
+        // the integration branch so worktree creation works for the next session.
+        let _ = std::process::Command::new("git")
+            .args(["checkout", &integ_ref])
+            .current_dir(repo_path)
+            .output();
     }
 }
 

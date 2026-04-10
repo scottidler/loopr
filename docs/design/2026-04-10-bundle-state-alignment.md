@@ -2,7 +2,7 @@
 
 **Author:** Scott A. Idler
 **Date:** 2026-04-10
-**Status:** Implemented
+**Status:** Implemented (Remediation Pending - v0.1.115)
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -579,3 +579,131 @@ After auto-convert, the normal bundle path runs `git rev-parse HEAD` in the work
 - Reviewer context: `src/agents/context.rs:414-471`
 - Integrator rejection: `src/agents/integrator.rs:320-380, 1446-1484`
 - Doom loop safety nets: `project-doom-loop-fix.md` (memory)
+
+---
+
+## Post-Implementation Review: Structural Flaws Found in v0.1.115
+
+An architectural review of the v0.1.115 implementation identified two structural bugs introduced
+by Fix 2, plus a test coverage gap. Status updated to "Remediation Pending."
+
+### Flaw 1 (Critical): Double-Lock Deadlock in Merge Failure Path
+
+**Root cause:** Fix 2 added `lock_git()` inside `reset_work_after_bundle_rejection`. However,
+the merge-failure path in `process_tick` already holds `_git_guard` (acquired at line 584) when
+it calls `reset_work_after_bundle_rejection` at lines 709 and 1411.
+
+`std::sync::Mutex` is non-reentrant. The inner `lock_git()` at line 1502 does not return `Err`
+on re-entrancy - it blocks forever. The `match` fallback only fires on mutex poison.
+
+**Affected call sites (called while `_git_guard` is held):**
+- `integrator.rs:709` - retryable merge conflict path
+- `integrator.rs:1411` - inside `combine_conflicting_works` (also called within `_git_guard` scope)
+
+**Call sites NOT affected (no outer git lock held):**
+- `integrator.rs:347` - stale rejection, RejectIfStale
+- `integrator.rs:374` - stale rejection, ReplanAtSafePoint
+- `integrator.rs:417` - auto-replay failed
+- `integrator.rs:994` - validation failure (inner `_git_guard` at line 933 drops before line 994)
+
+### Flaw 2 (Moderate): Read Lock Held Across IPC Loop
+
+Two call sites hold a named `RwLockReadGuard<bundles>` for the full duration of a `for` loop
+that contains IPC calls and (after Fix 2) git subprocess spawns. Any concurrent bundle writer
+is blocked for the entire loop duration.
+
+**Affected:**
+- `integrator.rs:703-711` - retryable merge conflict loop (also contains Flaw 1)
+- `integrator.rs:1406-1413` - unrelated-works reset in `combine_conflicting_works` (also Flaw 1)
+
+**NOT affected** (chained temporaries; guard drops at end of `let wi_id = ...;` statement):
+- Lines 340-346, 363-369, 987-993
+
+### Flaw 3 (Gap): Test Harness Does Not Exercise Application Code Paths
+
+Tests 2 and 3 in `handoff.rs` verify git mechanics (rebase preserves commits, conflict deletes
+branch) by calling git directly. They do not invoke `reset_work_after_bundle_rejection` or
+traverse the IPC bridge, which is why the deadlock in Flaw 1 passed undetected.
+
+The git-level tests are valid as boundary condition proofs and should be retained. The gap is
+the absence of tests that exercise the Rust code paths through the dispatch harness.
+
+---
+
+## Remediation Plan
+
+### Commit 1: Hoist Rebase + Fix Read-Lock Loops
+
+**Change 1 - Extract `rebase_agent_branch`:**
+
+Remove the git rebase block from `reset_work_after_bundle_rejection`. Extract it into a new
+private method `rebase_agent_branch(work_id: &str)` that performs the rebase without acquiring
+`lock_git()`. The caller is responsible for ensuring the git lock is either already held (merge
+failure path) or explicitly acquired before the call (stale/validation failure paths).
+
+`reset_work_after_bundle_rejection` after extraction: IPC only (work.transition + learning.create).
+
+**Change 2 - Collect-then-iterate at lines 703-711:**
+
+```rust
+// Before (guard held across loop)
+if let Ok(bundles) = self.ctx.stores.read_bundles() {
+    for bundle_id in &valid_bundle_ids {
+        let wi_id = bundles.get(...).map(...).unwrap_or_default();
+        self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
+    }
+}
+
+// After (guard dropped before loop)
+let work_ids: Vec<String> = {
+    let bundles = self.ctx.stores.read_bundles()?;
+    valid_bundle_ids.iter()
+        .filter_map(|bid| bundles.get(bid.as_str()).map(|b| b.work_id.clone()))
+        .collect()
+};
+for wi_id in &work_ids {
+    self.reset_work_after_bundle_rejection(&wi_id, "merge conflict");
+    self.rebase_agent_branch(&wi_id);  // git lock already held by outer _git_guard
+}
+```
+
+**Change 3 - Collect-then-iterate at lines 1406-1413:**
+
+Same pattern: collect unrelated work IDs into a `Vec<String>` first, drop the bundles guard,
+then iterate to call `reset_work_after_bundle_rejection` and `rebase_agent_branch`.
+
+**Change 4 - Non-loop callers (347, 374, 417, 994):**
+
+After each `reset_work_after_bundle_rejection` call, acquire git lock and call
+`rebase_agent_branch`:
+
+```rust
+self.reset_work_after_bundle_rejection(&wi_id, "stale base tick");
+if let Ok(_guard) = self.ctx.stores.lock_git() {
+    self.rebase_agent_branch(&wi_id);
+}
+```
+
+### Commit 2: Add Dispatch Harness Test
+
+Add a test in `src/tests/integration/handoff.rs` (or a new file in `src/tests/integration/`)
+that uses the existing dispatch harness (`dispatch_ok`, `inject_preformed_plan`) to:
+
+1. Create a plan/work via `inject_preformed_plan`
+2. Transition the work through the bundle rejection lifecycle via `dispatch_ok`
+3. Call the work.transition IPC path that `reset_work_after_bundle_rejection` exercises
+4. Verify the work state is correct post-reset and that no deadlock occurred
+
+The test does not need to drive a real `IntegratorAgent::process_tick` - it needs to prove that
+the state transitions and (separately) the git operations complete without contention under the
+new split structure.
+
+### Implementation Order
+
+1. Extract `rebase_agent_branch` - no behavior change, just extraction
+2. Remove `lock_git()` from `reset_work_after_bundle_rejection` (now safe, no git ops remain)
+3. Refactor loops at 703 and 1406 to collect-then-iterate, wiring in `rebase_agent_branch`
+4. Wire `rebase_agent_branch` into non-loop callers with explicit lock acquisition
+5. `otto ci` to verify no compile errors or test regressions
+6. Add dispatch harness test (Commit 2)
+7. `otto ci` again
