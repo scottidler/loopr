@@ -1481,6 +1481,66 @@ impl IntegratorAgent {
                 work_id
             ));
         }
+
+        // Fix 2 (bundle-state-alignment): Rebase the agent branch onto the
+        // current integration HEAD to prevent false-noop loops. If the rebase
+        // fails (conflict), delete the branch so the next session starts clean.
+        let branch = format!("agent/{}", work_id);
+        let repo_path = &self.ctx.stores.config.project.repo_path;
+
+        let branch_exists = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &format!("refs/heads/{}", branch)])
+            .current_dir(repo_path)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
+        if branch_exists && let Some(plan_id) = resolve_plan_id(&self.ctx.stores, work_id) {
+            let integ_ref = format!("integration/{}", plan_id);
+
+            // Acquire git lock to prevent concurrent operations
+            let _git_guard = match self.ctx.stores.lock_git() {
+                Ok(g) => Some(g),
+                Err(e) => {
+                    self.ctx.warn(&format!("cannot acquire git lock for rebase: {}", e));
+                    None
+                }
+            };
+
+            let rebase_ok = std::process::Command::new("git")
+                .args(["rebase", &integ_ref, &branch])
+                .current_dir(repo_path)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if rebase_ok {
+                self.ctx
+                    .info(&format!("Rebased {} onto {} after bundle rejection", branch, integ_ref));
+            } else {
+                // Abort the failed rebase, then delete the branch
+                let _ = std::process::Command::new("git")
+                    .args(["rebase", "--abort"])
+                    .current_dir(repo_path)
+                    .output();
+                let _ = std::process::Command::new("git")
+                    .args(["branch", "-D", &branch])
+                    .current_dir(repo_path)
+                    .output();
+                self.ctx.warn(&format!(
+                    "Rebase of {} failed (conflict) - deleted branch; next session starts clean",
+                    branch
+                ));
+            }
+
+            // Rebase (or abort) leaves the agent branch checked out. Restore
+            // the integration branch so worktree creation works for the next
+            // implementer session.
+            let _ = std::process::Command::new("git")
+                .args(["checkout", &integ_ref])
+                .current_dir(repo_path)
+                .output();
+        }
     }
 }
 

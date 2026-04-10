@@ -143,7 +143,6 @@ fn test_normal_bundle_creates_divergent_branch() {
 /// with the current state.
 ///
 /// This test exercises Fix 2 from the design doc.
-#[ignore = "requires Fix 2: rebase after stale rejection"]
 #[test]
 fn test_stale_rejection_rebase_preserves_work() {
     let (_tmp, repo) = setup_repo();
@@ -179,6 +178,8 @@ fn test_stale_rejection_rebase_preserves_work() {
     // SIMULATE Fix 2: rebase agent/wk-a onto new integration HEAD
     let rebase_ok = git_try(&repo, &["rebase", &integ_branch, "agent/wk-a"]);
     assert!(rebase_ok, "Rebase should succeed (no conflict)");
+    // Rebase leaves agent/wk-a checked out - restore integration branch
+    git(&repo, &["checkout", &integ_branch]);
 
     // After rebase: agent/wk-a should have the new integration HEAD as ancestor
     assert!(
@@ -208,7 +209,6 @@ fn test_stale_rejection_rebase_preserves_work() {
 /// so the next session starts from a clean state.
 ///
 /// This test exercises the conflict fallback in Fix 2.
-#[ignore = "requires Fix 2: rebase after stale rejection"]
 #[test]
 fn test_stale_rejection_rebase_conflict_deletes_branch() {
     let (_tmp, repo) = setup_repo();
@@ -237,8 +237,9 @@ fn test_stale_rejection_rebase_conflict_deletes_branch() {
     let rebase_ok = git_try(&repo, &["rebase", &integ_branch, "agent/wk-a"]);
     assert!(!rebase_ok, "Rebase should fail due to conflict");
 
-    // SIMULATE Fix 2 fallback: abort rebase, delete branch
+    // SIMULATE Fix 2 fallback: abort rebase, delete branch, restore checkout
     let _ = git_try(&repo, &["rebase", "--abort"]);
+    git(&repo, &["checkout", &integ_branch]);
     git(&repo, &["branch", "-D", "agent/wk-a"]);
 
     // Branch should no longer exist
