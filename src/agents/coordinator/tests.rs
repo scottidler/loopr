@@ -1753,3 +1753,128 @@ fn test_append_work_status_includes_bundle_id_for_inreview_work() {
         summary
     );
 }
+
+// --- sweep_stuck_inreview tests (Fix 4) ---
+
+/// Verify that sweep_stuck_inreview advances an InReview work when all bundles are terminal
+/// and at least one is Merged.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sweep_stuck_inreview_with_merged_bundle() {
+    let dir = TestDir::new("loopr-coord-inreview-merged");
+    let stores = test_stores(&dir);
+
+    let phase = Phase::new("spec-1".into(), "Phase 1".into());
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+    // Work stuck in InReview
+    let mut wi = Work::new(phase_id.clone(), "WI stuck".into());
+    wi.force_status(WorkStatus::InReview);
+    wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
+    let wi_id = wi.id.clone();
+    stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+    // Bundle in terminal Merged state
+    let mut bundle = Bundle::new(wi_id.clone(), None, String::new(), vec!["claim".into()]);
+    bundle.force_status(BundleStatus::Merged);
+    stores.bundles.write().unwrap().insert(bundle.id.clone(), bundle);
+
+    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
+
+    let (event_tx, _rx) = broadcast::channel(16);
+    let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
+    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+    sweep_stuck_inreview(&stores, &coord_state, &bridge, TEST_PREFIX);
+
+    // Work should now be Integrated
+    let works = stores.works.read().unwrap();
+    assert_eq!(
+        works.get(&wi_id).unwrap().status(),
+        WorkStatus::Integrated,
+        "stuck InReview work with Merged bundle should advance to Integrated"
+    );
+}
+
+/// Verify that sweep_stuck_inreview does NOT fire when bundles are not all terminal.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sweep_inreview_not_all_terminal() {
+    let dir = TestDir::new("loopr-coord-inreview-partial");
+    let stores = test_stores(&dir);
+
+    let phase = Phase::new("spec-1".into(), "Phase 1".into());
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+    let mut wi = Work::new(phase_id.clone(), "WI partial".into());
+    wi.force_status(WorkStatus::InReview);
+    wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
+    let wi_id = wi.id.clone();
+    stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+    // One bundle Merged, one still Proposed (not terminal)
+    let mut merged = Bundle::new(wi_id.clone(), None, String::new(), vec!["claim".into()]);
+    merged.force_status(BundleStatus::Merged);
+    stores.bundles.write().unwrap().insert(merged.id.clone(), merged);
+
+    let active = Bundle::new(wi_id.clone(), None, "agent/wi-1".into(), vec!["claim2".into()]);
+    // Default status is Proposed (non-terminal)
+    stores.bundles.write().unwrap().insert(active.id.clone(), active);
+
+    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
+
+    let (event_tx, _rx) = broadcast::channel(16);
+    let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
+    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+    sweep_stuck_inreview(&stores, &coord_state, &bridge, TEST_PREFIX);
+
+    // Work should still be InReview (not all bundles terminal)
+    let works = stores.works.read().unwrap();
+    assert_eq!(
+        works.get(&wi_id).unwrap().status(),
+        WorkStatus::InReview,
+        "should not advance when not all bundles are terminal"
+    );
+}
+
+/// Verify that sweep_stuck_inreview does NOT fire when all bundles are Rejected (no Merged).
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sweep_inreview_no_merged_bundle() {
+    let dir = TestDir::new("loopr-coord-inreview-nomerge");
+    let stores = test_stores(&dir);
+
+    let phase = Phase::new("spec-1".into(), "Phase 1".into());
+    let phase_id = phase.id.clone();
+    stores.phases.write().unwrap().insert(phase_id.clone(), phase);
+
+    let mut wi = Work::new(phase_id.clone(), "WI all rejected".into());
+    wi.force_status(WorkStatus::InReview);
+    wi.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec!["tests pass".into()]);
+    let wi_id = wi.id.clone();
+    stores.works.write().unwrap().insert(wi_id.clone(), wi);
+
+    // All bundles Rejected (terminal but no Merged)
+    let mut rejected = Bundle::new(wi_id.clone(), None, "agent/wi-1".into(), vec!["claim".into()]);
+    rejected.force_status(BundleStatus::Rejected);
+    stores.bundles.write().unwrap().insert(rejected.id.clone(), rejected);
+
+    let mut coord_state = CoordinatorState::new("goal-1".to_string(), InterviewMode::Interactive);
+    coord_state.fsm_state = CoordinatorFsmState::Executing;
+
+    let (event_tx, _rx) = broadcast::channel(16);
+    let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
+    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+
+    sweep_stuck_inreview(&stores, &coord_state, &bridge, TEST_PREFIX);
+
+    // Work should still be InReview (no Merged bundle, must go through rejection path)
+    let works = stores.works.read().unwrap();
+    assert_eq!(
+        works.get(&wi_id).unwrap().status(),
+        WorkStatus::InReview,
+        "should not advance when all bundles are Rejected"
+    );
+}

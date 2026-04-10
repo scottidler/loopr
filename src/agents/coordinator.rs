@@ -766,6 +766,69 @@ fn sweep_integrated_to_done(
     }
 }
 
+/// Safety net: advance InReview works whose bundles are all terminal and at least one is Merged.
+///
+/// This handles the case where the integrator published a tick that contains a noop bundle but
+/// the Work failed to transition InReview -> Integrated (e.g. due to a crash or handler error).
+/// The integrator's normal path (C1 block) handles this, but this sweep catches leftovers.
+fn sweep_stuck_inreview(
+    stores: &Stores,
+    coord_state: &CoordinatorState,
+    bridge: &crate::agents::bridge::AgentIpcBridge,
+    prefix: &str,
+) {
+    tracing::debug!("{} sweep_stuck_inreview(fsm={:?})", prefix, coord_state.fsm_state);
+    if coord_state.fsm_state != CoordinatorFsmState::Executing {
+        return;
+    }
+
+    let stuck: Vec<String> = {
+        let Ok(works) = stores.read_works() else {
+            tracing::error!("works lock poisoned");
+            return;
+        };
+        let Ok(bundles) = stores.read_bundles() else {
+            tracing::error!("bundles lock poisoned");
+            return;
+        };
+        works
+            .values()
+            .filter(|w| w.status() == WorkStatus::InReview)
+            .filter(|w| {
+                let work_bundles: Vec<&Bundle> = bundles.values().filter(|b| b.work_id == w.id).collect();
+                // All bundles must be terminal, and at least one must be Merged
+                !work_bundles.is_empty()
+                    && work_bundles.iter().all(|b| b.status().is_terminal())
+                    && work_bundles.iter().any(|b| b.status() == BundleStatus::Merged)
+            })
+            .map(|w| w.id.clone())
+            .collect()
+    };
+
+    for wi_id in &stuck {
+        tracing::warn!(
+            "{} sweep_stuck_inreview: Work {} is InReview with all bundles terminal \
+             (at least one Merged) - advancing to Integrated",
+            prefix,
+            wi_id
+        );
+        let resp = bridge.request(
+            "work.transition",
+            serde_json::json!({
+                "id": wi_id,
+                "target_status": "Integrated",
+                "role": "integrator",
+            }),
+        );
+        if resp.is_error() {
+            let msg = resp.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+            tracing::error!("{} sweep_stuck_inreview: failed to advance {}: {}", prefix, wi_id, msg);
+        } else {
+            tracing::info!("{} Work {} transitioned InReview -> Integrated", prefix, wi_id);
+        }
+    }
+}
+
 /// Determine the FSM state footer -- state-specific instructions for the LLM.
 ///
 /// `goal` and `config` are retained in the signature for future use.

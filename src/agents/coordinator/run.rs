@@ -161,6 +161,8 @@ impl<L: LlmClient> CoordinatorAgent<L> {
 
         // Deterministic: transition Integrated Works to Done before consulting the LLM.
         sweep_integrated_to_done(stores, coord_state, bridge, &prefix);
+        // Safety net: advance stuck InReview works whose bundles are all terminal.
+        sweep_stuck_inreview(stores, coord_state, bridge, &prefix);
 
         // Re-check FSM after sweep — if all Works are now Done, advance immediately.
         if let Some(new_state) = check_fsm_transition(stores, coord_state, config) {
