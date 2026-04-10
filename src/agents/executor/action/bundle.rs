@@ -146,11 +146,13 @@ pub(super) async fn handle_propose_bundle(
     };
 
     // Compute paths: all files this bundle affects.
-    // For normal bundles: git diff --name-only main...HEAD
+    // For normal bundles: git diff --name-only <base_ref>...HEAD
     // For noop bundles: use explicit noop_paths or fall back to Work context extraction.
     let paths: Vec<String> = if !is_noop {
+        let base = ctx.session.base_ref.as_deref().unwrap_or("main");
+        let range = format!("{}...HEAD", base);
         tokio::process::Command::new("git")
-            .args(["diff", "--name-only", "main...HEAD"])
+            .args(["diff", "--name-only", &range])
             .current_dir(worktree_path)
             .output()
             .await
