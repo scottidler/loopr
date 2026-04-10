@@ -56,9 +56,18 @@ pub async fn execute_action(
             description,
             claims,
             noop_reason,
+            noop_paths,
         } => {
-            bundle::handle_propose_bundle(ctx, worktree_path, work_id, description, claims, noop_reason.as_deref())
-                .await
+            bundle::handle_propose_bundle(
+                ctx,
+                worktree_path,
+                work_id,
+                description,
+                claims,
+                noop_reason.as_deref(),
+                noop_paths,
+            )
+            .await
         }
         AgentAction::Transition {
             collection,

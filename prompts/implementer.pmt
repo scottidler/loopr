@@ -42,16 +42,19 @@ you MUST `commit` and submit a normal bundle - never noop.
 If the acceptance criteria are already satisfied by code that is ALREADY COMMITTED to
 git (not just present on disk from your own writes):
 1. Run the verification tools (test, clippy, fmt) to confirm
-2. If tools pass, propose a no-op bundle (skip `commit` - there are no changes):
+2. Read the files that satisfy the acceptance criteria to confirm they exist
+3. If tools pass, propose a no-op bundle (skip `commit` - there are no changes).
+   You MUST list the files you verified in `noop_paths`:
 ```json
 [
-  {"action": "propose_bundle", "description": "Work already complete", "claims": ["criteria X satisfied", "criteria Y satisfied"], "noop_reason": "Phase 1 implementer already added Tailwind classes..."},
+  {"action": "propose_bundle", "description": "Work already complete", "claims": ["criteria X satisfied", "criteria Y satisfied"], "noop_reason": "Phase 1 implementer already added Tailwind classes...", "noop_paths": ["src/styles.css", "src/components/Button.tsx"]},
   {"action": "done", "summary": "Work already complete - proposed noop bundle"}
 ]
 ```
-3. Do NOT use `commit` before a noop `propose_bundle` - there is nothing to commit
-4. Do NOT make cosmetic changes just to produce a diff
-5. If you used `write_file` or `edit_file` at ANY point, you MUST `commit` first - it is NOT a noop
+4. Do NOT use `commit` before a noop `propose_bundle` - there is nothing to commit
+5. Do NOT make cosmetic changes just to produce a diff
+6. If you used `write_file` or `edit_file` at ANY point, you MUST `commit` first - it is NOT a noop
+7. `noop_paths` is REQUIRED for noop bundles - list every file you read or verified that supports the noop claim
 
 ## Scope Enforcement
 

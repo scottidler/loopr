@@ -673,6 +673,7 @@ mod tests {
             description: "d".into(),
             claims: vec![],
             noop_reason: None,
+            noop_paths: vec![],
         }));
     }
 

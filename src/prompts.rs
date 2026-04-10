@@ -361,6 +361,10 @@ mod tests {
             p.contains("write_file` or `edit_file` at ANY point"),
             "implementer.pmt missing noop guard: write_file/edit_file rule"
         );
+        assert!(
+            p.contains("noop_paths"),
+            "implementer.pmt missing noop_paths instruction"
+        );
     }
 
     #[test]

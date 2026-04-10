@@ -87,6 +87,10 @@ pub enum AgentAction {
         claims: Vec<String>,
         #[serde(default)]
         noop_reason: Option<String>,
+        /// Files the implementer verified when claiming noop. Required when
+        /// noop_reason is set; fallback extraction from Work title/AC if absent.
+        #[serde(default, deserialize_with = "string_or_vec")]
+        noop_paths: Vec<String>,
     },
     Transition {
         collection: String,
@@ -287,6 +291,7 @@ mod tests {
             description: "Add error handling".to_string(),
             claims: vec!["src/error.rs".to_string()],
             noop_reason: None,
+            noop_paths: vec![],
         };
         let json = serde_json::to_string(&action).unwrap();
         let deserialized: AgentAction = serde_json::from_str(&json).unwrap();
@@ -294,11 +299,13 @@ mod tests {
             description,
             claims,
             noop_reason,
+            noop_paths,
         } = deserialized
         {
             assert_eq!(description, "Add error handling");
             assert_eq!(claims, vec!["src/error.rs"]);
             assert!(noop_reason.is_none());
+            assert!(noop_paths.is_empty());
         } else {
             panic!("expected ProposeBundle");
         }

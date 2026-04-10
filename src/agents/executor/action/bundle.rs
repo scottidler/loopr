@@ -16,6 +16,7 @@ pub(super) async fn handle_propose_bundle(
     description: &str,
     claims: &[String],
     noop_reason: Option<&str>,
+    noop_paths: &[String],
 ) -> Result<ActionResult> {
     let bridge = &ctx.bridge;
 
@@ -116,8 +117,9 @@ pub(super) async fn handle_propose_bundle(
         None
     };
 
-    // Compute paths: all files this branch changed vs main, across all
-    // iterations. This enables scope enforcement at review and integration time.
+    // Compute paths: all files this bundle affects.
+    // For normal bundles: git diff --name-only main...HEAD
+    // For noop bundles: use explicit noop_paths or fall back to Work context extraction.
     let paths: Vec<String> = if !is_noop {
         tokio::process::Command::new("git")
             .args(["diff", "--name-only", "main...HEAD"])
@@ -135,7 +137,35 @@ pub(super) async fn handle_propose_bundle(
             })
             .unwrap_or_default()
     } else {
-        vec![]
+        // Use explicit noop_paths or fall back to extracting paths from Work title/AC
+        let candidates: Vec<String> = if !noop_paths.is_empty() {
+            noop_paths.to_vec()
+        } else {
+            extract_paths_from_work(bridge.stores(), wi_id)
+        };
+        // Validate: keep only paths that exist in the worktree
+        let valid: Vec<String> = candidates
+            .into_iter()
+            .filter(|p| {
+                let full = worktree_path.join(p);
+                if full.exists() {
+                    true
+                } else {
+                    ctx.warn(&format!("noop_paths: {} does not exist in worktree, skipping", p));
+                    false
+                }
+            })
+            .collect();
+        // Fail if no valid paths - prevents a dead-on-arrival bundle
+        if valid.is_empty() {
+            return Ok(ActionResult::ActionError(
+                "Noop bundle requires at least one valid file path. \
+                 Provide noop_paths listing the files you verified satisfy the acceptance criteria. \
+                 Example: \"noop_paths\": [\"src/main.rs\"]"
+                    .to_string(),
+            ));
+        }
+        valid
     };
     if !paths.is_empty() {
         ctx.info(&format!("Touched paths: {:?}", paths));
@@ -186,6 +216,29 @@ pub(super) async fn handle_propose_bundle(
         return Err(eyre!("propose bundle failed: {:?}", resp.error));
     }
     Ok(ActionResult::BundleProposed(description.to_string()))
+}
+
+/// Extract file-like path tokens from a Work's title and acceptance criteria.
+/// Used as fallback when the implementer omits noop_paths.
+/// A token is file-like if it contains `.` or `/`.
+fn extract_paths_from_work(stores: &crate::daemon::context::Stores, work_id: &str) -> Vec<String> {
+    let Ok(works) = stores.read_works() else {
+        return vec![];
+    };
+    let Some(work) = works.get(work_id) else {
+        return vec![];
+    };
+    let mut tokens: Vec<String> = Vec::new();
+    for text in std::iter::once(work.title.as_str()).chain(work.acceptance_criteria.0.iter().map(String::as_str)) {
+        for word in text.split_whitespace() {
+            let clean =
+                word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != '_' && c != '-');
+            if !clean.is_empty() && (clean.contains('.') || clean.contains('/')) {
+                tokens.push(clean.to_string());
+            }
+        }
+    }
+    tokens
 }
 
 /// Handle AcceptBundle action.
@@ -299,6 +352,7 @@ mod tests {
             description: "My bundle".to_string(),
             claims: vec!["Implemented feature X".to_string()],
             noop_reason: None,
+            noop_paths: vec![],
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -355,6 +409,7 @@ mod tests {
             description: "My bundle".to_string(),
             claims: vec![],
             noop_reason: None,
+            noop_paths: vec![],
         };
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Coordinator);
         let result = execute_action(&action, &ctx, &dir, None).await;
@@ -533,6 +588,7 @@ mod tests {
             description: "Bundle with base tick".to_string(),
             claims: vec!["claim".to_string()],
             noop_reason: None,
+            noop_paths: vec![],
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -590,6 +646,7 @@ mod tests {
             description: "Test bundle".to_string(),
             claims: vec!["implemented feature".to_string()],
             noop_reason: None,
+            noop_paths: vec![],
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -611,6 +668,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_noop_propose_bundle_creates_empty_branch() {
         let dir = TestDir::new("loopr-exec-noop-branch");
+        // Create a real file so noop_paths validation passes
+        std::fs::write(dir.join("main.rs"), "fn main() {}").unwrap();
         let stores = test_stores(&dir);
         let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
 
@@ -620,6 +679,7 @@ mod tests {
             description: "Work already complete".to_string(),
             claims: vec!["criteria satisfied".to_string()],
             noop_reason: Some("Phase 1 already implemented this".to_string()),
+            noop_paths: vec!["main.rs".to_string()],
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -717,6 +777,7 @@ mod tests {
             description: "Work already complete".to_string(),
             claims: vec!["criteria satisfied".to_string()],
             noop_reason: Some("already done".to_string()),
+            noop_paths: vec![],
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -790,6 +851,7 @@ mod tests {
             description: "Work already complete".to_string(),
             claims: vec!["criteria satisfied".to_string()],
             noop_reason: Some("Phase 1 already implemented this".to_string()),
+            noop_paths: vec!["init.txt".to_string()],
         };
         let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
         assert!(
@@ -826,5 +888,205 @@ mod tests {
         let bundle = bundles.get(bundle_id).expect("bundle should exist");
         assert!(bundle.branch_name.is_empty());
         assert_eq!(bundle.noop_reason.as_deref(), Some("already done by phase 1"));
+    }
+
+    // --- noop_paths tests (Fix 1) ---
+
+    /// Verify that explicit noop_paths are stored on the bundle when the implementer provides them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_noop_bundle_uses_explicit_paths() {
+        let dir = TestDir::new("loopr-exec-noop-explicit");
+
+        // Init git repo
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            tokio::process::Command::new("git")
+                .args(&args)
+                .current_dir(&dir)
+                .output()
+                .await
+                .unwrap();
+        }
+        // Ignore test artifacts so noop guard doesn't trigger
+        std::fs::write(dir.join(".gitignore"), ".taskstore/\ndocs/\n").unwrap();
+        // Create the file that noop_paths will reference
+        std::fs::write(dir.join("requirements.txt"), "flask==2.0").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Requirements already pinned".to_string(),
+            claims: vec!["requirements.txt exists with pinned versions".to_string()],
+            noop_reason: Some("File already exists from scaffold".to_string()),
+            noop_paths: vec!["requirements.txt".to_string()],
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(_)),
+            "expected BundleProposed, got: {:?}",
+            result
+        );
+
+        // Bundle should have paths set to the explicit noop_paths value
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.values().find(|b| b.work_id == wi_id).unwrap();
+        assert_eq!(bundle.paths, vec!["requirements.txt".to_string()]);
+    }
+
+    /// Verify that the fallback path extractor pulls file tokens from Work title/AC.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_noop_bundle_fallback_paths_from_work() {
+        let dir = TestDir::new("loopr-exec-noop-fallback");
+
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            tokio::process::Command::new("git")
+                .args(&args)
+                .current_dir(&dir)
+                .output()
+                .await
+                .unwrap();
+        }
+        // Ignore test artifacts so noop guard doesn't trigger
+        std::fs::write(dir.join(".gitignore"), ".taskstore/\ndocs/\n").unwrap();
+        // Create the file referenced in the work title
+        std::fs::write(dir.join("setup.py"), "# setup").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
+
+        // Create a work with "setup.py" in the title so the fallback extractor finds it
+        let (_, _, _, _) = create_test_hierarchy(&ctx.bridge);
+        // Override to create a custom work that mentions setup.py in title
+        let wi_resp = ctx.bridge.request(
+            "work.create",
+            serde_json::json!({
+                "parent_id": "ph-placeholder",
+                "title": "Create setup.py package configuration",
+                "acceptance_criteria": ["setup.py must define package metadata"]
+            }),
+        );
+        // Use create_test_hierarchy work but modify stores directly
+        let stores_arc = ctx.bridge.stores();
+        let work_id = {
+            let works = stores_arc.read_works().unwrap();
+            // Find any work - use the one from create_test_hierarchy
+            works.keys().next().unwrap().clone()
+        };
+        {
+            let mut works = stores_arc.works.write().unwrap();
+            if let Some(w) = works.get_mut(&work_id) {
+                w.title = "Create setup.py package configuration".to_string();
+                w.acceptance_criteria = crate::domain::criteria::AcceptanceCriteria(vec![
+                    "setup.py must define package metadata".to_string(),
+                ]);
+            }
+        }
+        let _ = wi_resp; // suppress unused warning
+
+        let action = AgentAction::ProposeBundle {
+            description: "Setup.py already exists".to_string(),
+            claims: vec!["setup.py already in repo".to_string()],
+            noop_reason: Some("File pre-exists".to_string()),
+            noop_paths: vec![], // empty - fallback to Work title/AC extraction
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&work_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::BundleProposed(_)),
+            "expected BundleProposed from fallback, got: {:?}",
+            result
+        );
+
+        let bundles = stores.bundles.read().unwrap();
+        let bundle = bundles.values().find(|b| b.work_id == work_id).unwrap();
+        assert!(!bundle.paths.is_empty(), "fallback should have found setup.py");
+        assert!(
+            bundle.paths.iter().any(|p| p.contains("setup.py")),
+            "fallback paths should include setup.py, got: {:?}",
+            bundle.paths
+        );
+    }
+
+    /// Verify that a noop bundle with no valid paths returns ActionError.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_noop_bundle_filters_nonexistent_paths() {
+        let dir = TestDir::new("loopr-exec-noop-filter");
+
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            tokio::process::Command::new("git")
+                .args(&args)
+                .current_dir(&dir)
+                .output()
+                .await
+                .unwrap();
+        }
+        // Ignore test artifacts so noop guard doesn't trigger
+        std::fs::write(dir.join(".gitignore"), ".taskstore/\ndocs/\n").unwrap();
+        std::fs::write(dir.join("README.md"), "# test").unwrap();
+        tokio::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+        tokio::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&dir)
+            .output()
+            .await
+            .unwrap();
+
+        let stores = test_stores(&dir);
+        let (ctx, _) = test_agent_context(&dir, &stores, AgentKind::Implementer);
+        let (_, _, _, wi_id) = create_test_hierarchy(&ctx.bridge);
+
+        let action = AgentAction::ProposeBundle {
+            description: "Noop with bad paths".to_string(),
+            claims: vec!["done".to_string()],
+            noop_reason: Some("already done".to_string()),
+            noop_paths: vec!["nonexistent/file.rs".to_string(), "also/missing.py".to_string()],
+        };
+        let result = execute_action(&action, &ctx, &dir, Some(&wi_id)).await.unwrap();
+        assert!(
+            matches!(result, ActionResult::ActionError(ref msg) if msg.contains("at least one valid file path")),
+            "expected ActionError for all-invalid noop_paths, got: {:?}",
+            result
+        );
     }
 }

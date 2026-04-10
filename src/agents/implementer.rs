@@ -643,6 +643,7 @@ impl<L: LlmClient + 'static> Agent for ImplementerAgent<L> {
                     ),
                     claims: vec!["partial implementation - needs review".to_string()],
                     noop_reason: None,
+                    noop_paths: vec![],
                 },
                 &self.ctx,
                 &self.worktree_path,
