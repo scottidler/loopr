@@ -74,6 +74,14 @@ The architecture splits into two layers:
 
 **Strategies** are named compositions of triggers and actions. A strategy defines: when to activate (trigger), what to do (sequence of primitives), and what happens next (on-success, on-failure wiring). Strategies can reference other strategies, enabling layered composition.
 
+**Critical constraint: strategies are single-tick.** A strategy fires, executes its action sequence, and completes - all within one engine tick. Strategies do not span ticks, do not suspend and resume, and do not hold intermediate state across engine cycles. This is the most important architectural decision in v4 and the one that keeps the system simple.
+
+Why this matters: `spawn-agent` is a primitive that returns immediately (it starts a tokio task and hands back a session ID). The agent then runs for minutes or hours. When the agent finishes, it emits an event. That event fires a *different* strategy. Multi-step flows are expressed as chains of strategies connected by events, not as multi-step strategies that pause and wait.
+
+This means v4 is NOT a durable workflow engine (Temporal, AWS Step Functions). There is no in-flight strategy state to persist, no resume-after-crash logic, no saga rollback. If the daemon crashes mid-strategy, the partial effects are visible in TaskStore (because primitives persist as they go), and the next engine tick will evaluate triggers against the current state and fire whatever strategies match. The system is self-healing through its reactive trigger model, not through durable execution replay.
+
+This single-tick constraint is the firewall against accidentally building a YAML programming language. Without it, strategies would need variables, conditionals, loops, suspend/resume, error recovery branches - the full complexity of a workflow engine. With it, strategies are flat sequences of primitives with a simple success/failure fork. Complexity lives in how strategies chain via events, not in how individual strategies execute.
+
 **The FSM interpreter** replaces `#[derive(Fsm)]`. It loads FSM definitions from YAML at startup, validates them (no orphan states, no unreachable states, terminals have no outgoing transitions), and enforces transitions at runtime. The coordinator no longer contains FSM logic - it asks the interpreter "is this transition valid for this role?" and the interpreter consults the YAML definition.
 
 v3's FSM has two transition types that the YAML schema must preserve:
@@ -618,22 +626,24 @@ strategies/
 | Scope creep toward general-purpose scripting | Medium | High | Non-goal is explicit. If YAML can't express something, add a new primitive - don't add scripting. |
 | AR generates invalid YAML compositions | Medium | Medium | Startup validation catches this. AR must validate before scoring. |
 | Loss of v3 tribal knowledge during rewrite | Low | High | v3 exists as reference in adjacent worktree. Carry-over components copied, not rewritten. Design docs capture the "why" behind v3 decisions. |
-| Strategy composition becomes accidentally Turing-complete | Medium | High | Strict non-goal. If we find ourselves adding conditionals or loops to YAML, stop and add a primitive instead. The composition model is trigger-action-wiring, not a programming language. |
-| Multi-step strategies need intermediate state management | High | Medium | Addressed in doc 5 (strategy composition). Likely solution: strategy-scoped context that primitives can read/write, cleared when the strategy completes. |
+| Strategy composition becomes accidentally Turing-complete | Medium | High | Design principle 6 (Greenspun's defense) + principle 7 (single-tick constraint). on-success/on-failure is the ceiling of control flow in YAML. Multi-step flows chain via events, not in-strategy logic. |
+| Multi-step strategies need intermediate state management | ~~High~~ Resolved | ~~Medium~~ | Strategies are single-tick (principle 7). No intermediate state survives across ticks. Strategy-scoped context (`HashMap<String, Value>`) exists within one tick only. Multi-step flows are chains of strategies connected by events. (Doc 5) |
 
-## Open Questions
+## Resolved Questions
 
-- [ ] Should FSM definitions support inheritance/composition (e.g., a "base-work" FSM that variants extend)?
-- [ ] How do strategies scope to specific Plans vs global? Is scoping part of the trigger or the strategy definition?
-- [ ] Should the primitive registry be extensible at startup (load additional primitives from config) or strictly compiled-in?
-- [ ] What is the right granularity for trigger evaluation? Per-event? Per-tick? Both?
-- [ ] How do we handle strategy versioning for AR trial reproducibility?
-- [ ] Should strategies be able to define new domain types (beyond Plan/Spec/Phase/Work) or is the type set fixed? If decomposition pipelines are pluggable (e.g., 3-level or 5-level), the domain type set may need to be dynamic too.
-- [ ] How does the TUI display strategy-driven behavior? Does it show which strategy fired and why?
-- [ ] **Strategy priority/ordering:** When two strategies fire on the same event, which executes first? Is there an explicit priority field, or is it document order, or is simultaneous firing an error?
-- [ ] **Async primitives:** Most interesting primitives (spawn-agent, LLM calls, merge-worktree) are async. How does the action sequence handle awaiting async primitives? Is the engine tick async?
-- [ ] **Strategy intermediate state:** The ask-a-friend example spawns an agent (step 1) then injects its result (step 2). Step 2 depends on step 1's output. Where does intermediate state between action steps live? Is there a strategy-scoped context/scratchpad?
-- [ ] **Carry-over module compatibility:** Domain types carry over from v3, but they currently embed `#[derive(Fsm)]`. How do we handle the transition? Strip the derive and add runtime FSM registration? Or keep the derive as a compile-time validation layer alongside runtime interpretation?
+All open questions from the initial vision were resolved during the design doc process (Docs 2-7):
+
+- [x] **FSM inheritance/composition?** No. Keep flat - one YAML file per domain type. Inheritance adds resolution-order complexity for marginal DRY benefit. *(Doc 3)*
+- [x] **Strategy scoping?** Scope lives on the strategy definition, not the trigger. Accepts any domain collection name (plan, spec, phase, work, bundle, session, tick, lock). *(Doc 5)*
+- [x] **Primitive registry extensibility?** Strictly compiled-in. Primitives are the stability boundary. New primitive = new Rust code = new release. *(Doc 2)*
+- [x] **Trigger evaluation granularity?** Both. Event triggers are push (fire on matching event). Threshold/ratio/timer/state-query triggers are pull (evaluate per tick). *(Doc 4)*
+- [x] **Strategy versioning for AR?** Git. Strategy YAML files are committed. AR trial configs reference overrides against HEAD. Reproducibility comes from pinning git SHA + trial config. *(Doc 7)*
+- [x] **Dynamic domain types?** No. Type set is fixed (Plan, Spec, Phase, Work, Bundle, Session, Tick, Lock, Chat). A 3-level pipeline skips Spec; it doesn't invent new types. *(Doc 6)*
+- [x] **TUI display of strategy behavior?** Add an "engine" or "events" view showing fired triggers, active strategies, executed primitives. Late-stage concern - build after engine works. *(Doc 5)*
+- [x] **Strategy priority/ordering?** Explicit `priority` field (integer, higher fires first). Same priority = document order. Simultaneous firing is normal, not an error. *(Doc 5)*
+- [x] **Async primitives?** The engine tick is async (tokio task). Action sequences execute sequentially, each primitive `await`ed. `spawn-agent` returns immediately (starts a tokio task, returns session ID). The agent runs asynchronously; completion fires an event that triggers a different strategy. *(Doc 5)*
+- [x] **Strategy intermediate state?** Strategy-scoped `HashMap<String, serde_json::Value>` created when a strategy fires, dropped when it completes. Primitives read/write via `$context.{step-name}.{output}` references. *(Docs 2, 5)*
+- [x] **Carry-over module compatibility?** Strip `#[derive(Fsm)]` from domain enums. Implement `FsmStatus` trait for kebab-case mapping. Runtime interpreter is the authority. Derive macro removed after interpreter passes v3's 128-test FSM suite. *(Doc 3)*
 
 ## Design Principles
 
@@ -647,9 +657,11 @@ strategies/
 
 5. **Primitives are the stability boundary.** Primitives are well-tested Rust functions that rarely change. Strategies are YAML that changes per experiment. The boundary between them is the API contract.
 
-6. **Composition, not scripting.** If YAML can't express something, add a new primitive. Don't add conditionals, loops, or variables to YAML. Keep the composition model simple.
+6. **Composition, not scripting (Greenspun's Tenth Rule defense).** If YAML can't express something, add a new primitive - don't add conditionals, loops, or variables to YAML. The pressure to add "just one more feature" to the YAML schema is real and must be actively resisted. The test: if a proposed YAML feature would make sense in a programming language, it belongs in a Rust primitive, not in the schema. on-success/on-failure is the ceiling of control flow in YAML, not the floor.
 
-7. **Otto parallel.** Otto proves the pattern works for build orchestration. v4 applies the same pattern to agent orchestration. YAML declares what happens, Rust interprets and executes.
+7. **Strategies are single-tick, not workflows.** A strategy fires and completes within one engine tick. Multi-step flows chain via events, not via in-strategy suspend/resume. This is the constraint that prevents the system from becoming a durable workflow engine (Temporal, Step Functions) and keeps the YAML schema simple. No intermediate state persistence, no saga rollback, no resume-after-crash. Self-healing comes from the reactive trigger model evaluating current state each tick.
+
+8. **Otto parallel.** Otto proves the pattern works for build orchestration. v4 applies the same pattern to agent orchestration. YAML declares what happens, Rust interprets and executes.
 
 ## References
 
