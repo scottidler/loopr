@@ -455,6 +455,15 @@ pub enum Command {
         #[arg(long)]
         skip_clarity_gate: bool,
     },
+    /// Score an E2E run — read JSONL from the output directory and write score.json
+    Score {
+        /// Directory containing the E2E run's TaskStore JSONL files
+        #[arg(long, short)]
+        dir: PathBuf,
+        /// Duration of the E2E run in seconds (for reporting)
+        #[arg(long, default_value = "0")]
+        duration_secs: u64,
+    },
 }
 
 /// Diagnose subcommands for querying session history and logs.

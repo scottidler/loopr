@@ -117,9 +117,9 @@ fn command_to_ipc(command: &Command, role: Role) -> (String, serde_json::Value) 
         // SetRole writes to local config, not IPC — handled in dispatch_command
         Command::SetRole { .. } => unreachable!("role handled before IPC dispatch"),
 
-        // Tui, Daemon, Diagnose, and Run are handled by main/run() before dispatch
-        Command::Tui | Command::Daemon | Command::Diagnose { .. } | Command::Run { .. } => {
-            unreachable!("tui/daemon/diagnose/run handled before dispatch")
+        // Tui, Daemon, Diagnose, Run, and Score are handled by main() before dispatch
+        Command::Tui | Command::Daemon | Command::Diagnose { .. } | Command::Run { .. } | Command::Score { .. } => {
+            unreachable!("tui/daemon/diagnose/run/score handled before dispatch")
         }
     }
 }

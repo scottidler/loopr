@@ -18,6 +18,16 @@ fn main() -> Result<()> {
     let role = cli_args.r#as.unwrap_or(domain::role::Role::Coordinator);
 
     match cli_args.command {
+        Some(Command::Score { ref dir, duration_secs }) => {
+            // Score runs locally — reads JSONL, writes score.json, no daemon needed
+            let score = loopr::scorer::compute(dir, duration_secs).context("Failed to compute score")?;
+            let score_path = dir.join("score.json");
+            let json = serde_json::to_string_pretty(&score).context("Failed to serialize score")?;
+            std::fs::write(&score_path, &json).context("Failed to write score.json")?;
+            println!("{json}");
+            println!("\nScore written to: {}", score_path.display());
+            Ok(())
+        }
         Some(Command::Diagnose { ref cmd }) => {
             // Diagnose runs locally — no daemon, no session logging needed
             cli::diagnose::run(cmd)
