@@ -65,7 +65,7 @@ fn main() -> Result<()> {
             tokio::runtime::Runtime::new()
                 .context("Failed to create Tokio runtime")?
                 .block_on(async {
-                    cli::dispatch::run(cmd, &config.daemon.socket_path, role, &config.strategy.clarity_gate).await
+                    cli::dispatch::run(cmd, &config.daemon.socket_path, role, &config.clarity_gate).await
                 })
         }
     }

@@ -35,7 +35,7 @@ impl std::fmt::Debug for AgentLlmClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentLlmClient")
             .field("session_id", &self.session_id)
-            .field("model", &self.config.model)
+            .field("model", &self.config.llm.model)
             .finish_non_exhaustive()
     }
 }
@@ -43,10 +43,10 @@ impl std::fmt::Debug for AgentLlmClient {
 impl AgentLlmClient {
     /// Create a new AgentLlmClient.
     ///
-    /// Reads the API key from the environment variable specified in `config.api_key_env`.
+    /// Reads the API key from the environment variable specified in `config.llm.api_key_env`.
     pub fn new(config: AgentRoleConfig, session_id: String, event_tx: broadcast::Sender<DaemonEvent>) -> Result<Self> {
-        let api_key = std::env::var(&config.api_key_env)
-            .map_err(|_| eyre!("API key not found in env var: {}", config.api_key_env))?;
+        let api_key = std::env::var(&config.llm.api_key_env)
+            .map_err(|_| eyre!("API key not found in env var: {}", config.llm.api_key_env))?;
 
         let client = Client::new();
 
@@ -138,9 +138,9 @@ impl AgentLlmClient {
             .collect();
 
         let body = serde_json::json!({
-            "model": self.config.model,
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
+            "model": self.config.llm.model,
+            "max_tokens": self.config.llm.max_tokens,
+            "temperature": self.config.llm.temperature,
             "stream": true,
             "system": system_prompt,
             "messages": api_messages,
@@ -332,9 +332,9 @@ impl AgenticLlm for AgentLlmClient {
         ]);
 
         let mut body = serde_json::json!({
-            "model": self.config.model,
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
+            "model": self.config.llm.model,
+            "max_tokens": self.config.llm.max_tokens,
+            "temperature": self.config.llm.temperature,
             "stream": true,
             "system": system_block,
             "messages": api_messages,
@@ -709,13 +709,13 @@ mod tests {
         );
         assert_eq!(client.session_id, "session-1");
         assert_eq!(client.api_key, "test-key");
-        assert_eq!(client.config.model, config.model);
+        assert_eq!(client.config.llm.model, config.llm.model);
     }
 
     #[test]
     fn test_agent_llm_client_new_missing_env() {
         let mut config = AgentRoleConfig::default_implementer();
-        config.api_key_env = "LOOPR_TEST_NONEXISTENT_KEY_12345".to_string();
+        config.llm.api_key_env = "LOOPR_TEST_NONEXISTENT_KEY_12345".to_string();
         let (event_tx, _) = broadcast::channel(16);
         let result = AgentLlmClient::new(config, "s1".to_string(), event_tx);
         assert!(result.is_err());
@@ -893,7 +893,7 @@ mod tests {
     #[tokio::test]
     async fn test_call_streaming_network_error() {
         let mut config = AgentRoleConfig::default_implementer();
-        config.model = "test-model".to_string();
+        config.llm.model = "test-model".to_string();
         let (event_tx, _) = broadcast::channel(16);
 
         // Use a non-routable address to trigger network error

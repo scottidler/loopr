@@ -80,8 +80,8 @@ impl<H: HttpClient> LlmClient<H> {
     /// Send a prompt to the LLM and return the raw text response.
     /// Retries once on parse failure with error feedback.
     pub async fn call(&self, prompt: &str) -> Result<String> {
-        let api_key = std::env::var(&self.config.api_key_env)
-            .context(format!("Missing API key env var: {}", self.config.api_key_env))?;
+        let api_key = std::env::var(&self.config.llm.api_key_env)
+            .context(format!("Missing API key env var: {}", self.config.llm.api_key_env))?;
 
         let api_url = match self.config.provider.as_str() {
             "anthropic" => "https://api.anthropic.com/v1/messages",
@@ -89,9 +89,9 @@ impl<H: HttpClient> LlmClient<H> {
         };
 
         let request = AnthropicRequest {
-            model: self.config.model.clone(),
-            max_tokens: self.config.max_tokens,
-            temperature: self.config.temperature,
+            model: self.config.llm.model.clone(),
+            max_tokens: self.config.llm.max_tokens,
+            temperature: self.config.llm.temperature,
             messages: vec![AnthropicMessage {
                 role: "user".to_string(),
                 content: prompt.to_string(),
@@ -108,7 +108,7 @@ impl<H: HttpClient> LlmClient<H> {
 
         info!(
             "Calling LLM API: provider={}, model={}",
-            self.config.provider, self.config.model
+            self.config.provider, self.config.llm.model
         );
 
         let response_text = self
@@ -233,12 +233,14 @@ mod tests {
         let env_var = format!("TEST_ANTHROPIC_API_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_var, key_value) };
         let config = ValidatorConfig {
+            llm: crate::config::LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: env_var.clone(),
+                max_tokens: 4096,
+                temperature: 0.0,
+            },
             enabled: true,
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: env_var.clone(),
-            max_tokens: 4096,
-            temperature: 0.0,
         };
         (config, env_var)
     }
@@ -271,12 +273,14 @@ mod tests {
         let missing_var = format!("TEST_ANTHROPIC_MISSING_{}", crate::id::generate_id("xx"));
         unsafe { std::env::remove_var(&missing_var) };
         let config = ValidatorConfig {
+            llm: crate::config::LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: missing_var,
+                max_tokens: 4096,
+                temperature: 0.0,
+            },
             enabled: true,
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: missing_var,
-            max_tokens: 4096,
-            temperature: 0.0,
         };
         let mock = MockHttpClient::new("{}");
         let client = LlmClient::new(config, mock);

@@ -17,13 +17,16 @@ pub(super) fn create_llm_client(
     event_tx: &broadcast::Sender<DaemonEvent>,
     conversation_log: Option<(PathBuf, String)>,
 ) -> Result<AgentLlmClient> {
-    debug!("create_llm_client(session_id={}, model={})", session_id, config.model);
+    debug!(
+        "create_llm_client(session_id={}, model={})",
+        session_id, config.llm.model
+    );
     let client = AgentLlmClient::new(config.clone(), session_id.to_string(), event_tx.clone())?;
     let client = if let Some((dir, name)) = conversation_log {
         client.with_conversation_log(dir, name)
     } else {
         client
     };
-    info!("Agent {} using LLM client (model: {})", session_id, config.model);
+    info!("Agent {} using LLM client (model: {})", session_id, config.llm.model);
     Ok(client)
 }

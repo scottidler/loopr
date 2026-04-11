@@ -434,8 +434,10 @@ mod tests {
         let config = ClarityGateConfig {
             enabled: true,
             model: "claude-sonnet-4-6".to_string(),
-            min_score: 3,
             api_key_env: "LOOPR_TEST_NONEXISTENT_KEY_12345".to_string(),
+            max_tokens: 1024,
+            temperature: 0.0,
+            min_score: 3,
         };
         let result = ClarityGate::new(config);
         assert!(result.is_err());

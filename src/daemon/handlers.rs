@@ -386,8 +386,11 @@ pub(crate) mod tests {
         let mut stores = Stores::new();
         stores.store = Some(Arc::new(std::sync::Mutex::new(store)));
         let validator_config = crate::config::ValidatorConfig {
+            llm: crate::config::LlmConfig {
+                api_key_env: "NONEXISTENT_TEST_KEY".to_string(),
+                ..crate::config::LlmConfig::default()
+            },
             enabled: true,
-            api_key_env: "NONEXISTENT_TEST_KEY".to_string(),
             ..crate::config::ValidatorConfig::default()
         };
         stores.validator = Some(Arc::new(crate::validator::DocValidator::new(validator_config)));
@@ -418,8 +421,11 @@ pub(crate) mod tests {
         // Create a DocValidator to enable the validation gate.
         // Tests don't call the LLM - they only check that the gate logic works.
         let validator_config = crate::config::ValidatorConfig {
+            llm: crate::config::LlmConfig {
+                api_key_env: "NONEXISTENT_TEST_KEY".to_string(),
+                ..crate::config::LlmConfig::default()
+            },
             enabled: true,
-            api_key_env: "NONEXISTENT_TEST_KEY".to_string(),
             ..crate::config::ValidatorConfig::default()
         };
         stores.validator = Some(Arc::new(crate::validator::DocValidator::new(validator_config)));

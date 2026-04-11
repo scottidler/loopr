@@ -141,7 +141,7 @@ pub async fn run_single_work(
     }
 
     // Step 3: Create AgentSession
-    let mut session = AgentSession::new(AgentKind::Implementer, implementer_config.model.clone());
+    let mut session = AgentSession::new(AgentKind::Implementer, implementer_config.llm.model.clone());
     session.work_id = Some(work_id.to_string());
     let session_id = session.id.clone();
 
@@ -236,7 +236,7 @@ pub async fn run_single_review(
     // Steps 2+3: Atomic dedup check + session creation under a single write lock.
     // Without this, multiple workers polling next_assignment() concurrently can
     // all see "no active reviewer" and double-spawn (TOCTOU race).
-    let mut session = AgentSession::new(AgentKind::Reviewer, reviewer_config.model.clone());
+    let mut session = AgentSession::new(AgentKind::Reviewer, reviewer_config.llm.model.clone());
     session.bundle_id = Some(bundle_id.to_string());
     session.daemon_session_id = stores
         .session_dir

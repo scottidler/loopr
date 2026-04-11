@@ -239,14 +239,14 @@ fn decomposition_tool_schema() -> serde_json::Value {
 ///
 /// Uses Claude's tool-use API so the model fills in a schema natively, eliminating
 /// manual JSON parsing and markdown fence stripping that caused parse failures.
-#[instrument(skip_all, fields(model = %config.model, provider = %config.provider))]
+#[instrument(skip_all, fields(model = %config.llm.model, provider = %config.provider))]
 async fn call_llm_for_children<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<Vec<ChildEntry>> {
-    let api_key =
-        std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
+    let api_key = std::env::var(&config.llm.api_key_env)
+        .context(format!("Missing API key env var: {}", config.llm.api_key_env))?;
 
     let api_url = match config.provider.as_str() {
         "anthropic" => "https://api.anthropic.com/v1/messages",
@@ -256,12 +256,12 @@ async fn call_llm_for_children<H: HttpClient + Sync>(
     // Tool-use generation needs more tokens than validation: use at least 8192 so the
     // structured `children` array isn't truncated before all entries are written.
     const MIN_GENERATION_TOKENS: u32 = 8192;
-    let generation_tokens = config.max_tokens.max(MIN_GENERATION_TOKENS);
+    let generation_tokens = config.llm.max_tokens.max(MIN_GENERATION_TOKENS);
 
     let request = serde_json::json!({
-        "model": config.model,
+        "model": config.llm.model,
         "max_tokens": generation_tokens,
-        "temperature": config.temperature,
+        "temperature": config.llm.temperature,
         "tools": [decomposition_tool_schema()],
         "tool_choice": {"type": "tool", "name": "submit_decomposition"},
         "messages": [{"role": "user", "content": prompt}]
@@ -361,10 +361,12 @@ async fn call_llm_for_validation<H: HttpClient + Sync>(
 ) -> Result<ValidationResult> {
     // Use the validation model (Haiku) for structural checks
     let mut validation_config = config.clone();
-    validation_config.model = config.validation_model.clone();
+    validation_config.llm.model = config.validation_model.clone();
 
-    let api_key = std::env::var(&validation_config.api_key_env)
-        .context(format!("Missing API key env var: {}", validation_config.api_key_env))?;
+    let api_key = std::env::var(&validation_config.llm.api_key_env).context(format!(
+        "Missing API key env var: {}",
+        validation_config.llm.api_key_env
+    ))?;
 
     let api_url = match validation_config.provider.as_str() {
         "anthropic" => "https://api.anthropic.com/v1/messages",
@@ -372,8 +374,8 @@ async fn call_llm_for_validation<H: HttpClient + Sync>(
     };
 
     let request = serde_json::json!({
-        "model": validation_config.model,
-        "max_tokens": validation_config.max_tokens,
+        "model": validation_config.llm.model,
+        "max_tokens": validation_config.llm.max_tokens,
         "temperature": 0.0,
         "messages": [{"role": "user", "content": prompt}]
     });
@@ -410,7 +412,7 @@ async fn call_llm_for_validation<H: HttpClient + Sync>(
 }
 
 /// Call the LLM for ratification and parse result.
-#[instrument(skip_all, fields(model = %config.model, provider = %config.provider))]
+#[instrument(skip_all, fields(model = %config.llm.model, provider = %config.provider))]
 async fn call_llm_for_ratification<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
@@ -422,14 +424,14 @@ async fn call_llm_for_ratification<H: HttpClient + Sync>(
 }
 
 /// Raw LLM call that returns text (shared helper).
-#[instrument(skip_all, fields(model = %config.model, provider = %config.provider))]
+#[instrument(skip_all, fields(model = %config.llm.model, provider = %config.provider))]
 async fn call_llm_for_children_raw<H: HttpClient + Sync>(
     http_client: &H,
     config: &DecomposerConfig,
     prompt: &str,
 ) -> Result<String> {
-    let api_key =
-        std::env::var(&config.api_key_env).context(format!("Missing API key env var: {}", config.api_key_env))?;
+    let api_key = std::env::var(&config.llm.api_key_env)
+        .context(format!("Missing API key env var: {}", config.llm.api_key_env))?;
 
     let api_url = match config.provider.as_str() {
         "anthropic" => "https://api.anthropic.com/v1/messages",
@@ -437,9 +439,9 @@ async fn call_llm_for_children_raw<H: HttpClient + Sync>(
     };
 
     let request = serde_json::json!({
-        "model": config.model,
-        "max_tokens": config.max_tokens,
-        "temperature": config.temperature,
+        "model": config.llm.model,
+        "max_tokens": config.llm.max_tokens,
+        "temperature": config.llm.temperature,
         "messages": [{"role": "user", "content": prompt}]
     });
 
@@ -1112,11 +1114,13 @@ mod tests {
 
     fn test_config() -> DecomposerConfig {
         DecomposerConfig {
+            llm: crate::config::LlmConfig {
+                model: "test-model".to_string(),
+                api_key_env: "TEST_DECOMPOSER_KEY".to_string(),
+                max_tokens: 4096,
+                temperature: 0.3,
+            },
             provider: "anthropic".to_string(),
-            model: "test-model".to_string(),
-            api_key_env: "TEST_DECOMPOSER_KEY".to_string(),
-            max_tokens: 4096,
-            temperature: 0.3,
             validation_model: "test-haiku".to_string(),
         }
     }
@@ -1158,7 +1162,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock)
             .await
@@ -1205,7 +1209,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock).await;
         assert!(result.is_err(), "expected error for unresolved dep title");
@@ -1257,7 +1261,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock)
             .await
@@ -1307,7 +1311,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &mock).await;
         assert!(result.is_err());
@@ -1343,7 +1347,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Work, &config, &mock)
             .await
@@ -1386,7 +1390,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Work, &config, &mock)
             .await
@@ -1487,7 +1491,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
@@ -1586,7 +1590,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
@@ -1675,7 +1679,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let (hierarchy, partial_err) = decompose_hierarchy(plan_markdown, &config, &mock, false).await.unwrap();
         assert!(
@@ -1720,7 +1724,7 @@ mod tests {
         }
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_into(parent_content, &parent_id, DocKind::Spec, &config, &SlowMockHttp).await;
 
@@ -1785,7 +1789,7 @@ mod tests {
         };
 
         let mut config = test_config();
-        config.api_key_env = env_key.clone();
+        config.llm.api_key_env = env_key.clone();
 
         let result = decompose_hierarchy(plan_markdown, &config, &mock, false).await;
         assert!(result.is_ok(), "decompose_hierarchy should succeed with partial docs");

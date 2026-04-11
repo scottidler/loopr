@@ -84,12 +84,12 @@ pub(super) fn handle_agent_start(
 
         // Create agent session with model from config (before lock, no shared state)
         let model = match agent_type {
-            AgentKind::Coordinator => stores.config.agents.coordinator.role.model.clone(),
-            AgentKind::Implementer => stores.config.agents.implementer.model.clone(),
-            AgentKind::Reviewer => stores.config.agents.reviewer.model.clone(),
-            AgentKind::Researcher => stores.config.agents.researcher.model.clone(),
+            AgentKind::Coordinator => stores.config.agents.coordinator.role.llm.model.clone(),
+            AgentKind::Implementer => stores.config.agents.implementer.llm.model.clone(),
+            AgentKind::Reviewer => stores.config.agents.reviewer.llm.model.clone(),
+            AgentKind::Researcher => stores.config.agents.researcher.llm.model.clone(),
             AgentKind::Integrator => "deterministic".to_string(),
-            AgentKind::Chat => stores.config.agents.implementer.model.clone(),
+            AgentKind::Chat => stores.config.agents.implementer.llm.model.clone(),
         };
         let mut session = AgentSession::new(agent_type, model);
         session.work_id = work_id;
@@ -783,24 +783,24 @@ mod tests {
         use crate::config::Config;
         let config = Config::default();
         let cases: Vec<(AgentKind, String)> = vec![
-            (AgentKind::Coordinator, config.agents.coordinator.role.model.clone()),
-            (AgentKind::Implementer, config.agents.implementer.model.clone()),
-            (AgentKind::Reviewer, config.agents.reviewer.model.clone()),
-            (AgentKind::Researcher, config.agents.researcher.model.clone()),
+            (AgentKind::Coordinator, config.agents.coordinator.role.llm.model.clone()),
+            (AgentKind::Implementer, config.agents.implementer.llm.model.clone()),
+            (AgentKind::Reviewer, config.agents.reviewer.llm.model.clone()),
+            (AgentKind::Researcher, config.agents.researcher.llm.model.clone()),
             (AgentKind::Integrator, "deterministic".to_string()),
         ];
         for (agent_type, expected_model) in cases {
             let model = match agent_type {
-                AgentKind::Coordinator => config.agents.coordinator.role.model.clone(),
-                AgentKind::Implementer => config.agents.implementer.model.clone(),
-                AgentKind::Reviewer => config.agents.reviewer.model.clone(),
-                AgentKind::Researcher => config.agents.researcher.model.clone(),
+                AgentKind::Coordinator => config.agents.coordinator.role.llm.model.clone(),
+                AgentKind::Implementer => config.agents.implementer.llm.model.clone(),
+                AgentKind::Reviewer => config.agents.reviewer.llm.model.clone(),
+                AgentKind::Researcher => config.agents.researcher.llm.model.clone(),
                 AgentKind::Integrator => "deterministic".to_string(),
-                AgentKind::Chat => config.agents.implementer.model.clone(),
+                AgentKind::Chat => config.agents.implementer.llm.model.clone(),
             };
             assert_eq!(model, expected_model, "model mismatch for {:?}", agent_type);
         }
-        assert_eq!(config.agents.coordinator.role.model, "claude-opus-4-6");
+        assert_eq!(config.agents.coordinator.role.llm.model, "claude-opus-4-6");
     }
 
     #[tokio::test]

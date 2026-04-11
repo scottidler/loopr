@@ -404,7 +404,7 @@ impl DaemonContext {
         if config.validator.enabled {
             info!(
                 "Doc Validator enabled: provider={}, model={}",
-                config.validator.provider, config.validator.model
+                config.validator.provider, config.validator.llm.model
             );
             stores.validator = Some(Arc::new(DocValidator::new(config.validator.clone())));
         } else {
@@ -415,15 +415,12 @@ impl DaemonContext {
         if config.evaluator.enabled {
             info!(
                 "Coverage Evaluator enabled: provider={}, model={}",
-                config.evaluator.provider, config.evaluator.model
+                config.evaluator.provider, config.evaluator.llm.model
             );
             let eval_config = crate::config::ValidatorConfig {
+                llm: config.evaluator.llm.clone(),
                 enabled: true,
                 provider: config.evaluator.provider.clone(),
-                model: config.evaluator.model.clone(),
-                api_key_env: config.evaluator.api_key_env.clone(),
-                max_tokens: config.evaluator.max_tokens,
-                temperature: config.evaluator.temperature,
             };
             stores.evaluator = Some(Arc::new(crate::evaluator::CoverageEvaluator::new(eval_config)));
         } else {

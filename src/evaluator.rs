@@ -46,8 +46,8 @@ pub struct CoverageEvaluator<H: HttpClient = ReqwestClient> {
 impl CoverageEvaluator<ReqwestClient> {
     /// Create a CoverageEvaluator with a real reqwest HTTP client.
     pub fn new(config: ValidatorConfig) -> Self {
-        debug!("CoverageEvaluator::new(model={})", config.model);
-        let model = config.model.clone();
+        debug!("CoverageEvaluator::new(model={})", config.llm.model);
+        let model = config.llm.model.clone();
         Self {
             llm_client: LlmClient::with_reqwest(config),
             model,
@@ -195,7 +195,7 @@ impl<H: HttpClient> CoverageEvaluator<H> {
 impl<H: HttpClient> CoverageEvaluator<H> {
     /// Create a CoverageEvaluator with a mock HTTP client (for tests).
     pub fn with_http_client(config: ValidatorConfig, http_client: H) -> Self {
-        let model = config.model.clone();
+        let model = config.llm.model.clone();
         Self {
             llm_client: LlmClient::new(config, http_client),
             model,
@@ -231,12 +231,14 @@ mod tests {
         let env_var = format!("TEST_COVERAGE_KEY_{}", crate::id::generate_id("xx"));
         unsafe { std::env::set_var(&env_var, "test-key") };
         let config = ValidatorConfig {
+            llm: crate::config::LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: env_var.clone(),
+                max_tokens: 4096,
+                temperature: 0.0,
+            },
             enabled: true,
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: env_var.clone(),
-            max_tokens: 4096,
-            temperature: 0.0,
         };
         (config, env_var)
     }

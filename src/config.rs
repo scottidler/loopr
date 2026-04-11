@@ -106,6 +106,31 @@ impl Default for WorkSlaConfig {
     }
 }
 
+/// Shared base configuration for any LLM-calling subsystem.
+///
+/// Every section that makes an LLM call embeds this via `#[serde(flatten)]`.
+/// This gives AR a uniform surface: `model`, `max-tokens`, `temperature`, and
+/// `api-key-env` appear at the same nesting depth in every section.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct LlmConfig {
+    pub model: String,
+    pub api_key_env: String,
+    pub max_tokens: u32,
+    pub temperature: f32,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            model: "claude-sonnet-4-6".to_string(),
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 4096,
+            temperature: 0.0,
+        }
+    }
+}
+
 /// Goal clarity gate configuration - LLM pre-validation for `loopr run`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -114,10 +139,14 @@ pub struct ClarityGateConfig {
     pub enabled: bool,
     /// Model for clarity evaluation.
     pub model: String,
-    /// Minimum score per dimension to pass (default: 3).
-    pub min_score: u8,
     /// API key env var.
     pub api_key_env: String,
+    /// Max tokens for the clarity evaluation call.
+    pub max_tokens: u32,
+    /// Temperature for the clarity evaluation call.
+    pub temperature: f32,
+    /// Minimum score per dimension to pass (default: 3).
+    pub min_score: u8,
 }
 
 impl Default for ClarityGateConfig {
@@ -125,8 +154,10 @@ impl Default for ClarityGateConfig {
         Self {
             enabled: true,
             model: "claude-sonnet-4-6".to_string(),
-            min_score: 3,
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            max_tokens: 1024,
+            temperature: 0.0,
+            min_score: 3,
         }
     }
 }
@@ -149,8 +180,6 @@ pub struct StrategyConfig {
     pub max_decomposition_attempts: u32,
     /// Maximum bubble-up depth to prevent infinite recursion.
     pub max_bubble_up_depth: u32,
-    /// Goal clarity gate configuration.
-    pub clarity_gate: ClarityGateConfig,
     /// Maximum consecutive agent session failures before Work transitions to
     /// Blocked. Catches crash-before-bundle loops independently of
     /// max_bundle_rejections.
@@ -176,7 +205,6 @@ impl Default for StrategyConfig {
             coverage_enabled: true,
             max_decomposition_attempts: 3,
             max_bubble_up_depth: 2,
-            clarity_gate: ClarityGateConfig::default(),
             max_session_failures: default_max_session_failures(),
         }
     }
@@ -234,12 +262,14 @@ impl Default for CoordinatorConfig {
     fn default() -> Self {
         Self {
             role: AgentRoleConfig {
-                model: "claude-opus-4-6".to_string(),
-                api_key_env: "ANTHROPIC_API_KEY".to_string(),
-                max_tokens: 8192,
+                llm: LlmConfig {
+                    model: "claude-opus-4-6".to_string(),
+                    api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                    max_tokens: 8192,
+                    temperature: 0.2,
+                },
                 max_iterations: u32::MAX,
                 max_pool: 1,
-                temperature: 0.2,
                 session_timeout_secs: None, // Coordinator is long-lived
                 max_requeries: 3,
             },
@@ -422,16 +452,14 @@ impl Default for AgentConfig {
 /// `AgentsConfig::worker_pool_size` at runtime. Explicit values in config still work.
 pub const MAX_POOL_UNLIMITED: u32 = u32::MAX;
 
-/// Per-role agent configuration (Implementer or Reviewer).
+/// Per-role agent configuration (Implementer, Reviewer, Researcher, Coordinator).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AgentRoleConfig {
-    pub model: String,
-    pub api_key_env: String,
-    pub max_tokens: u32,
+    #[serde(flatten)]
+    pub llm: LlmConfig,
     pub max_iterations: u32,
     pub max_pool: u32,
-    pub temperature: f32,
     pub session_timeout_secs: Option<u64>,
     /// Max re-prompts per iteration for self-correction (parse/tool errors). 0 = disabled.
     pub max_requeries: u32,
@@ -446,12 +474,14 @@ impl Default for AgentRoleConfig {
 impl AgentRoleConfig {
     pub fn default_implementer() -> Self {
         Self {
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 8192,
+            llm: LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 8192,
+                temperature: 0.3,
+            },
             max_iterations: 20,
             max_pool: MAX_POOL_UNLIMITED,
-            temperature: 0.3,
             session_timeout_secs: Some(1800), // 30 min
             max_requeries: 3,
         }
@@ -459,12 +489,14 @@ impl AgentRoleConfig {
 
     pub fn default_reviewer() -> Self {
         Self {
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 4096,
+            llm: LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 4096,
+                temperature: 0.1,
+            },
             max_iterations: 5,
             max_pool: MAX_POOL_UNLIMITED,
-            temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
         }
@@ -472,12 +504,14 @@ impl AgentRoleConfig {
 
     pub fn default_researcher() -> Self {
         Self {
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 4096,
+            llm: LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 4096,
+                temperature: 0.1,
+            },
             max_iterations: 10,
             max_pool: 4,
-            temperature: 0.1,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
         }
@@ -522,11 +556,13 @@ impl ChatConfig {
     /// Build an `AgentRoleConfig` for the parent chat LLM.
     pub fn to_role_config(&self) -> AgentRoleConfig {
         AgentRoleConfig {
-            model: self.model.clone(),
-            api_key_env: self.api_key_env.clone(),
-            max_tokens: self.max_tokens,
+            llm: LlmConfig {
+                model: self.model.clone(),
+                api_key_env: self.api_key_env.clone(),
+                max_tokens: self.max_tokens,
+                temperature: self.temperature,
+            },
             max_iterations: self.max_iterations,
-            temperature: self.temperature,
             ..AgentRoleConfig::default_implementer()
         }
     }
@@ -534,11 +570,13 @@ impl ChatConfig {
     /// Build an `AgentRoleConfig` for delegate subagents.
     pub fn to_delegate_role_config(&self) -> AgentRoleConfig {
         AgentRoleConfig {
-            model: self.delegate_model.clone(),
-            api_key_env: self.api_key_env.clone(),
-            max_tokens: self.max_tokens,
+            llm: LlmConfig {
+                model: self.delegate_model.clone(),
+                api_key_env: self.api_key_env.clone(),
+                max_tokens: self.max_tokens,
+                temperature: self.temperature,
+            },
             max_iterations: 20,
-            temperature: self.temperature,
             ..AgentRoleConfig::default_implementer()
         }
     }
@@ -548,23 +586,23 @@ impl ChatConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ValidatorConfig {
+    #[serde(flatten)]
+    pub llm: LlmConfig,
     pub enabled: bool,
     pub provider: String,
-    pub model: String,
-    pub api_key_env: String,
-    pub max_tokens: u32,
-    pub temperature: f32,
 }
 
 impl Default for ValidatorConfig {
     fn default() -> Self {
         Self {
+            llm: LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 4096,
+                temperature: 0.0,
+            },
             enabled: false,
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 4096,
-            temperature: 0.0,
         }
     }
 }
@@ -577,23 +615,23 @@ impl Default for ValidatorConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TierGateConfig {
+    #[serde(flatten)]
+    pub llm: LlmConfig,
     pub enabled: bool,
     pub provider: String,
-    pub model: String,
-    pub api_key_env: String,
-    pub max_tokens: u32,
-    pub temperature: f32,
 }
 
 impl Default for TierGateConfig {
     fn default() -> Self {
         Self {
+            llm: LlmConfig {
+                model: "claude-haiku-4-5-20251001".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 16,
+                temperature: 0.0,
+            },
             enabled: true,
             provider: "anthropic".to_string(),
-            model: "claude-haiku-4-5-20251001".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 16,
-            temperature: 0.0,
         }
     }
 }
@@ -602,23 +640,23 @@ impl Default for TierGateConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EvaluatorConfig {
+    #[serde(flatten)]
+    pub llm: LlmConfig,
     pub enabled: bool,
     pub provider: String,
-    pub model: String,
-    pub api_key_env: String,
-    pub max_tokens: u32,
-    pub temperature: f32,
 }
 
 impl Default for EvaluatorConfig {
     fn default() -> Self {
         Self {
+            llm: LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 4096,
+                temperature: 0.0,
+            },
             enabled: false,
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 4096,
-            temperature: 0.0,
         }
     }
 }
@@ -631,11 +669,9 @@ impl Default for EvaluatorConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DecomposerConfig {
+    #[serde(flatten)]
+    pub llm: LlmConfig,
     pub provider: String,
-    pub model: String,
-    pub api_key_env: String,
-    pub max_tokens: u32,
-    pub temperature: f32,
     /// Lightweight model for template validation checks.
     pub validation_model: String,
 }
@@ -643,11 +679,13 @@ pub struct DecomposerConfig {
 impl Default for DecomposerConfig {
     fn default() -> Self {
         Self {
+            llm: LlmConfig {
+                model: "claude-sonnet-4-6".to_string(),
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                max_tokens: 4096,
+                temperature: 0.3,
+            },
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
-            max_tokens: 4096,
-            temperature: 0.3,
             validation_model: "claude-haiku-4-5-20251001".to_string(),
         }
     }
@@ -695,6 +733,8 @@ pub struct Config {
     pub strategy: StrategyConfig,
     pub reconciler: ReconcilerConfig,
     pub decomposer: DecomposerConfig,
+    /// Goal clarity gate - promoted from strategy.clarity-gate to top-level.
+    pub clarity_gate: ClarityGateConfig,
 }
 
 impl Default for Config {
@@ -713,6 +753,7 @@ impl Default for Config {
             strategy: StrategyConfig::default(),
             reconciler: ReconcilerConfig::default(),
             decomposer: DecomposerConfig::default(),
+            clarity_gate: ClarityGateConfig::default(),
         }
     }
 }
@@ -761,7 +802,21 @@ impl Config {
         tracing::debug!("Config::load_from_file(path={})", path.as_ref().display());
         let content = fs::read_to_string(&path).context("Failed to read config file")?;
 
-        let config: Self = serde_yaml::from_str(&content).context("Failed to parse config file")?;
+        let mut config: Self = serde_yaml::from_str(&content).context("Failed to parse config file")?;
+
+        // Backward compat: if strategy.clarity-gate (legacy location) exists in YAML,
+        // promote it to the top-level clarity_gate field. New configs use top-level only.
+        let raw: serde_yaml::Value =
+            serde_yaml::from_str(&content).context("Failed to parse config file (raw pass)")?;
+        if let Some(legacy) = raw
+            .get("strategy")
+            .and_then(|s| s.get("clarity-gate").or_else(|| s.get("clarity_gate")))
+            .cloned()
+            && let Ok(legacy_config) = serde_yaml::from_value::<ClarityGateConfig>(legacy)
+        {
+            config.clarity_gate = legacy_config;
+            tracing::warn!("Config uses legacy strategy.clarity-gate; move it to top-level clarity-gate");
+        }
 
         tracing::info!("Loaded config from: {}", path.as_ref().display());
         Ok(config)
@@ -847,8 +902,8 @@ mod tests {
         let rc = AgentRoleConfig::default_implementer();
         assert_eq!(rc.max_iterations, 20);
         assert_eq!(rc.max_pool, MAX_POOL_UNLIMITED);
-        assert_eq!(rc.max_tokens, 8192);
-        assert!((rc.temperature - 0.3).abs() < f32::EPSILON);
+        assert_eq!(rc.llm.max_tokens, 8192);
+        assert!((rc.llm.temperature - 0.3).abs() < f32::EPSILON);
         assert_eq!(rc.max_requeries, 3);
     }
 
@@ -857,8 +912,8 @@ mod tests {
         let rc = AgentRoleConfig::default_reviewer();
         assert_eq!(rc.max_iterations, 5);
         assert_eq!(rc.max_pool, MAX_POOL_UNLIMITED);
-        assert_eq!(rc.max_tokens, 4096);
-        assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
+        assert_eq!(rc.llm.max_tokens, 4096);
+        assert!((rc.llm.temperature - 0.1).abs() < f32::EPSILON);
         assert_eq!(rc.max_requeries, 3);
     }
 
@@ -891,16 +946,16 @@ auto_start_implementer: true
 auto_start_reviewer: false
 implementer:
   model: "claude-sonnet-4-6"
-  api_key_env: "MY_KEY"
-  max_tokens: 4096
+  api-key-env: "MY_KEY"
+  max-tokens: 4096
   max_iterations: 10
   min_pool: 2
   max_pool: 3
   temperature: 0.5
 reviewer:
   model: "claude-sonnet-4-6"
-  api_key_env: "MY_KEY"
-  max_tokens: 2048
+  api-key-env: "MY_KEY"
+  max-tokens: 2048
   max_iterations: 3
   min_pool: 1
   max_pool: 1
@@ -916,6 +971,7 @@ tools:
         assert!(ac.auto_start_implementer);
         assert!(!ac.auto_start_reviewer);
         assert_eq!(ac.implementer.max_pool, 3);
+        assert_eq!(ac.implementer.llm.max_tokens, 4096);
         assert_eq!(ac.reviewer.max_iterations, 3);
         assert_eq!(ac.tools.len(), 1);
         assert_eq!(ac.tools[0].name, "test");
@@ -1073,7 +1129,7 @@ stale_policy: replan_at_safe_point
         assert_eq!(cc.idle_interval_secs, 30);
         assert_eq!(cc.max_validation_attempts, 3);
         assert_eq!(cc.role.max_pool, 1);
-        assert!((cc.role.temperature - 0.2).abs() < f32::EPSILON);
+        assert!((cc.role.llm.temperature - 0.2).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1087,8 +1143,8 @@ stale_policy: replan_at_safe_point
         let rc = AgentRoleConfig::default_researcher();
         assert_eq!(rc.max_iterations, 10);
         assert_eq!(rc.max_pool, 4);
-        assert_eq!(rc.max_tokens, 4096);
-        assert!((rc.temperature - 0.1).abs() < f32::EPSILON);
+        assert_eq!(rc.llm.max_tokens, 4096);
+        assert!((rc.llm.temperature - 0.1).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1213,7 +1269,7 @@ plan_approval_required: false
         let ec = EvaluatorConfig::default();
         assert!(!ec.enabled);
         assert_eq!(ec.provider, "anthropic");
-        assert_eq!(ec.model, "claude-sonnet-4-6");
+        assert_eq!(ec.llm.model, "claude-sonnet-4-6");
     }
 
     #[test]
@@ -1278,8 +1334,8 @@ interview_mode: auto
     fn test_chat_config_to_role_config() {
         let cc = ChatConfig::default();
         let role = cc.to_role_config();
-        assert_eq!(role.model, "claude-sonnet-4-6");
-        assert_eq!(role.max_tokens, 8192);
+        assert_eq!(role.llm.model, "claude-sonnet-4-6");
+        assert_eq!(role.llm.max_tokens, 8192);
         assert_eq!(role.max_iterations, 3);
     }
 
@@ -1287,7 +1343,7 @@ interview_mode: auto
     fn test_chat_config_to_delegate_role_config() {
         let cc = ChatConfig::default();
         let role = cc.to_delegate_role_config();
-        assert_eq!(role.model, "claude-haiku-4-5-20251001");
+        assert_eq!(role.llm.model, "claude-haiku-4-5-20251001");
         assert_eq!(role.max_iterations, 20);
     }
 
@@ -1399,5 +1455,159 @@ active_interval_secs: 10
         let config = AgentConfig::default();
         // Default is auto, resolves to >= 1
         assert!(config.worker_pool_size.resolve() >= 1);
+    }
+
+    // --- LlmConfig tests (Phase 1) ---
+
+    #[test]
+    fn test_llm_config_default() {
+        let llm = LlmConfig::default();
+        assert_eq!(llm.model, "claude-sonnet-4-6");
+        assert_eq!(llm.api_key_env, "ANTHROPIC_API_KEY");
+        assert_eq!(llm.max_tokens, 4096);
+        assert!((llm.temperature - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_llm_config_serde_roundtrip() {
+        let llm = LlmConfig {
+            model: "claude-opus-4-6".to_string(),
+            api_key_env: "MY_API_KEY".to_string(),
+            max_tokens: 8192,
+            temperature: 0.3,
+        };
+        let yaml = serde_yaml::to_string(&llm).unwrap();
+        let deserialized: LlmConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.model, llm.model);
+        assert_eq!(deserialized.api_key_env, llm.api_key_env);
+        assert_eq!(deserialized.max_tokens, llm.max_tokens);
+        assert!((deserialized.temperature - llm.temperature).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_llm_config_kebab_case_yaml() {
+        let yaml = r#"
+model: claude-opus-4-6
+api-key-env: MY_KEY
+max-tokens: 8192
+temperature: 0.5
+"#;
+        let llm: LlmConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(llm.model, "claude-opus-4-6");
+        assert_eq!(llm.api_key_env, "MY_KEY");
+        assert_eq!(llm.max_tokens, 8192);
+        assert!((llm.temperature - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_agent_role_config_flatten_preserves_llm_fields() {
+        let yaml = r#"
+model: claude-haiku-4-5-20251001
+api-key-env: CUSTOM_KEY
+max-tokens: 512
+temperature: 0.0
+max_iterations: 5
+max_pool: 2
+"#;
+        let role: AgentRoleConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(role.llm.model, "claude-haiku-4-5-20251001");
+        assert_eq!(role.llm.api_key_env, "CUSTOM_KEY");
+        assert_eq!(role.llm.max_tokens, 512);
+        assert_eq!(role.max_iterations, 5);
+        assert_eq!(role.max_pool, 2);
+    }
+
+    #[test]
+    fn test_validator_config_flatten_roundtrip() {
+        let vc = ValidatorConfig::default();
+        let yaml = serde_yaml::to_string(&vc).unwrap();
+        let deserialized: ValidatorConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.llm.model, vc.llm.model);
+        assert_eq!(deserialized.llm.max_tokens, vc.llm.max_tokens);
+        assert_eq!(deserialized.enabled, vc.enabled);
+        assert_eq!(deserialized.provider, vc.provider);
+    }
+
+    #[test]
+    fn test_tier_gate_config_flatten_roundtrip() {
+        let tg = TierGateConfig::default();
+        let yaml = serde_yaml::to_string(&tg).unwrap();
+        let deserialized: TierGateConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.llm.model, "claude-haiku-4-5-20251001");
+        assert_eq!(deserialized.llm.max_tokens, 16);
+        assert!(deserialized.enabled);
+    }
+
+    #[test]
+    fn test_evaluator_config_flatten_roundtrip() {
+        let ec = EvaluatorConfig::default();
+        let yaml = serde_yaml::to_string(&ec).unwrap();
+        let deserialized: EvaluatorConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.llm.model, ec.llm.model);
+        assert!(!deserialized.enabled);
+    }
+
+    #[test]
+    fn test_decomposer_config_flatten_roundtrip() {
+        let dc = DecomposerConfig::default();
+        let yaml = serde_yaml::to_string(&dc).unwrap();
+        let deserialized: DecomposerConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(deserialized.llm.model, "claude-sonnet-4-6");
+        assert_eq!(deserialized.llm.max_tokens, 4096);
+        assert!((deserialized.llm.temperature - 0.3).abs() < f32::EPSILON);
+        assert_eq!(deserialized.validation_model, "claude-haiku-4-5-20251001");
+    }
+
+    #[test]
+    fn test_clarity_gate_config_has_max_tokens_and_temperature() {
+        let cgc = ClarityGateConfig::default();
+        assert_eq!(cgc.max_tokens, 1024);
+        assert!((cgc.temperature - 0.0).abs() < f32::EPSILON);
+        assert_eq!(cgc.min_score, 3);
+        assert!(cgc.enabled);
+    }
+
+    #[test]
+    fn test_config_clarity_gate_at_top_level() {
+        let config = Config::default();
+        assert!(config.clarity_gate.enabled);
+        assert_eq!(config.clarity_gate.model, "claude-sonnet-4-6");
+        assert_eq!(config.clarity_gate.max_tokens, 1024);
+    }
+
+    #[test]
+    fn test_config_strategy_no_longer_has_clarity_gate() {
+        // StrategyConfig serialization must not include clarity-gate
+        let sc = StrategyConfig::default();
+        let yaml = serde_yaml::to_string(&sc).unwrap();
+        assert!(
+            !yaml.contains("clarity-gate") && !yaml.contains("clarity_gate"),
+            "StrategyConfig must not serialize clarity_gate: {}",
+            yaml
+        );
+    }
+
+    #[test]
+    fn test_backward_compat_strategy_clarity_gate_yaml() {
+        // Old-style config with strategy.clarity-gate must load into config.clarity_gate
+        let yaml = r#"
+name: test
+strategy:
+  clarity-gate:
+    enabled: true
+    model: claude-haiku-4-5-20251001
+    api-key-env: CUSTOM_KEY
+    max-tokens: 512
+    temperature: 0.1
+    min-score: 4
+"#;
+        // Write to temp file and load with Config::load_from_file
+        let tmp = std::env::temp_dir().join("loopr_compat_test.yml");
+        std::fs::write(&tmp, yaml).unwrap();
+        let config = Config::load(Some(&tmp)).unwrap();
+        std::fs::remove_file(&tmp).unwrap();
+        assert_eq!(config.clarity_gate.model, "claude-haiku-4-5-20251001");
+        assert_eq!(config.clarity_gate.max_tokens, 512);
+        assert_eq!(config.clarity_gate.min_score, 4);
     }
 }

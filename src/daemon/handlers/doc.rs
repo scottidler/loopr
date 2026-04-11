@@ -433,12 +433,9 @@ async fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
     }
 
     let tier_config = ValidatorConfig {
+        llm: tg.llm.clone(),
         enabled: true,
         provider: tg.provider.clone(),
-        model: tg.model.clone(),
-        api_key_env: tg.api_key_env.clone(),
-        max_tokens: tg.max_tokens,
-        temperature: tg.temperature,
     };
     let client = LlmClient::with_reqwest(tier_config);
     let prompt_template = crate::prompts::store().tier_gate.clone();
