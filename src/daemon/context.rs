@@ -421,6 +421,7 @@ impl DaemonContext {
                 llm: config.evaluator.llm.clone(),
                 enabled: true,
                 provider: config.evaluator.provider.clone(),
+                prompts: crate::config::ValidatorPrompts::default(),
             };
             stores.evaluator = Some(Arc::new(crate::evaluator::CoverageEvaluator::new(eval_config)));
         } else {

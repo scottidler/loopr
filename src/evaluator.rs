@@ -239,6 +239,7 @@ mod tests {
             },
             enabled: true,
             provider: "anthropic".to_string(),
+            prompts: crate::config::ValidatorPrompts::default(),
         };
         (config, env_var)
     }

@@ -241,6 +241,7 @@ mod tests {
             },
             enabled: true,
             provider: "anthropic".to_string(),
+            prompts: crate::config::ValidatorPrompts::default(),
         };
         (config, env_var)
     }
@@ -281,6 +282,7 @@ mod tests {
             },
             enabled: true,
             provider: "anthropic".to_string(),
+            prompts: crate::config::ValidatorPrompts::default(),
         };
         let mock = MockHttpClient::new("{}");
         let client = LlmClient::new(config, mock);

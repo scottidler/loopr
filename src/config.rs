@@ -272,6 +272,7 @@ impl Default for CoordinatorConfig {
                 max_pool: 1,
                 session_timeout_secs: None, // Coordinator is long-lived
                 max_requeries: 3,
+                prompt: "coordinator".to_string(),
             },
             active_interval_secs: 5,
             idle_interval_secs: 30,
@@ -452,6 +453,97 @@ impl Default for AgentConfig {
 /// `AgentsConfig::worker_pool_size` at runtime. Explicit values in config still work.
 pub const MAX_POOL_UNLIMITED: u32 = u32::MAX;
 
+/// Prompt file paths for the Decomposer system call.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct DecomposerPrompts {
+    pub spec: String,
+    pub phase: String,
+    pub work: String,
+    pub validate: String,
+    pub ratify: String,
+    /// Generation-work prompt (from agents/generation.rs, part of decomposition flow).
+    pub generation_work: String,
+}
+
+impl Default for DecomposerPrompts {
+    fn default() -> Self {
+        Self {
+            spec: "decompose/spec".to_string(),
+            phase: "decompose/phase".to_string(),
+            work: "decompose/work".to_string(),
+            validate: "decompose/validate".to_string(),
+            ratify: "decompose/ratify".to_string(),
+            generation_work: "generation-work".to_string(),
+        }
+    }
+}
+
+/// Prompt file paths for the Doc Validator.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ValidatorPrompts {
+    pub schema: String,
+    pub plan: String,
+    pub spec: String,
+    pub phase: String,
+}
+
+impl Default for ValidatorPrompts {
+    fn default() -> Self {
+        Self {
+            schema: "validator-schema".to_string(),
+            plan: "validator-plan".to_string(),
+            spec: "validator-spec".to_string(),
+            phase: "validator-phase".to_string(),
+        }
+    }
+}
+
+/// Prompt file paths for the Coverage Evaluator.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct EvaluatorPrompts {
+    pub schema: String,
+    pub plan_specs: String,
+    pub spec_phases: String,
+    pub phase_works: String,
+}
+
+impl Default for EvaluatorPrompts {
+    fn default() -> Self {
+        Self {
+            schema: "coverage-schema".to_string(),
+            plan_specs: "coverage-plan-specs".to_string(),
+            spec_phases: "coverage-spec-phases".to_string(),
+            phase_works: "coverage-phase-works".to_string(),
+        }
+    }
+}
+
+/// Prompt file paths for the Chat system.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ChatPrompts {
+    pub default: String,
+    pub interview: String,
+    pub draft: String,
+    pub refine: String,
+    pub executing: String,
+}
+
+impl Default for ChatPrompts {
+    fn default() -> Self {
+        Self {
+            default: "chat".to_string(),
+            interview: "chat-interview".to_string(),
+            draft: "chat-draft".to_string(),
+            refine: "chat-refine".to_string(),
+            executing: "chat-executing".to_string(),
+        }
+    }
+}
+
 /// Per-role agent configuration (Implementer, Reviewer, Researcher, Coordinator).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -463,6 +555,8 @@ pub struct AgentRoleConfig {
     pub session_timeout_secs: Option<u64>,
     /// Max re-prompts per iteration for self-correction (parse/tool errors). 0 = disabled.
     pub max_requeries: u32,
+    /// Path to the system prompt file for this role (relative to prompts dir, or absolute).
+    pub prompt: String,
 }
 
 impl Default for AgentRoleConfig {
@@ -484,6 +578,7 @@ impl AgentRoleConfig {
             max_pool: MAX_POOL_UNLIMITED,
             session_timeout_secs: Some(1800), // 30 min
             max_requeries: 3,
+            prompt: "implementer".to_string(),
         }
     }
 
@@ -499,6 +594,7 @@ impl AgentRoleConfig {
             max_pool: MAX_POOL_UNLIMITED,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
+            prompt: "reviewer".to_string(),
         }
     }
 
@@ -514,6 +610,7 @@ impl AgentRoleConfig {
             max_pool: 4,
             session_timeout_secs: Some(600), // 10 min
             max_requeries: 3,
+            prompt: "researcher".to_string(),
         }
     }
 }
@@ -537,6 +634,8 @@ pub struct ChatConfig {
     pub max_tokens: u32,
     pub temperature: f32,
     pub max_iterations: u32,
+    /// Prompt file paths for chat sessions.
+    pub prompts: ChatPrompts,
 }
 
 impl Default for ChatConfig {
@@ -548,6 +647,7 @@ impl Default for ChatConfig {
             max_tokens: 8192,
             temperature: 0.3,
             max_iterations: 3,
+            prompts: ChatPrompts::default(),
         }
     }
 }
@@ -590,6 +690,8 @@ pub struct ValidatorConfig {
     pub llm: LlmConfig,
     pub enabled: bool,
     pub provider: String,
+    /// Prompt file paths for document validation.
+    pub prompts: ValidatorPrompts,
 }
 
 impl Default for ValidatorConfig {
@@ -603,6 +705,7 @@ impl Default for ValidatorConfig {
             },
             enabled: false,
             provider: "anthropic".to_string(),
+            prompts: ValidatorPrompts::default(),
         }
     }
 }
@@ -611,7 +714,6 @@ impl Default for ValidatorConfig {
 ///
 /// Uses a lightweight model (Haiku by default) to read the Plan and determine
 /// whether it introduces contracts (Full) or is contract-neutral (Brief).
-/// The prompt is loaded from tier-gate.pmt and can be tuned without code changes.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TierGateConfig {
@@ -619,6 +721,8 @@ pub struct TierGateConfig {
     pub llm: LlmConfig,
     pub enabled: bool,
     pub provider: String,
+    /// Path to the tier-gate prompt file (relative to prompts dir, or absolute).
+    pub prompt: String,
 }
 
 impl Default for TierGateConfig {
@@ -632,6 +736,7 @@ impl Default for TierGateConfig {
             },
             enabled: true,
             provider: "anthropic".to_string(),
+            prompt: "tier-gate".to_string(),
         }
     }
 }
@@ -644,6 +749,8 @@ pub struct EvaluatorConfig {
     pub llm: LlmConfig,
     pub enabled: bool,
     pub provider: String,
+    /// Prompt file paths for coverage evaluation.
+    pub prompts: EvaluatorPrompts,
 }
 
 impl Default for EvaluatorConfig {
@@ -657,6 +764,7 @@ impl Default for EvaluatorConfig {
             },
             enabled: false,
             provider: "anthropic".to_string(),
+            prompts: EvaluatorPrompts::default(),
         }
     }
 }
@@ -674,6 +782,8 @@ pub struct DecomposerConfig {
     pub provider: String,
     /// Lightweight model for template validation checks.
     pub validation_model: String,
+    /// Prompt file paths for decomposition.
+    pub prompts: DecomposerPrompts,
 }
 
 impl Default for DecomposerConfig {
@@ -687,6 +797,7 @@ impl Default for DecomposerConfig {
             },
             provider: "anthropic".to_string(),
             validation_model: "claude-haiku-4-5-20251001".to_string(),
+            prompts: DecomposerPrompts::default(),
         }
     }
 }
@@ -1609,5 +1720,103 @@ strategy:
         assert_eq!(config.clarity_gate.model, "claude-haiku-4-5-20251001");
         assert_eq!(config.clarity_gate.max_tokens, 512);
         assert_eq!(config.clarity_gate.min_score, 4);
+    }
+
+    // --- Prompt config field tests (Phase 2) ---
+
+    #[test]
+    fn test_agent_role_config_has_prompt_field() {
+        assert_eq!(AgentRoleConfig::default_implementer().prompt, "implementer");
+        assert_eq!(AgentRoleConfig::default_reviewer().prompt, "reviewer");
+        assert_eq!(AgentRoleConfig::default_researcher().prompt, "researcher");
+        assert_eq!(CoordinatorConfig::default().role.prompt, "coordinator");
+    }
+
+    #[test]
+    fn test_tier_gate_config_has_prompt_field() {
+        let tg = TierGateConfig::default();
+        assert_eq!(tg.prompt, "tier-gate");
+    }
+
+    #[test]
+    fn test_decomposer_prompts_defaults() {
+        let dp = DecomposerPrompts::default();
+        assert_eq!(dp.spec, "decompose/spec");
+        assert_eq!(dp.phase, "decompose/phase");
+        assert_eq!(dp.work, "decompose/work");
+        assert_eq!(dp.validate, "decompose/validate");
+        assert_eq!(dp.ratify, "decompose/ratify");
+        assert_eq!(dp.generation_work, "generation-work");
+    }
+
+    #[test]
+    fn test_validator_prompts_defaults() {
+        let vp = ValidatorPrompts::default();
+        assert_eq!(vp.schema, "validator-schema");
+        assert_eq!(vp.plan, "validator-plan");
+        assert_eq!(vp.spec, "validator-spec");
+        assert_eq!(vp.phase, "validator-phase");
+    }
+
+    #[test]
+    fn test_evaluator_prompts_defaults() {
+        let ep = EvaluatorPrompts::default();
+        assert_eq!(ep.schema, "coverage-schema");
+        assert_eq!(ep.plan_specs, "coverage-plan-specs");
+        assert_eq!(ep.spec_phases, "coverage-spec-phases");
+        assert_eq!(ep.phase_works, "coverage-phase-works");
+    }
+
+    #[test]
+    fn test_chat_prompts_defaults() {
+        let cp = ChatPrompts::default();
+        assert_eq!(cp.default, "chat");
+        assert_eq!(cp.interview, "chat-interview");
+        assert_eq!(cp.draft, "chat-draft");
+        assert_eq!(cp.refine, "chat-refine");
+        assert_eq!(cp.executing, "chat-executing");
+    }
+
+    #[test]
+    fn test_decomposer_config_has_prompts() {
+        let dc = DecomposerConfig::default();
+        assert_eq!(dc.prompts.work, "decompose/work");
+        assert_eq!(dc.prompts.generation_work, "generation-work");
+    }
+
+    #[test]
+    fn test_validator_config_has_prompts() {
+        let vc = ValidatorConfig::default();
+        assert_eq!(vc.prompts.schema, "validator-schema");
+    }
+
+    #[test]
+    fn test_evaluator_config_has_prompts() {
+        let ec = EvaluatorConfig::default();
+        assert_eq!(ec.prompts.schema, "coverage-schema");
+    }
+
+    #[test]
+    fn test_chat_config_has_prompts() {
+        let cc = ChatConfig::default();
+        assert_eq!(cc.prompts.default, "chat");
+        assert_eq!(cc.prompts.interview, "chat-interview");
+    }
+
+    #[test]
+    fn test_prompt_field_yaml_roundtrip() {
+        let yaml = r#"
+prompt: custom-implementer
+model: claude-sonnet-4-6
+api-key-env: ANTHROPIC_API_KEY
+max-tokens: 8192
+temperature: 0.3
+max_iterations: 20
+max_pool: 10
+"#;
+        let role: AgentRoleConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(role.prompt, "custom-implementer");
+        assert_eq!(role.llm.model, "claude-sonnet-4-6");
+        assert_eq!(role.max_iterations, 20);
     }
 }

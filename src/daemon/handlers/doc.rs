@@ -436,6 +436,7 @@ async fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
         llm: tg.llm.clone(),
         enabled: true,
         provider: tg.provider.clone(),
+        prompts: crate::config::ValidatorPrompts::default(),
     };
     let client = LlmClient::with_reqwest(tier_config);
     let prompt_template = crate::prompts::store().tier_gate.clone();

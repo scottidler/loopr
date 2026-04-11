@@ -1122,6 +1122,7 @@ mod tests {
             },
             provider: "anthropic".to_string(),
             validation_model: "test-haiku".to_string(),
+            prompts: crate::config::DecomposerPrompts::default(),
         }
     }
 

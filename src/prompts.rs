@@ -1,8 +1,10 @@
 use std::fs;
 use std::sync::OnceLock;
 
+use eyre::Context as _;
 use tracing::info;
 
+use crate::config::Config;
 use crate::domain::bundle::BundleStatus;
 use crate::domain::plan::HierarchyStatus;
 use crate::domain::work::WorkStatus;
@@ -83,59 +85,76 @@ fn interpolate_status_values(content: String, max_abandon_ratio: f64) -> String 
         .replace("{max_abandon_ratio_pct}", &pct.to_string())
 }
 
-/// Initialize the global prompt store. Call once at startup after config load.
-/// Checks ~/.config/loopr/prompts/ for overrides.
-/// `max_abandon_ratio` is injected into coordinator.pmt as `{max_abandon_ratio_pct}`.
-pub fn init(max_abandon_ratio: f64) {
+/// Initialize the global prompt store from config. Call once at startup after config load.
+///
+/// Prompt paths are read from config. Each path can be:
+/// - A relative path (resolved via XDG override dir, then compiled-in default)
+/// - An absolute path (loaded directly; FATAL if missing or empty — prevents silent fallback
+///   that would corrupt AR experimental data by scoring the baseline as the trial prompt)
+pub fn init(config: &Config) -> eyre::Result<()> {
     let overrides_dir = dirs::config_dir().map(|d| d.join("loopr/prompts"));
+    let max_abandon_ratio = config.agents.coordinator.max_abandon_ratio;
 
-    let load = |filename: &str, default: &str| -> String {
+    let load = |configured_path: &str, default: &str| -> eyre::Result<String> {
+        // Absolute path: load directly, FATAL on failure or empty content.
+        if configured_path.starts_with('/') {
+            let content = fs::read_to_string(configured_path)
+                .with_context(|| format!("absolute prompt path not found: {}", configured_path))?;
+            eyre::ensure!(
+                !content.trim().is_empty(),
+                "absolute prompt path is empty: {}",
+                configured_path
+            );
+            info!("prompt loaded from absolute path: {}", configured_path);
+            return Ok(content);
+        }
+        // Relative path: check XDG override, then fall back to compiled-in default.
         if let Some(ref dir) = overrides_dir {
-            let path = dir.join(filename);
+            let path = dir.join(format!("{}.pmt", configured_path));
             match fs::read_to_string(&path) {
                 Ok(content) if !content.trim().is_empty() => {
                     info!("prompt override loaded: {}", path.display());
-                    return content;
+                    return Ok(content);
                 }
-                Ok(_) => {
-                    // Empty file — fall back to default
-                }
-                Err(_) => {
-                    // File not found — expected, use default
-                }
+                _ => {}
             }
         }
-        default.to_string()
+        Ok(default.to_string())
     };
 
     // OnceLock::set returns Err if already initialized — harmless no-op
     let _ = STORE.set(PromptStore {
-        coordinator: interpolate_status_values(load("coordinator.pmt", DEFAULT_COORDINATOR), max_abandon_ratio),
-        implementer: load("implementer.pmt", DEFAULT_IMPLEMENTER),
-        reviewer: load("reviewer.pmt", DEFAULT_REVIEWER),
-        researcher: load("researcher.pmt", DEFAULT_RESEARCHER),
-        validator_schema: load("validator-schema.pmt", DEFAULT_VALIDATOR_SCHEMA),
-        validator_plan: load("validator-plan.pmt", DEFAULT_VALIDATOR_PLAN),
-        validator_spec: load("validator-spec.pmt", DEFAULT_VALIDATOR_SPEC),
-        validator_phase: load("validator-phase.pmt", DEFAULT_VALIDATOR_PHASE),
-        generation_work: load("generation-work.pmt", DEFAULT_GENERATION_WORK),
-        coverage_schema: load("coverage-schema.pmt", DEFAULT_COVERAGE_SCHEMA),
-        coverage_plan_specs: load("coverage-plan-specs.pmt", DEFAULT_COVERAGE_PLAN_SPECS),
-        coverage_spec_phases: load("coverage-spec-phases.pmt", DEFAULT_COVERAGE_SPEC_PHASES),
-        coverage_phase_works: load("coverage-phase-works.pmt", DEFAULT_COVERAGE_PHASE_WORKS),
-        interview: load("interview.pmt", DEFAULT_INTERVIEW),
-        chat: load("chat.pmt", DEFAULT_CHAT),
-        chat_interview: load("chat-interview.pmt", DEFAULT_CHAT_INTERVIEW),
-        chat_draft: load("chat-draft.pmt", DEFAULT_CHAT_DRAFT),
-        chat_refine: load("chat-refine.pmt", DEFAULT_CHAT_REFINE),
-        chat_executing: load("chat-executing.pmt", DEFAULT_CHAT_EXECUTING),
-        tier_gate: load("tier-gate.pmt", DEFAULT_TIER_GATE),
-        decompose_spec: load("decompose/spec.pmt", DEFAULT_DECOMPOSE_SPEC),
-        decompose_phase: load("decompose/phase.pmt", DEFAULT_DECOMPOSE_PHASE),
-        decompose_work: load("decompose/work.pmt", DEFAULT_DECOMPOSE_WORK),
-        decompose_validate: load("decompose/validate.pmt", DEFAULT_DECOMPOSE_VALIDATE),
-        decompose_ratify: load("decompose/ratify.pmt", DEFAULT_DECOMPOSE_RATIFY),
+        coordinator: interpolate_status_values(
+            load(&config.agents.coordinator.role.prompt, DEFAULT_COORDINATOR)?,
+            max_abandon_ratio,
+        ),
+        implementer: load(&config.agents.implementer.prompt, DEFAULT_IMPLEMENTER)?,
+        reviewer: load(&config.agents.reviewer.prompt, DEFAULT_REVIEWER)?,
+        researcher: load(&config.agents.researcher.prompt, DEFAULT_RESEARCHER)?,
+        validator_schema: load(&config.validator.prompts.schema, DEFAULT_VALIDATOR_SCHEMA)?,
+        validator_plan: load(&config.validator.prompts.plan, DEFAULT_VALIDATOR_PLAN)?,
+        validator_spec: load(&config.validator.prompts.spec, DEFAULT_VALIDATOR_SPEC)?,
+        validator_phase: load(&config.validator.prompts.phase, DEFAULT_VALIDATOR_PHASE)?,
+        generation_work: load(&config.decomposer.prompts.generation_work, DEFAULT_GENERATION_WORK)?,
+        coverage_schema: load(&config.evaluator.prompts.schema, DEFAULT_COVERAGE_SCHEMA)?,
+        coverage_plan_specs: load(&config.evaluator.prompts.plan_specs, DEFAULT_COVERAGE_PLAN_SPECS)?,
+        coverage_spec_phases: load(&config.evaluator.prompts.spec_phases, DEFAULT_COVERAGE_SPEC_PHASES)?,
+        coverage_phase_works: load(&config.evaluator.prompts.phase_works, DEFAULT_COVERAGE_PHASE_WORKS)?,
+        // interview.pmt: open question on final config location; XDG-only for now
+        interview: load("interview", DEFAULT_INTERVIEW)?,
+        chat: load(&config.chat.prompts.default, DEFAULT_CHAT)?,
+        chat_interview: load(&config.chat.prompts.interview, DEFAULT_CHAT_INTERVIEW)?,
+        chat_draft: load(&config.chat.prompts.draft, DEFAULT_CHAT_DRAFT)?,
+        chat_refine: load(&config.chat.prompts.refine, DEFAULT_CHAT_REFINE)?,
+        chat_executing: load(&config.chat.prompts.executing, DEFAULT_CHAT_EXECUTING)?,
+        tier_gate: load(&config.tier_gate.prompt, DEFAULT_TIER_GATE)?,
+        decompose_spec: load(&config.decomposer.prompts.spec, DEFAULT_DECOMPOSE_SPEC)?,
+        decompose_phase: load(&config.decomposer.prompts.phase, DEFAULT_DECOMPOSE_PHASE)?,
+        decompose_work: load(&config.decomposer.prompts.work, DEFAULT_DECOMPOSE_WORK)?,
+        decompose_validate: load(&config.decomposer.prompts.validate, DEFAULT_DECOMPOSE_VALIDATE)?,
+        decompose_ratify: load(&config.decomposer.prompts.ratify, DEFAULT_DECOMPOSE_RATIFY)?,
     });
+    Ok(())
 }
 
 /// Initialize with compiled-in defaults only (no filesystem). For tests.
@@ -778,5 +797,145 @@ mod tests {
         let output = store().researcher.replace("{query}", sentinel_query);
         assert!(output.contains(sentinel_query), "query sentinel missing");
         assert_no_residual_placeholders(&output, "researcher.pmt", &["{plan_id}"]);
+    }
+
+    // =========================================================================
+    // Phase 2 tests: prompt path resolution
+    // =========================================================================
+
+    /// Test the load closure logic for absolute paths that don't exist returns Err.
+    #[test]
+    fn test_absolute_prompt_path_not_found_returns_err() {
+        let overrides_dir: Option<std::path::PathBuf> = None;
+        let load = |configured_path: &str, default: &str| -> eyre::Result<String> {
+            if configured_path.starts_with('/') {
+                let content = fs::read_to_string(configured_path)
+                    .with_context(|| format!("absolute prompt path not found: {}", configured_path))?;
+                eyre::ensure!(
+                    !content.trim().is_empty(),
+                    "absolute prompt path is empty: {}",
+                    configured_path
+                );
+                return Ok(content);
+            }
+            if let Some(ref dir) = overrides_dir {
+                let path = dir.join(format!("{}.pmt", configured_path));
+                match fs::read_to_string(&path) {
+                    Ok(content) if !content.trim().is_empty() => return Ok(content),
+                    _ => {}
+                }
+            }
+            Ok(default.to_string())
+        };
+
+        let result = load("/nonexistent/path/that/does/not/exist.pmt", "default");
+        assert!(result.is_err(), "absolute path for nonexistent file must fail");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("absolute prompt path not found")
+        );
+    }
+
+    /// Test the load closure logic for absolute paths that are empty returns Err.
+    #[test]
+    fn test_absolute_prompt_path_empty_returns_err() {
+        let dir = TestDir::new("loopr-pmt-abs-empty");
+        let empty_file = dir.join("empty.pmt");
+        fs::write(&empty_file, "   \n  ").unwrap();
+        let abs_path = empty_file.to_string_lossy().to_string();
+
+        let overrides_dir: Option<std::path::PathBuf> = None;
+        let load = |configured_path: &str, default: &str| -> eyre::Result<String> {
+            if configured_path.starts_with('/') {
+                let content = fs::read_to_string(configured_path)
+                    .with_context(|| format!("absolute prompt path not found: {}", configured_path))?;
+                eyre::ensure!(
+                    !content.trim().is_empty(),
+                    "absolute prompt path is empty: {}",
+                    configured_path
+                );
+                return Ok(content);
+            }
+            if let Some(ref dir) = overrides_dir {
+                let path = dir.join(format!("{}.pmt", configured_path));
+                match fs::read_to_string(&path) {
+                    Ok(content) if !content.trim().is_empty() => return Ok(content),
+                    _ => {}
+                }
+            }
+            Ok(default.to_string())
+        };
+
+        let result = load(&abs_path, "default");
+        assert!(result.is_err(), "empty absolute path file must fail");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("absolute prompt path is empty")
+        );
+    }
+
+    /// Test that relative paths with XDG override work (existing behavior preserved).
+    #[test]
+    fn test_relative_path_xdg_override_works() {
+        let dir = TestDir::new("loopr-pmt-rel-override");
+        fs::write(dir.join("coordinator.pmt"), "XDG COORDINATOR").unwrap();
+
+        let overrides_dir = Some(dir.to_path_buf());
+        let load = |configured_path: &str, default: &str| -> eyre::Result<String> {
+            if configured_path.starts_with('/') {
+                unreachable!("test does not use absolute paths");
+            }
+            if let Some(ref d) = overrides_dir {
+                let path = d.join(format!("{}.pmt", configured_path));
+                match fs::read_to_string(&path) {
+                    Ok(content) if !content.trim().is_empty() => return Ok(content),
+                    _ => {}
+                }
+            }
+            Ok(default.to_string())
+        };
+
+        // "coordinator" → resolves to XDG/coordinator.pmt
+        assert_eq!(load("coordinator", "default").unwrap(), "XDG COORDINATOR");
+        // "implementer" → not in XDG, falls back to default
+        assert_eq!(load("implementer", "compiled-in").unwrap(), "compiled-in");
+    }
+
+    /// Test that absolute paths that exist load correctly.
+    #[test]
+    fn test_absolute_prompt_path_loads_correctly() {
+        let dir = TestDir::new("loopr-pmt-abs-ok");
+        let prompt_file = dir.join("custom.pmt");
+        fs::write(&prompt_file, "CUSTOM ABSOLUTE PROMPT").unwrap();
+        let abs_path = prompt_file.to_string_lossy().to_string();
+
+        let overrides_dir: Option<std::path::PathBuf> = None;
+        let load = |configured_path: &str, default: &str| -> eyre::Result<String> {
+            if configured_path.starts_with('/') {
+                let content = fs::read_to_string(configured_path)
+                    .with_context(|| format!("absolute prompt path not found: {}", configured_path))?;
+                eyre::ensure!(
+                    !content.trim().is_empty(),
+                    "absolute prompt path is empty: {}",
+                    configured_path
+                );
+                return Ok(content);
+            }
+            if let Some(ref dir) = overrides_dir {
+                let path = dir.join(format!("{}.pmt", configured_path));
+                match fs::read_to_string(&path) {
+                    Ok(content) if !content.trim().is_empty() => return Ok(content),
+                    _ => {}
+                }
+            }
+            Ok(default.to_string())
+        };
+
+        let result = load(&abs_path, "fallback").unwrap();
+        assert_eq!(result, "CUSTOM ABSOLUTE PROMPT");
     }
 }
