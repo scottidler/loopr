@@ -21,7 +21,7 @@ use super::{parse_optional_param, parse_required_param};
 
 /// Maximum number of times a Work item can be reset to Ready before being Abandoned.
 /// Prevents infinite noop death loops when the root cause is unresolvable by workers.
-const MAX_WORK_ATTEMPTS: u32 = 5;
+const MAX_WORK_ATTEMPTS: u32 = 3;
 
 /// BFS cycle detection: returns true if adding `dependencies` to `new_id` would
 /// create a cycle in the dependency graph.
@@ -165,9 +165,16 @@ pub(super) fn handle_work_create(
             dependencies
         };
 
+        let files: Vec<String> = req
+            .params
+            .get("files")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
         let mut work = Work::new(parent_id, title);
         work.acceptance_criteria = acceptance_criteria.clone();
         work.dependencies = dependencies;
+        work.files = files;
 
         // Reject circular dependencies (including self-references)
         if !work.dependencies.is_empty() {
@@ -1705,7 +1712,7 @@ mod tests {
         let wm = test_worktree_mgr();
         let (_, wi_id) = create_test_work(&stores, &tx, &wm).await;
 
-        // Pre-set attempt_count to MAX_WORK_ATTEMPTS - 1 = 4
+        // Pre-set attempt_count to MAX_WORK_ATTEMPTS - 1 = 2
         {
             let mut works = stores.works.write().unwrap();
             let wi = works.get_mut(&wi_id).unwrap();

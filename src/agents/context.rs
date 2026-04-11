@@ -251,6 +251,8 @@ pub struct ContextBuilder<'a> {
     bundle_noop_reason: Option<String>,
     /// For noop bundles: file contents read from repo for Reviewer verification.
     noop_file_contents: Option<Vec<(String, String)>>,
+    /// HEAD contents of work.files for Reviewer schema grounding.
+    work_file_contents: Option<Vec<(String, String)>>,
     tools: Vec<String>,
     previous_summary: Option<String>,
     staleness_note: Option<String>,
@@ -296,6 +298,7 @@ impl<'a> ContextBuilder<'a> {
             bundle_diff: None,
             bundle_noop_reason: None,
             noop_file_contents: None,
+            work_file_contents: None,
             tools: Vec::new(),
             previous_summary: None,
             staleness_note: None,
@@ -317,7 +320,7 @@ impl<'a> ContextBuilder<'a> {
     /// Load the work hierarchy: Brief (Work -> Plan) or Full (Work -> Phase -> Spec -> Plan).
     pub fn load_work_hierarchy(mut self, work_id: &str) -> Result<Self> {
         debug!("ContextBuilder::load_work_hierarchy(work_id={})", work_id);
-        let (wi_title, wi_desc, parent_id, wi_ac, dep_summaries) = {
+        let (wi_title, wi_desc, parent_id, wi_ac, dep_summaries, wi_files) = {
             let guard = self.stores.read_works()?;
             let wi = guard.get(work_id).ok_or_else(|| eyre!("work not found: {}", work_id))?;
             let deps: Vec<DependencySummary> = wi
@@ -337,6 +340,7 @@ impl<'a> ContextBuilder<'a> {
                 wi.parent_id.clone(),
                 wi.acceptance_criteria.clone(),
                 deps,
+                wi.files.clone(),
             )
         };
 
@@ -344,6 +348,22 @@ impl<'a> ContextBuilder<'a> {
         self.work_acceptance_criteria = wi_ac.0;
         self.dependency_summaries = dep_summaries;
         self.work_id = Some(work_id.to_string());
+
+        // For Reviewers: inject HEAD contents of work.files so the reviewer can
+        // ground schema decisions against the actual merged codebase, not just the spec.
+        if self.role == Role::Reviewer && !wi_files.is_empty() {
+            let repo_path = &self.stores.config.project.repo_path;
+            let mut contents = Vec::new();
+            for path in &wi_files {
+                let full_path = repo_path.join(path);
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    contents.push((path.clone(), content));
+                }
+            }
+            if !contents.is_empty() {
+                self.work_file_contents = Some(contents);
+            }
+        }
 
         if parent_id.starts_with("pl-") {
             // Brief mode: Work parented directly to a Plan
@@ -436,9 +456,16 @@ impl<'a> ContextBuilder<'a> {
             // relevant files from the repo so the Reviewer can verify the
             // codebase state against acceptance criteria.
             let repo_path = &self.stores.config.project.repo_path;
-            // Use paths (actual files changed by the implementer).
-            // Without work.files, paths is the only source of file paths.
-            let paths_to_read: Vec<String> = paths;
+            // Prefer work.files (declared scope) over bundle.paths (empty for NO-OPs).
+            let paths_to_read: Vec<String> = {
+                let guard = self.stores.read_works().ok();
+                let work_files = guard
+                    .as_ref()
+                    .and_then(|g| g.get(&work_id))
+                    .map(|w| w.files.clone())
+                    .unwrap_or_default();
+                if work_files.is_empty() { paths } else { work_files }
+            };
             let mut file_contents = Vec::new();
             for path in &paths_to_read {
                 let full_path = repo_path.join(path);
@@ -729,6 +756,26 @@ impl<'a> ContextBuilder<'a> {
                     bundle_sec.push_str(diff);
                 }
                 bundle_sec.push_str("```\n\n");
+            }
+
+            // Inject HEAD contents of work.files so the reviewer can ground schema
+            // decisions against the actual merged codebase state.
+            if let Some(ref wf) = self.work_file_contents {
+                bundle_sec.push_str("**Merged Codebase (HEAD) - Files in scope for this Work:**\n\n");
+                bundle_sec.push_str(
+                    "Use these to verify schema correctness. If the merged code differs from \
+                     the Spec contract, the merged code is the source of truth.\n\n",
+                );
+                for (path, content) in wf {
+                    bundle_sec.push_str(&format!("### `{}`\n```\n", path));
+                    if content.len() > 4000 {
+                        bundle_sec.push_str(&content[..4000]);
+                        bundle_sec.push_str("\n... [truncated]\n");
+                    } else {
+                        bundle_sec.push_str(content);
+                    }
+                    bundle_sec.push_str("```\n\n");
+                }
             }
 
             let bundle_tokens = estimate_tokens(&bundle_sec);

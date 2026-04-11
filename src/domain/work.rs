@@ -52,6 +52,10 @@ pub struct Work {
     pub assignee: Option<String>,
     status: WorkStatus,
     pub dependencies: Vec<String>,
+    /// Files in scope for this Work, declared by the Coordinator at creation time.
+    /// Used by the Reviewer context builder to inject HEAD contents for schema verification.
+    #[serde(default)]
+    pub files: Vec<String>,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
     /// Number of times this Work has been reset to Ready from a non-Draft state.
@@ -117,6 +121,7 @@ impl Work {
             assignee: None,
             status: WorkStatus::Draft,
             dependencies: Vec::new(),
+            files: Vec::new(),
             acceptance_criteria: AcceptanceCriteria::default(),
             attempt_count: 0,
             session_failure_count: 0,

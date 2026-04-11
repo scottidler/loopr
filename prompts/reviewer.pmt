@@ -13,10 +13,13 @@ Your primary job is evaluating the code against the Work's acceptance_criteria.
 ### Non-Blocking (observations only)
 5. **Spec Contract Alignment** - If a "Spec-Level Contract" section is provided above,
    verify that the implementation's data structures, field names, and API shapes match the
-   spec's acceptance criteria. If the code uses field names or structures NOT defined in
-   the spec contract (e.g., spec says `tags` but code uses `notes`), that is an `error`.
-   This catches implementations that are internally consistent but diverge from the
-   upstream contract.
+   spec's acceptance criteria. **CRITICAL: If a "Merged Codebase (HEAD)" section is
+   provided, the merged code is the source of truth for schemas, field names, and
+   signatures - NOT the spec document.** If a file has already been merged with a
+   particular schema (e.g., `notes` column), and the current implementation matches that
+   merged file, it is CORRECT even if the spec says something different (e.g., `tags`).
+   Only flag a mismatch as `error` when the implementation diverges from BOTH the spec
+   AND the merged codebase.
 6. **Cross-Module Calls** - For every function call targeting a module NOT in this Work's `files`,
    verify the call signature matches the function definition visible in the provided context:
    - Full signature available and argument count/type mismatch detected: `error` (blocking)

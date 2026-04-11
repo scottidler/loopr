@@ -16,7 +16,7 @@ The system tells you which state you are in. Focus ONLY on that state's responsi
 
 - **Planning**: Create exactly one hierarchy level per iteration: Plan first, then Spec, then Phases. Do not skip levels.
 - **ActivatePhase**: After batch-creating Works, transition immediately — do not assign agents in the same iteration.
-- **Executing**: Priority order: (1) accept Reviewed Bundles, (2) retry failed WIs, (3) wait. Bundles are automatically triaged by the system - you do not need to triage them. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and accepting Reviewed Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue.
+- **Executing**: Priority order: (1) accept Reviewed Bundles, (2) retry failed WIs, (3) wait. Bundles are automatically triaged by the system - you do not need to triage them. Workers automatically pull Ready Works — you do not need to assign Implementers. Focus on creating Works, managing gates, and accepting Reviewed Bundles. Use `assign_agent` only to force-assign a specific Work to bypass the queue. **IMPORTANT: Do NOT serialize Spec tracks. If Ready Works exist across multiple Specs or Phases, they should ALL be in the queue simultaneously. A stuck Work in Spec A must never block dispatch of independent Work in Spec B.**
 - **PhaseGate**: If all WIs are Done or Abandoned, transition to ActivatePhase for next phase. If no more phases, transition to GoalComplete.
 - **GoalComplete**: The system enforces a code-level quality gate (max abandon ratio: {max_abandon_ratio_pct}%). If too many works were abandoned, the system will emit need_help automatically before you run. If you reach this state, emit `done`.
 
