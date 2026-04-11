@@ -661,7 +661,11 @@ All open questions from the initial vision were resolved during the design doc p
 
 7. **Strategies are single-tick, not workflows.** A strategy fires and completes within one engine tick. Multi-step flows chain via events, not via in-strategy suspend/resume. This is the constraint that prevents the system from becoming a durable workflow engine (Temporal, Step Functions) and keeps the YAML schema simple. No intermediate state persistence, no saga rollback, no resume-after-crash. Self-healing comes from the reactive trigger model evaluating current state each tick.
 
-8. **Otto parallel.** Otto proves the pattern works for build orchestration. v4 applies the same pattern to agent orchestration. YAML declares what happens, Rust interprets and executes.
+8. **Event triggers need level-triggered fallbacks.** Ephemeral events can be lost on daemon crash. Every event-triggered recovery strategy must have a corresponding state-query trigger that catches the same condition by inspecting current state. Example: `session-failure` (event) is backed by "work is InProgress with no active session for > 60s" (state-query). The sweep strategies are the canonical pattern - level-triggered safety nets that catch whatever the event path missed.
+
+9. **Primitives document their idempotency.** Because strategies can partially execute before a crash, primitives should be safe to re-encounter on the next tick. Read/check primitives are naturally idempotent. Mutating primitives should document whether re-execution is safe or requires guard conditions. Action sequences should order safe-to-repeat steps before hard-to-repeat steps.
+
+10. **Otto parallel.** Otto proves the pattern works for build orchestration. v4 applies the same pattern to agent orchestration. YAML declares what happens, Rust interprets and executes.
 
 ## References
 
