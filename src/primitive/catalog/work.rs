@@ -139,6 +139,8 @@ impl Primitive for ResetWork {
 }
 
 /// Increments a Work's session failure counter.
+/// Follows TaskStore write ordering: persist to JSONL first, then
+/// update in-memory, then emit event. All under the write lock.
 pub struct IncrementFailureCount;
 
 impl Primitive for IncrementFailureCount {
@@ -158,13 +160,27 @@ impl Primitive for IncrementFailureCount {
 
             debug!("increment-failure-count: work-id={}", work_id);
 
-            let mut works = ctx.stores.write_works()?;
-            let work = works
-                .get_mut(work_id)
-                .ok_or_else(|| eyre::eyre!("work '{}' not found", work_id))?;
-            work.session_failure_count += 1;
-            let count = work.session_failure_count;
-            work.updated_at = crate::id::now_millis();
+            let count = {
+                let mut works = ctx.stores.write_works()?;
+                let work = works
+                    .get_mut(work_id)
+                    .ok_or_else(|| eyre::eyre!("work '{}' not found", work_id))?;
+                work.session_failure_count += 1;
+                work.updated_at = crate::id::now_millis();
+                let count = work.session_failure_count;
+
+                // Persist to TaskStore (JSONL) while holding the lock
+                if let Some(store_arc) = &ctx.stores.store
+                    && let Ok(mut s) = store_arc.lock()
+                {
+                    let _ = s.update(work.clone());
+                }
+                count
+            };
+
+            let _ = ctx
+                .event_tx
+                .send(crate::ipc::protocol::DaemonEvent::record_updated("works", work_id));
 
             let mut values = HashMap::new();
             values.insert("count".to_string(), serde_json::json!(count));
@@ -197,6 +213,8 @@ impl Primitive for IncrementFailureCount {
 }
 
 /// Increments a Work's attempt counter.
+/// Follows TaskStore write ordering: persist to JSONL first, then
+/// update in-memory, then emit event. All under the write lock.
 pub struct IncrementAttemptCount;
 
 impl Primitive for IncrementAttemptCount {
@@ -216,13 +234,27 @@ impl Primitive for IncrementAttemptCount {
 
             debug!("increment-attempt-count: work-id={}", work_id);
 
-            let mut works = ctx.stores.write_works()?;
-            let work = works
-                .get_mut(work_id)
-                .ok_or_else(|| eyre::eyre!("work '{}' not found", work_id))?;
-            work.attempt_count += 1;
-            let count = work.attempt_count;
-            work.updated_at = crate::id::now_millis();
+            let count = {
+                let mut works = ctx.stores.write_works()?;
+                let work = works
+                    .get_mut(work_id)
+                    .ok_or_else(|| eyre::eyre!("work '{}' not found", work_id))?;
+                work.attempt_count += 1;
+                work.updated_at = crate::id::now_millis();
+                let count = work.attempt_count;
+
+                // Persist to TaskStore (JSONL) while holding the lock
+                if let Some(store_arc) = &ctx.stores.store
+                    && let Ok(mut s) = store_arc.lock()
+                {
+                    let _ = s.update(work.clone());
+                }
+                count
+            };
+
+            let _ = ctx
+                .event_tx
+                .send(crate::ipc::protocol::DaemonEvent::record_updated("works", work_id));
 
             let mut values = HashMap::new();
             values.insert("count".to_string(), serde_json::json!(count));

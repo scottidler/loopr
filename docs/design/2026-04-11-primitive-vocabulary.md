@@ -1031,9 +1031,9 @@ These v3 operations are multi-step sequences that become strategy compositions i
 
 #### Phase 1: Trait and Registry
 
-1. Define `Primitive` trait, `PrimitiveOutput`, `PrimitiveContext` in `src/primitive/mod.rs`
-2. Implement `PrimitiveRegistry` with register/get/validate_references
-3. Write startup validation: all YAML-referenced primitives must exist in registry
+1. Define `Primitive` trait, `PrimitiveOutput`, `PrimitiveContext` in `src/primitive/types.rs`
+2. Implement `PrimitiveRegistry` with register/get/validate_references in `src/primitive/registry.rs`
+3. Registry provides name-existence validation (`validate_references`); full `$context` type-compatibility validation across strategy DAGs is the engine's responsibility (Doc 3/Doc 5), using `input_schema()`/`output_schema()`/`OutputType::compatible_with()` infrastructure defined here
 
 #### Phase 2: Pure Query Primitives
 
@@ -1116,7 +1116,7 @@ Implement the remaining side-effecting primitives:
 - Each phase must pass `otto ci` before proceeding
 - Phase 1 (trait + registry) is the foundation - nothing else can start until it compiles
 - Pure query primitives (phase 2) can be tested immediately against v3's data
-- The full primitive set is complete when all 53 primitives are registered and unit-tested
+- The full primitive set is complete when all 59 primitives are registered and unit-tested
 
 ## Risks and Mitigations
 
@@ -1134,6 +1134,7 @@ Implement the remaining side-effecting primitives:
 - [x] **`reject-bundle` as primitive?** Yes. Bundle rejection + work reset is an invariant, not a composition choice. Splitting them is an error-prone footgun (orphaned works stuck in non-Ready state). Keeps it as a primitive.
 - [x] **`decompose` granularity?** Keep it coarse. "Decompose a parent into children" is the right abstraction level. No strategy would call the LLM but skip validation. Added `re-decompose` and `abandon-children` as new primitives to handle the re-decomposition-after-new-knowledge use case, which IS a meaningful composition point.
 - [x] **Registry aliases?** No aliases in the Rust registry. Handle convenience names (e.g., `abandon-work` for `override-work(target-status=abandoned)`) as default-param templates in the YAML composition layer. Keeps Rust simple, puts sugar where strategy authors work.
+- [x] **Schema validation scope?** The primitive module provides the building blocks: `InputField`, `OutputField`, `OutputType`, `compatible_with()`, and per-primitive `input_schema()`/`output_schema()` declarations. The registry validates name existence. Full `$context` DAG-walking type-compatibility validation is the engine's responsibility (Doc 3/Doc 5), using the schema infrastructure defined here. This is a clean separation: primitives declare their contracts, the engine enforces wiring correctness.
 
 ## References
 
