@@ -58,11 +58,39 @@ Operations that fail this test are compositions - sequences of primitives wired 
 ### Primitive Trait
 
 ```rust
+/// Declares a named, typed output field that a primitive produces.
+/// Used for startup validation of $context references between primitives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputField {
+    pub name: String,
+    pub field_type: OutputType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum OutputType {
+    String,
+    U32,
+    U64,
+    F64,
+    Bool,
+    StringArray,
+    /// Opaque JSON for complex/variable-shape outputs.
+    Json,
+}
+
+/// Declares a named, typed input parameter that a primitive accepts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputField {
+    pub name: String,
+    pub field_type: OutputType,
+    pub required: bool,
+}
+
 /// The result of executing a primitive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrimitiveOutput {
-    /// Named outputs that subsequent primitives can reference.
-    /// e.g., { "session_id": "ag-001", "work_id": "wk-042" }
+    /// Named, typed outputs that subsequent primitives can reference.
+    /// Keys must match the names declared in output_schema().
     pub values: HashMap<String, serde_json::Value>,
     /// Human-readable summary for logging/TUI.
     pub summary: String,
@@ -97,7 +125,20 @@ pub trait Primitive: Send + Sync {
         params: serde_json::Value,
     ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + '_>>;
 
+    /// Declare the typed output fields this primitive produces.
+    /// Used at startup to validate $context references between primitives:
+    /// if step B references $context.step-A.session-id, the engine verifies
+    /// that step A's primitive declares an output named "session-id" of a
+    /// compatible type with step B's expected input type.
+    fn output_schema(&self) -> Vec<OutputField>;
+
+    /// Declare the typed input params this primitive accepts.
+    /// Used at startup to validate strategy YAML params and $context type
+    /// compatibility. Each InputField has a name, type, and required flag.
+    fn input_schema(&self) -> Vec<InputField>;
+
     /// Validate params at startup (before any work starts).
+    /// Default implementation checks params against input_schema().
     fn validate_params(&self, params: &serde_json::Value) -> eyre::Result<()>;
 
     /// Idempotency guarantee. Strategies can partially execute before a crash;
@@ -182,6 +223,16 @@ action:
 ```
 
 The `$context.spawn-advisor.session-id` reference resolves at runtime by reading the `spawn-advisor` step's `PrimitiveOutput.values["session-id"]` from the strategy context. The `$trigger.*` references come from the trigger that fired the strategy (defined in Doc 4).
+
+**Startup type validation:** Every `$context` reference is validated at YAML load time against primitive schemas. When the engine encounters `$context.spawn-advisor.session-id` as an input to `inject-context`'s `session-id` param:
+
+1. It checks that step `spawn-advisor` exists earlier in the action sequence
+2. It checks that `spawn-agent`'s `output_schema()` declares a field named `session-id`
+3. It checks that the output field's `OutputType` is compatible with `inject-context`'s `input_schema()` type for `session-id` (both `OutputType::String`)
+
+If any check fails, the strategy is rejected at startup with a clear error message naming the step, field, and type mismatch. This catches wiring errors before any work starts rather than producing opaque runtime failures.
+
+**Alternative considered: untyped JSON with runtime errors.** We considered keeping `PrimitiveOutput.values` as untyped `serde_json::Value` with no schema validation, relying on runtime error messages when a primitive receives an unexpected type. This is simpler to implement (no schema declarations on every primitive) but pushes type errors to execution time, where they surface as confusing "expected string, got null" errors mid-strategy. The typed schema approach costs ~5 lines per primitive (declaring input/output fields) but catches every wiring error at startup. Given that AR will generate novel strategy compositions overnight without human supervision, startup validation is worth the boilerplate.
 
 ## Primitive Catalog
 

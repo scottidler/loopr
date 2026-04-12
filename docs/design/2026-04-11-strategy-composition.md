@@ -471,6 +471,7 @@ restart-coordinator-on-state:
 | Strategy scope is a valid collection | Typo in scope |
 | Strategy priority is a positive integer | Invalid priority |
 | `$context.*` references point to named steps that exist earlier in the sequence | Reference to nonexistent step |
+| `$context.*` output types are compatible with the consuming primitive's input types | Type mismatch between chained primitives (via output_schema/input_schema) |
 | `$trigger.*` references are valid trigger output fields | Reference to nonexistent trigger field |
 | No circular strategy wiring (on-success/on-failure don't create infinite loops) | Infinite strategy chains |
 | All param types match primitive `validate_params` | Wrong param type |
