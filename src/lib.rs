@@ -16,6 +16,7 @@ pub mod evaluator;
 pub mod guidance;
 pub mod id;
 pub mod ipc;
+pub mod primitive;
 pub mod prompts;
 pub mod scorer;
 pub mod session_summary;
