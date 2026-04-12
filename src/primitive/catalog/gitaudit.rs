@@ -74,16 +74,7 @@ impl Primitive for AuditTickShas {
     }
 
     fn output_schema(&self) -> Vec<OutputField> {
-        vec![
-            OutputField {
-                name: "unreachable".to_string(),
-                field_type: OutputType::Json,
-            },
-            OutputField {
-                name: "catastrophic".to_string(),
-                field_type: OutputType::Bool,
-            },
-        ]
+        audit_output_schema("unreachable")
     }
 
     fn input_schema(&self) -> Vec<InputField> {
@@ -113,7 +104,6 @@ impl Primitive for AuditMergeAncestry {
 
             let cutoff_ms = crate::id::now_millis() - (30 * 24 * 60 * 60 * 1000_i64);
 
-            // Collect recently merged bundles with their tick IDs
             let merged_bundles: Vec<(String, String, String)> = {
                 let bundles = ctx.stores.read_bundles()?;
                 let ticks = ctx.stores.read_ticks()?;
@@ -122,7 +112,6 @@ impl Primitive for AuditMergeAncestry {
                     .filter(|b| format!("{:?}", b.status()) == "Merged" && b.created_at > cutoff_ms)
                     .filter_map(|b| {
                         let head = b.head_commit.as_ref()?;
-                        // Find the tick that contains this bundle
                         let tick = ticks.values().find(|t| t.bundle_ids.contains(&b.id))?;
                         let tick_sha = tick.integration_sha.as_ref()?;
                         Some((b.id.clone(), head.clone(), tick_sha.clone()))
@@ -169,16 +158,7 @@ impl Primitive for AuditMergeAncestry {
     }
 
     fn output_schema(&self) -> Vec<OutputField> {
-        vec![
-            OutputField {
-                name: "broken".to_string(),
-                field_type: OutputType::Json,
-            },
-            OutputField {
-                name: "catastrophic".to_string(),
-                field_type: OutputType::Bool,
-            },
-        ]
+        audit_output_schema("broken")
     }
 
     fn input_schema(&self) -> Vec<InputField> {
@@ -188,4 +168,86 @@ impl Primitive for AuditMergeAncestry {
     fn idempotency(&self) -> Idempotency {
         Idempotency::Idempotent
     }
+}
+
+/// Verifies every non-terminal Bundle still has its agent branch.
+pub struct AuditBranches;
+
+impl Primitive for AuditBranches {
+    fn name(&self) -> &'static str {
+        "audit-branches"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut PrimitiveContext<'_>,
+        _params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            debug!("audit-branches: starting");
+            let non_terminal: Vec<(String, String)> = {
+                let bundles = ctx.stores.read_bundles()?;
+                bundles
+                    .values()
+                    .filter(|b| !b.status().is_terminal())
+                    .map(|b| (b.id.clone(), b.branch_name.clone()))
+                    .collect()
+            };
+            let mut mismatches = Vec::new();
+            for (bundle_id, branch) in &non_terminal {
+                let output = std::process::Command::new("git")
+                    .args(["rev-parse", "--verify", branch])
+                    .current_dir(ctx.repo_path)
+                    .output();
+                match output {
+                    Ok(o) if !o.status.success() => {
+                        warn!("audit-branches: bundle {} missing branch {}", bundle_id, branch);
+                        mismatches.push(serde_json::json!({
+                            "bundle-id": bundle_id,
+                            "expected-branch": branch,
+                        }));
+                    }
+                    Err(e) => warn!("audit-branches: git error for {}: {}", bundle_id, e),
+                    _ => {}
+                }
+            }
+            let mut values = HashMap::new();
+            values.insert("mismatches".to_string(), serde_json::Value::Array(mismatches.clone()));
+            values.insert("catastrophic".to_string(), serde_json::json!(false));
+            Ok(PrimitiveOutput {
+                values,
+                summary: format!(
+                    "audit-branches: {} checked, {} missing",
+                    non_terminal.len(),
+                    mismatches.len()
+                ),
+            })
+        })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        audit_output_schema("mismatches")
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::Idempotent
+    }
+}
+
+/// Shared output schema for all audit primitives: a named JSON array + catastrophic bool.
+fn audit_output_schema(array_name: &str) -> Vec<OutputField> {
+    vec![
+        OutputField {
+            name: array_name.to_string(),
+            field_type: OutputType::Json,
+        },
+        OutputField {
+            name: "catastrophic".to_string(),
+            field_type: OutputType::Bool,
+        },
+    ]
 }

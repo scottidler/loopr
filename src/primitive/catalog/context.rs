@@ -194,3 +194,147 @@ impl Primitive for CompactContext {
         Idempotency::Idempotent
     }
 }
+
+/// Assembles the full LLM context for an agent session.
+pub struct BuildContext;
+
+impl Primitive for BuildContext {
+    fn name(&self) -> &'static str {
+        "build-context"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut PrimitiveContext<'_>,
+        params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            debug!("build-context: session-id={}", params["session-id"]);
+            let resp = ctx.bridge.request("context.build", params);
+            if let Some(err) = &resp.error {
+                eyre::bail!("build-context failed: {}", err.message);
+            }
+            let result = resp.result.unwrap_or(serde_json::json!({}));
+            let mut values = HashMap::new();
+            values.insert("system-prompt".to_string(), result["system_prompt"].clone());
+            values.insert("user-message".to_string(), result["user_message"].clone());
+            values.insert("token-estimate".to_string(), result["token_estimate"].clone());
+            Ok(PrimitiveOutput {
+                values,
+                summary: "built context".to_string(),
+            })
+        })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        vec![
+            OutputField {
+                name: "system-prompt".to_string(),
+                field_type: OutputType::String,
+            },
+            OutputField {
+                name: "user-message".to_string(),
+                field_type: OutputType::String,
+            },
+            OutputField {
+                name: "token-estimate".to_string(),
+                field_type: OutputType::U64,
+            },
+        ]
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![
+            InputField {
+                name: "session-id".to_string(),
+                field_type: OutputType::String,
+                required: true,
+            },
+            InputField {
+                name: "role".to_string(),
+                field_type: OutputType::String,
+                required: true,
+            },
+            InputField {
+                name: "target-id".to_string(),
+                field_type: OutputType::String,
+                required: true,
+            },
+            InputField {
+                name: "iteration".to_string(),
+                field_type: OutputType::U32,
+                required: true,
+            },
+            InputField {
+                name: "previous-summary".to_string(),
+                field_type: OutputType::String,
+                required: false,
+            },
+        ]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::Idempotent
+    }
+}
+
+/// Assembles a state summary of current orchestration state.
+pub struct BuildStateSummary;
+
+impl Primitive for BuildStateSummary {
+    fn name(&self) -> &'static str {
+        "build-state-summary"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a mut PrimitiveContext<'_>,
+        params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            debug!("build-state-summary: plan-id={}", params["plan-id"]);
+            let resp = ctx.bridge.request("context.build_state_summary", params);
+            if let Some(err) = &resp.error {
+                eyre::bail!("build-state-summary failed: {}", err.message);
+            }
+            let summary = resp
+                .result
+                .as_ref()
+                .and_then(|r| r["summary"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let mut values = HashMap::new();
+            values.insert("summary".to_string(), serde_json::json!(summary));
+            Ok(PrimitiveOutput {
+                values,
+                summary: format!("state summary ({} chars)", summary.len()),
+            })
+        })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        vec![OutputField {
+            name: "summary".to_string(),
+            field_type: OutputType::String,
+        }]
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![
+            InputField {
+                name: "plan-id".to_string(),
+                field_type: OutputType::String,
+                required: true,
+            },
+            InputField {
+                name: "include-sla".to_string(),
+                field_type: OutputType::Bool,
+                required: false,
+            },
+        ]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::Idempotent
+    }
+}
