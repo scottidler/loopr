@@ -146,44 +146,38 @@ brief:
 
 ### How the Engine Executes a Pipeline
 
-The pipeline definition is not itself a strategy - it's a **configuration** that the engine uses to generate strategies at startup. Each stage becomes one or more strategies wired by events:
+**Critical constraint:** Decomposition involves multiple LLM calls (seconds to minutes total). Per the single-tick mandate (vision principle 7), LLM calls cannot block the engine tick. Therefore: the engine's single-tick strategy spawns a **decomposer agent task** that runs asynchronously, exactly like v3's background decomposition. The pipeline YAML configures how that agent task behaves, not how the engine tick executes.
 
-**Stage 1 (Specs):**
-```
-Trigger: plan-ready-for-decomposition (plan status = Active, no children)
-Action: decompose(plan_id, target=spec, prompt=decompose/spec)
-Event on completion: stage.specs.completed
-```
-
-**Stage 2 (Phases):**
-```
-Trigger: stage.specs.completed
-Action: for each spec, decompose(spec_id, target=phase, prompt=decompose/phase)
-  (parallel if parallel=true)
-Event on completion: stage.phases.completed
-```
-
-**Stage 3 (Works):**
-```
-Trigger: stage.phases.completed
-Action: for each phase, decompose(phase_id, target=work, prompt=decompose/work)
-  (parallel if parallel=true)
-Event on completion: stage.works.completed
+**The engine tick fires one strategy:**
+```yaml
+# Generated from pipeline definition at startup
+decompose-plan:
+  trigger: plan-ready-for-decomposition   # state-query (level-triggered, principle 8)
+  scope: plan
+  priority: 900
+  action:
+    - primitive: spawn-agent
+      params:
+        role: decomposer
+        target-id: $trigger.scope-id
+        config:
+          pipeline: full                  # or brief, three-level, etc.
 ```
 
-**Validation (if enabled):**
-```
-Trigger: each stage completion
-Action: for each child, validate-document(child_id)
-  (blocking or advisory per config)
-```
+This returns immediately. The decomposer agent task then executes the pipeline stages internally:
 
-**Ratification (if enabled):**
-```
-Trigger: all stages completed (stage.works.completed for full, stage.works.completed for brief)
-Action: ratify-hierarchy(plan_id)
-  (blocking or advisory per config)
-```
+**Inside the decomposer agent task (async, not in engine tick):**
+1. Read pipeline config for stages, validation, ratification settings
+2. Execute stages in order (respecting parallel/sequential per stage)
+3. For parallel stages: use bounded concurrency (`buffer_unordered(N)`, not unbounded `join_all`) to avoid rate-limit exhaustion
+4. Persist children to TaskStore as they are created (crash recovery: already-persisted children are visible on restart)
+5. Run validation per-child if enabled
+6. Run ratification if enabled
+7. Emit `decomposition.completed` or `decomposition.failed` event
+
+**Level-triggered fallbacks (principle 8):**
+- `plan-ready-for-decomposition`: "plan is Active with no children" (catches restart after plan approval but before decomposition starts)
+- `decomposition-stalled`: "plan has been in Decomposing state for > 10 minutes with no new children" (catches crashed decomposer agent)
 
 **Completion:**
 ```
@@ -424,8 +418,9 @@ This is a loop driven by events: decompose -> evaluate -> re-decompose (if gaps)
 ### Performance
 
 - Pipeline parsing happens once at startup.
-- Decomposition performance is dominated by LLM calls (seconds each), not engine overhead.
-- Parallel stages use tokio::join_all, same as v3. No performance regression.
+- Decomposition runs in a spawned async task, not in the engine tick. No tick stalls.
+- LLM calls dominate runtime (seconds each). Parallel stages use bounded concurrency (`buffer_unordered(N)` where N defaults to 4) to avoid rate-limit exhaustion. Not unbounded `join_all`.
+- Pipeline config fields (`count-guidance`, `dependency-pattern`) are passed to the `decompose` primitive via the agent task's pipeline config, not as direct primitive params. The decomposer agent reads pipeline config and constructs the appropriate prompt and dependency resolution strategy internally.
 
 ### Security
 
