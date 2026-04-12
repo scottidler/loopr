@@ -355,9 +355,35 @@ impl FsmInterpreter {
     /// Load all FSM definitions from a directory.
     pub fn load(dir: &Path) -> eyre::Result<Self> { /* ... */ }
 
-    /// Validate a normal transition.
+    /// Strongly-typed transition validation. Call sites use domain types,
+    /// not raw strings. The FsmStatus trait handles kebab-case mapping.
+    pub fn validate<S: FsmStatus>(
+        &self,
+        from: &S,
+        to: &S,
+        role: &str,
+    ) -> eyre::Result<Transition> {
+        self.validate_transition(S::fsm_name(), from.to_yaml_name(), to.to_yaml_name(), role)
+    }
+
+    /// Strongly-typed override validation.
+    pub fn validate_override_typed<S: FsmStatus>(
+        &self,
+        from: &S,
+        to: &S,
+        role: &str,
+    ) -> eyre::Result<Transition> {
+        self.validate_override(S::fsm_name(), from.to_yaml_name(), to.to_yaml_name(), role)
+    }
+
+    /// Raw string validation (used by the engine for YAML-driven transitions).
     /// Returns Changed if valid, Unchanged if from == to (idempotent),
     /// or Err if the transition is invalid.
+    ///
+    /// Design decision: self-transitions (from == to) bypass role authorization
+    /// and return Unchanged. This matches v3 behavior and is intentional for
+    /// idempotency - a handler that transitions a record to its current state
+    /// should succeed silently regardless of the caller's role.
     pub fn validate_transition(
         &self,
         fsm_name: &str,
@@ -370,12 +396,13 @@ impl FsmInterpreter {
         }
         let def = self.get_definition(fsm_name)?;
         let targets = def.transitions.get(from)
-            .ok_or_else(|| invalid_transition(fsm_name, from, to, role))?;
+            .ok_or_else(|| invalid_transition(fsm_name, from, to, role, None))?;
         self.check_target(targets, to, role, fsm_name, from)
     }
 
     /// Validate an override transition.
     /// Checks normal transitions first, then override edges.
+    /// Preserves error context from the normal transition attempt.
     pub fn validate_override(
         &self,
         fsm_name: &str,
@@ -384,20 +411,25 @@ impl FsmInterpreter {
         role: &str,
     ) -> eyre::Result<Transition> {
         // Try normal transition first
-        if let Ok(result) = self.validate_transition(fsm_name, from, to, role) {
-            return Ok(result);
+        match self.validate_transition(fsm_name, from, to, role) {
+            Ok(result) => return Ok(result),
+            Err(normal_err) => {
+                // Then check overrides, preserving normal error as context
+                let def = self.get_definition(fsm_name)?;
+                let targets = def.overrides.get(from)
+                    .ok_or_else(|| invalid_transition(
+                        fsm_name, from, to, role,
+                        Some(&format!("normal transition also failed: {}", normal_err)),
+                    ))?;
+                self.check_target(targets, to, role, fsm_name, from)
+            }
         }
-        // Then check overrides
-        let def = self.get_definition(fsm_name)?;
-        let targets = def.overrides.get(from)
-            .ok_or_else(|| invalid_transition(fsm_name, from, to, role))?;
-        self.check_target(targets, to, role, fsm_name, from)
     }
 
     /// Check if a state is terminal.
     pub fn is_terminal(&self, fsm_name: &str, state: &str) -> eyre::Result<bool> {
         let def = self.get_definition(fsm_name)?;
-        Ok(def.terminal.contains(&state.to_string()))
+        Ok(def.terminal.iter().any(|t| t == state))
     }
 
     /// Get all valid target states from a given state (for context/prompt building).
@@ -423,25 +455,28 @@ impl FsmInterpreter {
     ) -> eyre::Result<Transition> {
         // O(1) lookup by target state - the keyed-map payoff
         match targets.get(to) {
-            Some(rule) if rule.by.is_empty() || rule.by.contains(&role.to_string()) => {
+            Some(rule) if rule.by.is_empty() || rule.by.iter().any(|r| r == role) => {
                 Ok(Transition::Changed)
             }
             Some(_) => {
                 // Right target, wrong role
-                Err(invalid_transition(fsm_name, from, to, role))
+                Err(invalid_transition(fsm_name, from, to, role, None))
             }
             None => {
-                Err(invalid_transition(fsm_name, from, to, role))
+                Err(invalid_transition(fsm_name, from, to, role, None))
             }
         }
     }
 }
 
-fn invalid_transition(fsm: &str, from: &str, to: &str, role: &str) -> eyre::Report {
-    eyre::eyre!(
-        "invalid {} transition: {} -> {} (role: {})",
-        fsm, from, to, role
-    )
+fn invalid_transition(
+    fsm: &str, from: &str, to: &str, role: &str, context: Option<&str>,
+) -> eyre::Report {
+    let base = format!("invalid {} transition: {} -> {} (role: {})", fsm, from, to, role);
+    match context {
+        Some(ctx) => eyre::eyre!("{}\n  {}", base, ctx),
+        None => eyre::eyre!("{}", base),
+    }
 }
 ```
 
@@ -490,6 +525,8 @@ pub trait FsmStatus: Sized {
 ```
 
 Each status enum implements `FsmStatus`. This can be derived (a simple attribute macro) or hand-written - it's mechanical and changes rarely.
+
+**Data migration note:** v3 uses `#[serde(rename_all = "lowercase")]` on `HierarchyStatus`, which serializes `InProgress` as `"inprogress"` in JSONL/SQLite. The YAML FSM definitions use kebab-case (`"in-progress"`). These are two different mappings. The `FsmStatus` trait maps between PascalCase Rust and kebab-case YAML for FSM validation only. Serde serialization to JSONL/SQLite continues to use the v3 lowercase format. The two formats do not need to match - `FsmStatus::to_yaml_name()` is for FSM interpreter queries, `serde::Serialize` is for persistence. No data migration required.
 
 ### Interpreter Ownership
 
@@ -660,7 +697,8 @@ The interpreter can provide hints because it has the full transition map at runt
 - [x] **FSM inheritance/composition?** No. Decided in vision doc. Keep flat - one file per domain type.
 - [x] **Hot-reload?** No. FSMs loaded at startup, fixed for the run.
 - [x] **What about LockStatus?** Not an FSM. Stays as imperative methods. No YAML definition needed.
-- [x] **kebab-case vs PascalCase in YAML?** kebab-case in YAML (consistent with all other YAML naming). FsmStatus trait handles the mapping.
+- [x] **kebab-case vs PascalCase in YAML?** kebab-case in YAML (consistent with all other YAML naming). FsmStatus trait handles the mapping. Serde persistence uses v3's lowercase format unchanged - no data migration needed.
+- [x] **Why are states (nodes) fixed in Rust but transitions (edges) configurable in YAML?** By design. Domain types (WorkStatus, BundleStatus, etc.) are the carry-over layer - they define the TaskStore schema, TUI views, and IPC protocol. Adding a new state requires a new Rust enum variant, new TaskStore indexes, new TUI rendering, and new IPC handling. AR experiments with transitions, guards, strategies, and decomposition pipelines - not with new FSM states. The experimentation surface is the edges and the policies, not the nodes.
 
 ## Open Questions
 
