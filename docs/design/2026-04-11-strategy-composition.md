@@ -303,7 +303,7 @@ complete-specs:
         id: $trigger.scope-id
 ```
 
-The fixed-point convergence that v3 achieves with a loop is achieved by the engine's per-tick re-evaluation: promoting a spec makes its children eligible, which fires on the next tick. Within 3-4 ticks the hierarchy converges, same as v3's 3-4 loop iterations.
+The fixed-point convergence that v3 achieves with a loop is achieved by running reconciliation strategies in an inner loop within a single tick until no triggers fire (run-until-stable). This matches v3's behavior exactly: promoting a spec makes its children eligible, which fires in the next inner-loop iteration. The inner loop is bounded at 10 iterations, each <1ms. Total reconciliation converges in <50ms, same as v3's 3-4 loop iterations but within a single tick - no inconsistency window.
 
 #### Sweep Strategies (v3's deterministic sweeps)
 
@@ -393,51 +393,27 @@ abandon-ratio-escalation:
 ```yaml
 # strategies/integration/default.yml
 integrate-accepted-bundles:
-  description: Merge accepted bundles into integration branch, validate, publish
-  trigger: bundle-accepted            # event: bundle transitioned to Accepted
+  description: Integrate all accepted bundles for a plan (atomic Git+DB cycle)
+  trigger: bundles-ready-for-integration  # state-query: plan has Accepted bundles
   scope: plan
   priority: 500
-  cooldown-secs: 15                   # don't re-trigger within 15s (batch accumulation)
   action:
-    - name: create-tick
-      primitive: create-tick
+    - primitive: integrate-tick
       params:
         plan-id: $trigger.scope-id
-    - name: merge
-      primitive: merge-branches
-      params:
-        branch-names: $trigger.event.bundle-branches
-        target-branch: integration/$trigger.scope-id
-    - name: validate
-      primitive: run-validation
-      params:
-        commands: $config.validation-commands
-    - name: publish
-      primitive: transition-record
-      params:
-        collection: tick
-        id: $context.create-tick.tick-id
-        target-status: published
-        role: integrator
-  on-failure:
-    - primitive: transition-record
-      params:
-        collection: tick
-        id: $context.create-tick.tick-id
-        target-status: failed
-        role: integrator
-    - primitive: reject-bundle
-      params:
-        bundle-id: $trigger.event.bundle-id
-        reason: integration-failed
+  # No on-failure needed: integrate-tick handles its own rollback internally
+  # (fails tick, rejects bundles, resets works, reverts git state)
 ```
+
+**Note:** The integration strategy uses the atomic `integrate-tick` primitive (Doc 2), NOT a chain of naked `merge-branches` + `run-validation` + `transition-record`. The Git+DB boundary is encapsulated in Rust, not exposed to YAML - the same principle that justifies `reject-bundle` and `re-decompose` as primitives. The trigger is level-triggered (state-query: "plan has Accepted bundles") rather than event-triggered, satisfying principle 8 (level-triggered fallbacks) and avoiding the event-payload-aggregation problem that cooldown-as-batching would introduce.
 
 #### Supervisor Strategy (v3's restart logic)
 
 ```yaml
 # strategies/supervision/default.yml
-restart-coordinator:
-  description: Restart coordinator after failure with exponential backoff
+# Event-driven: fast reaction to coordinator failure
+restart-coordinator-on-event:
+  description: Restart coordinator after failure event
   trigger: coordinator-failed         # event: agent.status-changed, match coordinator+failed
   scope: session
   priority: 1200
@@ -456,6 +432,25 @@ restart-coordinator:
     - primitive: escalate
       params:
         reason: coordinator-max-restarts-exceeded
+
+# Level-triggered fallback (principle 8): catches missed events on restart
+restart-coordinator-on-state:
+  description: Restart coordinator if no Running coordinator session exists
+  trigger: no-running-coordinator     # state-query: no coordinator session with status Running
+  scope: plan
+  priority: 1100
+  cooldown-secs: 60                   # don't spam restarts
+  action:
+    - primitive: check-threshold
+      params:
+        collection: session
+        id: coordinator
+        field: restart-count
+        max: 5
+  on-success:
+    - primitive: spawn-agent
+      params:
+        role: coordinator
 ```
 
 ### Strategy Lifecycle
@@ -587,8 +582,14 @@ restart-coordinator:
 
 ## Open Questions
 
-- [ ] Should the engine support a "run-until-stable" mode for reconciliation (re-evaluate within one tick until no triggers fire)? This would match v3's fixed-point loop behavior. The cost is potentially unbounded tick duration.
-- [ ] How does the engine handle strategy failures that leave state partially modified? (e.g., action 2 of 4 fails). Should it roll back actions 1's effects? Or is partial application acceptable with on-failure handling?
+(None remaining - all resolved during Architect review.)
+
+## Additional Resolved Questions
+
+- [x] **Run-until-stable for reconciliation?** Yes. Reconciliation strategies (promote-*, complete-*) run in an inner loop within a single tick until no triggers fire, matching v3's fixed-point convergence. This prevents the 15-20s inconsistency window that multi-tick convergence would create. The inner loop is bounded: maximum 10 iterations, each <1ms per strategy. Total reconciliation: <50ms per tick.
+- [x] **Partial execution handling?** No rollback. Primitives are ordered safe-to-repeat first, mutating last (principle 9). `on-failure` handles cleanup. Cross-system invariants (Git+DB) are encapsulated in atomic primitives (`integrate-tick`, `reject-bundle`, `re-decompose`). Strategies that only call single-system primitives don't need rollback because each primitive either succeeds atomically or returns an error without side effects.
+- [x] **Integration strategy uses integrate-tick?** Yes. The naked primitive chain was a design error caught in review. The integration strategy now uses the atomic `integrate-tick` primitive with a level-triggered fallback (principle 8).
+- [x] **Level-triggered fallbacks for supervisor?** Yes. `restart-coordinator-on-event` (fast) paired with `restart-coordinator-on-state` (reliable). Both check the restart threshold.
 
 ## References
 
