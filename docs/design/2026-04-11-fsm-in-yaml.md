@@ -708,7 +708,7 @@ The interpreter can provide hints because it has the full transition map at runt
 
 - [x] **FsmStatus trait: derive macro or hand-written?** Derive macro (`#[derive(FsmStatus)]`). 75 lines of mechanical PascalCase-to-kebab mapping is a typo magnet. The macro is small (similar scope to keyby) and prevents silent state mapping bugs.
 - [x] **Error type: reuse LooprError or new FsmError?** New `FsmError` within the fsm module, mapped to `LooprError` at the boundary. Keeps the interpreter independently testable without coupling to the global error module.
-- [x] **valid_targets via IPC?** Yes, expose it. Agents currently guess valid transitions; giving them the exact allowed-target list in their prompt prevents invalid transition attempts and wasted LLM tokens.
+- [x] **valid_targets via IPC?** Yes, expose it. Agents currently guess valid transitions; giving them the exact allowed-target list in their prompt prevents invalid transition attempts and wasted LLM tokens. The context builder should call `interpreter.valid_targets(fsm_name, current_status, role)` at prompt assembly time and inject the result directly into the agent's prompt (e.g., "Valid transitions from in-progress: blocked (any), in-review (implementer), abandoned (coordinator)"). This is generated from the YAML FSM definition at runtime - no hand-written transition tables in prompt text to keep in sync with the YAML. The FSM YAML is the single source of truth for both enforcement and documentation.
 
 ## References
 
