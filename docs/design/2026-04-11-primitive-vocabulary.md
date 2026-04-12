@@ -42,7 +42,7 @@ No formal catalog of atomic operations exists. v3's operations are scattered acr
 
 ### Overview
 
-The audit of v3 identified **58 true primitives** across 14 domains. Each primitive is a single, well-defined operation with typed inputs and outputs. Composed operations (like the integrator's full tick cycle or the coordinator's reconciliation loop) are NOT primitives - they become strategy compositions in YAML.
+The audit of v3 identified **59 true primitives** across 14 domains. Each primitive is a single, well-defined operation with typed inputs and outputs. Composed operations (like the integrator's full tick cycle or the coordinator's reconciliation loop) are NOT primitives - they become strategy compositions in YAML.
 
 ### The Atomicity Test
 
@@ -99,6 +99,24 @@ pub trait Primitive: Send + Sync {
 
     /// Validate params at startup (before any work starts).
     fn validate_params(&self, params: &serde_json::Value) -> eyre::Result<()>;
+
+    /// Idempotency guarantee. Strategies can partially execute before a crash;
+    /// the next tick re-evaluates triggers and may re-invoke primitives that
+    /// already ran. Primitives must document their behavior on re-execution:
+    /// - Idempotent: safe to call again (transitions return Unchanged, queries are pure)
+    /// - GuardRequired: caller must check precondition before re-calling (create-* primitives)
+    /// - NonIdempotent: re-execution produces duplicate side effects (must be last in sequence)
+    fn idempotency(&self) -> Idempotency;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Idempotency {
+    /// Safe to call multiple times with same params. No duplicate side effects.
+    Idempotent,
+    /// Safe if a guard condition is checked first (e.g., "record doesn't already exist").
+    GuardRequired,
+    /// NOT safe to re-call. Must be last in action sequence or protected by cooldown.
+    NonIdempotent,
 }
 ```
 
@@ -507,7 +525,22 @@ Binary classifier: determines brief vs full decomposition path.
 | **Side Effects** | None (pure classification). |
 | **v3 Source** | Tier-gate classification in coordinator |
 
-### Domain 6: Integration (6 primitives)
+### Domain 6: Integration (7 primitives)
+
+#### `integrate-tick`
+
+Executes the full integration cycle atomically: create tick, merge bundle branches, run validation, publish or fail. Encapsulates the Git+DB boundary - the same reasoning that makes `reject-bundle` a primitive (DB invariant protection) applies here for the more fragile Git+DB synchronization. If the daemon crashes mid-integration, the git audit primitives detect and repair the fracture on next startup.
+
+| Field | Value |
+|-------|-------|
+| **Params** | `plan-id` (string), `bundle-ids` (string[]) |
+| **Outputs** | `tick-id` (string), `outcome` (string: published, validation-failed, merge-conflict), `head-sha` (string, if published) |
+| **Preconditions** | No in-progress Tick exists. All bundles are Accepted. Integration branch exists. |
+| **Side Effects** | Creates Tick. Transitions bundles to Integrating. Merges branches. Runs validation. On success: publishes Tick, transitions bundles to Merged, transitions works to Integrated. On failure: fails Tick, rejects bundles, resets works. All Git+DB mutations are internally sequenced with rollback on failure. |
+| **Idempotency** | GuardRequired - check no in-progress tick before calling. |
+| **v3 Source** | `run_cycle` in integrator.rs - the entire integration cycle. |
+
+**Note:** The individual integration primitives (`create-tick`, `merge-branches`, `run-validation`) remain available for strategies that need finer control. But the default integration strategy should use `integrate-tick` to avoid the Git+DB split-brain risk that the Architect identified. Like `reject-bundle` and `re-decompose`, this encapsulates a cross-system invariant in Rust rather than trusting YAML authors to sequence it correctly.
 
 #### `create-tick`
 
@@ -522,6 +555,8 @@ Creates a new Tick for bundling accepted work.
 | **v3 Source** | `handle_tick_create` |
 
 #### `merge-branches`
+
+**Git concurrency note:** All git-mutating primitives (`merge-branches`, `run-validation`, `create-integration-branch`, `merge-integration-to-main`, `delete-integration-branch`) require exclusive access to the repo's working directory. The engine must serialize strategies that invoke these primitives - either via an internal git mutex in `PrimitiveContext` or by scoping all git strategies to the same plan with priority ordering. Concurrent git mutations from different strategies would corrupt the working directory.
 
 Merges one or more bundle branches into the integration branch.
 
@@ -906,7 +941,7 @@ Emits an arbitrary event to the daemon's event bus.
 | Record CRUD | 5 | 2 | 3 |
 | Bundle Operations | 3 | 0 | 3 |
 | Decomposition | 7 | 1 | 6 |
-| Integration | 6 | 0 | 6 |
+| Integration | 7 | 0 | 7 |
 | Worktree | 4 | 0 | 4 |
 | Context & Learning | 5 | 3 | 2 |
 | Reconciliation & Escalation | 8 | 3 | 5 |
@@ -915,7 +950,9 @@ Emits an arbitrary event to the daemon's event bus.
 | Git Audit | 3 | 0 | 3 |
 | Conflict Resolution | 1 | 0 | 1 |
 | Events | 1 | 0 | 1 |
-| **Total** | **58** | **10** | **48** |
+| **Total** | **59** | **10** | **49** |
+
+**Idempotency summary:** Of 59 primitives, ~10 are pure queries (Idempotent by nature), ~35 are state transitions (Idempotent - return Unchanged on re-call), ~8 are create-* operations (GuardRequired - check existence before calling), and ~6 are git-mutating (GuardRequired or NonIdempotent - protected by integrate-tick or advisory locks).
 
 ### What's NOT a Primitive (v3 Compositions -> v4 Strategies)
 
