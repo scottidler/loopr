@@ -665,7 +665,9 @@ All open questions from the initial vision were resolved during the design doc p
 
 9. **Primitives document their idempotency.** Because strategies can partially execute before a crash, primitives should be safe to re-encounter on the next tick. Read/check primitives are naturally idempotent. Mutating primitives should document whether re-execution is safe or requires guard conditions. Action sequences should order safe-to-repeat steps before hard-to-repeat steps.
 
-10. **Proven pattern (Otto precedent).** Otto proves that YAML-declares/Rust-interprets works for build orchestration. v4 applies the same pattern to agent orchestration. This is not a novel architecture - it's a domain transfer of a working system.
+10. **YAML is the single source of truth for prompts.** If a fact, constraint, or parameter is defined in YAML (FSM transitions, tool lists, scoring weights, retry limits, decomposition guidance, role capabilities), the context builder injects it into agent prompts at runtime. Prompt .pmt files contain only genuinely static prose (instructions, persona, tone). Every dynamic fact is generated from YAML - no hand-written prompt text that can drift out of sync with the actual config. Examples: valid transitions from FSM YAML, available tools from role YAML, count guidance from pipeline YAML, threshold values from trigger YAML.
+
+11. **Proven pattern (Otto precedent).** Otto proves that YAML-declares/Rust-interprets works for build orchestration. v4 applies the same pattern to agent orchestration. This is not a novel architecture - it's a domain transfer of a working system.
 
 ## References
 
