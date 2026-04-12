@@ -460,7 +460,7 @@ session-failure:
 |------|------------|--------|------------|
 | State query registry grows large (many one-off queries) | Medium | Low | Keep built-in queries general. Project-specific queries can be added as needed - same as primitives. |
 | Trigger evaluation becomes slow with many triggers | Low | Medium | Profile. Triggers are O(1) state lookups. If needed, index triggers by scope for faster evaluation. |
-| Cooldown tracking leaks memory (old scope IDs never cleaned) | Medium | Low | Periodic sweep of cooldown entries older than max cooldown. Or use an LRU cache. |
+| Cooldown tracking leaks memory (old scope IDs never cleaned) | Medium | Low | Deterministic TTL sweep on each engine tick: remove entries where `now - last_fired_at > cooldown_secs`. Not an LRU cache (LRU evicts wrong entries and causes trigger storms). |
 | Guard conditions too restrictive (block valid transitions) | Medium | Medium | Guards have `on-failure: reject` with a clear message. Strategy authors can debug from the message. Add `on-failure: warn` option for non-blocking guards. |
 | Event trigger match filters need more expressiveness | Medium | Low | Start with exact-match filters. Add regex or glob matching if needed. Don't add a query language. |
 

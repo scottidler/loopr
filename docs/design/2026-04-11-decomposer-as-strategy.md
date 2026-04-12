@@ -61,80 +61,87 @@ Every one of these experiments requires modifying `decomposer.rs`.
 
 ### Overview
 
-A decomposition pipeline is a YAML file that declares a sequence of stages. Each stage decomposes a parent type into a child type using the `decompose` primitive, with configurable validation and dependency patterns. The composition engine executes the pipeline by firing strategies for each stage in sequence, connected by events.
+The decomposer is a standard agent that performs single-level decomposition: read an Active parent, create Pending children. The multi-level pipeline (Plan -> Spec -> Phase -> Work) is driven entirely by the composition engine's FSM and reconciliation strategies - not by a pipeline executor inside the agent.
 
-### Decomposition Pipeline Schema
+### Decomposition Config Schema
+
+Instead of a pipeline YAML with stages, the decomposer role config specifies per-parent-kind behavior:
 
 ```yaml
-# strategies/decomposition/full.yml
-full:
-  description: Plan -> Spec -> Phase -> Work (v3 default)
-  # Stage ordering is inferred from the parent-child chain (plan -> spec -> phase -> work),
-  # NOT from YAML document order. The engine topologically sorts stages by parent-kind/child-kind
-  # relationships. Keyed map form gives O(1) lookup and duplicate detection.
-  stages:
-    specs:
-      parent-kind: plan
-      child-kind: spec
+# strategies/roles/decomposer.yml
+decomposer:
+  model: claude-sonnet-4-6
+  max-tokens: 4096
+  temperature: 0.3
+
+  # Per-parent-kind decomposition rules.
+  # The engine fires decompose-when-active for any Active parent with no children.
+  # This config tells the decomposer agent WHAT to create.
+  rules:
+    plan:
+      target-kind: spec                    # full mode: Plan -> Specs
       prompt: decompose/spec.pmt
       count-guidance: 1-3
       dependency-pattern: sequential-chain
-      parallel: false                      # specs decomposed sequentially
-    phases:
-      parent-kind: spec
-      child-kind: phase
+    spec:
+      target-kind: phase
       prompt: decompose/phase.pmt
       count-guidance: 1-5
       dependency-pattern: sequential-chain
-      parallel: true                       # phases decomposed in parallel across specs
-    works:
-      parent-kind: phase
-      child-kind: work
+    phase:
+      target-kind: work
       prompt: decompose/work.pmt
       count-guidance: 1-5
       dependency-pattern: fan-out
-      parallel: true                       # works decomposed in parallel across phases
-  validation:
-    enabled: true
-    per-child: true
-    blocking: false                        # v3: validation is advisory (warning only)
-  ratification:
-    enabled: true
-    blocking: false                        # v3: ratification is advisory
-  on-partial-failure: continue             # v3: persist successful branches, surface error
 ```
 
+Brief mode is a simple override of the plan rule's target-kind:
+
 ```yaml
-# strategies/decomposition/brief.yml
-brief:
-  description: Plan -> Work (skip Spec and Phase)
-  stages:
-    works:
-      parent-kind: plan
-      child-kind: work
+# strategies/roles/decomposer-brief.yml
+decomposer:
+  model: claude-sonnet-4-6
+  max-tokens: 4096
+  temperature: 0.3
+  rules:
+    plan:
+      target-kind: work                    # brief mode: Plan -> Works directly
       prompt: decompose/work.pmt
       count-guidance: 1-8
       dependency-pattern: fan-out
-      parallel: false
-  validation:
-    enabled: true
-    per-child: true
-    blocking: false
-  ratification:
-    enabled: false                         # v3: brief mode skips ratification
-  on-partial-failure: fail                 # brief has one stage - partial = total failure
+    # No spec or phase rules - the engine never fires decompose-when-active
+    # for Specs or Phases because they don't exist in brief mode.
 ```
 
-### Pipeline Stage Fields
+The tier-gate strategy selects which decomposer role config to use:
+
+```yaml
+# strategies/decomposition/classify.yml
+classify-and-configure:
+  trigger: plan-accepted
+  scope: plan
+  priority: 1000
+  action:
+    - name: classify
+      primitive: classify-tier
+      params:
+        plan-id: $trigger.scope-id
+    - primitive: update-record
+      params:
+        collection: plan
+        id: $trigger.scope-id
+        fields:
+          decomposer-config: $context.classify.tier   # "full" or "brief"
+```
+
+### Decomposition Rule Fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `parent-kind` | string | (required) | Domain type of the parent record (plan, spec, phase) |
-| `child-kind` | string | (required) | Domain type to decompose into (spec, phase, work) |
-| `prompt` | string | (required) | Prompt template path (relative to prompts directory) |
+| `target-kind` | string | (required) | Domain type to decompose into (spec, phase, work) |
+| `prompt` | string | (required) | Prompt .pmt file path or inline content (principle 10) |
 | `count-guidance` | string | none | Soft guidance for the LLM ("1-3", "1-5", "1-8") |
 | `dependency-pattern` | string | fan-out | How children depend on each other |
-| `parallel` | bool | false | Whether children of different parents at this level are decomposed in parallel |
 
 ### Dependency Patterns
 
@@ -144,47 +151,52 @@ brief:
 | `sequential-chain` | Each child depends on the previous one (A -> B -> C) | Phases that must execute in order |
 | `explicit` | Dependencies are whatever the LLM declares | When the LLM should decide dependency structure |
 
-### How the Engine Executes a Pipeline
+### How the Engine Drives Decomposition
 
-**Critical constraint:** Decomposition involves multiple LLM calls (seconds to minutes total). Per the single-tick mandate (vision principle 7), LLM calls cannot block the engine tick. Therefore: the engine's single-tick strategy spawns a **decomposer agent task** that runs asynchronously, exactly like v3's background decomposition. The pipeline YAML configures how that agent task behaves, not how the engine tick executes.
+**Key insight: the FSM hierarchy IS the pipeline.** There is no separate pipeline executor or background workflow engine. The decomposer is a standard single-level agent: it reads one Active parent and creates Pending children. The multi-level pipeline emerges from the composition engine reacting to FSM state changes via the existing reconciliation strategies from Doc 5.
 
-**The engine tick fires one strategy:**
+**One strategy, one agent capability:**
+
 ```yaml
-# Generated from pipeline definition at startup
-decompose-plan:
-  trigger: plan-ready-for-decomposition   # state-query (level-triggered, principle 8)
-  scope: plan
+# strategies/decomposition/default.yml
+decompose-when-active:
+  description: Decompose any Active parent that has no children yet
+  trigger: parent-active-no-children    # state-query: record is Active AND has no children
+  scope: plan                           # also fires for spec, phase via scope aliasing
   priority: 900
   action:
     - primitive: spawn-agent
+      guard: no-active-sessions         # don't spawn if already decomposing
       params:
         role: decomposer
         target-id: $trigger.scope-id
-        config:
-          pipeline: full                  # or brief, three-level, etc.
 ```
 
-This returns immediately. The decomposer agent task then executes the pipeline stages internally:
+**The decomposer agent does one thing:** reads the Active parent, calls the LLM once, creates Pending children, terminates. It does not loop, does not execute multi-stage pipelines, does not drive FSM transitions.
 
-**Inside the decomposer agent task (async, not in engine tick):**
-1. Read pipeline config for stages, validation, ratification settings
-2. Execute stages in order (respecting parallel/sequential per stage)
-3. For parallel stages: use bounded concurrency (`buffer_unordered(N)`, not unbounded `join_all`) to avoid rate-limit exhaustion
-4. Persist children to TaskStore as they are created (crash recovery: already-persisted children are visible on restart)
-5. Run validation per-child if enabled
-6. Run ratification if enabled
-7. Emit `decomposition.completed` or `decomposition.failed` event
+**The multi-level flow emerges naturally from the FSM:**
 
-**Level-triggered fallbacks (principle 8):**
-- `plan-ready-for-decomposition`: "plan is Active with no children" (catches restart after plan approval but before decomposition starts)
-- `decomposition-stalled`: "plan has been in Decomposing state for > 10 minutes with no new children" (catches crashed decomposer agent)
+1. **Tick N:** Plan becomes Active (no children). Engine fires `decompose-when-active`. Spawns decomposer for Plan.
+2. **Agent runs:** Decomposer reads Plan, calls LLM, creates Pending Specs. Terminates.
+3. **Tick N+1:** Reconciliation promotes Pending Specs to Active (parent is Active, deps met).
+4. **Tick N+2:** Specs are Active (no children). Same `decompose-when-active` strategy fires for each Spec. Spawns decomposers.
+5. **Agents run:** Each decomposer reads its Spec, calls LLM, creates Pending Phases. Terminates.
+6. **Tick N+3:** Reconciliation promotes Phases to Active.
+7. **Tick N+4:** Phases are Active (no children). Same strategy fires. Spawns decomposers.
+8. **Agents run:** Each decomposer creates Pending Works. Terminates.
+9. **Tick N+5:** Reconciliation promotes Works to Ready. Execution begins.
 
-**Completion:**
-```
-Trigger: ratification completed (or skipped if disabled)
-Action: emit decomposition.completed event
-  Coordinator wakes from Decomposing state
-```
+**Why this is structurally superior to a pipeline executor:**
+
+- **Zero shadow orchestrators.** The engine controls all FSM transitions. No background task usurps the composition engine's role.
+- **True composability.** Brief mode = decomposer creates Works directly from Plan (skips Spec/Phase levels). Three-level = skip Spec. Change `target-kind` in the strategy, not a pipeline YAML file.
+- **Crash resilience for free.** If the daemon crashes after Specs are created but before Phases exist, the Specs are in Active state with no children. On restart, the engine fires `decompose-when-active` for each Spec. No "resume from partial state" logic needed.
+- **Validation and ratification are strategies, not agent internals.** Validation fires as a separate strategy when children are created. Ratification fires when all children at a level are validated. These are composable, not hardcoded inside an agent.
+
+**Level-triggered fallback (principle 8):**
+- `parent-active-no-children`: "record is Active with zero children in child collection" - catches restarts, agent crashes, any state where decomposition should have happened but didn't.
+
+**Alternative considered and rejected: pipeline.yml with background agent executor.** The initial design (prior revision of this doc) had the decomposer agent reading a pipeline YAML and executing stages internally. This was rejected in architectural review as a "shadow orchestrator" - a procedural workflow engine hidden inside spawn-agent, violating the single-tick constraint. The Implementer agent's internal tool loop is different because it operates within a single Work item and doesn't create FSM-managed entities. The decomposer creates Specs, Phases, and Works - entities the composition engine must manage. Embedding that control flow in an agent bypasses the engine.
 
 ### Expressing v3's Exact Behavior
 

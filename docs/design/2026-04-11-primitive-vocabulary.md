@@ -148,6 +148,11 @@ pub trait Primitive: Send + Sync {
     /// - GuardRequired: caller must check precondition before re-calling (create-* primitives)
     /// - NonIdempotent: re-execution produces duplicate side effects (must be last in sequence)
     fn idempotency(&self) -> Idempotency;
+
+    /// Whether this primitive requires exclusive git worktree access.
+    /// If true, the engine acquires a centralized async git mutex before
+    /// calling execute(). Default: false.
+    fn requires_git_lock(&self) -> bool { false }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -607,7 +612,7 @@ Creates a new Tick for bundling accepted work.
 
 #### `merge-branches`
 
-**Git concurrency note:** All git-mutating primitives (`merge-branches`, `run-validation`, `create-integration-branch`, `merge-integration-to-main`, `delete-integration-branch`) require exclusive access to the repo's working directory. The engine must serialize strategies that invoke these primitives - either via an internal git mutex in `PrimitiveContext` or by scoping all git strategies to the same plan with priority ordering. Concurrent git mutations from different strategies would corrupt the working directory.
+**Git concurrency enforcement:** All git-mutating primitives (`merge-branches`, `run-validation`, `create-integration-branch`, `merge-integration-to-main`, `delete-integration-branch`, `integrate-tick`) must acquire a centralized async git mutex held in `PrimitiveContext` before executing. This is a hard requirement, not a convention. Priority ordering alone is insufficient - it does not serialize git operations across different plans or protect against edge-case race conditions. The mutex is acquired automatically by the engine when it detects a git-mutating primitive (via a `requires_git_lock()` method on the trait), not manually by YAML authors.
 
 Merges one or more bundle branches into the integration branch.
 

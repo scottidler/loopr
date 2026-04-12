@@ -107,6 +107,7 @@ work-retry-on-failure:
 |-------|------|----------|-------------|
 | `name` | string | no | Step name for `$context.*` references |
 | `primitive` | string | yes | Primitive name from the registry |
+| `guard` | string | no | Named guard condition (from Doc 4) that must pass before this step executes. If the guard fails, the step is skipped (not the whole strategy). Required for `GuardRequired` primitives to prevent duplicate side effects on re-fire. |
 | `params` | map | no | Parameters passed to the primitive |
 
 **Parameter references:**
