@@ -140,20 +140,41 @@ ar/
 # ar/runner.py (simplified)
 
 def run_trial(trial_config: TrialConfig) -> Score:
-    """Run a single trial: write config, run loopr e2e, read score."""
-    # 1. Write trial config to loopr's config directory
+    """Run a single trial: reset state, write config, run loopr e2e, read score."""
+    # 0. Reset target repo to pristine state (prevent state leakage between trials)
+    reset_target_repo(trial_config.target_repo, trial_config.git_ref)
+
+    # 1. Kill any orphaned daemons from prior trial
+    kill_daemon(trial_config.target_repo)
+
+    # 2. Write trial config to loopr's config directory
     write_trial_config(trial_config)
 
-    # 2. Run loopr e2e against the target repo
+    # 3. Run loopr e2e against the target repo
     result = subprocess.run(
         ["loopr", "run", "--config", trial_config.config_path,
          "--target", trial_config.target_repo],
         capture_output=True, timeout=trial_config.timeout_secs,
     )
 
-    # 3. Read the structured score
+    # 4. Explicitly stop daemon after trial completes
+    kill_daemon(trial_config.target_repo)
+
+    # 5. Read the structured score
     score_path = trial_config.output_dir / "score.json"
     return Score.from_json(score_path)
+
+
+def reset_target_repo(repo_path: str, git_ref: str):
+    """Reset target repo to pristine state. Prevents state leakage."""
+    subprocess.run(["git", "-C", repo_path, "checkout", git_ref], check=True)
+    subprocess.run(["git", "-C", repo_path, "reset", "--hard", git_ref], check=True)
+    subprocess.run(["git", "-C", repo_path, "clean", "-fdx"], check=True)
+
+
+def kill_daemon(repo_path: str):
+    """Kill any running loopr daemon for this repo."""
+    subprocess.run(["loopr", "shutdown"], capture_output=True, timeout=10)
 
 
 def ar_loop(program: Program, target_repo: str):
@@ -226,8 +247,13 @@ The composite score is [0.0, 1.0]:
 3. **Recovery strategies** - add ask-a-friend, change retry limits
 4. **Model selection** - swap roles between opus/sonnet/haiku
 5. **Agent collaboration** - new tool sets, iteration limits
-6. **Scoring weights** - change the composite formula
-7. **Trigger thresholds** - adjust safety net values
+6. **Trigger thresholds** - adjust safety net values
+
+## What You CANNOT Modify
+- Scoring weights (fixed for this experiment series - reward hacking prevention)
+- Loopr source code (Rust)
+- The scorer (fixed evaluation metric)
+- The target repo (reset to pristine state before each trial)
 ```
 
 ### Results Tracking
@@ -272,7 +298,7 @@ The existing Rust scorer (`src/scorer.rs`) already produces the right output. Th
 }
 ```
 
-**v4 enhancement:** Make scoring weights configurable per trial. The scorer currently has hardcoded 40/30/20/10 weights. In v4:
+**v4 enhancement:** Scoring weights are configurable per experiment SERIES, not per trial:
 
 ```yaml
 # strategies/scoring/default.yml
@@ -283,7 +309,7 @@ default:
   efficiency-weight: 0.10
 ```
 
-A trial can override these weights, and the scorer reads them from the merged config.
+**Critical constraint (reward hacking prevention):** Scoring weights are fixed for an entire AR experiment series. The AR agent CANNOT modify scoring weights within a series - it would trivially "reward hack" by setting `completion-weight: 1.0` and ignoring quality. A human chooses the weights when launching a series. The weights file is outside the AR agent's writable scope. Different series can use different weights to explore tradeoffs (e.g., "optimize for quality" vs "optimize for speed"), but within a series, the fitness function is immutable.
 
 ### Trial Reproducibility
 
@@ -380,11 +406,11 @@ uv run python ar/runner.py
 5. Create pyproject.toml (uv-managed, PyYAML only) and Dockerfile
 6. Integration test: run baseline trial against a test target repo
 
-#### Phase 3: Configurable Scorer
+#### Phase 3: Configurable Scorer (per-series, not per-trial)
 
 1. Move scoring weights from hardcoded constants to `strategies/scoring/default.yml`
-2. Trial config can override scoring weights
-3. The scorer reads weights from the merged config
+2. Weights are fixed per experiment series (set by human at series launch)
+3. AR agent cannot modify weights within a series (reward hacking prevention)
 4. Unit tests: verify different weights produce different composite scores
 
 #### Phase 4: Strategy Generation
@@ -471,12 +497,15 @@ uv run python ar/runner.py
 - [x] **Optuna or Karpathy pattern?** Karpathy pattern. The LLM-as-optimizer is better for structural exploration. Optuna could be a future layer for numeric sweeps within the Karpathy outer loop.
 - [x] **Python or Rust for the trial runner?** Python. The loop is I/O-bound scripting. Rust adds compile overhead for no benefit.
 - [x] **Single score or Pareto front?** Single composite score with tunable weights. Simpler for the LLM agent to reason about.
+- [x] **Reward hacking via mutable weights?** Scoring weights are fixed per experiment series (set by human). AR agent cannot modify weights. Prevents trivial reward hacking.
+- [x] **State leakage between trials?** Target repo reset to pristine (`git reset --hard` + `git clean -fdx`) before each trial. Daemon explicitly killed between trials.
+- [x] **Flakiness handling?** Accept noise for v1. LLM non-determinism means exact reproduction is impossible. The Karpathy pattern relies on large trial counts (30-50/night) to surface real patterns above the noise floor. Future enhancement: run N=3 per config and average for high-stakes comparisons.
 
 ## Open Questions
 
 - [ ] Should the AR loop support A/B comparison (run two configs on the same target, compare)? Or is sequential trial-and-compare sufficient?
-- [ ] How does AR handle flaky E2E results (same config produces different scores due to LLM non-determinism)? Options: run each trial N times and average, or accept noise and rely on large trial counts to surface real patterns.
 - [ ] Should the trial config support "strategy diffs" (patch files against base strategies) or full strategy file overrides? Diffs are more compact but harder to validate.
+- [ ] Should the engine enforce a per-run API call / token budget for AR mode to prevent runaway costs from malformed strategy loops?
 
 ## References
 
