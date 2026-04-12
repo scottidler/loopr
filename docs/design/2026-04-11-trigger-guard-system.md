@@ -176,6 +176,10 @@ triggers:
 
 Composites can nest: an `and` can contain an `or` which contains threshold triggers. Startup validation detects cycles.
 
+**Composite evaluation semantics:** Composites always evaluate on the pull path (per-tick), even if they contain event sub-triggers. Event sub-triggers within composites check the event buffer in `ObservationCtx.event_bus` rather than the push pipeline. This means event triggers in composites lose sub-tick reactivity but gain consistency - all sub-triggers evaluate against the same tick snapshot.
+
+**Cross-scope restriction:** All sub-triggers in a composite must share the same scope. A composite that `and`s `scope: work` with `scope: session` is rejected at startup validation. This prevents ambiguous `scope_ids` in the `TriggerResult`.
+
 ### Guard Definitions
 
 Guards are conditions attached to FSM transitions. They're evaluated synchronously during `validate_transition` - if the guard fails, the transition is rejected.
@@ -263,8 +267,14 @@ Triggers evaluate in two modes:
 pub enum TriggerResult {
     /// Trigger condition not met.
     Idle,
-    /// Trigger fired. Contains the scoped record ID(s) that matched.
-    Fired { scope_ids: Vec<String> },
+    /// Trigger fired. Contains the scoped record ID(s) that matched
+    /// and optional event payload for context propagation to strategies.
+    Fired {
+        scope_ids: Vec<String>,
+        /// Event payload (for event triggers) or computed values (for ratio triggers).
+        /// Strategies access this via $trigger.event.{field}.
+        payload: Option<serde_json::Value>,
+    },
 }
 
 pub trait Trigger: Send + Sync {
@@ -289,7 +299,7 @@ work-retry-exhaustion:
 
 **`cooldown-secs`** (optional, default 0): After firing for a given scope ID, the trigger is suppressed for this duration. The engine tracks `last_fired_at` per (trigger-name, scope-id) pair.
 
-Event triggers can also specify `debounce-secs` to collapse rapid-fire events:
+Event triggers can also specify `throttle-secs` to rate-limit rapid-fire events (fire the first, drop subsequent within the window):
 
 ```yaml
 session-failure:
@@ -298,8 +308,10 @@ session-failure:
   match:
     status: failed
   scope: work
-  debounce-secs: 5                # collapse multiple failures within 5 seconds
+  throttle-secs: 5               # fire first event, drop duplicates within 5 seconds
 ```
+
+**Note:** This is throttling (fire-and-suppress), not debouncing (wait-for-silence-then-fire). Throttling is the right semantic for recovery triggers - you want to react immediately to the first failure, not wait for silence.
 
 ### Mapping v3 Conditions to v4 Triggers
 
@@ -350,6 +362,7 @@ session-failure:
 | Guard transition actually exists in the FSM definition | Guard on impossible transition |
 | Timer `start-field` is a timestamp field | Wrong field type |
 | Ratio numerator/denominator collections are valid | Typo in collection name |
+| Composite sub-triggers all share the same scope | Cross-scope ambiguity in scope_ids |
 
 ### Implementation Plan
 
@@ -415,7 +428,7 @@ session-failure:
 
 ### Performance
 
-- Trigger evaluation is pure state inspection: HashMap lookups, numeric comparisons, count queries. Sub-millisecond per trigger.
+- Trigger evaluation is pure state inspection: HashMap lookups, numeric comparisons, count queries. Threshold and state-query triggers are O(1) lookups. Ratio triggers are O(N) where N = records in the scoped collection (typically <200 works per plan). At 5-second tick intervals and ~30 triggers, total evaluation time is well under 100ms even at scale.
 - The engine evaluates all active pull triggers per tick. With ~30 triggers and a 5-second tick interval, this is negligible.
 - Event triggers are checked per-event. With ~10 event triggers and ~100 events per tick, this is still negligible.
 - Guards evaluate per-transition attempt. With ~5 guards total and transitions happening at most once per tick per entity, this is negligible.
@@ -460,6 +473,7 @@ session-failure:
 
 - [ ] Should state queries be YAML-definable or strictly compiled-in Rust? Currently they're compiled-in (like primitives). Making them YAML-definable adds expressiveness but approaches the expression-language non-goal.
 - [ ] Should the trigger evaluator run on the engine's tick or on a separate tick rate? Running on the engine tick is simpler but means trigger evaluation frequency is coupled to engine tick rate.
+- [ ] **Cooldown persistence across daemon restarts.** Cooldown state is currently in-memory. On restart, all cooldowns reset, potentially causing trigger storms (e.g., all SLA timers re-fire simultaneously). Options: (a) persist cooldowns to a sidecar file, (b) rely on level-triggered fallbacks (principle 8) so the resulting strategies are idempotent anyway, (c) re-derive cooldowns from TaskStore timestamps on startup. Leaning toward (b) - if every strategy handles re-fire gracefully (transitions return Unchanged, creates check existence), cooldown loss is harmless.
 
 ## References
 
