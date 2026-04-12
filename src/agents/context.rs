@@ -83,7 +83,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// Truncate text at the last sentence boundary within the token budget.
 /// Keeps the **head** (oldest content) and drops the tail.
 /// Appends `[truncated]` if truncation occurs.
-fn truncate_prose(text: &str, max_tokens: usize) -> String {
+pub fn truncate_prose(text: &str, max_tokens: usize) -> String {
     let max_chars = max_tokens * 4;
     if text.len() <= max_chars {
         return text.to_string();
@@ -101,7 +101,7 @@ fn truncate_prose(text: &str, max_tokens: usize) -> String {
 /// Truncate text from the **head** (oldest content), keeping the **tail** (newest).
 /// Used for accumulated iteration history where recent context is most relevant.
 /// Prepends `[earlier iterations truncated]` if truncation occurs.
-fn truncate_from_head(text: &str, max_tokens: usize) -> String {
+pub fn truncate_from_head(text: &str, max_tokens: usize) -> String {
     let max_chars = max_tokens * 4;
     if text.len() <= max_chars {
         return text.to_string();
@@ -116,7 +116,7 @@ fn truncate_from_head(text: &str, max_tokens: usize) -> String {
 }
 
 /// Truncate a list by dropping items from the end until under token budget.
-fn truncate_list(items: &[String], max_tokens: usize) -> Vec<String> {
+pub fn truncate_list(items: &[String], max_tokens: usize) -> Vec<String> {
     let mut result = Vec::new();
     let mut total_tokens = 0;
     for item in items {

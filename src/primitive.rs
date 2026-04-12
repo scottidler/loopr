@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod registry;
 pub mod types;
 
