@@ -471,9 +471,9 @@ session-failure:
 
 ## Open Questions
 
-- [ ] Should state queries be YAML-definable or strictly compiled-in Rust? Currently they're compiled-in (like primitives). Making them YAML-definable adds expressiveness but approaches the expression-language non-goal.
-- [ ] Should the trigger evaluator run on the engine's tick or on a separate tick rate? Running on the engine tick is simpler but means trigger evaluation frequency is coupled to engine tick rate.
-- [ ] **Cooldown persistence across daemon restarts.** Cooldown state is currently in-memory. On restart, all cooldowns reset, potentially causing trigger storms (e.g., all SLA timers re-fire simultaneously). Options: (a) persist cooldowns to a sidecar file, (b) rely on level-triggered fallbacks (principle 8) so the resulting strategies are idempotent anyway, (c) re-derive cooldowns from TaskStore timestamps on startup. Leaning toward (b) - if every strategy handles re-fire gracefully (transitions return Unchanged, creates check existence), cooldown loss is harmless.
+- [x] **State queries: YAML-definable or compiled-in Rust?** Compiled-in Rust. Design principle 6 (Greenspun defense) is decisive here. YAML-definable queries would require an expression language for field comparisons, aggregations, and filters - that's a programming language, not a composition schema. New queries are added as Rust functions registered in the query registry, same as primitives. Keeps trigger evaluation debuggable and statically validatable.
+- [x] **Trigger evaluator tick rate?** Engine tick. Separate tick adds concurrency complexity (race conditions on half-written state) for zero measurable benefit. Trigger evaluation is sub-millisecond. Running on the engine tick ensures triggers observe a consistent state snapshot matching the strategies they fire.
+- [x] **Cooldown persistence across restarts?** Option (b): rely on level-triggered fallbacks. Principle 8 already mandates that strategies handle redundant fires gracefully (transitions return Unchanged, creates check existence). Persisting cooldowns to a sidecar file would introduce a secondary state store outside TaskStore's JSONL-as-truth model. If a strategy can't tolerate re-fire, it's violating principle 9 (idempotency) and that's the real bug to fix.
 
 ## References
 

@@ -665,7 +665,7 @@ All open questions from the initial vision were resolved during the design doc p
 
 9. **Primitives document their idempotency.** Because strategies can partially execute before a crash, primitives should be safe to re-encounter on the next tick. Read/check primitives are naturally idempotent. Mutating primitives should document whether re-execution is safe or requires guard conditions. Action sequences should order safe-to-repeat steps before hard-to-repeat steps.
 
-10. **Otto parallel.** Otto proves the pattern works for build orchestration. v4 applies the same pattern to agent orchestration. YAML declares what happens, Rust interprets and executes.
+10. **Proven pattern (Otto precedent).** Otto proves that YAML-declares/Rust-interprets works for build orchestration. v4 applies the same pattern to agent orchestration. This is not a novel architecture - it's a domain transfer of a working system.
 
 ## References
 

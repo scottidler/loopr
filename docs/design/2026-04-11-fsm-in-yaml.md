@@ -702,9 +702,13 @@ The interpreter can provide hints because it has the full transition map at runt
 
 ## Open Questions
 
-- [ ] Should the `FsmStatus` trait be derived via a simple attribute macro, or hand-written? It's ~15 lines per enum, 5 enums = 75 lines. Hardly worth a macro, but it IS mechanical and error-prone.
-- [ ] Should the interpreter return the same `LooprError::InvalidTransition` error type as v3, or a new FSM-specific error type? Using the same type eases migration but couples the interpreter to the error module.
-- [ ] The `valid_targets` method is new (v3 doesn't have it). Should it be exposed through IPC for agent prompts, or is it only for internal engine use?
+(None remaining - all resolved.)
+
+## Additional Resolved Questions
+
+- [x] **FsmStatus trait: derive macro or hand-written?** Derive macro (`#[derive(FsmStatus)]`). 75 lines of mechanical PascalCase-to-kebab mapping is a typo magnet. The macro is small (similar scope to keyby) and prevents silent state mapping bugs.
+- [x] **Error type: reuse LooprError or new FsmError?** New `FsmError` within the fsm module, mapped to `LooprError` at the boundary. Keeps the interpreter independently testable without coupling to the global error module.
+- [x] **valid_targets via IPC?** Yes, expose it. Agents currently guess valid transitions; giving them the exact allowed-target list in their prompt prevents invalid transition attempts and wasted LLM tokens.
 
 ## References
 

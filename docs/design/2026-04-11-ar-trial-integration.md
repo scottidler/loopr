@@ -503,9 +503,9 @@ uv run python ar/runner.py
 
 ## Open Questions
 
-- [ ] Should the AR loop support A/B comparison (run two configs on the same target, compare)? Or is sequential trial-and-compare sufficient?
-- [ ] Should the trial config support "strategy diffs" (patch files against base strategies) or full strategy file overrides? Diffs are more compact but harder to validate.
-- [ ] Should the engine enforce a per-run API call / token budget for AR mode to prevent runaway costs from malformed strategy loops?
+- [x] **A/B comparison or sequential?** Sequential trial-and-compare. A/B requires concurrent runs which cause resource contention (CPU, memory, network) that pollutes efficiency and timing metrics. Sequential execution guarantees isolated, pristine environments. The Karpathy pattern is inherently sequential.
+- [x] **Strategy diffs or full file overrides?** Full file overrides. Diffs (JSON Patch, YAML merge keys) are brittle - if the base strategy changes, diffs silently mis-apply. Full overrides are structurally complete and independently validatable by the startup schema parser. The AR agent generates complete strategy files, not patches.
+- [x] **Per-run API cost budget?** Yes. The engine must enforce a hard API call / token limit per AR run. A malformed strategy loop (e.g., fail -> re-decompose -> fail with a bad guard) will spin rapidly, burning hundreds of dollars overnight before the subprocess timeout catches it. The budget is a config field in the trial config, defaulting to a sane ceiling (e.g., 10,000 API calls or $50 per trial).
 
 ## References
 
