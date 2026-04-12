@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod context;
 pub mod decompose;
 pub mod gitaudit;
@@ -5,6 +6,7 @@ pub mod mutation;
 pub mod reconcile;
 pub mod record;
 pub mod scoring;
+pub mod worktree;
 
 use super::registry::PrimitiveRegistry;
 
@@ -33,5 +35,16 @@ pub fn register_all(registry: &mut PrimitiveRegistry) -> eyre::Result<()> {
     registry.register(Box::new(mutation::CreateBundle))?;
     registry.register(Box::new(mutation::CreateTick))?;
     registry.register(Box::new(mutation::CreateLearning))?;
+
+    // Phase 4: Agent and worktree primitives
+    registry.register(Box::new(agent::SpawnAgent))?;
+    registry.register(Box::new(agent::StopAgent))?;
+    registry.register(Box::new(agent::PauseAgent))?;
+    registry.register(Box::new(agent::ResumeAgent))?;
+    registry.register(Box::new(agent::InjectContext))?;
+    registry.register(Box::new(worktree::CreateWorktree))?;
+    registry.register(Box::new(worktree::CleanupWorktree))?;
+    registry.register(Box::new(worktree::DeleteAgentBranch))?;
+    registry.register(Box::new(worktree::RefreshWorktree))?;
     Ok(())
 }
