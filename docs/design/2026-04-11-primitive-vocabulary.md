@@ -496,7 +496,7 @@ Breaks a parent document into children via LLM call.
 
 | Field | Value |
 |-------|-------|
-| **Params** | `parent-id` (string), `parent-collection` (string: plan, spec, phase), `target-kind` (string: spec, phase, work), `prompt` (string, optional: prompt template override) |
+| **Params** | `parent-id` (string), `parent-collection` (string: plan, spec, phase), `target-kind` (string: spec, phase, work), `prompt` (string, optional: .pmt file path or inline content per vision principle 10) |
 | **Outputs** | `children` (array: [{id, title, kind, dependencies, acceptance-criteria}]) |
 | **Preconditions** | Parent exists and has content. |
 | **Side Effects** | Creates child records in Pending status. Persists to TaskStore. Emits `decomposition.completed` or `decomposition.failed` event. |
@@ -556,7 +556,7 @@ Re-decomposes a parent after new knowledge invalidates the existing decompositio
 
 | Field | Value |
 |-------|-------|
-| **Params** | `parent-id` (string), `parent-collection` (string: plan, spec, phase), `target-kind` (string: spec, phase, work), `reason` (string: why re-decomposition is needed), `preserve-ids` (string[], optional: children to keep), `prompt` (string, optional: prompt template override) |
+| **Params** | `parent-id` (string), `parent-collection` (string: plan, spec, phase), `target-kind` (string: spec, phase, work), `reason` (string: why re-decomposition is needed), `preserve-ids` (string[], optional: children to keep), `prompt` (string, optional: .pmt file path or inline content per vision principle 10) |
 | **Outputs** | `children` (array: [{id, title, kind, dependencies, acceptance-criteria}]), `abandoned-count` (u32) |
 | **Preconditions** | Parent exists and has content. |
 | **Side Effects** | Calls `abandon-children` for non-preserved children. Re-runs decomposition with reason injected into context (so the LLM knows what went wrong). Creates child records in Pending status. Emits `decomposition.completed` event. |

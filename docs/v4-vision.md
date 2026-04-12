@@ -213,7 +213,7 @@ max-iterations: 20
 max-pool: unlimited
 session-timeout-secs: 1800
 max-requeries: 3
-prompt: implementer
+prompt: implementer.pmt
 tools:
   - read-file
   - write-file
@@ -239,7 +239,7 @@ action:
       role: reviewer
       model: claude-opus-4-6
       context-from: current-session
-      prompt: advisor
+      prompt: advisor.pmt
       max-iterations: 5
   - primitive: inject-context
     params:
@@ -308,23 +308,23 @@ action:
 name: full
 description: Plan -> Spec -> Phase -> Work (v3 default)
 stages:
-  - name: specs
+  specs:
     parent-kind: plan
     child-kind: spec
-    prompt: decompose/spec
+    prompt: decompose/spec.pmt
     count-guidance: 1-3
     dependency-pattern: sequential-chain
-  - name: phases
+  phases:
     parent-kind: spec
     child-kind: phase
-    prompt: decompose/phase
+    prompt: decompose/phase.pmt
     count-guidance: 1-5
     dependency-pattern: sequential-chain
     parallel-across-parents: true
-  - name: works
+  works:
     parent-kind: phase
     child-kind: work
-    prompt: decompose/work
+    prompt: decompose/work.pmt
     count-guidance: 1-5
     dependency-pattern: fan-out
     parallel-across-parents: true
@@ -666,6 +666,8 @@ All open questions from the initial vision were resolved during the design doc p
 9. **Primitives document their idempotency.** Because strategies can partially execute before a crash, primitives should be safe to re-encounter on the next tick. Read/check primitives are naturally idempotent. Mutating primitives should document whether re-execution is safe or requires guard conditions. Action sequences should order safe-to-repeat steps before hard-to-repeat steps.
 
 10. **YAML is the single source of truth for prompts.** If a fact, constraint, or parameter is defined in YAML (FSM transitions, tool lists, scoring weights, retry limits, decomposition guidance, role capabilities), the context builder injects it into agent prompts at runtime. Prompt .pmt files contain only genuinely static prose (instructions, persona, tone). Every dynamic fact is generated from YAML - no hand-written prompt text that can drift out of sync with the actual config. Examples: valid transitions from FSM YAML, available tools from role YAML, count guidance from pipeline YAML, threshold values from trigger YAML.
+
+    **Prompt field convention:** YAML `prompt` fields accept either a file path or inline content. If the value ends with `.pmt`, it's a file path relative to the prompts directory (e.g., `prompt: implementer.pmt`). Otherwise, it's inline content (e.g., `prompt: "Classify this plan as brief or full."`). The .pmt extension makes the distinction explicit - no filesystem probing or magic detection.
 
 11. **Proven pattern (Otto precedent).** Otto proves that YAML-declares/Rust-interprets works for build orchestration. v4 applies the same pattern to agent orchestration. This is not a novel architecture - it's a domain transfer of a working system.
 
