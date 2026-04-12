@@ -1,0 +1,29 @@
+name: hierarchy
+description: Shared lifecycle for Plan, Spec, and Phase records
+
+states:
+  - draft
+  - pending
+  - active
+  - complete
+  - abandoned
+
+terminal:
+  - complete
+  - abandoned
+
+transitions:
+  draft:
+    pending: { by: [coordinator] }
+    active: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+  pending:
+    active: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+  active:
+    complete: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+
+overrides: {}
+
+guards: {}

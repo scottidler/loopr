@@ -13,6 +13,7 @@ pub mod decomposer;
 pub mod domain;
 pub mod error;
 pub mod evaluator;
+pub mod fsm;
 pub mod guidance;
 pub mod id;
 pub mod ipc;

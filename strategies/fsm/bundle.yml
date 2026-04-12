@@ -1,0 +1,44 @@
+name: bundle
+description: Bundle lifecycle - from proposal through review to merge or rejection
+
+states:
+  - proposed
+  - triaged
+  - reviewed
+  - accepted
+  - integrating
+  - merged
+  - rejected
+  - superseded
+
+terminal:
+  - merged
+  - rejected
+  - superseded
+
+transitions:
+  proposed:
+    triaged: { by: [coordinator] }
+    rejected: { by: [coordinator, reviewer] }
+    superseded: { by: [coordinator] }
+  triaged:
+    reviewed: { by: [coordinator, reviewer] }
+    accepted: { by: [coordinator] }
+    rejected: { by: [coordinator, reviewer] }
+    superseded: { by: [coordinator] }
+  reviewed:
+    accepted: { by: [coordinator] }
+    rejected: { by: [coordinator, reviewer] }
+    superseded: { by: [coordinator] }
+  accepted:
+    integrating: { by: [integrator] }
+    rejected: { by: [integrator] }
+    superseded: { by: [coordinator] }
+  integrating:
+    merged: { by: [integrator] }
+    rejected: { by: [integrator] }
+    superseded: { by: [coordinator] }
+
+overrides: {}
+
+guards: {}

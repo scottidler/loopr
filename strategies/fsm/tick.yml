@@ -1,0 +1,28 @@
+name: tick
+description: Tick lifecycle - integration batch from open to published or failed
+
+states:
+  - open
+  - sealing
+  - validating
+  - published
+  - failed
+
+terminal:
+  - published
+  - failed
+
+transitions:
+  open:
+    sealing: { by: [integrator] }
+    failed: { by: [integrator] }
+  sealing:
+    validating: { by: [integrator] }
+    failed: { by: [integrator] }
+  validating:
+    published: { by: [integrator] }
+    failed: { by: [integrator] }
+
+overrides: {}
+
+guards: {}

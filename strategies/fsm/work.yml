@@ -1,0 +1,54 @@
+name: work
+description: Work item lifecycle - from creation to completion or abandonment
+
+states:
+  - draft
+  - pending
+  - ready
+  - in-progress
+  - blocked
+  - in-review
+  - integrated
+  - done
+  - abandoned
+
+terminal:
+  - done
+  - abandoned
+
+transitions:
+  draft:
+    pending: { by: [coordinator] }
+    ready: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+  pending:
+    ready: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+  ready:
+    in-progress: { by: [coordinator] }
+    blocked: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+    done: { by: [coordinator] }
+  in-progress:
+    blocked: {}
+    in-review: { by: [implementer] }
+    abandoned: { by: [coordinator] }
+  blocked:
+    ready: { by: [coordinator] }
+    abandoned: { by: [coordinator] }
+  in-review:
+    in-progress: { by: [coordinator] }
+    integrated: { by: [integrator] }
+    abandoned: { by: [coordinator] }
+  integrated:
+    done: { by: [coordinator, integrator] }
+    abandoned: { by: [coordinator] }
+
+overrides:
+  in-progress:
+    ready: { by: [coordinator] }
+    in-review: { by: [coordinator] }
+  in-review:
+    ready: { by: [coordinator] }
+
+guards: {}

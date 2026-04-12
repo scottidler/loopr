@@ -1,0 +1,48 @@
+name: agent
+description: Agent session lifecycle
+
+# v3's AgentStatus uses hand-written can_transition_to() without role
+# authorization (no #[derive(Fsm)]). The YAML definition omits "by" on all
+# transitions, matching v3's "any caller can transition" behavior.
+
+states:
+  - starting
+  - running
+  - waiting-for-llm
+  - paused
+  - idle
+  - completed
+  - failed
+  - cancelled
+
+terminal:
+  - completed
+  - failed
+  - cancelled
+
+transitions:
+  starting:
+    running: {}
+    failed: {}
+    cancelled: {}
+  running:
+    waiting-for-llm: {}
+    paused: {}
+    idle: {}
+    completed: {}
+    failed: {}
+    cancelled: {}
+  waiting-for-llm:
+    running: {}
+    failed: {}
+    cancelled: {}
+  paused:
+    running: {}
+    cancelled: {}
+  idle:
+    running: {}
+    cancelled: {}
+
+overrides: {}
+
+guards: {}
