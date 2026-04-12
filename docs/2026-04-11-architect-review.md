@@ -18,8 +18,8 @@ The design documents present several severe structural contradictions that will 
 
 ### Flaw A: The "Decomposer Agent" is a Shadow Orchestrator
 **Location:** `docs/design/2026-04-11-decomposer-as-strategy.md` (Doc 6)
-**Violation:** The vision explicitly prohibits multi-step procedural workflow engines. Yet Doc 6 states: *"Inside the decomposer agent task: 1. Read pipeline config... 2. Execute stages in order... 5. Run validation... 6. Run ratification"*. 
-This offloads the entire decomposition pipeline into a background Rust task. You have merely hidden the procedural loop inside `spawn-agent(role: decomposer)`. 
+**Violation:** The vision explicitly prohibits multi-step procedural workflow engines. Yet Doc 6 states: *"Inside the decomposer agent task: 1. Read pipeline config... 2. Execute stages in order... 5. Run validation... 6. Run ratification"*.
+This offloads the entire decomposition pipeline into a background Rust task. You have merely hidden the procedural loop inside `spawn-agent(role: decomposer)`.
 **Impact:** If the daemon crashes midway through decomposing phases, the agent task dies. The `decomposition-stalled` trigger will eventually restart it. Because the agent task contains an internal loop over the YAML pipeline, it must now implement its own resume-from-partial-state logic (checking which specs/phases already exist) in Rust. This entirely defeats the v4 purpose.
 
 ### Flaw B: Strategy Re-fire Idempotency Gap
@@ -29,7 +29,7 @@ This offloads the entire decomposition pipeline into a background Rust task. You
 
 ### Flaw C: Git Worktree Concurrency
 **Location:** `docs/design/2026-04-11-primitive-vocabulary.md` (Doc 2)
-**Violation:** The document states that git-mutating primitives require exclusive access to the worktree, suggesting either an "internal git mutex" OR "scoping all git strategies to the same plan with priority ordering". 
+**Violation:** The document states that git-mutating primitives require exclusive access to the worktree, suggesting either an "internal git mutex" OR "scoping all git strategies to the same plan with priority ordering".
 **Impact:** Priority ordering does *not* serialize git operations across different plans, nor does it protect against manual overrides. The git mutex must be a hard, centralized requirement inside `PrimitiveContext`. Relying on YAML priority ordering to prevent git corruption is a catastrophic blast radius failure.
 
 ### Flaw D: The Cooldown Memory Leak
@@ -38,7 +38,7 @@ This offloads the entire decomposition pipeline into a background Rust task. You
 **Impact:** An LRU cache drops the oldest entries. If a long-running system evicts a cooldown entry prematurely, the engine will re-trigger and cause a trigger storm. Cooldown pruning must be based on a deterministic TTL sweep linked to the engine tick, never an LRU eviction.
 
 ## 4. Scrutinize the Tests
-The migration plan for `FsmInterpreter` (Doc 3) assumes that testing string-based FSM evaluation is equivalent to type-safe macro derivation. 
+The migration plan for `FsmInterpreter` (Doc 3) assumes that testing string-based FSM evaluation is equivalent to type-safe macro derivation.
 **Test Reality:** You are passing hardcoded YAML keys as strings between Rust structs. The `FsmStatus` trait maps enum variants to kebab-case strings, but strategy YAML files pass literal strings to primitives. There is no proof in the design that a typo in a primitive param (e.g., `target-status: abondoned`) will be caught at startup unless the *entire* schema explicitly binds `target-status` parameters to valid FSM state enumerations during startup validation.
 
 ## 5. Execution Orders (Required Fixes)
