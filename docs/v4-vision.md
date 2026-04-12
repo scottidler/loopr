@@ -213,7 +213,8 @@ max-iterations: 20
 max-pool: unlimited
 session-timeout-secs: 1800
 max-requeries: 3
-prompt: implementer.pmt
+prompt:
+  file: implementer.pmt
 tools:
   - read-file
   - write-file
@@ -239,7 +240,8 @@ action:
       role: reviewer
       model: claude-opus-4-6
       context-from: current-session
-      prompt: advisor.pmt
+      prompt:
+        file: advisor.pmt
       max-iterations: 5
   - primitive: inject-context
     params:
@@ -311,20 +313,23 @@ stages:
   specs:
     parent-kind: plan
     child-kind: spec
-    prompt: decompose/spec.pmt
+    prompt:
+      file: decompose/spec.pmt
     count-guidance: 1-3
     dependency-pattern: sequential-chain
   phases:
     parent-kind: spec
     child-kind: phase
-    prompt: decompose/phase.pmt
+    prompt:
+      file: decompose/phase.pmt
     count-guidance: 1-5
     dependency-pattern: sequential-chain
     parallel-across-parents: true
   works:
     parent-kind: phase
     child-kind: work
-    prompt: decompose/work.pmt
+    prompt:
+      file: decompose/work.pmt
     count-guidance: 1-5
     dependency-pattern: fan-out
     parallel-across-parents: true
@@ -667,7 +672,24 @@ All open questions from the initial vision were resolved during the design doc p
 
 10. **YAML is the single source of truth for prompts.** If a fact, constraint, or parameter is defined in YAML (FSM transitions, tool lists, scoring weights, retry limits, decomposition guidance, role capabilities), the context builder injects it into agent prompts at runtime. Prompt .pmt files contain only genuinely static prose (instructions, persona, tone). Every dynamic fact is generated from YAML - no hand-written prompt text that can drift out of sync with the actual config. Examples: valid transitions from FSM YAML, available tools from role YAML, count guidance from pipeline YAML, threshold values from trigger YAML.
 
-    **Prompt field convention:** YAML `prompt` fields accept either a file path or inline content. If the value ends with `.pmt`, it's a file path relative to the prompts directory (e.g., `prompt: implementer.pmt`). Otherwise, it's inline content (e.g., `prompt: "Classify this plan as brief or full."`). The .pmt extension makes the distinction explicit - no filesystem probing or magic detection.
+    **Prompt field convention:** YAML `prompt` fields use an explicit map to distinguish file references from inline content - no magic string suffix detection:
+
+    ```yaml
+    # File reference
+    prompt:
+      file: implementer.pmt
+
+    # Inline content
+    prompt:
+      inline: |
+        Classify this plan as "brief" or "full". Respond with exactly one word.
+    ```
+
+    In Rust, this deserializes to a `PromptSource` enum (`File(PathBuf)` or `Inline(String)`), making the distinction type-safe via serde. No trailing-whitespace edge cases, no coincidental `.pmt` endings in inline text, no YAML multiline ambiguity.
+
+    **Alternative considered: magic suffix detection** (if value ends with `.pmt`, it's a file; otherwise inline). Rejected because it's fragile - trailing whitespace, multiline newlines, and inline prompts that happen to mention `.pmt` files all break the heuristic. The explicit map costs a few extra characters of YAML but is unambiguous.
+
+    **Alternative considered: templating engine (minijinja/tera) in .pmt files.** Rejected because it reintroduces coupling between static prose and dynamic facts. If a .pmt contains `{% if 'search_code' in tools %}`, logic has moved back into the prompt file. The v4 approach is that the context builder handles ALL injection - .pmt files never need conditionals because they never reference dynamic facts directly.
 
 11. **Proven pattern (Otto precedent).** Otto proves that YAML-declares/Rust-interprets works for build orchestration. v4 applies the same pattern to agent orchestration. This is not a novel architecture - it's a domain transfer of a working system.
 

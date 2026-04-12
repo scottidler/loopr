@@ -76,21 +76,24 @@ full:
     specs:
       parent-kind: plan
       child-kind: spec
-      prompt: decompose/spec.pmt
+      prompt:
+        file: decompose/spec.pmt
       count-guidance: 1-3
       dependency-pattern: sequential-chain
       parallel: false                      # specs decomposed sequentially
     phases:
       parent-kind: spec
       child-kind: phase
-      prompt: decompose/phase.pmt
+      prompt:
+        file: decompose/phase.pmt
       count-guidance: 1-5
       dependency-pattern: sequential-chain
       parallel: true                       # phases decomposed in parallel across specs
     works:
       parent-kind: phase
       child-kind: work
-      prompt: decompose/work.pmt
+      prompt:
+        file: decompose/work.pmt
       count-guidance: 1-5
       dependency-pattern: fan-out
       parallel: true                       # works decomposed in parallel across phases
@@ -112,7 +115,8 @@ brief:
     works:
       parent-kind: plan
       child-kind: work
-      prompt: decompose/work.pmt
+      prompt:
+        file: decompose/work.pmt
       count-guidance: 1-8
       dependency-pattern: fan-out
       parallel: false
@@ -212,14 +216,16 @@ three-level:
     phases:
       parent-kind: plan
       child-kind: phase
-      prompt: decompose/phase.pmt
+      prompt:
+        file: decompose/phase.pmt
       count-guidance: 2-6
       dependency-pattern: sequential-chain
       parallel: false
     works:
       parent-kind: phase
       child-kind: work
-      prompt: decompose/work.pmt
+      prompt:
+        file: decompose/work.pmt
       count-guidance: 1-5
       dependency-pattern: fan-out
       parallel: true
@@ -241,21 +247,24 @@ strict:
     specs:
       parent-kind: plan
       child-kind: spec
-      prompt: decompose/spec.pmt
+      prompt:
+        file: decompose/spec.pmt
       count-guidance: 1-3
       dependency-pattern: sequential-chain
       parallel: false
     phases:
       parent-kind: spec
       child-kind: phase
-      prompt: decompose/phase.pmt
+      prompt:
+        file: decompose/phase.pmt
       count-guidance: 1-5
       dependency-pattern: sequential-chain
       parallel: true
     works:
       parent-kind: phase
       child-kind: work
-      prompt: decompose/work.pmt
+      prompt:
+        file: decompose/work.pmt
       count-guidance: 1-5
       dependency-pattern: fan-out
       parallel: true
@@ -277,7 +286,8 @@ iterative:
     specs:
       parent-kind: plan
       child-kind: spec
-      prompt: decompose/spec.pmt
+      prompt:
+        file: decompose/spec.pmt
       count-guidance: 1-3
       dependency-pattern: explicit
       parallel: false
