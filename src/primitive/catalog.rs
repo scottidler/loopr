@@ -1,6 +1,7 @@
 pub mod context;
 pub mod decompose;
 pub mod gitaudit;
+pub mod mutation;
 pub mod reconcile;
 pub mod record;
 pub mod scoring;
@@ -21,5 +22,16 @@ pub fn register_all(registry: &mut PrimitiveRegistry) -> eyre::Result<()> {
     registry.register(Box::new(scoring::ComputeScore))?;
     registry.register(Box::new(gitaudit::AuditTickShas))?;
     registry.register(Box::new(gitaudit::AuditMergeAncestry))?;
+
+    // Phase 3: Record mutation primitives
+    registry.register(Box::new(mutation::CreateRecord))?;
+    registry.register(Box::new(mutation::UpdateRecord))?;
+    registry.register(Box::new(mutation::TransitionRecord))?;
+    registry.register(Box::new(mutation::CreateWork))?;
+    registry.register(Box::new(mutation::TransitionWork))?;
+    registry.register(Box::new(mutation::OverrideWork))?;
+    registry.register(Box::new(mutation::CreateBundle))?;
+    registry.register(Box::new(mutation::CreateTick))?;
+    registry.register(Box::new(mutation::CreateLearning))?;
     Ok(())
 }
