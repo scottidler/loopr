@@ -1,0 +1,17 @@
+# Composite triggers combining multiple state-query triggers for promotion logic.
+
+# Fires for phases ready to promote: parent spec is active AND phase deps are terminal
+phase-promotable:
+  type: composite
+  operator: and
+  triggers:
+    - phase-parent-active
+    - phase-deps-terminal
+
+# Fires for works ready to promote: parent phase is active AND work deps are done
+work-promotable:
+  type: composite
+  operator: and
+  triggers:
+    - parent-active
+    - work-deps-done

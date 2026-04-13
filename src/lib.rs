@@ -11,6 +11,7 @@ pub mod config;
 pub mod daemon;
 pub mod decomposer;
 pub mod domain;
+pub mod engine;
 pub mod error;
 pub mod evaluator;
 pub mod fsm;

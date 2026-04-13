@@ -1,0 +1,54 @@
+# Recovery strategies: retry, abandon, and escalation logic.
+# These replace v3's coordinator doom-loop safety nets.
+
+# When a session fails, increment the failure count and retry or abandon.
+work-retry-on-failure:
+  description: When an agent session fails, retry the work up to max session failures
+  trigger: session-failure
+  scope: work
+  priority: 200
+  action:
+    - primitive: increment-failure-count
+      params:
+        work-id: $trigger.scope-id
+    - name: threshold-check
+      primitive: check-threshold
+      params:
+        collection: work
+        id: $trigger.scope-id
+        field: session-failure-count
+        max: 3
+  on-success:
+    - primitive: retry-work
+      params:
+        work-id: $trigger.scope-id
+  on-failure:
+    - primitive: abandon-work
+      params:
+        work-id: $trigger.scope-id
+        reason: max-session-failures-exceeded
+
+# Hard cap on total work attempts regardless of failure mode.
+work-attempt-hard-cap:
+  description: Hard cap on total work attempts - abandon when max attempts exceeded
+  trigger: work-retry-exhaustion
+  scope: work
+  priority: 1000
+  action:
+    - primitive: override-work
+      params:
+        work-id: $trigger.scope-id
+        target-status: abandoned
+        reason: max-attempts-exceeded
+
+# If the abandon ratio for a plan exceeds the threshold, escalate.
+abandon-ratio-escalation:
+  description: Escalate when the abandon ratio for a plan exceeds the configured threshold
+  trigger: abandon-ratio-exceeded
+  scope: plan
+  priority: 1100
+  action:
+    - primitive: escalate
+      params:
+        reason: abandon-ratio-exceeded
+        scope-id: $trigger.scope-id

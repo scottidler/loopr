@@ -1,0 +1,33 @@
+# Triggers required by the composition engine default strategies.
+
+# Fires when a tick is published - used to drive sweep strategies
+tick-published:
+  type: event
+  event: tick.published
+  scope: plan
+
+# Fires when a coordinator agent session transitions to failed
+coordinator-failed:
+  type: event
+  event: agent.status-changed
+  match:
+    status: failed
+  scope: session
+  throttle-secs: 5
+
+# Fires for plans with no Running or Paused coordinator sessions (level-triggered fallback)
+no-running-coordinator:
+  type: state-query
+  scope: plan
+  query: no-active-sessions
+
+# Fires when a plan has accepted bundles ready for integration.
+# Note: uses field-equals as a placeholder; a dedicated has-accepted-bundles
+# state query will replace this in Phase 3 when bundle-scoped queries exist.
+bundles-ready-for-integration:
+  type: state-query
+  scope: plan
+  query: field-equals
+  params:
+    field: has-accepted-bundles
+    value: true

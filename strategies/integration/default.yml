@@ -1,0 +1,15 @@
+# Integration strategies: replace v3's integrator cycle.
+
+# Integrate all accepted bundles for a plan in one atomic tick operation.
+integrate-accepted-bundles:
+  description: Integrate accepted bundles for a plan using the atomic integrate-tick primitive
+  trigger: bundles-ready-for-integration
+  scope: plan
+  priority: 500
+  action:
+    - primitive: integrate-tick
+      params:
+        plan-id: $trigger.scope-id
+  # No on-failure: integrate-tick handles its own rollback internally
+  # (fails tick, rejects bundles, resets works, reverts git state).
+  # The trigger is level-triggered so the strategy re-fires next tick if needed.

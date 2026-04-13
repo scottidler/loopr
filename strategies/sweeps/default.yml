@@ -1,0 +1,24 @@
+# Sweep strategies: deterministic per-tick cleanup passes.
+# These replace v3's coordinator sweep functions.
+
+# Advance all Integrated works to Done on each tick.
+sweep-integrated-to-done:
+  description: Advance all Integrated works to Done on each engine tick
+  trigger: tick-published
+  scope: plan
+  priority: 950
+  action:
+    - primitive: sweep-to-done
+      params:
+        plan-id: $trigger.scope-id
+
+# Safety net for InReview works whose bundles are all terminal.
+sweep-stuck-inreview:
+  description: Recover InReview works with all-terminal bundles that were not advanced
+  trigger: tick-published
+  scope: plan
+  priority: 940
+  action:
+    - primitive: sweep-stuck-inreview
+      params:
+        plan-id: $trigger.scope-id

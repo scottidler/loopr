@@ -1,0 +1,63 @@
+# Reconciliation strategies: hierarchy promotion and completion.
+# These replace v3's fixed-point reconciliation loop.
+# Run in the inner reconciliation loop (run-until-stable) each engine tick.
+
+# Promote Pending specs when their parent plan is active.
+promote-pending-specs:
+  description: Promote Pending specs to Active when parent plan is active
+  trigger: parent-active
+  scope: spec
+  priority: 900
+  action:
+    - primitive: promote-record
+      params:
+        collection: spec
+        id: $trigger.scope-id
+
+# Promote Pending phases when parent spec is active and deps are terminal.
+promote-pending-phases:
+  description: Promote Pending phases to Active when parent is active and deps are terminal
+  trigger: phase-promotable
+  scope: phase
+  priority: 890
+  action:
+    - primitive: promote-record
+      params:
+        collection: phase
+        id: $trigger.scope-id
+
+# Promote Pending works to Ready when parent phase is active and deps are done.
+promote-pending-works:
+  description: Promote Pending works to Ready when parent phase is active and work deps are done
+  trigger: work-promotable
+  scope: work
+  priority: 880
+  action:
+    - primitive: promote-record
+      params:
+        collection: work
+        id: $trigger.scope-id
+
+# Complete phases when all child works are terminal.
+complete-phases:
+  description: Complete phases when all child works are in a terminal state
+  trigger: phase-children-terminal
+  scope: phase
+  priority: 870
+  action:
+    - primitive: complete-record
+      params:
+        collection: phase
+        id: $trigger.scope-id
+
+# Complete specs when all child phases are terminal.
+complete-specs:
+  description: Complete specs when all child phases are in a terminal state
+  trigger: spec-children-terminal
+  scope: spec
+  priority: 860
+  action:
+    - primitive: complete-record
+      params:
+        collection: spec
+        id: $trigger.scope-id

@@ -70,3 +70,21 @@ coverage-incomplete:
   params:
     field: coverage-verdict
     value: incomplete
+
+# ─── Phase-scoped promotion triggers ─────────────────────────────────────────
+# These are scope: phase counterparts used in composite phase-promotable trigger.
+
+phase-parent-active:
+  type: state-query
+  scope: phase
+  query: parent-active
+
+phase-deps-terminal:
+  type: state-query
+  scope: phase
+  query: all-deps-terminal
+  params:
+    dep-field: dependencies
+    terminal-statuses:
+      - complete
+      - abandoned
