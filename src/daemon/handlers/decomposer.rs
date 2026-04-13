@@ -286,14 +286,12 @@ fn persist_children(
                 })
                 .collect();
 
-            // TODO(create_many): Replace sequential creates with store.create_many(domain_records)
-            // for atomic batch persistence. Sequential creates are NOT crash-atomic.
             if let Some(store) = &stores.store {
-                let mut sg = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
-                for rec in &domain_records {
-                    sg.create(rec.clone())
-                        .map_err(|e| eyre!("failed to persist spec {}: {}", rec.id, e))?;
-                }
+                store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create_many(domain_records.clone())
+                    .map_err(|e| eyre!("atomic batch persist failed for specs: {}", e))?;
             }
 
             let mut specs = stores.write_specs()?;
@@ -324,11 +322,11 @@ fn persist_children(
                 .collect();
 
             if let Some(store) = &stores.store {
-                let mut sg = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
-                for rec in &domain_records {
-                    sg.create(rec.clone())
-                        .map_err(|e| eyre!("failed to persist phase {}: {}", rec.id, e))?;
-                }
+                store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create_many(domain_records.clone())
+                    .map_err(|e| eyre!("atomic batch persist failed for phases: {}", e))?;
             }
 
             let mut phases = stores.write_phases()?;
@@ -358,11 +356,11 @@ fn persist_children(
                 .collect();
 
             if let Some(store) = &stores.store {
-                let mut sg = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
-                for rec in &domain_records {
-                    sg.create(rec.clone())
-                        .map_err(|e| eyre!("failed to persist work {}: {}", rec.id, e))?;
-                }
+                store
+                    .lock()
+                    .map_err(|_| eyre!("taskstore lock poisoned"))?
+                    .create_many(domain_records.clone())
+                    .map_err(|e| eyre!("atomic batch persist failed for works: {}", e))?;
             }
 
             let mut works = stores.write_works()?;
@@ -628,4 +626,108 @@ fn extract_acceptance_criteria(content: &str) -> Vec<String> {
         }
     }
     criteria
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- detect_cycles ---
+
+    #[test]
+    fn detect_cycles_acyclic_graph() {
+        let mut nodes = HashMap::new();
+        nodes.insert("A".to_string(), vec!["B".to_string()]);
+        nodes.insert("B".to_string(), vec!["C".to_string()]);
+        nodes.insert("C".to_string(), vec![]);
+        assert!(detect_cycles(&nodes).is_ok());
+    }
+
+    #[test]
+    fn detect_cycles_simple_cycle() {
+        let mut nodes = HashMap::new();
+        nodes.insert("A".to_string(), vec!["B".to_string()]);
+        nodes.insert("B".to_string(), vec!["A".to_string()]);
+        let err = detect_cycles(&nodes).unwrap_err();
+        assert!(err.to_string().contains("dependency cycle detected"));
+    }
+
+    #[test]
+    fn detect_cycles_empty_graph() {
+        let nodes: HashMap<String, Vec<String>> = HashMap::new();
+        assert!(detect_cycles(&nodes).is_ok());
+    }
+
+    #[test]
+    fn detect_cycles_fan_out_no_deps() {
+        let mut nodes = HashMap::new();
+        nodes.insert("A".to_string(), vec![]);
+        nodes.insert("B".to_string(), vec![]);
+        nodes.insert("C".to_string(), vec![]);
+        assert!(detect_cycles(&nodes).is_ok());
+    }
+
+    #[test]
+    fn detect_cycles_three_node_cycle() {
+        let mut nodes = HashMap::new();
+        nodes.insert("A".to_string(), vec!["B".to_string()]);
+        nodes.insert("B".to_string(), vec!["C".to_string()]);
+        nodes.insert("C".to_string(), vec!["A".to_string()]);
+        assert!(detect_cycles(&nodes).is_err());
+    }
+
+    // --- extract_acceptance_criteria ---
+
+    #[test]
+    fn extract_ac_from_section() {
+        let content = "## Summary\nSome text\n## Acceptance Criteria\n- Users can log in\n- JWT tokens expire after 1h\n## References\n";
+        let ac = extract_acceptance_criteria(content);
+        assert_eq!(ac.len(), 2);
+        assert_eq!(ac[0], "Users can log in");
+        assert_eq!(ac[1], "JWT tokens expire after 1h");
+    }
+
+    #[test]
+    fn extract_ac_no_section() {
+        let content = "## Summary\nSome text\n## References\n";
+        let ac = extract_acceptance_criteria(content);
+        assert!(ac.is_empty());
+    }
+
+    #[test]
+    fn extract_ac_assert_style() {
+        let content = "## Acceptance Criteria\nassert users_can_login()\nassert jwt_valid()\n";
+        let ac = extract_acceptance_criteria(content);
+        assert_eq!(ac.len(), 2);
+    }
+
+    // --- build_decompose_prompt ---
+
+    #[test]
+    fn prompt_includes_guidance_section() {
+        crate::prompts::init_defaults();
+        let prompt = build_decompose_prompt(DocKind::Work, "parent content", "1-3", "fan-out").unwrap();
+        assert!(prompt.contains("## Guidance"));
+        assert!(prompt.contains("1-3"));
+        assert!(prompt.contains("fan-out"));
+        assert!(prompt.contains("parent content"));
+    }
+
+    #[test]
+    fn prompt_rejects_plan_target() {
+        crate::prompts::init_defaults();
+        let result = build_decompose_prompt(DocKind::Plan, "content", "1-3", "fan-out");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn prompt_includes_template_for_spec() {
+        crate::prompts::init_defaults();
+        let prompt = build_decompose_prompt(DocKind::Spec, "parent", "1-3", "sequential-chain").unwrap();
+        assert!(prompt.contains("## Template"));
+        assert!(prompt.contains("sequential-chain"));
+    }
 }
