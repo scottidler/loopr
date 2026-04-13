@@ -475,6 +475,36 @@ session-failure:
 - [x] **Trigger evaluator tick rate?** Engine tick. Separate tick adds concurrency complexity (race conditions on half-written state) for zero measurable benefit. Trigger evaluation is sub-millisecond. Running on the engine tick ensures triggers observe a consistent state snapshot matching the strategies they fire.
 - [x] **Cooldown persistence across restarts?** Option (b): rely on level-triggered fallbacks. Principle 8 already mandates that strategies handle redundant fires gracefully (transitions return Unchanged, creates check existence). Persisting cooldowns to a sidecar file would introduce a secondary state store outside TaskStore's JSONL-as-truth model. If a strategy can't tolerate re-fire, it's violating principle 9 (idempotency) and that's the real bug to fix.
 
+## Addenda (post-implementation)
+
+### Addendum 1: FSM Integration via `IsTerminal` Trait (deferred)
+
+**Context:** Phase 4 implemented `GuardEvaluator` as a standalone component rather than integrating it into `FsmInterpreter`. This was a deliberate choice to avoid a circular dependency:
+
+```
+fsm::runtime (FsmInterpreter)
+  -> trigger::guard (GuardEvaluator)
+    -> trigger::observe (ObservationCtx)
+      -> daemon::context (Stores)
+        -> Stores.fsm: Arc<FsmInterpreter>   <- cycle
+```
+
+**Proposed resolution:** Extract `is_terminal` into a lightweight trait in a shared module (e.g. `crate::fsm::status` or a new `crate::fsm::terminal`):
+
+```rust
+pub trait IsTerminal {
+    fn is_terminal(&self, fsm_name: &str, state: &str) -> eyre::Result<bool>;
+}
+```
+
+`FsmInterpreter` implements `IsTerminal`. `ObservationCtx` holds `&dyn IsTerminal` instead of `&Stores` (or holds `Stores` but the `Stores.fsm` field is typed as `Arc<dyn IsTerminal>`). This breaks the cycle: `FsmInterpreter` no longer needs to know about `ObservationCtx` or `GuardEvaluator`.
+
+With the cycle broken, `FsmInterpreter::validate_transition` can accept a `&GuardEvaluator` and `&ObservationCtx` and evaluate guards inline - making guard enforcement a core constraint of the state machine rather than a caller convention.
+
+**When to do this:** Before the composition engine (Doc 5) wires strategies to transitions at scale. Currently the only callers of `validate_transition` are IPC handlers which can be trusted to chain the guard check. Once strategies fire autonomously, the risk of a guard bypass grows and the trait extraction becomes load-bearing.
+
+**Estimated scope:** New trait in `src/fsm/status.rs` or `src/fsm/terminal.rs`, update `Stores.fsm` field type, update `ObservationCtx`, update `FsmInterpreter::validate_transition` signature. Mechanical - no logic changes.
+
 ## References
 
 - `docs/v4-vision.md` - v4 architecture vision

@@ -468,8 +468,9 @@ impl GuardConditionRegistry {
 
         // all-ac-passing: all acceptance criteria on the record are satisfied.
         // Note: There is no per-criterion satisfaction tracking in the current domain model.
-        // This guard returns true when the record's AC list is non-empty.
-        // TODO(Phase 4): wire to a real AC satisfaction tracker.
+        // This guard is vacuously true when the AC list is absent or empty (no criteria
+        // to fail - same semantics as deps-satisfied on an empty deps list).
+        // TODO(future): wire to a real AC satisfaction tracker when per-criterion status exists.
         r.register(
             "all-ac-passing",
             Box::new(|ctx, collection, id| {
@@ -477,13 +478,12 @@ impl GuardConditionRegistry {
                     Some(r) => r,
                     None => return false,
                 };
-                // Permissive: passes if the record exists and has at least one criterion.
-                // A full implementation would check each criterion's satisfaction status.
-                record
-                    .get("acceptance_criteria")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| !arr.is_empty())
-                    .unwrap_or(true)
+                // Permissive stub: always true when record exists. An empty AC list is
+                // vacuously satisfied (no criteria to fail), and a non-empty list cannot
+                // be evaluated without per-criterion satisfaction tracking, which does not
+                // yet exist in the domain model. Replace with a real check when it does.
+                let _ = record.get("acceptance_criteria");
+                true
             }),
         );
 
