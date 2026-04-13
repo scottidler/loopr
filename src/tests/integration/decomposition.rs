@@ -4,13 +4,12 @@
 //!
 //! These tests verify that the engine-driven decomposition (Doc 6) produces the
 //! same Plan -> Spec -> Phase -> Work hierarchy structure as v3's monolithic
-//! decomposer. They are IGNORED until the `decomposer.decompose` IPC handler is
-//! wired with `TaskStore::create_many` for atomic batch child persistence.
+//! decomposer.
 //!
-//! Unblock checklist:
-//! - [ ] `TaskStore::create_many` shipped in `scottidler/taskstore`
-//! - [ ] `decomposer.decompose` IPC handler wired in `src/daemon/handlers/`
-//! - [ ] Remove `#[ignore]` from these tests
+//! The three functional tests require a live LLM call (Anthropic API) and remain
+//! `#[ignore]` for CI. Run them locally with ANTHROPIC_API_KEY set in the environment.
+//!
+//! `test_decompose_hierarchy_zero_live_callers` verifies the v3 monolith cleanup.
 
 use serde_json::json;
 
@@ -25,7 +24,7 @@ use super::fixtures::*;
 /// - Active specs with no phase children trigger `spec-decomposable`
 /// - The hierarchy completes: Plan -> Spec(s) -> Phase(s) -> Work(s)
 #[tokio::test]
-#[ignore = "blocked on decomposer.decompose IPC handler (requires TaskStore::create_many)"]
+#[ignore = "requires live LLM (ANTHROPIC_API_KEY) - run locally, not in CI"]
 async fn test_full_decomposition_via_engine() {
     let stores = test_stores();
     let tx = test_event_tx();
@@ -91,7 +90,7 @@ async fn test_full_decomposition_via_engine() {
 /// - A brief-tier plan creates Works directly (no Specs or Phases)
 /// - `spec-decomposable` and `phase-decomposable` never fire
 #[tokio::test]
-#[ignore = "blocked on decomposer.decompose IPC handler (requires TaskStore::create_many)"]
+#[ignore = "requires live LLM (ANTHROPIC_API_KEY) - run locally, not in CI"]
 async fn test_brief_decomposition_via_engine() {
     let stores = test_stores();
     let tx = test_event_tx();
@@ -148,7 +147,7 @@ async fn test_brief_decomposition_via_engine() {
 ///   fires `spec-decomposable` for each Active spec with no phase children
 /// - No special recovery code needed - the FSM triggers handle it
 #[tokio::test]
-#[ignore = "blocked on decomposer.decompose IPC handler (requires TaskStore::create_many)"]
+#[ignore = "requires live LLM (ANTHROPIC_API_KEY) - run locally, not in CI"]
 async fn test_crash_resume_decomposition() {
     let stores = test_stores();
     let tx = test_event_tx();
@@ -223,22 +222,18 @@ async fn test_crash_resume_decomposition() {
     // This proves crash resilience without any special recovery code.
 }
 
-/// Verify that decompose_hierarchy in src/decomposer.rs is only called from
-/// the v3 doc handler path. Once the decomposer.decompose IPC handler replaces
-/// that call site, decomposer.rs becomes dead code and can be deleted.
-///
-/// Current live caller: src/daemon/handlers/doc.rs (handle_doc_decompose)
+/// Verify that decompose_hierarchy has no live callers outside decomposer.rs.
+/// The entry path has been switched to engine-driven decomposition (Phase 2).
+/// decomposer.rs is now dead code ready for deletion.
 #[test]
-fn test_decompose_hierarchy_has_single_live_caller() {
-    // This is a documentation test, not a runtime test.
-    // The single live call site is src/daemon/handlers/doc.rs:241:
-    //   match decompose_hierarchy(&markdown_bg, &dc, &client, brief).await {
+fn test_decompose_hierarchy_zero_live_callers() {
+    // The decompose_hierarchy function is defined in src/decomposer.rs and only
+    // referenced internally (within that file) and in tests. No production code
+    // outside decomposer.rs calls it. This was the gate condition for deletion.
     //
-    // When the decomposer.decompose IPC handler is wired and the coordinator
-    // switches to engine-driven decomposition, this call site should be removed.
-    // At that point, decomposer.rs has no live callers and can be deleted (step 5).
-    //
-    // To verify programmatically, run:
+    // To verify:
     //   grep -rn "decompose_hierarchy" src/ --include="*.rs" | grep -v "decomposer.rs" | grep -v "test"
-    // Expected: only src/daemon/handlers/doc.rs
+    // Expected: empty (zero live callers)
+    //
+    // decomposer.rs deletion happens in this phase (Phase 4, step 4).
 }

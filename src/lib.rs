@@ -9,7 +9,6 @@ pub mod clarity;
 pub mod cli;
 pub mod config;
 pub mod daemon;
-pub mod decomposer;
 pub mod domain;
 pub mod engine;
 pub mod error;
