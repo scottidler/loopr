@@ -1,7 +1,13 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use super::schema::{self, ActionStep, StrategyDefinition};
+use crate::primitive::types::{
+    Idempotency, InputField, OutputField, OutputType, Primitive, PrimitiveContext, PrimitiveOutput,
+};
 
 fn strategies_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -607,4 +613,508 @@ fn same_step_name_in_action_and_on_success_is_allowed() {
         "reusing step name across sequences should be valid: {:?}",
         errors
     );
+}
+
+// ─── Engine tick tests ──────────────────────────────────────────────────────
+
+// Test primitive that always succeeds and records its invocation.
+struct RecordingPrimitive {
+    name: &'static str,
+}
+
+impl Primitive for RecordingPrimitive {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a mut PrimitiveContext<'_>,
+        params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(PrimitiveOutput {
+                values: params.as_object().cloned().unwrap_or_default().into_iter().collect(),
+                summary: format!("{} executed", self.name),
+            })
+        })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        vec![OutputField {
+            name: "result".to_owned(),
+            field_type: OutputType::String,
+        }]
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::Idempotent
+    }
+}
+
+// Test primitive that always fails.
+struct FailingPrimitive;
+
+impl Primitive for FailingPrimitive {
+    fn name(&self) -> &'static str {
+        "always-fail"
+    }
+
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a mut PrimitiveContext<'_>,
+        _params: serde_json::Value,
+    ) -> Pin<Box<dyn Future<Output = eyre::Result<PrimitiveOutput>> + Send + 'a>> {
+        Box::pin(async { eyre::bail!("intentional test failure") })
+    }
+
+    fn output_schema(&self) -> Vec<OutputField> {
+        vec![]
+    }
+
+    fn input_schema(&self) -> Vec<InputField> {
+        vec![]
+    }
+
+    fn idempotency(&self) -> Idempotency {
+        Idempotency::Idempotent
+    }
+}
+
+fn test_registry() -> crate::primitive::registry::PrimitiveRegistry {
+    let mut reg = crate::primitive::registry::PrimitiveRegistry::new();
+    reg.register(Box::new(RecordingPrimitive { name: "promote-record" }))
+        .unwrap();
+    reg.register(Box::new(RecordingPrimitive {
+        name: "complete-record",
+    }))
+    .unwrap();
+    reg.register(Box::new(RecordingPrimitive { name: "retry-work" }))
+        .unwrap();
+    reg.register(Box::new(RecordingPrimitive {
+        name: "check-threshold",
+    }))
+    .unwrap();
+    reg.register(Box::new(RecordingPrimitive {
+        name: "increment-failure-count",
+    }))
+    .unwrap();
+    reg.register(Box::new(RecordingPrimitive { name: "abandon-work" }))
+        .unwrap();
+    reg.register(Box::new(FailingPrimitive)).unwrap();
+    reg
+}
+
+fn test_trigger_evaluator(
+    triggers: Vec<crate::trigger::schema::TriggerDefinition>,
+) -> crate::trigger::evaluate::TriggerEvaluator {
+    let sq = crate::trigger::observe::StateQueryRegistry::with_builtins();
+    crate::trigger::evaluate::TriggerEvaluator::new(triggers, sq)
+}
+
+fn test_engine_context<'a>(
+    stores: &'a crate::daemon::context::Stores,
+    events: &'a [crate::ipc::protocol::DaemonEvent],
+    event_tx: &'a tokio::sync::broadcast::Sender<crate::ipc::protocol::DaemonEvent>,
+    bridge: &'a crate::agents::bridge::AgentIpcBridge,
+    repo_path: &'a std::path::Path,
+    worktree_mgr: &'a crate::worktree::manager::WorktreeManager,
+) -> super::tick::EngineContext<'a> {
+    super::tick::EngineContext {
+        stores,
+        events,
+        event_tx,
+        bridge,
+        repo_path,
+        worktree_mgr,
+        now: chrono::Utc::now().timestamp_millis(),
+        guard_conditions: None,
+    }
+}
+
+/// Build the shared test infrastructure needed by engine tick tests.
+fn test_infra(
+    dir: &std::path::Path,
+) -> (
+    Arc<crate::daemon::context::Stores>,
+    tokio::sync::broadcast::Sender<crate::ipc::protocol::DaemonEvent>,
+    crate::agents::bridge::AgentIpcBridge,
+    crate::worktree::manager::WorktreeManager,
+) {
+    let stores = Arc::new(crate::daemon::context::Stores::new());
+    let (tx, _) = tokio::sync::broadcast::channel(64);
+    let wm = crate::worktree::manager::WorktreeManager::new(dir.to_path_buf(), dir.join("worktrees"));
+    let bridge = crate::agents::bridge::AgentIpcBridge::new(
+        stores.clone(),
+        tx.clone(),
+        wm.clone(),
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
+    (stores, tx, bridge, wm)
+}
+
+#[tokio::test]
+async fn tick_no_triggers_converges_immediately() {
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-empty");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+    let events: Vec<crate::ipc::protocol::DaemonEvent> = vec![];
+
+    let te = test_trigger_evaluator(vec![]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 0);
+    assert_eq!(outcome.convergence_iterations, 1);
+    assert!(!outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_event_trigger_fires_strategy() {
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-event");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    // Create an event trigger
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    // Strategy that fires on the event trigger
+    let strategy = StrategyDefinition {
+        name: "handle-test-event".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "promote-record".to_owned(),
+            guard: None,
+            params: [("id".to_owned(), serde_json::json!("$trigger.scope-id"))].into(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    // Event on the bus
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-123"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 1);
+    assert!(!outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_priority_ordering() {
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-priority");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let low_priority = StrategyDefinition {
+        name: "low-priority".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 50,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "retry-work".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    let high_priority = StrategyDefinition {
+        name: "high-priority".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 1000,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "promote-record".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-1"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    // Note: low_priority is first in the vec, but high_priority should fire first
+    let mut engine = super::tick::CompositionEngine::new(vec![low_priority, high_priority], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 2);
+    assert!(!outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_on_failure_wiring_fires_when_action_fails() {
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-failure");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let strategy = StrategyDefinition {
+        name: "failing-strategy".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "always-fail".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: vec![ActionStep {
+            name: None,
+            primitive: "promote-record".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_failure: vec![ActionStep {
+            name: None,
+            primitive: "abandon-work".to_owned(),
+            guard: None,
+            params: [("work-id".to_owned(), serde_json::json!("$trigger.scope-id"))].into(),
+        }],
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-99"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 1);
+    assert!(outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_disabled_strategy_is_skipped() {
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-disabled");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let strategy = StrategyDefinition {
+        name: "disabled-strategy".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "promote-record".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: false,
+        cooldown_secs: None,
+    };
+
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-1"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 0);
+    assert!(!outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_scope_id_explosion() {
+    // A trigger that fires for multiple scope IDs should produce one execution per ID
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-explode");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "multi.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let strategy = StrategyDefinition {
+        name: "multi-scope".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "promote-record".to_owned(),
+            guard: None,
+            params: [("id".to_owned(), serde_json::json!("$trigger.scope-id"))].into(),
+        }],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    // Two events with different work IDs
+    let events = vec![
+        crate::ipc::protocol::DaemonEvent {
+            event: "multi.fired".to_owned(),
+            data: serde_json::json!({"work_id": "wi-1"}),
+        },
+        crate::ipc::protocol::DaemonEvent {
+            event: "multi.fired".to_owned(),
+            data: serde_json::json!({"work_id": "wi-2"}),
+        },
+    ];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    // Should fire once per unique scope_id
+    assert_eq!(outcome.strategies_fired, 2);
+    assert!(!outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_context_passes_between_steps() {
+    // Verify that a named step's output is available to subsequent steps via $context
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-ctx");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let strategy = StrategyDefinition {
+        name: "context-chain".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![
+            ActionStep {
+                name: Some("step-one".to_owned()),
+                primitive: "check-threshold".to_owned(),
+                guard: None,
+                params: [("id".to_owned(), serde_json::json!("$trigger.scope-id"))].into(),
+            },
+            ActionStep {
+                name: None,
+                primitive: "retry-work".to_owned(),
+                guard: None,
+                params: [("ref-id".to_owned(), serde_json::json!("$context.step-one.id"))].into(),
+            },
+        ],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-42"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 1);
+    assert!(!outcome.had_failures);
 }
