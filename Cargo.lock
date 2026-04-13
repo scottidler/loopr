@@ -1353,6 +1353,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyby"
+version = "0.1.0"
+source = "git+https://github.com/scottidler/keyby.git#b2c9719beb0eb6e35fb9372ca076eb45e173b3a8"
+dependencies = [
+ "keyby-derive",
+ "serde",
+]
+
+[[package]]
+name = "keyby-derive"
+version = "0.1.0"
+source = "git+https://github.com/scottidler/keyby.git#b2c9719beb0eb6e35fb9372ca076eb45e173b3a8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "lab"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1452,6 +1471,7 @@ dependencies = [
  "eyre",
  "futures",
  "glob",
+ "keyby",
  "libc",
  "log",
  "loopr-derive",
@@ -1926,9 +1946,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.44"
+version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
+checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]

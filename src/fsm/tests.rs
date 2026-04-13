@@ -27,10 +27,10 @@ fn minimal_def(name: &str) -> FsmDefinition {
         transitions: {
             let mut t = HashMap::new();
             let mut a_targets = HashMap::new();
-            a_targets.insert("b".to_string(), TransitionRule { by: vec![] });
+            a_targets.insert("b".to_string(), TransitionRule::default());
             t.insert("a".to_string(), a_targets);
             let mut b_targets = HashMap::new();
-            b_targets.insert("done".to_string(), TransitionRule { by: vec![] });
+            b_targets.insert("done".to_string(), TransitionRule::default());
             t.insert("b".to_string(), b_targets);
             t
         },
@@ -121,7 +121,7 @@ fn reject_transition_source_not_in_states() {
 fn reject_transition_target_not_in_states() {
     let mut def = minimal_def("test");
     let mut targets = HashMap::new();
-    targets.insert("nonexistent".to_string(), TransitionRule { by: vec![] });
+    targets.insert("nonexistent".to_string(), TransitionRule::default());
     def.transitions.insert("a".to_string(), targets);
     let errors = schema::validate(&def, None);
     assert!(errors.iter().any(|e| e.contains("transition target 'nonexistent'")));
@@ -131,7 +131,7 @@ fn reject_transition_target_not_in_states() {
 fn reject_terminal_with_outgoing() {
     let mut def = minimal_def("test");
     let mut targets = HashMap::new();
-    targets.insert("a".to_string(), TransitionRule { by: vec![] });
+    targets.insert("a".to_string(), TransitionRule::default());
     def.transitions.insert("done".to_string(), targets);
     let errors = schema::validate(&def, None);
     assert!(errors.iter().any(|e| e.contains("terminal state 'done' has outgoing")));
@@ -144,6 +144,7 @@ fn reject_unknown_role() {
     targets.insert(
         "b".to_string(),
         TransitionRule {
+            name: String::new(),
             by: vec!["cordinator".to_string()],
         },
     );
@@ -303,4 +304,73 @@ fn work_unrestricted_transition() {
     assert_eq!(result.unwrap(), Transition::Changed);
     let result = interp.validate_transition("work", "in-progress", "blocked", "reviewer");
     assert_eq!(result.unwrap(), Transition::Changed);
+}
+
+// --- Terminal override validation ---
+
+#[test]
+fn reject_terminal_with_outgoing_overrides() {
+    let mut def = minimal_def("test");
+    let mut targets = HashMap::new();
+    targets.insert("a".to_string(), TransitionRule::default());
+    def.overrides.insert("done".to_string(), targets);
+    let errors = schema::validate(&def, None);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("terminal state 'done' has outgoing overrides"))
+    );
+}
+
+// --- Rich error hints ---
+
+#[test]
+fn error_includes_valid_target_hints() {
+    let interp = load_test_interpreter();
+    let result = interp.validate_transition("work", "in-progress", "done", "implementer");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("hint: valid targets from in-progress:"), "error: {}", err);
+}
+
+#[test]
+fn error_includes_override_hints() {
+    let interp = load_test_interpreter();
+    let result = interp.validate_transition("work", "in-progress", "done", "coordinator");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("hint: with overrides:"), "error: {}", err);
+}
+
+#[test]
+fn override_error_chains_normal_error() {
+    let interp = load_test_interpreter();
+    // in-progress -> done with role=implementer fails both normal and override
+    let result = interp.validate_override("work", "in-progress", "done", "implementer");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("normal transition also failed"), "error: {}", err);
+}
+
+// --- valid_targets includes overrides ---
+
+#[test]
+fn valid_targets_includes_overrides() {
+    let interp = load_test_interpreter();
+    let targets = interp.valid_targets("work", "in-progress", "coordinator").unwrap();
+    // Normal: blocked (any), abandoned (coordinator)
+    // Override: ready (coordinator), in-review (coordinator)
+    assert!(
+        targets.iter().any(|t| t.contains("ready") && t.contains("override")),
+        "should include override targets: {:?}",
+        targets
+    );
+}
+
+// --- keyby name field ---
+
+#[test]
+fn transition_rule_name_populated_from_yaml() {
+    let defs = schema::load_dir(&test_strategies_dir()).unwrap();
+    let work = defs.iter().find(|d| d.name == "work").unwrap();
+    let draft_targets = &work.transitions["draft"];
+    let pending_rule = &draft_targets["pending"];
+    assert_eq!(pending_rule.name, "pending", "name should be injected from map key");
 }

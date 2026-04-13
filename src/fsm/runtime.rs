@@ -3,7 +3,7 @@ use std::path::Path;
 
 use tracing::info;
 
-use super::schema::{self, FsmDefinition};
+use super::schema::{self, FsmDefinition, TransitionRule};
 use crate::domain::transition::Transition;
 
 /// Holds all loaded FSM definitions. Immutable after startup.
@@ -45,7 +45,7 @@ impl FsmInterpreter {
 
     /// Validate a normal transition.
     /// Returns Changed if valid, Unchanged if from == to (idempotent),
-    /// or Err if the transition is invalid.
+    /// or Err with rich hints if the transition is invalid.
     pub fn validate_transition(&self, fsm_name: &str, from: &str, to: &str, role: &str) -> eyre::Result<Transition> {
         if from == to {
             return Ok(Transition::Unchanged);
@@ -54,31 +54,27 @@ impl FsmInterpreter {
         let targets = def
             .transitions
             .get(from)
-            .ok_or_else(|| invalid_transition(fsm_name, from, to, role, None))?;
-        self.check_target(targets, to, role, fsm_name, from)
+            .ok_or_else(|| self.rich_error(def, from, to, role, None))?;
+        self.check_target(targets, to, role, def, from, None)
     }
 
     /// Validate an override transition.
     /// Checks normal transitions first, then override edges.
+    /// Chains both error contexts if both paths fail.
     pub fn validate_override(&self, fsm_name: &str, from: &str, to: &str, role: &str) -> eyre::Result<Transition> {
         if from == to {
             return Ok(Transition::Unchanged);
         }
-        // Try normal transition first
         match self.validate_transition(fsm_name, from, to, role) {
             Ok(result) => Ok(result),
             Err(normal_err) => {
                 let def = self.get_definition(fsm_name)?;
-                let targets = def.overrides.get(from).ok_or_else(|| {
-                    invalid_transition(
-                        fsm_name,
-                        from,
-                        to,
-                        role,
-                        Some(&format!("normal transition also failed: {}", normal_err)),
-                    )
-                })?;
-                self.check_target(targets, to, role, fsm_name, from)
+                let context = format!("normal transition also failed: {}", normal_err);
+                let targets = def
+                    .overrides
+                    .get(from)
+                    .ok_or_else(|| self.rich_error(def, from, to, role, Some(&context)))?;
+                self.check_target(targets, to, role, def, from, Some(&context))
             }
         }
     }
@@ -90,6 +86,7 @@ impl FsmInterpreter {
     }
 
     /// Get all valid target states from a given state for a role.
+    /// Includes both normal transitions and override targets (marked).
     pub fn valid_targets(&self, fsm_name: &str, from: &str, role: &str) -> eyre::Result<Vec<String>> {
         let def = self.get_definition(fsm_name)?;
         let mut targets = Vec::new();
@@ -97,6 +94,14 @@ impl FsmInterpreter {
             for (to, rule) in trans {
                 if rule.by.is_empty() || rule.by.iter().any(|r| r == role) {
                     targets.push(to.clone());
+                }
+            }
+        }
+        if let Some(overrides) = def.overrides.get(from) {
+            for (to, rule) in overrides {
+                let authorized = rule.by.is_empty() || rule.by.iter().any(|r| r == role);
+                if authorized && !targets.contains(to) {
+                    targets.push(format!("{} (override)", to));
                 }
             }
         }
@@ -121,24 +126,61 @@ impl FsmInterpreter {
 
     fn check_target(
         &self,
-        targets: &HashMap<String, super::schema::TransitionRule>,
+        targets: &HashMap<String, TransitionRule>,
         to: &str,
         role: &str,
-        fsm_name: &str,
+        def: &FsmDefinition,
         from: &str,
+        context: Option<&str>,
     ) -> eyre::Result<Transition> {
         match targets.get(to) {
             Some(rule) if rule.by.is_empty() || rule.by.iter().any(|r| r == role) => Ok(Transition::Changed),
-            Some(_) => Err(invalid_transition(fsm_name, from, to, role, None)),
-            None => Err(invalid_transition(fsm_name, from, to, role, None)),
+            _ => Err(self.rich_error(def, from, to, role, context)),
         }
     }
-}
 
-fn invalid_transition(fsm: &str, from: &str, to: &str, role: &str, context: Option<&str>) -> eyre::Report {
-    let base = format!("invalid {} transition: {} -> {} (role: {})", fsm, from, to, role);
-    match context {
-        Some(ctx) => eyre::eyre!("{}\n  {}", base, ctx),
-        None => eyre::eyre!("{}", base),
+    /// Build a rich error message with hints about valid targets and overrides.
+    fn rich_error(&self, def: &FsmDefinition, from: &str, to: &str, role: &str, context: Option<&str>) -> eyre::Report {
+        let mut msg = format!("invalid {} transition: {} -> {} (role: {})", def.name, from, to, role);
+
+        // Hint: valid normal targets from this state
+        if let Some(trans) = def.transitions.get(from) {
+            let hints: Vec<String> = trans
+                .iter()
+                .map(|(target, rule)| {
+                    if rule.by.is_empty() {
+                        format!("{} (any)", target)
+                    } else {
+                        format!("{} ({})", target, rule.by.join(", "))
+                    }
+                })
+                .collect();
+            if !hints.is_empty() {
+                msg.push_str(&format!("\n  hint: valid targets from {}: {}", from, hints.join(", ")));
+            }
+        }
+
+        // Hint: valid override targets from this state
+        if let Some(overrides) = def.overrides.get(from) {
+            let hints: Vec<String> = overrides
+                .iter()
+                .map(|(target, rule)| {
+                    if rule.by.is_empty() {
+                        format!("{} (any)", target)
+                    } else {
+                        format!("{} ({})", target, rule.by.join(", "))
+                    }
+                })
+                .collect();
+            if !hints.is_empty() {
+                msg.push_str(&format!("\n  hint: with overrides: {}", hints.join(", ")));
+            }
+        }
+
+        if let Some(ctx) = context {
+            msg.push_str(&format!("\n  {}", ctx));
+        }
+
+        eyre::eyre!("{}", msg)
     }
 }

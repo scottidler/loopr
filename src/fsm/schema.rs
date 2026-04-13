@@ -8,8 +8,13 @@ use tracing::info;
 const VALID_ROLES: &[&str] = &["coordinator", "integrator", "implementer", "reviewer", "researcher"];
 
 /// Authorization rule for a transition to a target state.
+/// The `name` field holds the target state name, populated from the YAML
+/// map key after deserialization (keyby convention).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TransitionRule {
+    /// Target state name - populated from the YAML map key post-deserialization.
+    #[serde(skip_deserializing)]
+    pub name: String,
     /// Roles authorized to perform this transition.
     /// Empty vec means any role is allowed.
     #[serde(default)]
@@ -44,8 +49,9 @@ pub struct FsmDefinition {
 /// Load a single FSM definition from a YAML file.
 pub fn load_file(path: &Path) -> eyre::Result<FsmDefinition> {
     let content = std::fs::read_to_string(path).map_err(|e| eyre::eyre!("failed to read {}: {}", path.display(), e))?;
-    let def: FsmDefinition =
+    let mut def: FsmDefinition =
         serde_yaml::from_str(&content).map_err(|e| eyre::eyre!("failed to parse {}: {}", path.display(), e))?;
+    inject_transition_names(&mut def);
     info!("loaded FSM '{}' from {}", def.name, path.display());
     Ok(def)
 }
@@ -62,6 +68,24 @@ pub fn load_dir(dir: &Path) -> eyre::Result<Vec<FsmDefinition>> {
         }
     }
     Ok(defs)
+}
+
+/// Inject the YAML map key into each TransitionRule's `name` field.
+/// This follows the keyby convention: the map key IS the name, and the
+/// struct carries it for contexts where the HashMap is not available.
+/// keyby's derive macro can't drive nested HashMap deserialization, so
+/// we populate the field in a post-deserialization pass.
+fn inject_transition_names(def: &mut FsmDefinition) {
+    for targets in def.transitions.values_mut() {
+        for (target_name, rule) in targets.iter_mut() {
+            rule.name = target_name.clone();
+        }
+    }
+    for targets in def.overrides.values_mut() {
+        for (target_name, rule) in targets.iter_mut() {
+            rule.name = target_name.clone();
+        }
+    }
 }
 
 /// Validate an FSM definition. Returns a list of errors (empty = valid).
@@ -116,6 +140,13 @@ pub fn validate(def: &FsmDefinition, filename: Option<&str>) -> Vec<String> {
     for t in &def.terminal {
         if def.transitions.contains_key(t) {
             errors.push(format!("terminal state '{}' has outgoing transitions", t));
+        }
+    }
+
+    // Terminal states have no outgoing overrides
+    for t in &def.terminal {
+        if def.overrides.contains_key(t) {
+            errors.push(format!("terminal state '{}' has outgoing overrides", t));
         }
     }
 
