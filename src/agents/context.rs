@@ -195,6 +195,14 @@ impl TokenBudget {
                 previous_summary: 500,
                 guidance: 800,
             },
+            Role::Decomposer => Self {
+                work_target: 500,
+                learnings: 500,
+                state_summary: 1000,
+                tools_or_actions: 0,
+                previous_summary: 0,
+                guidance: 500,
+            },
         }
     }
 }

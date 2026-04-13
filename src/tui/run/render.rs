@@ -215,6 +215,7 @@ pub fn role_actions(role: Role) -> Vec<&'static str> {
         Role::Implementer => vec!["n:New Work", "t:Transition", "R:Role"],
         Role::Reviewer => vec!["t:Transition", "R:Role"],
         Role::Researcher => vec!["R:Role"],
+        Role::Decomposer => vec!["R:Role"],
     }
 }
 

@@ -299,14 +299,15 @@ impl App {
         };
     }
 
-    /// Cycle role: Coordinator → Integrator → Implementer → Reviewer → Researcher → Coordinator.
+    /// Cycle role: Coordinator → Integrator → Implementer → Reviewer → Researcher → Decomposer → Coordinator.
     pub fn cycle_role(&mut self) {
         self.current_role = match self.current_role {
             Role::Coordinator => Role::Integrator,
             Role::Integrator => Role::Implementer,
             Role::Implementer => Role::Reviewer,
             Role::Reviewer => Role::Researcher,
-            Role::Researcher => Role::Coordinator,
+            Role::Researcher => Role::Decomposer,
+            Role::Decomposer => Role::Coordinator,
         };
     }
 
@@ -482,6 +483,8 @@ mod tests {
         assert_eq!(app.current_role, Role::Reviewer);
         app.cycle_role();
         assert_eq!(app.current_role, Role::Researcher);
+        app.cycle_role();
+        assert_eq!(app.current_role, Role::Decomposer);
         app.cycle_role();
         assert_eq!(app.current_role, Role::Coordinator);
     }

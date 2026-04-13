@@ -12,6 +12,7 @@ pub enum AgentKind {
     Researcher,
     Integrator,
     Chat,
+    Decomposer,
 }
 
 impl AgentKind {
@@ -23,7 +24,8 @@ impl AgentKind {
             AgentKind::Coordinator => crate::domain::role::Role::Coordinator,
             AgentKind::Researcher => crate::domain::role::Role::Researcher,
             AgentKind::Integrator => crate::domain::role::Role::Integrator,
-            AgentKind::Chat => crate::domain::role::Role::Coordinator, // Chat uses Coordinator role as default
+            AgentKind::Chat => crate::domain::role::Role::Coordinator,
+            AgentKind::Decomposer => crate::domain::role::Role::Decomposer,
         }
     }
 
@@ -36,6 +38,7 @@ impl AgentKind {
                 | AgentKind::Integrator
                 | AgentKind::Reviewer
                 | AgentKind::Chat
+                | AgentKind::Decomposer
         )
     }
 }
@@ -49,6 +52,7 @@ impl fmt::Display for AgentKind {
             AgentKind::Researcher => write!(f, "researcher"),
             AgentKind::Integrator => write!(f, "integrator"),
             AgentKind::Chat => write!(f, "chat"),
+            AgentKind::Decomposer => write!(f, "decomposer"),
         }
     }
 }
@@ -58,12 +62,13 @@ impl fmt::Display for AgentKind {
 mod tests {
     use super::*;
 
-    const ALL_AGENT_TYPES: [AgentKind; 5] = [
+    const ALL_AGENT_TYPES: [AgentKind; 6] = [
         AgentKind::Implementer,
         AgentKind::Reviewer,
         AgentKind::Coordinator,
         AgentKind::Researcher,
         AgentKind::Integrator,
+        AgentKind::Decomposer,
     ];
 
     #[test]
@@ -73,6 +78,7 @@ mod tests {
         assert_eq!(AgentKind::Coordinator.to_string(), "coordinator");
         assert_eq!(AgentKind::Researcher.to_string(), "researcher");
         assert_eq!(AgentKind::Integrator.to_string(), "integrator");
+        assert_eq!(AgentKind::Decomposer.to_string(), "decomposer");
     }
 
     #[test]
@@ -102,6 +108,7 @@ mod tests {
         assert_eq!(AgentKind::Coordinator.default_role(), Role::Coordinator);
         assert_eq!(AgentKind::Researcher.default_role(), Role::Researcher);
         assert_eq!(AgentKind::Integrator.default_role(), Role::Integrator);
+        assert_eq!(AgentKind::Decomposer.default_role(), Role::Decomposer);
     }
 
     #[test]
@@ -111,5 +118,6 @@ mod tests {
         assert!(AgentKind::Coordinator.is_thinking_plane());
         assert!(AgentKind::Researcher.is_thinking_plane());
         assert!(AgentKind::Integrator.is_thinking_plane());
+        assert!(AgentKind::Decomposer.is_thinking_plane());
     }
 }

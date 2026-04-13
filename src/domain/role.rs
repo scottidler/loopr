@@ -11,6 +11,7 @@ pub enum Role {
     Implementer,
     Reviewer,
     Researcher,
+    Decomposer,
 }
 
 impl fmt::Display for Role {
@@ -21,6 +22,7 @@ impl fmt::Display for Role {
             Role::Implementer => write!(f, "implementer"),
             Role::Reviewer => write!(f, "reviewer"),
             Role::Researcher => write!(f, "researcher"),
+            Role::Decomposer => write!(f, "decomposer"),
         }
     }
 }
@@ -37,6 +39,7 @@ mod tests {
         assert_eq!(Role::Implementer.to_string(), "implementer");
         assert_eq!(Role::Reviewer.to_string(), "reviewer");
         assert_eq!(Role::Researcher.to_string(), "researcher");
+        assert_eq!(Role::Decomposer.to_string(), "decomposer");
     }
 
     #[test]
@@ -61,6 +64,7 @@ mod tests {
             Role::Implementer,
             Role::Reviewer,
             Role::Researcher,
+            Role::Decomposer,
         ] {
             let json = serde_json::to_string(&role).unwrap();
             let deserialized: Role = serde_json::from_str(&json).unwrap();
@@ -75,6 +79,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&Role::Implementer).unwrap(), "\"implementer\"");
         assert_eq!(serde_json::to_string(&Role::Reviewer).unwrap(), "\"reviewer\"");
         assert_eq!(serde_json::to_string(&Role::Researcher).unwrap(), "\"researcher\"");
+        assert_eq!(serde_json::to_string(&Role::Decomposer).unwrap(), "\"decomposer\"");
     }
 
     #[test]
@@ -87,6 +92,7 @@ mod tests {
             Role::Implementer,
             Role::Reviewer,
             Role::Researcher,
+            Role::Decomposer,
         ] {
             let display = role.to_string();
             let quoted = format!("\"{}\"", display);

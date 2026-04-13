@@ -51,7 +51,11 @@ pub async fn run_agent_task(
             AgentKind::Implementer => session.work_id.clone(),
             AgentKind::Reviewer => session.bundle_id.clone(),
             // Already handled by is_thinking_plane() above
-            AgentKind::Coordinator | AgentKind::Researcher | AgentKind::Integrator | AgentKind::Chat => None,
+            AgentKind::Coordinator
+            | AgentKind::Researcher
+            | AgentKind::Integrator
+            | AgentKind::Chat
+            | AgentKind::Decomposer => None,
         }
     };
 
@@ -157,6 +161,7 @@ pub async fn run_agent_task(
         AgentKind::Coordinator => stores.config.agents.coordinator.role.session_timeout_secs,
         AgentKind::Integrator => stores.config.integrator.session_timeout_secs,
         AgentKind::Chat => None,
+        AgentKind::Decomposer => Some(600), // 10 min - single LLM call + child persistence
     };
 
     let loop_future = run_agent_loop(&session_id, agent_type, &stores, &bridge, &event_tx);
@@ -468,6 +473,16 @@ pub(super) async fn run_agent_loop(
             // This arm should never be reached.
             return Ok(());
         }
+        AgentKind::Decomposer => {
+            let target_id = ctx
+                .session
+                .target_id
+                .clone()
+                .ok_or_else(|| eyre!("decomposer session missing target_id"))?;
+            let mut agent = crate::agents::decomposer::DecomposerAgent::new(ctx, bridge, target_id);
+            let result = agent.run().await;
+            (result, agent.ctx.session.iteration)
+        }
     };
 
     // Unified iteration writeback
@@ -512,6 +527,7 @@ mod tests {
             AgentKind::Coordinator => config.agents.coordinator.role.session_timeout_secs,
             AgentKind::Integrator => config.integrator.session_timeout_secs,
             AgentKind::Chat => None,
+            AgentKind::Decomposer => Some(600),
         }
     }
 

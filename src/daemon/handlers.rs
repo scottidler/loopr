@@ -78,7 +78,8 @@ fn max_pool_for(agent_type: AgentKind, config: &crate::config::Config) -> u32 {
         AgentKind::Coordinator => config.agents.coordinator.role.max_pool,
         AgentKind::Researcher => config.agents.researcher.max_pool,
         AgentKind::Integrator => 1,
-        AgentKind::Chat => 1, // Single chat session for now
+        AgentKind::Chat => 1,
+        AgentKind::Decomposer => config.agents.researcher.max_pool,
     };
     if raw == crate::config::MAX_POOL_UNLIMITED {
         config.agents.worker_pool_size.resolve()
