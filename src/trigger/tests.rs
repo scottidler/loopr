@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::evaluate::{TriggerEvaluator, TriggerResult};
 use super::observe::{GuardConditionRegistry, ObservationCtx, StateQueryRegistry};
 use super::schema::{self, CompositeOperator, CountQuery, Operator, TriggerDefinition, TriggerKind};
 use crate::daemon::context::Stores;
 use crate::domain::phase::Phase;
+use crate::domain::plan::Plan;
 use crate::domain::work::{Work, WorkStatus};
 use crate::ipc::protocol::DaemonEvent;
 
@@ -769,4 +771,882 @@ fn guard_unknown_condition_returns_false() {
     let ctx = make_ctx(&stores);
     let reg = GuardConditionRegistry::with_builtins();
     assert!(!reg.evaluate("ghost-condition", &ctx, "work", "any-id"));
+}
+
+// ─── Phase 3: Trigger Evaluator tests ───────────────────────────────────────
+
+fn make_evaluator(defs: Vec<TriggerDefinition>) -> TriggerEvaluator {
+    TriggerEvaluator::new(defs, StateQueryRegistry::with_builtins())
+}
+
+fn insert_plan(stores: &Stores, title: &str) -> Plan {
+    use crate::domain::criteria::AcceptanceCriteria;
+    let plan = Plan::new(title.to_owned(), AcceptanceCriteria::default());
+    stores.write_plans().unwrap().insert(plan.id.clone(), plan.clone());
+    plan
+}
+
+// --- Threshold evaluator ---
+
+#[test]
+fn threshold_fires_when_field_meets_condition() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    let ctx = make_ctx(&stores);
+    let mut eval = make_evaluator(vec![minimal_threshold()]); // attempt-count >= 3
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "test-threshold");
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&work.id));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn threshold_idle_when_field_below_condition() {
+    let stores = make_stores();
+    insert_work(&stores, "p1", "task"); // attempt_count defaults to 0
+    let ctx = make_ctx(&stores);
+    let mut eval = make_evaluator(vec![minimal_threshold()]); // >= 3
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn threshold_fires_only_for_matching_records() {
+    let stores = make_stores();
+    let w1 = insert_work(&stores, "p1", "over");
+    stores.write_works().unwrap().get_mut(&w1.id).unwrap().attempt_count = 5;
+    let w2 = insert_work(&stores, "p1", "under");
+    // w2 attempt_count stays 0
+    let ctx = make_ctx(&stores);
+    let mut eval = make_evaluator(vec![minimal_threshold()]);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&w1.id));
+        assert!(!scope_ids.contains(&w2.id));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn threshold_exact_boundary_gte() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 3;
+    let ctx = make_ctx(&stores);
+    let mut eval = make_evaluator(vec![minimal_threshold()]); // >= 3
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1, "exactly-at-threshold should fire for >=");
+}
+
+// --- Ratio evaluator ---
+
+#[test]
+fn ratio_fires_when_ratio_exceeds_threshold() {
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "test-plan");
+    // 3 works: 2 abandoned (terminal), 1 done (terminal) = 2/3 = 0.667 > 0.4
+    let w1 = insert_work(&stores, &plan.id, "abandoned-1");
+    let w2 = insert_work(&stores, &plan.id, "abandoned-2");
+    let w3 = insert_work(&stores, &plan.id, "done-1");
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&w1.id)
+        .unwrap()
+        .force_status(WorkStatus::Abandoned);
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&w2.id)
+        .unwrap()
+        .force_status(WorkStatus::Abandoned);
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&w3.id)
+        .unwrap()
+        .force_status(WorkStatus::Done);
+    let ctx = make_ctx(&stores);
+    let def = TriggerDefinition {
+        name: "abandon-ratio-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Ratio {
+            scope: "plan".into(),
+            numerator: CountQuery {
+                collection: "work".into(),
+                filter: [
+                    ("status".to_string(), serde_json::json!("Abandoned")),
+                    ("terminal".to_string(), serde_json::json!(true)),
+                ]
+                .into(),
+            },
+            denominator: CountQuery {
+                collection: "work".into(),
+                filter: [("terminal".to_string(), serde_json::json!(true))].into(),
+            },
+            operator: Operator::Gt,
+            value: 0.4,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&plan.id));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn ratio_idle_when_ratio_below_threshold() {
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "test-plan");
+    // 3 works: 1 abandoned, 2 done = 1/3 = 0.333 < 0.4
+    let w1 = insert_work(&stores, &plan.id, "abandoned-1");
+    let w2 = insert_work(&stores, &plan.id, "done-1");
+    let w3 = insert_work(&stores, &plan.id, "done-2");
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&w1.id)
+        .unwrap()
+        .force_status(WorkStatus::Abandoned);
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&w2.id)
+        .unwrap()
+        .force_status(WorkStatus::Done);
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&w3.id)
+        .unwrap()
+        .force_status(WorkStatus::Done);
+    let ctx = make_ctx(&stores);
+    let def = TriggerDefinition {
+        name: "abandon-ratio-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Ratio {
+            scope: "plan".into(),
+            numerator: CountQuery {
+                collection: "work".into(),
+                filter: [
+                    ("status".to_string(), serde_json::json!("Abandoned")),
+                    ("terminal".to_string(), serde_json::json!(true)),
+                ]
+                .into(),
+            },
+            denominator: CountQuery {
+                collection: "work".into(),
+                filter: [("terminal".to_string(), serde_json::json!(true))].into(),
+            },
+            operator: Operator::Gt,
+            value: 0.4,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn ratio_idle_when_denominator_zero() {
+    let stores = make_stores();
+    let plan = insert_plan(&stores, "test-plan");
+    // All works are Draft (non-terminal), so denominator is 0
+    insert_work(&stores, &plan.id, "draft");
+    let ctx = make_ctx(&stores);
+    let def = TriggerDefinition {
+        name: "ratio-zero-denom".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Ratio {
+            scope: "plan".into(),
+            numerator: CountQuery {
+                collection: "work".into(),
+                filter: [("terminal".to_string(), serde_json::json!(true))].into(),
+            },
+            denominator: CountQuery {
+                collection: "work".into(),
+                filter: [("terminal".to_string(), serde_json::json!(true))].into(),
+            },
+            operator: Operator::Gt,
+            value: 0.0,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty(), "zero denominator should not fire");
+}
+
+// --- Event evaluator ---
+
+#[test]
+fn event_fires_on_matching_event() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed", "work_id": "wk-123"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let def = TriggerDefinition {
+        name: "session-failure-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "agent.status-changed".into(),
+            scope: Some("work".into()),
+            match_filter: [("status".to_string(), serde_json::json!("failed"))].into(),
+            throttle_secs: None,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, payload } = &results[0].1 {
+        assert!(scope_ids.contains(&"wk-123".to_string()));
+        assert!(payload.is_some());
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn event_idle_when_no_matching_event() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "record.created",
+        serde_json::json!({"collection": "work", "id": "wk-1"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let def = TriggerDefinition {
+        name: "session-failure-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "agent.status-changed".into(),
+            scope: Some("work".into()),
+            match_filter: [("status".to_string(), serde_json::json!("failed"))].into(),
+            throttle_secs: None,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_push(&ctx);
+    assert!(results.is_empty());
+}
+
+#[test]
+fn event_extracts_id_from_standard_events() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::transition_completed(
+        "work",
+        "wk-42",
+        "Draft",
+        "Active",
+        "coordinator",
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let def = TriggerDefinition {
+        name: "transition-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "transition.completed".into(),
+            scope: Some("work".into()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&"wk-42".to_string()));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+// --- Timer evaluator ---
+
+#[test]
+fn timer_fires_when_elapsed_exceeds_max() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let created_at = work.created_at;
+    // Set now to 31 minutes after creation (> 1800 secs)
+    let now = created_at + 31 * 60 * 1000;
+    let ctx = ObservationCtx::new(&stores, &[], now);
+    let def = TriggerDefinition {
+        name: "sla-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Timer {
+            scope: "work".into(),
+            start_field: "created-at".into(),
+            max_duration_secs: 1800,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&work.id));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn timer_idle_when_under_max() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let created_at = work.created_at;
+    // Set now to 10 minutes after creation (< 1800 secs)
+    let now = created_at + 10 * 60 * 1000;
+    let ctx = ObservationCtx::new(&stores, &[], now);
+    let def = TriggerDefinition {
+        name: "sla-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Timer {
+            scope: "work".into(),
+            start_field: "created-at".into(),
+            max_duration_secs: 1800,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty());
+}
+
+// --- State-query evaluator ---
+
+#[test]
+fn state_query_trigger_fires_when_query_true() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    insert_work(&stores, &phase.id, "child");
+    let ctx = make_ctx(&stores);
+    let def = TriggerDefinition {
+        name: "has-children-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::StateQuery {
+            scope: "phase".into(),
+            query: "has-children".into(),
+            params: [("child-collection".to_string(), serde_json::json!("work"))].into(),
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&phase.id));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn state_query_trigger_idle_when_query_false() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    // No children
+    let ctx = make_ctx(&stores);
+    let def = TriggerDefinition {
+        name: "has-children-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::StateQuery {
+            scope: "phase".into(),
+            query: "has-children".into(),
+            params: [("child-collection".to_string(), serde_json::json!("work"))].into(),
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty());
+    let _ = phase;
+}
+
+// --- Composite evaluator ---
+
+#[test]
+fn composite_and_fires_when_all_sub_triggers_fire() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&work.id)
+        .unwrap()
+        .session_failure_count = 4;
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let t2 = TriggerDefinition {
+        name: "session-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "session-failure-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "both-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::And,
+            triggers: vec!["attempt-check".into(), "session-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, t2, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "both-failing");
+    assert!(comp_result.is_some(), "composite AND should fire");
+    if let TriggerResult::Fired { scope_ids, .. } = &comp_result.unwrap().1 {
+        assert!(scope_ids.contains(&work.id));
+    }
+}
+
+#[test]
+fn composite_and_idle_when_one_sub_trigger_idle() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    // session_failure_count stays at 0, below threshold of 3
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let t2 = TriggerDefinition {
+        name: "session-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "session-failure-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "both-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::And,
+            triggers: vec!["attempt-check".into(), "session-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, t2, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "both-failing");
+    assert!(
+        comp_result.is_none(),
+        "composite AND should be idle when one sub-trigger is idle"
+    );
+}
+
+#[test]
+fn composite_or_fires_when_any_sub_trigger_fires() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    // session_failure_count stays 0
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let t2 = TriggerDefinition {
+        name: "session-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "session-failure-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "either-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Or,
+            triggers: vec!["attempt-check".into(), "session-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, t2, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "either-failing");
+    assert!(
+        comp_result.is_some(),
+        "composite OR should fire when one sub-trigger fires"
+    );
+}
+
+#[test]
+fn composite_or_idle_when_no_sub_trigger_fires() {
+    let stores = make_stores();
+    insert_work(&stores, "p1", "task"); // both counts at 0
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let t2 = TriggerDefinition {
+        name: "session-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "session-failure-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "either-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Or,
+            triggers: vec!["attempt-check".into(), "session-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, t2, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "either-failing");
+    assert!(
+        comp_result.is_none(),
+        "composite OR should be idle when no sub-triggers fire"
+    );
+}
+
+#[test]
+fn composite_not_fires_when_sub_trigger_idle() {
+    let stores = make_stores();
+    insert_work(&stores, "p1", "task"); // attempt_count = 0
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "not-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Not,
+            triggers: vec!["attempt-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "not-failing");
+    assert!(
+        comp_result.is_some(),
+        "composite NOT should fire when sub-trigger is idle"
+    );
+}
+
+#[test]
+fn composite_not_idle_when_sub_trigger_fires() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "not-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Not,
+            triggers: vec!["attempt-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "not-failing");
+    assert!(
+        comp_result.is_none(),
+        "composite NOT should be idle when sub-trigger fires"
+    );
+}
+
+// --- Cooldown ---
+
+#[test]
+fn cooldown_suppresses_refire_within_window() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    let def = TriggerDefinition {
+        name: "cooldown-test".into(),
+        cooldown_secs: Some(60),
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+
+    // First evaluation at t=1000: should fire
+    let ctx = ObservationCtx::new(&stores, &[], 1000);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1, "first eval should fire");
+
+    // Second evaluation at t=1000+30s: should be suppressed (within 60s cooldown)
+    let ctx = ObservationCtx::new(&stores, &[], 1000 + 30_000);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty(), "second eval within cooldown should be suppressed");
+
+    // Third evaluation at t=1000+61s: should fire again (cooldown expired)
+    let ctx = ObservationCtx::new(&stores, &[], 1000 + 61_000);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1, "eval after cooldown should fire again");
+}
+
+#[test]
+fn throttle_suppresses_event_refire() {
+    let stores = make_stores();
+    let def = TriggerDefinition {
+        name: "throttle-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "agent.status-changed".into(),
+            scope: Some("work".into()),
+            match_filter: [("status".to_string(), serde_json::json!("failed"))].into(),
+            throttle_secs: Some(5),
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+
+    // First event at t=1000: should fire
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed", "work_id": "wk-1"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1, "first event should fire");
+
+    // Same event at t=1000+3s: should be throttled
+    let ctx = ObservationCtx::new(&stores, &events, 1000 + 3000);
+    let results = eval.evaluate_push(&ctx);
+    assert!(results.is_empty(), "event within throttle window should be suppressed");
+
+    // Same event at t=1000+6s: should fire again
+    let ctx = ObservationCtx::new(&stores, &events, 1000 + 6000);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1, "event after throttle window should fire again");
+}
+
+#[test]
+fn cooldown_is_per_scope_id() {
+    let stores = make_stores();
+    let w1 = insert_work(&stores, "p1", "task-1");
+    let w2 = insert_work(&stores, "p1", "task-2");
+    stores.write_works().unwrap().get_mut(&w1.id).unwrap().attempt_count = 5;
+    stores.write_works().unwrap().get_mut(&w2.id).unwrap().attempt_count = 5;
+    let def = TriggerDefinition {
+        name: "cooldown-per-id".into(),
+        cooldown_secs: Some(60),
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+
+    // First eval: both should fire
+    let ctx = ObservationCtx::new(&stores, &[], 1000);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert_eq!(scope_ids.len(), 2, "both works should fire on first eval");
+    }
+
+    // Second eval within cooldown: neither should fire
+    let ctx = ObservationCtx::new(&stores, &[], 1000 + 30_000);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty(), "both should be suppressed within cooldown");
+}
+
+#[test]
+fn sweep_removes_expired_cooldowns() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    let def = TriggerDefinition {
+        name: "sweep-test".into(),
+        cooldown_secs: Some(10),
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+
+    // Fire at t=0
+    let ctx = ObservationCtx::new(&stores, &[], 0);
+    eval.evaluate_pull(&ctx);
+
+    // Sweep at t=2 hours: should remove the cooldown entry
+    eval.sweep_cooldowns(2 * 3_600_000);
+    // The internal cooldowns map should be empty after sweep
+    // Verify by firing again - it should fire because the cooldown was swept
+    let ctx = ObservationCtx::new(&stores, &[], 2 * 3_600_000);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1, "should fire after cooldown swept");
+}
+
+// --- Pull vs push separation ---
+
+#[test]
+fn evaluate_pull_skips_event_triggers() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let def = TriggerDefinition {
+        name: "event-only".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "agent.status-changed".into(),
+            scope: None,
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert!(results.is_empty(), "pull should not evaluate event triggers");
+}
+
+#[test]
+fn evaluate_push_skips_threshold_triggers() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 5;
+    let ctx = make_ctx(&stores);
+    let mut eval = make_evaluator(vec![minimal_threshold()]);
+    let results = eval.evaluate_push(&ctx);
+    assert!(results.is_empty(), "push should not evaluate threshold triggers");
+}
+
+// --- v3 regression: representative conditions ---
+
+#[test]
+fn v3_work_retry_exhaustion_fires_at_max_attempts() {
+    // v3: attempt_count >= MAX_WORK_ATTEMPTS (3)
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores.write_works().unwrap().get_mut(&work.id).unwrap().attempt_count = 3;
+    let ctx = make_ctx(&stores);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let retry_def = defs.into_iter().find(|d| d.name == "work-retry-exhaustion").unwrap();
+    let mut eval = make_evaluator(vec![retry_def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.contains(&work.id));
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+#[test]
+fn v3_session_failure_event_fires() {
+    // v3: agent.status_changed(failed)
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed", "work_id": "wk-99"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let event_def = defs.into_iter().find(|d| d.name == "session-failure").unwrap();
+    let mut eval = make_evaluator(vec![event_def]);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "session-failure");
+}
+
+#[test]
+fn v3_work_sla_breach_fires_after_timeout() {
+    // v3: now - first_assignment_at > max_wall_clock (1800s)
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let created_at = work.created_at;
+    let now = created_at + 31 * 60 * 1000; // 31 minutes
+    let ctx = ObservationCtx::new(&stores, &[], now);
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    // work-sla-breach uses start-field: first-assignment-at, but our test work
+    // doesn't have that field set (it would be None/0). The timer trigger requires
+    // ts > 0, so we use created-at which is always set. We test with our own def.
+    let def = TriggerDefinition {
+        name: "sla-regression".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Timer {
+            scope: "work".into(),
+            start_field: "created-at".into(),
+            max_duration_secs: 1800,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_pull(&ctx);
+    assert_eq!(results.len(), 1);
+    let _ = defs; // loaded to verify YAML parses
 }

@@ -1,3 +1,4 @@
+pub mod evaluate;
 pub mod observe;
 pub mod schema;
 

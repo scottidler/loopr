@@ -97,6 +97,31 @@ impl<'a> ObservationCtx<'a> {
             .collect()
     }
 
+    /// Get all record IDs in a collection.
+    pub fn record_ids(&self, collection: &str) -> Vec<String> {
+        self.all_records(collection)
+            .into_iter()
+            .filter_map(|r| r.get("id").and_then(|v| v.as_str()).map(str::to_owned))
+            .collect()
+    }
+
+    /// Count children of a parent that match all filter conditions.
+    /// Handles the `terminal` computed filter the same way `count()` does.
+    pub fn count_children(&self, parent_id: &str, child_collection: &str, filter: &Filter) -> usize {
+        self.children(parent_id, child_collection)
+            .into_iter()
+            .filter(|child| self.matches_filter(child_collection, child, filter))
+            .count()
+    }
+
+    /// Get a numeric field from a record as f64. Handles integer and float JSON values.
+    /// Accepts kebab-case or snake_case field names.
+    pub fn get_field_numeric(&self, collection: &str, id: &str, field: &str) -> Option<f64> {
+        let record = self.get_record(collection, id)?;
+        let key = normalize_field(field);
+        record.get(&key).and_then(|v| v.as_f64())
+    }
+
     // ─── Private helpers ─────────────────────────────────────────────────────
 
     fn all_records(&self, collection: &str) -> Vec<Value> {
@@ -509,7 +534,7 @@ fn normalize_field(field: &str) -> String {
 }
 
 /// Flexible equality: string values are compared case-insensitively; other types use `==`.
-fn flexible_eq(actual: &Value, expected: &Value) -> bool {
+pub(crate) fn flexible_eq(actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {
         (Value::String(a), Value::String(e)) => a.eq_ignore_ascii_case(e),
         _ => actual == expected,
