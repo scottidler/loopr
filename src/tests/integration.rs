@@ -18,4 +18,5 @@ mod preformed;
 mod sessions;
 mod tick;
 
+mod decomposition;
 mod handoff;
