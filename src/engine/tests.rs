@@ -137,6 +137,8 @@ fn strategies_have_correct_priorities() {
     assert_eq!(by_name["promote-pending-specs"].priority, 900);
     assert_eq!(by_name["sweep-integrated-to-done"].priority, 950);
     assert_eq!(by_name["integrate-accepted-bundles"].priority, 500);
+    // Normal operations (default 100 per spec)
+    assert_eq!(by_name["work-retry-on-failure"].priority, 100);
 }
 
 #[test]
@@ -398,4 +400,211 @@ fn extract_context_refs_empty_for_non_context() {
     let val = serde_json::json!({"key": "plain-value", "num": 42});
     let refs = schema::extract_context_refs(&val);
     assert!(refs.is_empty());
+}
+
+// ─── Architect review fixes ───────────────────────────────────────────────────
+
+// Fix 1.1: on_success/on_failure steps see their own preceding steps
+
+#[test]
+fn on_success_step_can_reference_preceding_on_success_step() {
+    let def = StrategyDefinition {
+        name: "chained-success".to_owned(),
+        description: String::new(),
+        trigger: "session-failure".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "check-threshold".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: vec![
+            ActionStep {
+                name: Some("step-one".to_owned()),
+                primitive: "get-value".to_owned(),
+                guard: None,
+                params: HashMap::new(),
+            },
+            ActionStep {
+                name: None,
+                primitive: "use-value".to_owned(),
+                guard: None,
+                params: [("input".to_owned(), serde_json::json!("$context.step-one.output"))].into(),
+            },
+        ],
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let errors = schema::validate(std::slice::from_ref(&def));
+    assert!(
+        errors.is_empty(),
+        "on_success step should see preceding on_success steps: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn on_success_step_cannot_forward_reference_within_sequence() {
+    let def = StrategyDefinition {
+        name: "bad-forward".to_owned(),
+        description: String::new(),
+        trigger: "session-failure".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: None,
+            primitive: "check-threshold".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: vec![
+            ActionStep {
+                name: None,
+                primitive: "use-value".to_owned(),
+                guard: None,
+                // References step-two which comes AFTER this step
+                params: [("input".to_owned(), serde_json::json!("$context.step-two.output"))].into(),
+            },
+            ActionStep {
+                name: Some("step-two".to_owned()),
+                primitive: "get-value".to_owned(),
+                guard: None,
+                params: HashMap::new(),
+            },
+        ],
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let errors = schema::validate(std::slice::from_ref(&def));
+    assert!(
+        errors.iter().any(|e| e.contains("forward-declared")),
+        "forward reference in on_success should be rejected: {:?}",
+        errors
+    );
+}
+
+// Fix 1.2: malformed $context.step (no .field suffix) is rejected
+
+#[test]
+fn reject_malformed_context_ref_missing_field() {
+    let def = StrategyDefinition {
+        name: "bad-ref".to_owned(),
+        description: String::new(),
+        trigger: "session-failure".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![
+            ActionStep {
+                name: Some("prev-step".to_owned()),
+                primitive: "check-threshold".to_owned(),
+                guard: None,
+                params: HashMap::new(),
+            },
+            ActionStep {
+                name: None,
+                primitive: "retry-work".to_owned(),
+                guard: None,
+                // Missing .field suffix - malformed
+                params: [("value".to_owned(), serde_json::json!("$context.prev-step"))].into(),
+            },
+        ],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let errors = schema::validate(std::slice::from_ref(&def));
+    assert!(
+        errors.iter().any(|e| e.contains("malformed context reference")),
+        "missing .field suffix should be rejected: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn find_malformed_context_refs_catches_missing_field() {
+    let val = serde_json::json!("$context.step-name");
+    let malformed = schema::find_malformed_context_refs(&val);
+    assert_eq!(malformed, vec!["$context.step-name"]);
+}
+
+#[test]
+fn find_malformed_context_refs_ignores_well_formed() {
+    let val = serde_json::json!("$context.step-name.output");
+    let malformed = schema::find_malformed_context_refs(&val);
+    assert!(malformed.is_empty());
+}
+
+// Fix 3.1: duplicate step names within a sequence are rejected
+
+#[test]
+fn reject_duplicate_step_names_in_action() {
+    let def = StrategyDefinition {
+        name: "dup-steps".to_owned(),
+        description: String::new(),
+        trigger: "session-failure".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![
+            ActionStep {
+                name: Some("my-step".to_owned()),
+                primitive: "check-threshold".to_owned(),
+                guard: None,
+                params: HashMap::new(),
+            },
+            ActionStep {
+                name: Some("my-step".to_owned()), // duplicate
+                primitive: "retry-work".to_owned(),
+                guard: None,
+                params: HashMap::new(),
+            },
+        ],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let errors = schema::validate(std::slice::from_ref(&def));
+    assert!(
+        errors.iter().any(|e| e.contains("duplicate step name")),
+        "duplicate step name in action should be rejected: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn same_step_name_in_action_and_on_success_is_allowed() {
+    // on_success is a different sequence; reusing a name from action is valid
+    let def = StrategyDefinition {
+        name: "reused-name".to_owned(),
+        description: String::new(),
+        trigger: "session-failure".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: Some("my-step".to_owned()),
+            primitive: "check-threshold".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_success: vec![ActionStep {
+            name: Some("my-step".to_owned()), // same name, different sequence - OK
+            primitive: "retry-work".to_owned(),
+            guard: None,
+            params: HashMap::new(),
+        }],
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+    let errors = schema::validate(std::slice::from_ref(&def));
+    assert!(
+        errors.is_empty(),
+        "reusing step name across sequences should be valid: {:?}",
+        errors
+    );
 }

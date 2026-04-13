@@ -6,7 +6,7 @@ work-retry-on-failure:
   description: When an agent session fails, retry the work up to max session failures
   trigger: session-failure
   scope: work
-  priority: 200
+  priority: 100
   action:
     - primitive: increment-failure-count
       params:

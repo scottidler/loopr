@@ -14,6 +14,9 @@ const VALID_SCOPES: &[&str] = &["work", "bundle", "plan", "spec", "phase", "sess
 #[serde(rename_all = "kebab-case")]
 pub struct ActionStep {
     /// Optional name for referencing this step's output via `$context.{name}.{field}`.
+    /// Names must be unique within an action sequence. They are intentional scaffolding -
+    /// a named step that no current `$context` reference consumes is still valid; it is
+    /// pre-wired for future strategy evolution without requiring a schema change.
     #[serde(default)]
     pub name: Option<String>,
     /// Primitive to invoke (must be registered in PrimitiveRegistry - validated in Phase 2).
@@ -24,6 +27,22 @@ pub struct ActionStep {
     pub guard: Option<String>,
     /// Parameters passed to the primitive. Values may contain `$trigger.*` or `$context.*`
     /// references resolved at execution time.
+    ///
+    /// # Reference syntax
+    ///
+    /// - `$trigger.scope-id` - ID of the record the trigger fired on.
+    /// - `$trigger.event.{field}` - field from the event payload (event triggers only).
+    /// - `$context.{step-name}.{field}` - output field from a preceding named step.
+    ///
+    /// # String interpolation is NOT supported
+    ///
+    /// A `$context.*` reference must occupy the entire parameter value. Embedded
+    /// references like `"prefix $context.step.field"` are NOT detected by validation
+    /// and will be passed as literal strings to the primitive at runtime. This is an
+    /// intentional simplicity boundary: params are either literals or references, not
+    /// templates. If template interpolation is needed in the future, it should be
+    /// added as an explicit primitive (e.g., `format-string`) rather than expanding
+    /// the parameter syntax.
     #[serde(default)]
     pub params: HashMap<String, serde_json::Value>,
 }
@@ -76,15 +95,19 @@ fn default_enabled() -> bool {
 // ─── Loading ─────────────────────────────────────────────────────────────────
 
 /// Load all strategy definitions from a directory tree (recursive).
-/// Strategies may be organized in subdirectories (e.g. `recovery/`, `reconciliation/`).
+/// Strategies are organized in subdirectories (e.g. `recovery/`, `reconciliation/`).
+/// The `fsm/` and `triggers/` subdirs at the ROOT level are skipped - they share the
+/// `strategies/` root but contain FSM and trigger definitions, not strategy files.
+/// This skip is anchored to the root level only; a `triggers/` subdir nested inside
+/// a strategy directory would still be scanned (though none currently exist).
 pub fn load_dir(dir: &Path) -> eyre::Result<Vec<StrategyDefinition>> {
     let mut defs = Vec::new();
-    load_dir_recursive(dir, &mut defs)?;
+    load_dir_recursive(dir, dir, &mut defs)?;
     info!("loaded {} strategy definitions from {}", defs.len(), dir.display());
     Ok(defs)
 }
 
-fn load_dir_recursive(dir: &Path, defs: &mut Vec<StrategyDefinition>) -> eyre::Result<()> {
+fn load_dir_recursive(root: &Path, dir: &Path, defs: &mut Vec<StrategyDefinition>) -> eyre::Result<()> {
     let entries =
         std::fs::read_dir(dir).map_err(|e| eyre::eyre!("failed to read strategy dir {}: {}", dir.display(), e))?;
     let mut entries: Vec<_> = entries.collect::<Result<_, _>>()?;
@@ -93,12 +116,15 @@ fn load_dir_recursive(dir: &Path, defs: &mut Vec<StrategyDefinition>) -> eyre::R
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            // Skip non-strategy subdirs that share the strategies/ root
-            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if matches!(dir_name, "fsm" | "triggers") {
-                continue;
+            // Skip fsm/ and triggers/ at the root level only - these share the strategies/
+            // root but contain non-strategy YAML files with incompatible schemas.
+            if dir == root {
+                let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if matches!(dir_name, "fsm" | "triggers") {
+                    continue;
+                }
             }
-            load_dir_recursive(&path, defs)?;
+            load_dir_recursive(root, &path, defs)?;
         } else if path.extension().map(|e| e == "yml" || e == "yaml").unwrap_or(false) {
             let mut file_defs = load_file(&path)?;
             defs.append(&mut file_defs);
@@ -128,14 +154,16 @@ pub fn load_file(path: &Path) -> eyre::Result<Vec<StrategyDefinition>> {
 // ─── Validation ──────────────────────────────────────────────────────────────
 
 /// Structural validation of a set of strategy definitions.
-/// Checks correctness without requiring external registries (trigger/primitive existence
-/// is deferred to Phase 2 when TriggerEvaluator and PrimitiveRegistry are available).
+///
+/// Checks correctness without requiring external registries. Registry-dependent
+/// checks (trigger existence, primitive existence, param types) are deferred to
+/// Phase 2 when TriggerEvaluator and PrimitiveRegistry are available.
 ///
 /// Returns a list of error strings. Empty vec = valid.
 pub fn validate(defs: &[StrategyDefinition]) -> Vec<String> {
     let mut errors = Vec::new();
 
-    // Check for duplicate strategy names
+    // Check for duplicate strategy names across all loaded definitions
     let mut seen_names: HashSet<&str> = HashSet::new();
     for def in defs {
         if !seen_names.insert(def.name.as_str()) {
@@ -151,7 +179,7 @@ pub fn validate(defs: &[StrategyDefinition]) -> Vec<String> {
 }
 
 fn validate_strategy(def: &StrategyDefinition, errors: &mut Vec<String>) {
-    // trigger must be non-empty
+    // trigger must be non-empty (existence in trigger registry is Phase 2)
     if def.trigger.is_empty() {
         errors.push(format!("strategy '{}': trigger must not be empty", def.name));
     }
@@ -171,27 +199,62 @@ fn validate_strategy(def: &StrategyDefinition, errors: &mut Vec<String>) {
         errors.push(format!("strategy '{}': priority must be >= 1, got 0", def.name));
     }
 
-    // Validate action steps and their $context references
+    // Step names must be unique within each sequence
+    validate_step_name_uniqueness(def, "action", &def.action, errors);
+    validate_step_name_uniqueness(def, "on-success", &def.on_success, errors);
+    validate_step_name_uniqueness(def, "on-failure", &def.on_failure, errors);
+
+    // Validate action steps: each step may reference named steps that precede it.
     for (i, step) in def.action.iter().enumerate() {
-        validate_step(def, "action", step, &def.action[..i], errors);
+        validate_step(def, "action", step, &def.action[..i], &[], errors);
     }
-    // on-success and on-failure steps can reference any named action step
-    for step in &def.on_success {
-        validate_step(def, "on-success", step, &def.action, errors);
+
+    // on-success steps may reference:
+    //   - any named step in the action sequence, AND
+    //   - named steps earlier in the same on-success sequence.
+    for (i, step) in def.on_success.iter().enumerate() {
+        validate_step(def, "on-success", step, &def.action, &def.on_success[..i], errors);
     }
-    for step in &def.on_failure {
-        validate_step(def, "on-failure", step, &def.action, errors);
+
+    // on-failure steps follow the same rule as on-success.
+    for (i, step) in def.on_failure.iter().enumerate() {
+        validate_step(def, "on-failure", step, &def.action, &def.on_failure[..i], errors);
     }
 }
 
+fn validate_step_name_uniqueness(
+    def: &StrategyDefinition,
+    sequence_label: &str,
+    steps: &[ActionStep],
+    errors: &mut Vec<String>,
+) {
+    let mut seen: HashSet<&str> = HashSet::new();
+    for step in steps {
+        if let Some(name) = step.name.as_deref()
+            && !seen.insert(name)
+        {
+            errors.push(format!(
+                "strategy '{}' {}: duplicate step name '{}'",
+                def.name, sequence_label, name
+            ));
+        }
+    }
+}
+
+/// Validate a single action step.
+///
+/// `preceding_primary` - steps whose names are always visible (the action sequence).
+/// `preceding_secondary` - additional steps whose names are visible (earlier steps in
+///   the same on-success or on-failure sequence being validated).
 fn validate_step(
     def: &StrategyDefinition,
     context: &str,
     step: &ActionStep,
-    preceding_action_steps: &[ActionStep],
+    preceding_primary: &[ActionStep],
+    preceding_secondary: &[ActionStep],
     errors: &mut Vec<String>,
 ) {
-    // primitive name must be non-empty
+    // primitive name must be non-empty (existence in registry is Phase 2)
     if step.primitive.is_empty() {
         errors.push(format!(
             "strategy '{}' {}: step has empty primitive name",
@@ -199,13 +262,27 @@ fn validate_step(
         ));
     }
 
-    // $context.{step}.{field} references must point to named steps earlier in the action sequence
-    let named_preceding: HashSet<&str> = preceding_action_steps
+    // Build the set of named steps visible from this position
+    let named_preceding: HashSet<&str> = preceding_primary
         .iter()
+        .chain(preceding_secondary.iter())
         .filter_map(|s| s.name.as_deref())
         .collect();
 
     for (param_key, param_val) in &step.params {
+        // Reject malformed $context.{step} references missing the .{field} suffix.
+        // A well-formed reference is $context.{step-name}.{field}; anything that starts
+        // with "$context." but has no second dot is a typo that would silently produce
+        // a literal string at runtime instead of the intended value.
+        for bad_ref in find_malformed_context_refs(param_val) {
+            errors.push(format!(
+                "strategy '{}' {} param '{}': malformed context reference '{}' - expected $context.{{step}}.{{field}}",
+                def.name, context, param_key, bad_ref
+            ));
+        }
+
+        // Validate that well-formed $context.{step}.{field} references point to known
+        // named steps that precede the current step (not forward references).
         for step_ref in extract_context_refs(param_val) {
             if !named_preceding.contains(step_ref.as_str()) {
                 errors.push(format!(
@@ -217,7 +294,10 @@ fn validate_step(
     }
 }
 
-/// Extract all step names referenced by `$context.{step}.{field}` patterns in a JSON value.
+// ─── Reference utilities ─────────────────────────────────────────────────────
+
+/// Extract all step names from well-formed `$context.{step}.{field}` patterns in a value.
+/// A well-formed reference has exactly two dots after `$context`: step name and field name.
 pub fn extract_context_refs(val: &serde_json::Value) -> Vec<String> {
     let mut refs = Vec::new();
     collect_context_refs(val, &mut refs);
@@ -227,11 +307,11 @@ pub fn extract_context_refs(val: &serde_json::Value) -> Vec<String> {
 fn collect_context_refs(val: &serde_json::Value, refs: &mut Vec<String>) {
     match val {
         serde_json::Value::String(s) => {
-            if let Some(rest) = s.strip_prefix("$context.") {
-                // Pattern: $context.{step-name}.{field} - extract step-name
-                if let Some(dot_pos) = rest.find('.') {
-                    refs.push(rest[..dot_pos].to_owned());
-                }
+            // Malformed refs (no .field suffix) are handled by find_malformed_context_refs
+            if let Some(rest) = s.strip_prefix("$context.")
+                && let Some(dot_pos) = rest.find('.')
+            {
+                refs.push(rest[..dot_pos].to_owned());
             }
         }
         serde_json::Value::Array(arr) => {
@@ -242,6 +322,37 @@ fn collect_context_refs(val: &serde_json::Value, refs: &mut Vec<String>) {
         serde_json::Value::Object(map) => {
             for v in map.values() {
                 collect_context_refs(v, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Find all strings that start with `$context.` but are missing the `.{field}` suffix.
+/// These are malformed references that would silently produce literal strings at runtime.
+pub fn find_malformed_context_refs(val: &serde_json::Value) -> Vec<String> {
+    let mut malformed = Vec::new();
+    collect_malformed_context_refs(val, &mut malformed);
+    malformed
+}
+
+fn collect_malformed_context_refs(val: &serde_json::Value, malformed: &mut Vec<String>) {
+    match val {
+        serde_json::Value::String(s) => {
+            if let Some(rest) = s.strip_prefix("$context.")
+                && !rest.contains('.')
+            {
+                malformed.push(s.clone());
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_malformed_context_refs(item, malformed);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values() {
+                collect_malformed_context_refs(v, malformed);
             }
         }
         _ => {}
