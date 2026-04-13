@@ -351,11 +351,18 @@ impl Primitive for AbandonWork {
     }
 
     fn input_schema(&self) -> Vec<InputField> {
-        vec![InputField {
-            name: "work-id".to_string(),
-            field_type: OutputType::String,
-            required: true,
-        }]
+        vec![
+            InputField {
+                name: "work-id".to_string(),
+                field_type: OutputType::String,
+                required: true,
+            },
+            InputField {
+                name: "reason".to_string(),
+                field_type: OutputType::String,
+                required: false,
+            },
+        ]
     }
 
     fn idempotency(&self) -> Idempotency {

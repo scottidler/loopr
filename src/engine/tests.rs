@@ -1288,3 +1288,138 @@ fn engine_constructs_with_real_registries() {
     let engine = super::tick::CompositionEngine::new(strategies, registry, te);
     drop(engine);
 }
+
+// ─── Architect review fixes ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn tick_context_passes_from_action_to_on_success() {
+    // Verify that $context references in on_success can see named step outputs from action.
+    // This is the bug the Architect caught: strategy_ctx was previously scoped inside
+    // execute_steps, so on_success got a fresh empty context.
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-ctx-wiring");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let strategy = StrategyDefinition {
+        name: "ctx-wiring".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![ActionStep {
+            name: Some("threshold-check".to_owned()),
+            primitive: "check-threshold".to_owned(),
+            guard: None,
+            params: [("id".to_owned(), serde_json::json!("$trigger.scope-id"))].into(),
+        }],
+        on_success: vec![ActionStep {
+            name: None,
+            primitive: "retry-work".to_owned(),
+            guard: None,
+            // This $context reference reaches back into the action sequence.
+            // Before the fix, this would fail with "step 'threshold-check' has no output".
+            params: [("ref".to_owned(), serde_json::json!("$context.threshold-check.id"))].into(),
+        }],
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-77"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    let mut ctx = test_engine_context(&stores, &events, &tx, &bridge, &dir, &wm);
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 1);
+    // The key assertion: no failures means $context resolved successfully across the boundary
+    assert!(!outcome.had_failures);
+}
+
+#[tokio::test]
+async fn tick_guard_skips_step_but_strategy_succeeds() {
+    // Verify that a failed guard skips the guarded step but the strategy still succeeds.
+    let dir = crate::test_util::TestDir::new("loopr-engine-tick-guard");
+    let (stores, tx, bridge, wm) = test_infra(&dir);
+
+    let trigger = crate::trigger::schema::TriggerDefinition {
+        name: "test-event".to_owned(),
+        kind: crate::trigger::schema::TriggerKind::Event {
+            event: "test.fired".to_owned(),
+            scope: Some("work".to_owned()),
+            match_filter: HashMap::new(),
+            throttle_secs: None,
+        },
+        cooldown_secs: None,
+    };
+
+    let strategy = StrategyDefinition {
+        name: "guarded-strategy".to_owned(),
+        description: String::new(),
+        trigger: "test-event".to_owned(),
+        scope: "work".to_owned(),
+        priority: 100,
+        action: vec![
+            ActionStep {
+                name: None,
+                // This step has a guard that will fail (unknown guard -> false when registry exists)
+                primitive: "promote-record".to_owned(),
+                guard: Some("nonexistent-guard".to_owned()),
+                params: HashMap::new(),
+            },
+            ActionStep {
+                name: None,
+                // This step has no guard, so it should still execute
+                primitive: "check-threshold".to_owned(),
+                guard: None,
+                params: HashMap::new(),
+            },
+        ],
+        on_success: Vec::new(),
+        on_failure: Vec::new(),
+        enabled: true,
+        cooldown_secs: None,
+    };
+
+    let events = vec![crate::ipc::protocol::DaemonEvent {
+        event: "test.fired".to_owned(),
+        data: serde_json::json!({"work_id": "wi-guard"}),
+    }];
+
+    let te = test_trigger_evaluator(vec![trigger]);
+    let registry = test_registry();
+    let mut engine = super::tick::CompositionEngine::new(vec![strategy], registry, te);
+
+    // Use a guard registry so that unknown guards evaluate to false (not the no-registry passthrough)
+    let guard_registry = crate::trigger::observe::GuardConditionRegistry::with_builtins();
+    let mut ctx = super::tick::EngineContext {
+        stores: &stores,
+        events: &events,
+        event_tx: &tx,
+        bridge: &bridge,
+        repo_path: &dir,
+        worktree_mgr: &wm,
+        now: chrono::Utc::now().timestamp_millis(),
+        guard_conditions: Some(&guard_registry),
+    };
+
+    let outcome = engine.tick(&mut ctx).await.unwrap();
+    assert_eq!(outcome.strategies_fired, 1);
+    // Strategy succeeds even though the first step was skipped by the guard
+    assert!(!outcome.had_failures);
+}

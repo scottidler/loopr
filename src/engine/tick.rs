@@ -204,6 +204,10 @@ impl CompositionEngine {
                 strategy_name, exec.scope_id, exec.priority
             );
 
+            // Strategy context is shared across action, on-success, and on-failure sequences.
+            // Named step outputs from `action` are visible to wiring steps via $context.
+            let mut strategy_ctx: HashMap<String, Value> = HashMap::new();
+
             // Execute the strategy's action sequence
             let action_steps = self.strategies[exec.strategy_idx].action.clone();
             let result = self
@@ -213,6 +217,7 @@ impl CompositionEngine {
                     &strategy_scope,
                     &exec.scope_id,
                     exec.trigger_payload.as_ref(),
+                    &mut strategy_ctx,
                     ctx,
                 )
                 .await;
@@ -229,6 +234,7 @@ impl CompositionEngine {
                                 &strategy_scope,
                                 &exec.scope_id,
                                 exec.trigger_payload.as_ref(),
+                                &mut strategy_ctx,
                                 ctx,
                             )
                             .await;
@@ -253,6 +259,7 @@ impl CompositionEngine {
                                 &strategy_scope,
                                 &exec.scope_id,
                                 exec.trigger_payload.as_ref(),
+                                &mut strategy_ctx,
                                 ctx,
                             )
                             .await;
@@ -274,6 +281,8 @@ impl CompositionEngine {
     }
 
     /// Execute a sequence of action steps with guard evaluation and $context threading.
+    /// `strategy_ctx` is shared across action/on-success/on-failure sequences so that
+    /// named step outputs from the action sequence are visible to wiring steps.
     async fn execute_steps(
         &self,
         steps: &[ActionStep],
@@ -281,10 +290,9 @@ impl CompositionEngine {
         strategy_scope: &str,
         scope_id: &str,
         trigger_payload: Option<&Value>,
+        strategy_ctx: &mut HashMap<String, Value>,
         ctx: &mut EngineContext<'_>,
     ) -> eyre::Result<()> {
-        let mut strategy_ctx: HashMap<String, Value> = HashMap::new();
-
         for (i, step) in steps.iter().enumerate() {
             // Guard check: skip step (not whole strategy) on guard failure
             if let Some(guard_name) = &step.guard {
@@ -304,7 +312,7 @@ impl CompositionEngine {
             }
 
             let output = self
-                .execute_step(step, scope_id, trigger_payload, &strategy_ctx, strategy_name, ctx)
+                .execute_step(step, scope_id, trigger_payload, strategy_ctx, strategy_name, ctx)
                 .await?;
 
             if let Some(name) = &step.name {
