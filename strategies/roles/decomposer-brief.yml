@@ -1,0 +1,18 @@
+# Decomposer role config - brief mode.
+# Produces Works directly from the Plan, skipping the Spec and Phase levels.
+# spec-decomposable and phase-decomposable never fire because the plan decomposer
+# creates Works, not Specs or Phases - those levels never become Active.
+
+decomposer:
+  model: claude-sonnet-4-6
+  max-tokens: 4096
+  temperature: 0.3
+
+  rules:
+    plan:
+      target-kind: work
+      prompt: decompose/work.pmt
+      count-guidance: 1-8
+      dependency-pattern: fan-out
+      validation: advisory
+    # No spec or phase rules - those levels do not exist in brief mode.

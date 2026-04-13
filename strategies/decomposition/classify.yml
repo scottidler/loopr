@@ -1,0 +1,19 @@
+# Tier classification: fires when a plan is approved, classifies it as full or
+# brief and stores the result on the plan record for the decomposer agent to read.
+
+classify-and-configure:
+  description: Classify plan tier and store decomposer config for agent lookup
+  trigger: plan-approved
+  scope: plan
+  priority: 1000
+  action:
+    - name: classify
+      primitive: classify-tier
+      params:
+        plan-id: $trigger.scope-id
+    - primitive: update-record
+      params:
+        collection: plan
+        id: $trigger.scope-id
+        fields:
+          decomposer-config: $context.classify.tier

@@ -1,0 +1,18 @@
+# Coverage-driven re-decomposition strategy.
+# Fires when the coverage evaluator finds gaps in a plan's spec coverage.
+# The decomposition-attempt-limit trigger (defined in strategies/triggers/reconciliation.yml)
+# caps iterations to prevent divergence.
+
+re-decompose-on-gaps:
+  description: Re-decompose when coverage evaluation finds gaps
+  trigger: coverage-incomplete
+  scope: plan
+  priority: 780
+  action:
+    - primitive: re-decompose
+      params:
+        parent-id: $trigger.scope-id
+        parent-collection: plan
+        target-kind: spec
+        reason: coverage-gaps-detected
+        preserve-ids: $trigger.event.adequate-children

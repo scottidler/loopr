@@ -96,10 +96,9 @@ fn default_enabled() -> bool {
 
 /// Load all strategy definitions from a directory tree (recursive).
 /// Strategies are organized in subdirectories (e.g. `recovery/`, `reconciliation/`).
-/// The `fsm/` and `triggers/` subdirs at the ROOT level are skipped - they share the
-/// `strategies/` root but contain FSM and trigger definitions, not strategy files.
-/// This skip is anchored to the root level only; a `triggers/` subdir nested inside
-/// a strategy directory would still be scanned (though none currently exist).
+/// The `fsm/`, `triggers/`, and `roles/` subdirs at the ROOT level are skipped - they
+/// share the `strategies/` root but contain non-strategy YAML files with incompatible
+/// schemas. This skip is anchored to the root level only.
 pub fn load_dir(dir: &Path) -> eyre::Result<Vec<StrategyDefinition>> {
     let mut defs = Vec::new();
     load_dir_recursive(dir, dir, &mut defs)?;
@@ -120,7 +119,7 @@ fn load_dir_recursive(root: &Path, dir: &Path, defs: &mut Vec<StrategyDefinition
             // root but contain non-strategy YAML files with incompatible schemas.
             if dir == root {
                 let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if matches!(dir_name, "fsm" | "triggers") {
+                if matches!(dir_name, "fsm" | "triggers" | "roles") {
                     continue;
                 }
             }

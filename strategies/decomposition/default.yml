@@ -1,0 +1,40 @@
+# Decomposition strategies: spawn a single-level decomposer agent for each
+# Active record that has no children yet at the expected next level.
+# Multi-level flow (Plan -> Spec -> Phase -> Work) emerges from the FSM as
+# each level's children are promoted to Active by reconciliation strategies.
+
+decompose-plan:
+  description: Decompose an Active plan with no spec children
+  trigger: plan-decomposable
+  scope: plan
+  priority: 850
+  action:
+    - primitive: spawn-agent
+      guard: no-active-sessions
+      params:
+        role: decomposer
+        target-id: $trigger.scope-id
+
+decompose-spec:
+  description: Decompose an Active spec with no phase children
+  trigger: spec-decomposable
+  scope: spec
+  priority: 850
+  action:
+    - primitive: spawn-agent
+      guard: no-active-sessions
+      params:
+        role: decomposer
+        target-id: $trigger.scope-id
+
+decompose-phase:
+  description: Decompose an Active phase with no work children
+  trigger: phase-decomposable
+  scope: phase
+  priority: 850
+  action:
+    - primitive: spawn-agent
+      guard: no-active-sessions
+      params:
+        role: decomposer
+        target-id: $trigger.scope-id

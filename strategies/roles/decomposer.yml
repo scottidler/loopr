@@ -1,0 +1,32 @@
+# Decomposer role config - full mode (default).
+# The decomposer agent reads this file at spawn time based on the plan's
+# decomposer-config field. If the field is absent, default-config is used.
+# New decomposition shapes can be added as config variants without Rust changes.
+
+decomposer:
+  model: claude-sonnet-4-6
+  max-tokens: 4096
+  temperature: 0.3
+
+  # Fallback if plan.decomposer-config is not set.
+  default-config: full
+
+  rules:
+    plan:
+      target-kind: spec
+      prompt: decompose/spec.pmt
+      count-guidance: 1-3
+      dependency-pattern: sequential-chain
+      validation: advisory
+    spec:
+      target-kind: phase
+      prompt: decompose/phase.pmt
+      count-guidance: 1-5
+      dependency-pattern: sequential-chain
+      validation: advisory
+    phase:
+      target-kind: work
+      prompt: decompose/work.pmt
+      count-guidance: 1-5
+      dependency-pattern: fan-out
+      validation: advisory

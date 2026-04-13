@@ -1,0 +1,24 @@
+# Optional validation and ratification strategies.
+# Disabled by setting enabled: false on either strategy.
+# Validation mode (advisory vs blocking) is controlled in role config, not here.
+
+validate-after-decomposition:
+  description: Validate children after each decomposition level completes
+  trigger: decomposition-completed
+  scope: plan
+  priority: 800
+  action:
+    - primitive: validate-document
+      params:
+        collection: $trigger.event.child-collection
+        id: $trigger.event.child-id
+
+ratify-spec-level:
+  description: Ratify hierarchy when all specs are validated
+  trigger: spec-children-terminal
+  scope: spec
+  priority: 790
+  action:
+    - primitive: ratify-hierarchy
+      params:
+        plan-id: $trigger.scope-id

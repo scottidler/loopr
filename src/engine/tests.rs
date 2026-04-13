@@ -1423,3 +1423,72 @@ async fn tick_guard_skips_step_but_strategy_succeeds() {
     // Strategy succeeds even though the first step was skipped by the guard
     assert!(!outcome.had_failures);
 }
+
+// ─── Decomposition strategy tests ────────────────────────────────────────────
+
+#[test]
+fn decomposition_strategies_are_loaded() {
+    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    for required in &[
+        "decompose-plan",
+        "decompose-spec",
+        "decompose-phase",
+        "classify-and-configure",
+        "validate-after-decomposition",
+        "ratify-spec-level",
+        "re-decompose-on-gaps",
+    ] {
+        assert!(names.contains(required), "missing decomposition strategy: {}", required);
+    }
+}
+
+#[test]
+fn decomposition_strategies_have_correct_scopes() {
+    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let by_name: HashMap<&str, &StrategyDefinition> = defs.iter().map(|d| (d.name.as_str(), d)).collect();
+    assert_eq!(by_name["decompose-plan"].scope, "plan");
+    assert_eq!(by_name["decompose-spec"].scope, "spec");
+    assert_eq!(by_name["decompose-phase"].scope, "phase");
+    assert_eq!(by_name["classify-and-configure"].scope, "plan");
+    assert_eq!(by_name["re-decompose-on-gaps"].scope, "plan");
+}
+
+#[test]
+fn decomposition_strategies_have_correct_priorities() {
+    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let by_name: HashMap<&str, &StrategyDefinition> = defs.iter().map(|d| (d.name.as_str(), d)).collect();
+    assert_eq!(by_name["classify-and-configure"].priority, 1000);
+    assert_eq!(by_name["decompose-plan"].priority, 850);
+    assert_eq!(by_name["decompose-spec"].priority, 850);
+    assert_eq!(by_name["decompose-phase"].priority, 850);
+    assert_eq!(by_name["validate-after-decomposition"].priority, 800);
+    assert_eq!(by_name["ratify-spec-level"].priority, 790);
+    assert_eq!(by_name["re-decompose-on-gaps"].priority, 780);
+}
+
+#[test]
+fn classify_and_configure_has_named_classify_step() {
+    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let def = defs.iter().find(|d| d.name == "classify-and-configure").unwrap();
+    let named: Vec<&str> = def.action.iter().filter_map(|s| s.name.as_deref()).collect();
+    assert!(
+        named.contains(&"classify"),
+        "classify-and-configure should have a 'classify' named step"
+    );
+}
+
+#[test]
+fn roles_dir_is_not_loaded_as_strategies() {
+    // Verifies that strategies/roles/ is skipped by load_dir, so role config YAML
+    // (which has a different schema) does not cause parse errors.
+    let defs = schema::load_dir(&strategies_dir()).unwrap();
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    // Role config files are keyed under "decomposer", not valid strategy names.
+    // If roles/ were scanned this would either fail to parse or inject "decomposer"
+    // as a strategy with missing required fields.
+    assert!(
+        !names.contains(&"decomposer"),
+        "roles/ was scanned as strategy dir; 'decomposer' should not appear as a strategy"
+    );
+}
