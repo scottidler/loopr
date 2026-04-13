@@ -1,0 +1,631 @@
+//! IPC handlers for single-level decomposition.
+//!
+//! `decomposer.decompose` performs one level of decomposition: reads a parent
+//! record's markdown, calls the LLM to generate children, detects dependency
+//! cycles, resolves sibling dependencies, and persists children atomically via
+//! `TaskStore::create_many`. Multi-level flow emerges from engine ticks per Doc 6.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use eyre::{Context, bail, eyre};
+use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
+use tracing::{debug, info, instrument, warn};
+
+use crate::config::DecomposerConfig;
+use crate::daemon::context::Stores;
+use crate::domain::criteria::AcceptanceCriteria;
+use crate::domain::doc::DocKind;
+use crate::domain::markdown::{read_full_markdown, update_parent_children, write_doc_markdown_body};
+use crate::domain::phase::Phase;
+use crate::domain::spec::Spec;
+use crate::domain::work::Work;
+use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
+use crate::prompts::SECTION_AC;
+use crate::validator::client::HttpClient;
+
+const LLM_CALL_TIMEOUT_SECS: u64 = 180;
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+/// A single child document parsed from the LLM's JSON response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChildEntry {
+    title: String,
+    content: String,
+    #[serde(default)]
+    dependencies: Vec<String>,
+    #[serde(default)]
+    acceptance_criteria: Vec<String>,
+}
+
+/// In-memory child record produced by decompose_single_level.
+#[derive(Debug)]
+struct ChildRecord {
+    id: String,
+    kind: DocKind,
+    parent_id: String,
+    title: String,
+    content: String,
+    dependencies: Vec<String>,
+    acceptance_criteria: Vec<String>,
+}
+
+// ─── Handler ────────────────────────────────────────────────────────────────
+
+#[instrument(skip_all, fields(
+    parent_id = ?req.params.get("parent_id"),
+    parent_collection = ?req.params.get("parent_collection"),
+    target_kind = ?req.params.get("target_kind"),
+))]
+pub(super) async fn handle_decomposer_decompose(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    try_async_handler!(req.id, {
+        let parent_id = req
+            .params
+            .get("parent_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing parent_id"))?
+            .to_string();
+        // parent_collection is validated but not currently used in persist_children
+        // (the match is on target_kind). Retained for future create_many integration.
+        let _parent_collection = req
+            .params
+            .get("parent_collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing parent_collection"))?;
+        let target_kind_str = req
+            .params
+            .get("target_kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing target_kind"))?;
+        let target_kind = match target_kind_str {
+            "spec" => DocKind::Spec,
+            "phase" => DocKind::Phase,
+            "work" => DocKind::Work,
+            other => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params(&format!("invalid target_kind: {}", other)),
+                ));
+            }
+        };
+        let count_guidance = req
+            .params
+            .get("count_guidance")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1-5")
+            .to_string();
+        let dependency_pattern = req
+            .params
+            .get("dependency_pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("fan-out")
+            .to_string();
+
+        // Read parent markdown content from docs/loopr/<id>.md
+        let repo_path = &stores.config.project.repo_path;
+        let parent_content = read_full_markdown(std::path::Path::new(repo_path), &parent_id)
+            .map_err(|e| eyre!("failed to read parent markdown for {}: {}", parent_id, e))?;
+
+        if parent_content.is_empty() {
+            return Ok(DaemonResponse::err(
+                req.id,
+                RpcError::invalid_params(&format!("parent {} has no markdown content", parent_id)),
+            ));
+        }
+
+        // Call LLM for single-level decomposition
+        let config = &stores.config.decomposer;
+        let http_client = crate::validator::client::ReqwestClient::new();
+        let records = decompose_single_level(
+            &parent_content,
+            &parent_id,
+            target_kind,
+            config,
+            &http_client,
+            &count_guidance,
+            &dependency_pattern,
+        )
+        .await?;
+
+        let child_count = records.len();
+        if child_count == 0 {
+            return Ok(DaemonResponse::ok(
+                req.id,
+                serde_json::json!({ "children": [], "child_count": 0 }),
+            ));
+        }
+
+        // Persist children atomically
+        let children_json = persist_children(stores, event_tx, &parent_id, records)?;
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({
+                "children": children_json,
+                "child_count": child_count,
+            }),
+        ))
+    })
+}
+
+// ─── Core decomposition ─────────────────────────────────────────────────────
+
+/// Single-level decomposition: one LLM call, parse, cycle detect, resolve deps.
+/// Does NOT validate children - that's the engine's job (validate-after-decomposition strategy).
+#[instrument(skip_all, fields(parent_id = %parent_id, target_kind = %target_kind))]
+async fn decompose_single_level<H: HttpClient + Sync>(
+    parent_content: &str,
+    parent_id: &str,
+    target_kind: DocKind,
+    config: &DecomposerConfig,
+    http_client: &H,
+    count_guidance: &str,
+    dependency_pattern: &str,
+) -> eyre::Result<Vec<ChildRecord>> {
+    let prompt = build_decompose_prompt(target_kind, parent_content, count_guidance, dependency_pattern)?;
+    let children = match call_llm_for_children(http_client, config, &prompt).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("decomposition failed, retrying once: {}", e);
+            let retry_prompt = format!(
+                "{}\n\n## Previous Attempt Failed\n\n{}\n\nPlease fix the issues and try again.",
+                prompt, e
+            );
+            call_llm_for_children(http_client, config, &retry_prompt).await?
+        }
+    };
+
+    // Cycle detection
+    let dep_graph: HashMap<String, Vec<String>> = children
+        .iter()
+        .map(|c| (c.title.clone(), c.dependencies.clone()))
+        .collect();
+    detect_cycles(&dep_graph)?;
+
+    // Build ChildRecords with domain IDs
+    let mut records: Vec<(ChildRecord, Vec<String>)> = Vec::new();
+    for child in &children {
+        let id = crate::id::generate_id(target_kind.id_prefix());
+        let ac = if child.acceptance_criteria.is_empty() && target_kind == DocKind::Work {
+            extract_acceptance_criteria(&child.content)
+        } else {
+            child.acceptance_criteria.clone()
+        };
+        records.push((
+            ChildRecord {
+                id,
+                kind: target_kind,
+                parent_id: parent_id.to_string(),
+                title: child.title.clone(),
+                content: child.content.clone(),
+                dependencies: Vec::new(),
+                acceptance_criteria: ac,
+            },
+            child.dependencies.clone(),
+        ));
+    }
+
+    // Resolve dependency titles to sibling IDs (local-only)
+    let local_title_to_id: HashMap<String, String> =
+        records.iter().map(|(r, _)| (r.title.clone(), r.id.clone())).collect();
+    let local_lower: HashMap<String, String> = local_title_to_id
+        .iter()
+        .map(|(k, v)| (k.trim().to_lowercase(), v.clone()))
+        .collect();
+
+    let mut final_records: Vec<ChildRecord> = Vec::new();
+    for (mut record, dep_titles) in records {
+        let mut resolved = Vec::new();
+        let mut unresolved = Vec::new();
+        for title in &dep_titles {
+            if let Some(id) = local_title_to_id
+                .get(title)
+                .or_else(|| local_lower.get(&title.trim().to_lowercase()))
+            {
+                resolved.push(id.clone());
+            } else {
+                unresolved.push(title.clone());
+            }
+        }
+        record.dependencies = resolved;
+        if !unresolved.is_empty() {
+            bail!(
+                "dependency resolution failed for '{}': unresolved deps {:?}",
+                record.title,
+                unresolved
+            );
+        }
+        final_records.push(record);
+    }
+
+    info!(
+        "decompose_single_level: parent={} -> {} {}(s)",
+        parent_id,
+        final_records.len(),
+        target_kind
+    );
+
+    Ok(final_records)
+}
+
+// ─── Persistence ────────────────────────────────────────────────────────────
+
+/// Persist children atomically via create_many, insert into in-memory stores,
+/// write advisory markdown files, and emit record_created events.
+fn persist_children(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    parent_id: &str,
+    records: Vec<ChildRecord>,
+) -> eyre::Result<Vec<serde_json::Value>> {
+    let repo_path = stores.config.project.repo_path.clone();
+    let target_kind = records
+        .first()
+        .map(|r| r.kind)
+        .ok_or_else(|| eyre!("no records to persist"))?;
+
+    let mut children_json = Vec::new();
+
+    match target_kind {
+        DocKind::Spec => {
+            let domain_records: Vec<Spec> = records
+                .iter()
+                .map(|r| {
+                    let mut spec = Spec::new(r.parent_id.clone(), r.title.clone());
+                    spec.id = r.id.clone();
+                    spec.dependencies = r.dependencies.clone();
+                    spec.acceptance_criteria = AcceptanceCriteria(r.acceptance_criteria.clone());
+                    spec
+                })
+                .collect();
+
+            // TODO(create_many): Replace sequential creates with store.create_many(domain_records)
+            // for atomic batch persistence. Sequential creates are NOT crash-atomic.
+            if let Some(store) = &stores.store {
+                let mut sg = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+                for rec in &domain_records {
+                    sg.create(rec.clone())
+                        .map_err(|e| eyre!("failed to persist spec {}: {}", rec.id, e))?;
+                }
+            }
+
+            let mut specs = stores.write_specs()?;
+            for (rec, child_record) in domain_records.into_iter().zip(records.iter()) {
+                children_json.push(serde_json::json!({"id": rec.id, "title": rec.title}));
+                let id = rec.id.clone();
+                specs.insert(id.clone(), rec);
+                // Advisory markdown write
+                if let Err(e) =
+                    write_doc_markdown_body(std::path::Path::new(&repo_path), &specs[&id], &child_record.content)
+                {
+                    warn!("docs/loopr write failed for {}: {}", id, e);
+                }
+                update_parent_children(std::path::Path::new(&repo_path), parent_id, &id, &child_record.title);
+                let _ = event_tx.send(DaemonEvent::record_created("spec", &id));
+            }
+        }
+        DocKind::Phase => {
+            let domain_records: Vec<Phase> = records
+                .iter()
+                .map(|r| {
+                    let mut phase = Phase::new(r.parent_id.clone(), r.title.clone());
+                    phase.id = r.id.clone();
+                    phase.dependencies = r.dependencies.clone();
+                    phase.acceptance_criteria = AcceptanceCriteria(r.acceptance_criteria.clone());
+                    phase
+                })
+                .collect();
+
+            if let Some(store) = &stores.store {
+                let mut sg = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+                for rec in &domain_records {
+                    sg.create(rec.clone())
+                        .map_err(|e| eyre!("failed to persist phase {}: {}", rec.id, e))?;
+                }
+            }
+
+            let mut phases = stores.write_phases()?;
+            for (rec, child_record) in domain_records.into_iter().zip(records.iter()) {
+                children_json.push(serde_json::json!({"id": rec.id, "title": rec.title}));
+                let id = rec.id.clone();
+                phases.insert(id.clone(), rec);
+                if let Err(e) =
+                    write_doc_markdown_body(std::path::Path::new(&repo_path), &phases[&id], &child_record.content)
+                {
+                    warn!("docs/loopr write failed for {}: {}", id, e);
+                }
+                update_parent_children(std::path::Path::new(&repo_path), parent_id, &id, &child_record.title);
+                let _ = event_tx.send(DaemonEvent::record_created("phase", &id));
+            }
+        }
+        DocKind::Work => {
+            let domain_records: Vec<Work> = records
+                .iter()
+                .map(|r| {
+                    let mut work = Work::new(r.parent_id.clone(), r.title.clone());
+                    work.id = r.id.clone();
+                    work.dependencies = r.dependencies.clone();
+                    work.acceptance_criteria = AcceptanceCriteria(r.acceptance_criteria.clone());
+                    work
+                })
+                .collect();
+
+            if let Some(store) = &stores.store {
+                let mut sg = store.lock().map_err(|_| eyre!("taskstore lock poisoned"))?;
+                for rec in &domain_records {
+                    sg.create(rec.clone())
+                        .map_err(|e| eyre!("failed to persist work {}: {}", rec.id, e))?;
+                }
+            }
+
+            let mut works = stores.write_works()?;
+            for (rec, child_record) in domain_records.into_iter().zip(records.iter()) {
+                children_json.push(serde_json::json!({"id": rec.id, "title": rec.title}));
+                let id = rec.id.clone();
+                works.insert(id.clone(), rec);
+                if let Err(e) =
+                    write_doc_markdown_body(std::path::Path::new(&repo_path), &works[&id], &child_record.content)
+                {
+                    warn!("docs/loopr write failed for {}: {}", id, e);
+                }
+                update_parent_children(std::path::Path::new(&repo_path), parent_id, &id, &child_record.title);
+                let _ = event_tx.send(DaemonEvent::record_created("work", &id));
+            }
+        }
+        DocKind::Plan => {
+            bail!("cannot create Plan children via decomposer.decompose");
+        }
+    }
+
+    Ok(children_json)
+}
+
+// ─── Prompt construction ────────────────────────────────────────────────────
+
+/// Build decomposition prompt with count_guidance and dependency_pattern injected.
+fn build_decompose_prompt(
+    target_kind: DocKind,
+    parent_content: &str,
+    count_guidance: &str,
+    dependency_pattern: &str,
+) -> eyre::Result<String> {
+    let prompts = crate::prompts::store();
+    let (instructions, template_text) = match target_kind {
+        DocKind::Spec => (&prompts.decompose_spec, include_str!("../../../docs/templates/spec.md")),
+        DocKind::Phase => (
+            &prompts.decompose_phase,
+            include_str!("../../../docs/templates/phase.md"),
+        ),
+        DocKind::Work => (&prompts.decompose_work, include_str!("../../../docs/templates/work.md")),
+        DocKind::Plan => bail!("cannot decompose into Plan"),
+    };
+
+    Ok(format!(
+        "{}\n\n## Guidance\n\n- Produce {} child documents\n- Dependency pattern: {}\n\n## Template\n\n{}\n\n## Parent Document\n\n{}",
+        instructions, count_guidance, dependency_pattern, template_text, parent_content
+    ))
+}
+
+/// Tool schema for structured decomposition output.
+fn decomposition_tool_schema() -> serde_json::Value {
+    serde_json::json!({
+        "name": "submit_decomposition",
+        "description": "Submit the decomposed child documents. Call this exactly once with all children.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "array",
+                    "description": "The decomposed child documents",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Title of the child document"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Full markdown content of the child document"
+                            },
+                            "dependencies": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Titles of sibling documents this document depends on"
+                            },
+                            "acceptance_criteria": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Acceptance criteria assertions for this document"
+                            }
+                        },
+                        "required": ["title", "content"]
+                    }
+                }
+            },
+            "required": ["children"]
+        }
+    })
+}
+
+// ─── LLM calls ──────────────────────────────────────────────────────────────
+
+/// Call the LLM using tool-use structured output and return child entries.
+#[instrument(skip_all, fields(model = %config.llm.model, provider = %config.provider))]
+async fn call_llm_for_children<H: HttpClient + Sync>(
+    http_client: &H,
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> eyre::Result<Vec<ChildEntry>> {
+    let api_key = std::env::var(&config.llm.api_key_env)
+        .context(format!("missing API key env var: {}", config.llm.api_key_env))?;
+
+    let api_url = match config.provider.as_str() {
+        "anthropic" => "https://api.anthropic.com/v1/messages",
+        other => bail!("unsupported LLM provider: {}", other),
+    };
+
+    const MIN_GENERATION_TOKENS: u32 = 8192;
+    let generation_tokens = config.llm.max_tokens.max(MIN_GENERATION_TOKENS);
+
+    let request = serde_json::json!({
+        "model": config.llm.model,
+        "max_tokens": generation_tokens,
+        "temperature": config.llm.temperature,
+        "tools": [decomposition_tool_schema()],
+        "tool_choice": {"type": "tool", "name": "submit_decomposition"},
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let body = serde_json::to_string(&request)?;
+    let headers = [
+        ("content-type", "application/json"),
+        ("x-api-key", api_key.as_str()),
+        ("anthropic-version", "2023-06-01"),
+    ];
+
+    let response_text = tokio::time::timeout(
+        Duration::from_secs(LLM_CALL_TIMEOUT_SECS),
+        http_client.post(api_url, &headers, &body),
+    )
+    .await
+    .map_err(|_| eyre::eyre!("LLM call timed out after {}s", LLM_CALL_TIMEOUT_SECS))??;
+
+    let response: serde_json::Value =
+        serde_json::from_str(&response_text).context("failed to parse LLM API response")?;
+
+    if let Some(err) = response.get("error") {
+        let snippet: String = response_text.chars().take(500).collect();
+        bail!("Anthropic API error: {} (raw: {})", err, snippet);
+    }
+
+    let stop_reason = response
+        .get("stop_reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    debug!(
+        "response stop_reason={} content_len={}",
+        stop_reason,
+        response["content"].as_array().map(|a| a.len()).unwrap_or(0)
+    );
+
+    if stop_reason == "max_tokens" {
+        bail!(
+            "decomposition hit max_tokens ({} tokens) - tool input was truncated",
+            generation_tokens
+        );
+    }
+
+    // Extract tool_use input.children, fall back to text parsing
+    let children = if let Some(tool_input) = response["content"]
+        .as_array()
+        .and_then(|blocks| blocks.iter().find(|b| b["type"].as_str() == Some("tool_use")))
+        .and_then(|b| b.get("input"))
+        .and_then(|input| input.get("children"))
+    {
+        serde_json::from_value::<Vec<ChildEntry>>(tool_input.clone())
+            .context("failed to parse tool_use input.children")?
+    } else {
+        let snippet: String = response_text.chars().take(800).collect();
+        warn!(
+            "model did not use tool, falling back to text parsing (response: {})",
+            snippet
+        );
+        let text = response["content"]
+            .as_array()
+            .and_then(|blocks| blocks.iter().find(|b| b["type"].as_str() == Some("text")))
+            .and_then(|b| b["text"].as_str())
+            .ok_or_else(|| eyre::eyre!("LLM returned neither tool_use nor text content"))?;
+        let json_text = text
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+        serde_json::from_str::<Vec<ChildEntry>>(json_text)
+            .context("failed to parse LLM text output as child documents")?
+    };
+
+    if children.is_empty() {
+        bail!("LLM produced zero child documents");
+    }
+
+    debug!("got {} children", children.len());
+    Ok(children)
+}
+
+// ─── Utility functions ──────────────────────────────────────────────────────
+
+/// Detect cycles in a dependency graph via topological sort.
+pub(crate) fn detect_cycles(nodes: &HashMap<String, Vec<String>>) -> eyre::Result<()> {
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    for title in nodes.keys() {
+        in_degree.entry(title.as_str()).or_insert(0);
+    }
+    for deps in nodes.values() {
+        for dep in deps {
+            if let Some(deg) = in_degree.get_mut(dep.as_str()) {
+                *deg += 1;
+            }
+        }
+    }
+
+    let mut queue: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, deg)| **deg == 0)
+        .map(|(title, _)| *title)
+        .collect();
+    let mut visited = 0usize;
+
+    while let Some(node) = queue.pop() {
+        visited += 1;
+        if let Some(deps) = nodes.get(node) {
+            for dep in deps {
+                if let Some(deg) = in_degree.get_mut(dep.as_str()) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push(dep.as_str());
+                    }
+                }
+            }
+        }
+    }
+
+    if visited < nodes.len() {
+        let cycled: Vec<_> = in_degree.iter().filter(|(_, deg)| **deg > 0).map(|(t, _)| *t).collect();
+        bail!("dependency cycle detected among: {}", cycled.join(", "));
+    }
+    Ok(())
+}
+
+/// Extract acceptance criteria lines from a markdown `## Acceptance Criteria` section.
+fn extract_acceptance_criteria(content: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut criteria = Vec::new();
+    for line in content.lines() {
+        if line.starts_with(&format!("## {}", SECTION_AC)) {
+            in_section = true;
+            continue;
+        }
+        if in_section && line.starts_with("## ") {
+            break;
+        }
+        if in_section {
+            let trimmed = line.trim();
+            if trimmed.starts_with("assert") || trimmed.starts_with("- ") {
+                let clean = trimmed.trim_start_matches("- ").to_string();
+                if !clean.is_empty() {
+                    criteria.push(clean);
+                }
+            }
+        }
+    }
+    criteria
+}

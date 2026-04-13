@@ -93,6 +93,7 @@ mod bundle;
 mod chat;
 mod common;
 mod coordinator;
+mod decomposer;
 mod doc;
 mod integrator;
 mod learning;
@@ -214,6 +215,7 @@ pub async fn dispatch(
         "agent.status" => handle_agent_status(stores, req),
         "agent.list" => handle_agent_list(stores, req),
         "agent.output" => handle_agent_output(stores, req),
+        "decomposer.decompose" => decomposer::handle_decomposer_decompose(stores, event_tx, req).await,
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     };
 
