@@ -124,7 +124,13 @@ pub async fn run_agent_task(
     info!("{} Agent task started", prefix);
 
     // Create the in-process IPC bridge for this agent
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx.clone(),
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     // Transition to Running
     {

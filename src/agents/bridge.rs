@@ -5,6 +5,7 @@ use tokio::sync::broadcast;
 use crate::config::Config;
 use crate::daemon::context::Stores;
 use crate::daemon::handlers;
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::worktree::manager::WorktreeManager;
 
@@ -17,6 +18,7 @@ pub struct AgentIpcBridge {
     event_tx: broadcast::Sender<DaemonEvent>,
     worktree_mgr: WorktreeManager,
     config: Config,
+    fsm: Arc<FsmInterpreter>,
     next_id: std::sync::atomic::AtomicU64,
 }
 
@@ -26,12 +28,14 @@ impl AgentIpcBridge {
         event_tx: broadcast::Sender<DaemonEvent>,
         worktree_mgr: WorktreeManager,
         config: Config,
+        fsm: Arc<FsmInterpreter>,
     ) -> Self {
         Self {
             stores,
             event_tx,
             worktree_mgr,
             config,
+            fsm,
             next_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
@@ -65,6 +69,7 @@ impl AgentIpcBridge {
                 &self.event_tx,
                 &self.worktree_mgr,
                 &self.config.integrator,
+                &self.fsm,
                 req,
             ))
         })
@@ -90,6 +95,7 @@ mod tests {
         };
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let (event_tx, _) = broadcast::channel(16);
+        let fsm = Arc::new(FsmInterpreter::embedded().unwrap());
 
         // Open TaskStore and rebuild indexes like DaemonContext does
         let store = Store::open(&dir).unwrap();
@@ -98,7 +104,7 @@ mod tests {
 
         (
             dir,
-            AgentIpcBridge::new(Arc::new(stores), event_tx, worktree_mgr, config),
+            AgentIpcBridge::new(Arc::new(stores), event_tx, worktree_mgr, config, fsm),
         )
     }
 

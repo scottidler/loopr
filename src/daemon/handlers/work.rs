@@ -11,6 +11,8 @@ use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::transition::Transition;
 use crate::domain::work::{Work, WorkStatus};
+use crate::fsm::runtime::FsmInterpreter;
+use crate::fsm::status::FsmStatus;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 use taskstore::{Filter, FilterOp, IndexValue};
@@ -373,6 +375,7 @@ fn unblock_dependents(stores: &Arc<Stores>, done_id: &str, event_tx: &broadcast:
 pub(super) fn handle_work_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    fsm: &FsmInterpreter,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
@@ -406,10 +409,13 @@ pub(super) fn handle_work_transition(
         };
 
         let from = wi.status();
+        let from_yaml = from.to_yaml_name();
+        let to_yaml = target_status.to_yaml_name();
+        let role_str = role.to_string();
         let result = if is_override {
-            from.validate_override(target_status, role)
+            fsm.validate_override(WorkStatus::fsm_name(), from_yaml, to_yaml, &role_str)
         } else {
-            from.validate_transition(target_status, role)
+            fsm.validate_transition(WorkStatus::fsm_name(), from_yaml, to_yaml, &role_str)
         };
         match result {
             Err(e) => {
@@ -418,7 +424,7 @@ pub(super) fn handle_work_transition(
                     &id,
                     &format!("{:?}", from),
                     &format!("{:?}", target_status),
-                    &role.to_string(),
+                    &role_str,
                     &e.to_string(),
                 ));
                 return Ok(DaemonResponse::err(
@@ -634,7 +640,7 @@ mod tests {
     use tokio::sync::broadcast;
 
     use crate::daemon::context::Stores;
-    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::test_dispatch as dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,
     };

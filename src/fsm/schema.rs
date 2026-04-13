@@ -75,7 +75,7 @@ pub fn load_dir(dir: &Path) -> eyre::Result<Vec<FsmDefinition>> {
 /// struct carries it for contexts where the HashMap is not available.
 /// keyby's derive macro can't drive nested HashMap deserialization, so
 /// we populate the field in a post-deserialization pass.
-fn inject_transition_names(def: &mut FsmDefinition) {
+pub fn inject_transition_names(def: &mut FsmDefinition) {
     for targets in def.transitions.values_mut() {
         for (target_name, rule) in targets.iter_mut() {
             rule.name = target_name.clone();

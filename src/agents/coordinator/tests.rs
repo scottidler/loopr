@@ -73,7 +73,13 @@ pub(crate) fn test_coordinator(
     let (event_tx, _rx) = broadcast::channel(16);
     let session = AgentSession::new(AgentKind::Coordinator, "test-model".into());
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx.clone(),
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
     let ctx = AgentContext {
         session,
         stores: stores.clone(),
@@ -1193,7 +1199,13 @@ async fn test_sweep_integrated_to_done_transitions_works() {
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx,
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     sweep_integrated_to_done(&stores, &coord_state, &bridge, TEST_PREFIX);
 
@@ -1222,7 +1234,13 @@ async fn test_sweep_noop_when_no_integrated_works() {
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx,
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     sweep_integrated_to_done(&stores, &coord_state, &bridge, TEST_PREFIX);
 
@@ -1784,7 +1802,13 @@ async fn test_sweep_stuck_inreview_with_merged_bundle() {
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx,
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     sweep_stuck_inreview(&stores, &coord_state, &bridge, TEST_PREFIX);
 
@@ -1827,7 +1851,13 @@ async fn test_sweep_inreview_not_all_terminal() {
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx,
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     sweep_stuck_inreview(&stores, &coord_state, &bridge, TEST_PREFIX);
 
@@ -1866,7 +1896,13 @@ async fn test_sweep_inreview_no_merged_bundle() {
 
     let (event_tx, _rx) = broadcast::channel(16);
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".wt"));
-    let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        event_tx,
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     sweep_stuck_inreview(&stores, &coord_state, &bridge, TEST_PREFIX);
 

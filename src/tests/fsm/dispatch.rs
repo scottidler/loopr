@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 use crate::config::IntegratorConfig;
 use crate::daemon::context::Stores;
 use crate::daemon::handlers::dispatch;
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
 use crate::worktree::manager::WorktreeManager;
 
@@ -16,6 +17,7 @@ fn setup() -> (
     broadcast::Sender<DaemonEvent>,
     WorktreeManager,
     IntegratorConfig,
+    FsmInterpreter,
 ) {
     let stores = Arc::new(Stores::new());
     let (tx, _) = broadcast::channel(64);
@@ -24,7 +26,8 @@ fn setup() -> (
         validation_commands: vec!["echo ok".to_string()],
         ..Default::default()
     };
-    (stores, tx, wm, ic)
+    let fsm = FsmInterpreter::embedded().unwrap();
+    (stores, tx, wm, ic, fsm)
 }
 
 async fn dispatch_ok(
@@ -32,11 +35,12 @@ async fn dispatch_ok(
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
     ic: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     method: &str,
     params: serde_json::Value,
 ) -> serde_json::Value {
     let req = DaemonRequest::new(1, method, params);
-    let resp = dispatch(stores, tx, wm, ic, req).await;
+    let resp = dispatch(stores, tx, wm, ic, fsm, req).await;
     assert!(!resp.is_error(), "{method} failed: {:?}", resp.error);
     resp.result.unwrap()
 }
@@ -46,11 +50,12 @@ async fn dispatch_err(
     tx: &broadcast::Sender<DaemonEvent>,
     wm: &WorktreeManager,
     ic: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     method: &str,
     params: serde_json::Value,
 ) -> i32 {
     let req = DaemonRequest::new(1, method, params);
-    let resp = dispatch(stores, tx, wm, ic, req).await;
+    let resp = dispatch(stores, tx, wm, ic, fsm, req).await;
     assert!(
         resp.is_error(),
         "{method} expected error but got success: {:?}",
@@ -63,12 +68,13 @@ async fn dispatch_err(
 
 #[tokio::test]
 async fn plan_full_lifecycle_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
     let plan = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.create",
         json!({"title": "P", "description": "D"}),
     )
@@ -81,11 +87,12 @@ async fn plan_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": id, "target_status": "active"}),
     )
     .await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "plan.get", json!({"id": id})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.get", json!({"id": id})).await;
     assert_eq!(got["status"], "active");
 
     // Active -> Complete
@@ -94,11 +101,12 @@ async fn plan_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": id, "target_status": "complete"}),
     )
     .await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "plan.get", json!({"id": id})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.get", json!({"id": id})).await;
     assert_eq!(got["status"], "complete");
 
     // Complete -> anything should fail
@@ -107,6 +115,7 @@ async fn plan_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": id, "target_status": "active"}),
     )
@@ -116,12 +125,13 @@ async fn plan_full_lifecycle_through_dispatch() {
 
 #[tokio::test]
 async fn plan_abandon_from_draft_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
     let plan = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.create",
         json!({"title": "P", "description": "D"}),
     )
@@ -133,11 +143,12 @@ async fn plan_abandon_from_draft_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": id, "target_status": "abandoned"}),
     )
     .await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "plan.get", json!({"id": id})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "plan.get", json!({"id": id})).await;
     assert_eq!(got["status"], "abandoned");
 
     // Abandoned -> anything should fail
@@ -146,6 +157,7 @@ async fn plan_abandon_from_draft_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": id, "target_status": "active"}),
     )
@@ -157,7 +169,7 @@ async fn plan_abandon_from_draft_through_dispatch() {
 
 #[tokio::test]
 async fn work_full_lifecycle_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
     // Create hierarchy
     let plan = dispatch_ok(
@@ -165,6 +177,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.create",
         json!({"title": "P", "description": "D"}),
     )
@@ -175,6 +188,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
     )
@@ -185,6 +199,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "spec.create",
         json!({"parent_id": plan_id, "title": "S", "description": "D"}),
     )
@@ -195,6 +210,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
     )
@@ -205,6 +221,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
     )
@@ -215,6 +232,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
     )
@@ -225,6 +243,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.create",
         json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"], "acceptance_criteria": ["tests pass"]}),
     )
@@ -238,6 +257,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.transition",
         json!({"id": wi_id, "target_status": "InProgress", "role": "coordinator", "assignee": "agent-1"}),
     )
@@ -249,6 +269,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feature/test"}),
     )
@@ -259,6 +280,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.transition",
         json!({"id": wi_id, "target_status": "InReview", "role": "implementer"}),
     )
@@ -268,6 +290,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.transition",
         json!({"id": wi_id, "target_status": "Integrated", "role": "integrator"}),
     )
@@ -277,12 +300,13 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.transition",
         json!({"id": wi_id, "target_status": "Done", "role": "coordinator"}),
     )
     .await;
 
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "work.get", json!({"id": wi_id})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "work.get", json!({"id": wi_id})).await;
     assert_eq!(got["status"], "Done");
 
     // Done -> anything should fail
@@ -291,6 +315,7 @@ async fn work_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.transition",
         json!({"id": wi_id, "target_status": "Ready", "role": "coordinator"}),
     )
@@ -302,7 +327,7 @@ async fn work_full_lifecycle_through_dispatch() {
 
 #[tokio::test]
 async fn bundle_full_lifecycle_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
     // Create hierarchy + work item
     let plan = dispatch_ok(
@@ -310,6 +335,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.create",
         json!({"title": "P", "description": "D"}),
     )
@@ -320,6 +346,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
     )
@@ -329,6 +356,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "spec.create",
         json!({"parent_id": plan_id, "title": "S", "description": "D"}),
     )
@@ -339,6 +367,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
     )
@@ -348,6 +377,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
     )
@@ -358,6 +388,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
     )
@@ -367,6 +398,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.create",
         json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
     )
@@ -378,6 +410,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "feature/test"}),
     )
@@ -391,6 +424,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": bid, "target_status": "Triaged", "role": "coordinator"}),
     )
@@ -400,6 +434,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": bid, "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
@@ -409,6 +444,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": bid, "target_status": "Accepted", "role": "coordinator"}),
     )
@@ -418,6 +454,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": bid, "target_status": "Integrating", "role": "integrator"}),
     )
@@ -427,12 +464,13 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": bid, "target_status": "Merged", "role": "integrator"}),
     )
     .await;
 
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "bundle.get", json!({"id": bid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "bundle.get", json!({"id": bid})).await;
     assert_eq!(got["status"], "Merged");
 
     // Merged -> anything should fail
@@ -441,6 +479,7 @@ async fn bundle_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": bid, "target_status": "Proposed", "role": "coordinator"}),
     )
@@ -452,12 +491,13 @@ async fn bundle_full_lifecycle_through_dispatch() {
 
 #[tokio::test]
 async fn bundle_rejection_at_every_stage() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
     let plan = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.create",
         json!({"title": "P", "description": "D"}),
     )
@@ -468,6 +508,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": plan_id, "target_status": "active"}),
     )
@@ -477,6 +518,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "spec.create",
         json!({"parent_id": plan_id, "title": "S", "description": "D"}),
     )
@@ -487,6 +529,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "spec.transition",
         json!({"id": spec_id, "target_status": "active"}),
     )
@@ -496,6 +539,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "phase.create",
         json!({"parent_id": spec_id, "title": "Ph", "description": "D"}),
     )
@@ -506,6 +550,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "phase.transition",
         json!({"id": phase_id, "target_status": "active"}),
     )
@@ -515,6 +560,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "work.create",
         json!({"parent_id": phase_id, "title": "WI", "description": "D", "files": ["src/"]}),
     )
@@ -527,6 +573,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "f/1"}),
     )
@@ -536,6 +583,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": b1["id"].as_str().unwrap(), "target_status": "Rejected", "role": "reviewer"}),
     )
@@ -547,6 +595,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "f/2"}),
     )
@@ -556,6 +605,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": b2["id"].as_str().unwrap(), "target_status": "Triaged", "role": "coordinator"}),
     )
@@ -565,6 +615,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": b2["id"].as_str().unwrap(), "target_status": "Rejected", "role": "coordinator"}),
     )
@@ -576,6 +627,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.create",
         json!({"work_id": wi_id, "branch_name": "f/3"}),
     )
@@ -585,6 +637,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": b3["id"].as_str().unwrap(), "target_status": "Triaged", "role": "coordinator"}),
     )
@@ -594,6 +647,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": b3["id"].as_str().unwrap(), "target_status": "Reviewed", "role": "reviewer", "verification": "tests passed"}),
     )
@@ -603,6 +657,7 @@ async fn bundle_rejection_at_every_stage() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "bundle.transition",
         json!({"id": b3["id"].as_str().unwrap(), "target_status": "Rejected", "role": "reviewer"}),
     )
@@ -613,9 +668,9 @@ async fn bundle_rejection_at_every_stage() {
 
 #[tokio::test]
 async fn tick_full_lifecycle_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
-    let tick = dispatch_ok(&s, &tx, &wm, &ic, "tick.create", json!({"number": 1})).await;
+    let tick = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "tick.create", json!({"number": 1})).await;
     let tid = tick["id"].as_str().unwrap().to_string();
     assert_eq!(tick["status"], "Open");
 
@@ -624,6 +679,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Sealing", "role": "integrator"}),
     )
@@ -633,6 +689,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Validating", "role": "integrator"}),
     )
@@ -642,12 +699,13 @@ async fn tick_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Published", "role": "integrator"}),
     )
     .await;
 
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "tick.get", json!({"id": tid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "tick.get", json!({"id": tid})).await;
     assert_eq!(got["status"], "Published");
 
     // Published -> anything should fail
@@ -656,6 +714,7 @@ async fn tick_full_lifecycle_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Open", "role": "integrator"}),
     )
@@ -665,9 +724,9 @@ async fn tick_full_lifecycle_through_dispatch() {
 
 #[tokio::test]
 async fn tick_failure_path_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
-    let tick = dispatch_ok(&s, &tx, &wm, &ic, "tick.create", json!({"number": 1})).await;
+    let tick = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "tick.create", json!({"number": 1})).await;
     let tid = tick["id"].as_str().unwrap().to_string();
 
     dispatch_ok(
@@ -675,6 +734,7 @@ async fn tick_failure_path_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Sealing", "role": "integrator"}),
     )
@@ -684,6 +744,7 @@ async fn tick_failure_path_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Validating", "role": "integrator"}),
     )
@@ -693,12 +754,13 @@ async fn tick_failure_path_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "tick.transition",
         json!({"id": tid, "target_status": "Failed", "role": "integrator"}),
     )
     .await;
 
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "tick.get", json!({"id": tid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "tick.get", json!({"id": tid})).await;
     assert_eq!(got["status"], "Failed");
 }
 
@@ -706,13 +768,14 @@ async fn tick_failure_path_through_dispatch() {
 
 #[tokio::test]
 async fn wrong_role_rejected_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
     let plan = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.create",
         json!({"title": "P", "description": "D"}),
     )
@@ -725,6 +788,7 @@ async fn wrong_role_rejected_through_dispatch() {
         &tx,
         &wm,
         &ic,
+        &fsm,
         "plan.transition",
         json!({"id": id, "target_status": "active", "role": "implementer"}),
     )
@@ -736,13 +800,14 @@ async fn wrong_role_rejected_through_dispatch() {
 
 #[tokio::test]
 async fn lock_full_lifecycle_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
     let lock = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "lock.create",
         json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord"}),
     )
@@ -750,28 +815,29 @@ async fn lock_full_lifecycle_through_dispatch() {
     let lid = lock["id"].as_str().unwrap().to_string();
     assert_eq!(lock["status"], "active");
 
-    dispatch_ok(&s, &tx, &wm, &ic, "lock.release", json!({"id": lid})).await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "lock.get", json!({"id": lid})).await;
+    dispatch_ok(&s, &tx, &wm, &ic, &fsm, "lock.release", json!({"id": lid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "lock.get", json!({"id": lid})).await;
     assert_eq!(got["status"], "released");
 }
 
 #[tokio::test]
 async fn lock_expire_through_dispatch() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
     let lock = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "lock.create",
         json!({"resource": "src/main.rs", "holder_id": "wi-1", "granted_by": "coord"}),
     )
     .await;
     let lid = lock["id"].as_str().unwrap().to_string();
 
-    dispatch_ok(&s, &tx, &wm, &ic, "lock.expire", json!({"id": lid})).await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "lock.get", json!({"id": lid})).await;
+    dispatch_ok(&s, &tx, &wm, &ic, &fsm, "lock.expire", json!({"id": lid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "lock.get", json!({"id": lid})).await;
     assert_eq!(got["status"], "expired");
 }
 
@@ -779,11 +845,11 @@ async fn lock_expire_through_dispatch() {
 
 #[tokio::test]
 async fn tick_singleton_guard() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
-    dispatch_ok(&s, &tx, &wm, &ic, "tick.create", json!({"number": 1})).await;
+    dispatch_ok(&s, &tx, &wm, &ic, &fsm, "tick.create", json!({"number": 1})).await;
     // Second non-terminal tick should be rejected
-    let code = dispatch_err(&s, &tx, &wm, &ic, "tick.create", json!({"number": 2})).await;
+    let code = dispatch_err(&s, &tx, &wm, &ic, &fsm, "tick.create", json!({"number": 2})).await;
     assert_eq!(code, -32005); // precondition_failed
 }
 
@@ -791,13 +857,14 @@ async fn tick_singleton_guard() {
 
 #[tokio::test]
 async fn learning_reinforce_contradict_promote_demote() {
-    let (s, tx, wm, ic) = setup();
+    let (s, tx, wm, ic, fsm) = setup();
 
     let learning = dispatch_ok(
         &s,
         &tx,
         &wm,
         &ic,
+        &fsm,
         "learning.create",
         json!({"content": "Always run tests", "scope": "global", "source_id": "plan-1"}),
     )
@@ -808,23 +875,23 @@ async fn learning_reinforce_contradict_promote_demote() {
 
     // Reinforce 3 times
     for _ in 0..3 {
-        dispatch_ok(&s, &tx, &wm, &ic, "learning.reinforce", json!({"id": lid})).await;
+        dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.reinforce", json!({"id": lid})).await;
     }
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "learning.get", json!({"id": lid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.get", json!({"id": lid})).await;
     assert_eq!(got["reinforcements"], 3);
 
     // Contradict
-    dispatch_ok(&s, &tx, &wm, &ic, "learning.contradict", json!({"id": lid})).await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "learning.get", json!({"id": lid})).await;
+    dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.contradict", json!({"id": lid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.get", json!({"id": lid})).await;
     assert_eq!(got["contradictions"], 1);
 
     // Promote
-    dispatch_ok(&s, &tx, &wm, &ic, "learning.promote", json!({"id": lid})).await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "learning.get", json!({"id": lid})).await;
+    dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.promote", json!({"id": lid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.get", json!({"id": lid})).await;
     assert_eq!(got["promoted"], true);
 
     // Demote
-    dispatch_ok(&s, &tx, &wm, &ic, "learning.demote", json!({"id": lid})).await;
-    let got = dispatch_ok(&s, &tx, &wm, &ic, "learning.get", json!({"id": lid})).await;
+    dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.demote", json!({"id": lid})).await;
+    let got = dispatch_ok(&s, &tx, &wm, &ic, &fsm, "learning.get", json!({"id": lid})).await;
     assert_eq!(got["promoted"], false);
 }

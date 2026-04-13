@@ -3,38 +3,31 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
-use loopr_derive::{FlexibleEnum, Fsm};
+use loopr_derive::FlexibleEnum;
 
 use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
 use crate::id;
 use crate::prompts::SECTION_AC;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 pub enum WorkStatus {
-    #[transitions(Pending(Coordinator), Ready(Coordinator), Abandoned(Coordinator))]
     Draft,
-    #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
     Pending,
-    #[transitions(
-        InProgress(Coordinator),
-        Blocked(Coordinator),
-        Abandoned(Coordinator),
-        Done(Coordinator)
-    )]
     Ready,
-    #[transitions(Blocked, InReview(Implementer), Abandoned(Coordinator))]
-    #[overrides(Ready(Coordinator), InReview(Coordinator))]
     InProgress,
-    #[transitions(Ready(Coordinator), Abandoned(Coordinator))]
     Blocked,
-    #[transitions(InProgress(Coordinator), Integrated(Integrator), Abandoned(Coordinator))]
-    #[overrides(Ready(Coordinator))]
     InReview,
-    #[transitions(Done(Coordinator, Integrator), Abandoned(Coordinator))]
     Integrated,
     Done,
     Abandoned,
+}
+
+impl WorkStatus {
+    /// True if this state has no outgoing transitions (terminal).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, WorkStatus::Done | WorkStatus::Abandoned)
+    }
 }
 
 impl std::fmt::Display for WorkStatus {
@@ -77,13 +70,20 @@ impl Work {
         self.status
     }
 
-    /// Validated FSM transition. Returns Err if invalid.
+    /// Validated FSM transition via the runtime interpreter.
     pub fn transition(
         &mut self,
         target: WorkStatus,
         role: crate::domain::role::Role,
-    ) -> crate::error::Result<crate::domain::transition::Transition> {
-        let result = self.status.validate_transition(target, role)?;
+        fsm: &crate::fsm::runtime::FsmInterpreter,
+    ) -> eyre::Result<crate::domain::transition::Transition> {
+        use crate::fsm::status::FsmStatus;
+        let result = fsm.validate_transition(
+            WorkStatus::fsm_name(),
+            self.status.to_yaml_name(),
+            target.to_yaml_name(),
+            &role.to_string(),
+        )?;
         if result == crate::domain::transition::Transition::Changed {
             self.status = target;
             self.updated_at = id::now_millis();
@@ -96,8 +96,15 @@ impl Work {
         &mut self,
         target: WorkStatus,
         role: crate::domain::role::Role,
-    ) -> crate::error::Result<crate::domain::transition::Transition> {
-        let result = self.status.validate_override(target, role)?;
+        fsm: &crate::fsm::runtime::FsmInterpreter,
+    ) -> eyre::Result<crate::domain::transition::Transition> {
+        use crate::fsm::status::FsmStatus;
+        let result = fsm.validate_override(
+            WorkStatus::fsm_name(),
+            self.status.to_yaml_name(),
+            target.to_yaml_name(),
+            &role.to_string(),
+        )?;
         if result == crate::domain::transition::Transition::Changed {
             self.status = target;
             self.updated_at = id::now_millis();
@@ -192,8 +199,6 @@ impl Record for Work {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::role::Role;
-    use crate::domain::transition::Transition;
 
     #[test]
     fn test_work_status_display() {
@@ -284,199 +289,7 @@ mod tests {
         assert_ne!(w1.id, w2.id);
     }
 
-    // --- Valid transitions (derived via #[derive(Fsm)]) ---
-
-    #[test]
-    fn test_valid_draft_to_ready() {
-        assert!(
-            WorkStatus::Draft
-                .validate_transition(WorkStatus::Ready, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_ready_to_in_progress() {
-        assert!(
-            WorkStatus::Ready
-                .validate_transition(WorkStatus::InProgress, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_ready_to_done_coordinator() {
-        assert!(
-            WorkStatus::Ready
-                .validate_transition(WorkStatus::Done, Role::Coordinator)
-                .is_ok(),
-            "Coordinator should be able to short-circuit Ready->Done for pre-flight AC pass"
-        );
-    }
-
-    #[test]
-    fn test_invalid_ready_to_done_wrong_role() {
-        assert!(
-            WorkStatus::Ready
-                .validate_transition(WorkStatus::Done, Role::Implementer)
-                .is_err(),
-            "Only Coordinator can short-circuit Ready->Done"
-        );
-    }
-
-    #[test]
-    fn test_valid_in_progress_to_blocked_any_role() {
-        for role in [Role::Coordinator, Role::Integrator, Role::Implementer] {
-            assert!(
-                WorkStatus::InProgress
-                    .validate_transition(WorkStatus::Blocked, role)
-                    .is_ok(),
-                "Expected InProgress->Blocked to succeed for {:?}",
-                role
-            );
-        }
-    }
-
-    #[test]
-    fn test_valid_blocked_to_ready() {
-        assert!(
-            WorkStatus::Blocked
-                .validate_transition(WorkStatus::Ready, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_in_progress_to_in_review() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_transition(WorkStatus::InReview, Role::Implementer)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_in_review_to_in_progress_rejection() {
-        assert!(
-            WorkStatus::InReview
-                .validate_transition(WorkStatus::InProgress, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_in_review_to_integrated() {
-        assert!(
-            WorkStatus::InReview
-                .validate_transition(WorkStatus::Integrated, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_integrated_to_done() {
-        assert!(
-            WorkStatus::Integrated
-                .validate_transition(WorkStatus::Done, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_integrated_to_done_integrator() {
-        assert!(
-            WorkStatus::Integrated
-                .validate_transition(WorkStatus::Done, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_abandoned_from_all_non_terminal() {
-        let non_terminal = [
-            WorkStatus::Draft,
-            WorkStatus::Ready,
-            WorkStatus::InProgress,
-            WorkStatus::Blocked,
-            WorkStatus::InReview,
-            WorkStatus::Integrated,
-        ];
-        for from in non_terminal {
-            assert!(
-                from.validate_transition(WorkStatus::Abandoned, Role::Coordinator)
-                    .is_ok(),
-                "Expected {:?}->Abandoned to succeed",
-                from
-            );
-        }
-    }
-
-    // --- Invalid transitions ---
-
-    #[test]
-    fn test_invalid_draft_to_ready_wrong_role() {
-        assert!(
-            WorkStatus::Draft
-                .validate_transition(WorkStatus::Ready, Role::Implementer)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_skip_draft_to_in_progress() {
-        assert!(
-            WorkStatus::Draft
-                .validate_transition(WorkStatus::InProgress, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_done_to_anything() {
-        for target in [WorkStatus::Draft, WorkStatus::Ready, WorkStatus::InProgress] {
-            assert!(
-                WorkStatus::Done.validate_transition(target, Role::Coordinator).is_err(),
-                "Expected Done->{:?} to fail",
-                target
-            );
-        }
-    }
-
-    #[test]
-    fn test_invalid_abandoned_to_anything() {
-        assert!(
-            WorkStatus::Abandoned
-                .validate_transition(WorkStatus::Draft, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_in_review_to_integrated_wrong_role() {
-        assert!(
-            WorkStatus::InReview
-                .validate_transition(WorkStatus::Integrated, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_in_progress_to_in_review_wrong_role() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_transition(WorkStatus::InReview, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_abandoned_not_by_implementer() {
-        assert!(
-            WorkStatus::Ready
-                .validate_transition(WorkStatus::Abandoned, Role::Implementer)
-                .is_err()
-        );
-    }
+    // FSM transition validation tests are in src/fsm/tests.rs (runtime interpreter).
 
     // --- Record trait tests ---
 
@@ -514,110 +327,12 @@ mod tests {
         );
     }
 
-    // --- Override transition tests (validate_override includes normal + override edges) ---
-
-    #[test]
-    fn test_override_in_progress_to_ready_coordinator() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_override(WorkStatus::Ready, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_override_in_progress_to_in_review_coordinator() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_override(WorkStatus::InReview, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_override_in_progress_to_abandoned_coordinator() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_override(WorkStatus::Abandoned, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_override_in_review_to_ready_coordinator() {
-        assert!(
-            WorkStatus::InReview
-                .validate_override(WorkStatus::Ready, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_override_in_review_to_abandoned_coordinator() {
-        assert!(
-            WorkStatus::InReview
-                .validate_override(WorkStatus::Abandoned, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_override_blocked_to_abandoned_coordinator() {
-        assert!(
-            WorkStatus::Blocked
-                .validate_override(WorkStatus::Abandoned, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_override_rejected_for_implementer() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_override(WorkStatus::Ready, Role::Implementer)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_override_rejected_for_integrator() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_override(WorkStatus::Ready, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_override_not_in_normal_transitions() {
-        assert!(
-            WorkStatus::InProgress
-                .validate_transition(WorkStatus::Ready, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_override_in_review_to_ready_not_in_normal() {
-        assert!(
-            WorkStatus::InReview
-                .validate_transition(WorkStatus::Ready, Role::Coordinator)
-                .is_err()
-        );
-    }
-
     #[test]
     fn test_is_terminal() {
         assert!(!WorkStatus::Draft.is_terminal());
         assert!(!WorkStatus::InProgress.is_terminal());
         assert!(WorkStatus::Done.is_terminal());
         assert!(WorkStatus::Abandoned.is_terminal());
-    }
-
-    #[test]
-    fn test_idempotent_self_transition() {
-        let r = WorkStatus::Draft.validate_transition(WorkStatus::Draft, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Unchanged);
     }
 
     // --- FlexibleEnum tests ---

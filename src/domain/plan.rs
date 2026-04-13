@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use taskstore::record::{IndexValue, Record};
 
-use loopr_derive::{FlexibleEnum, Fsm};
+use loopr_derive::FlexibleEnum;
 
 use crate::domain::criteria::AcceptanceCriteria;
 use crate::domain::markdown::{DocMarkdown, FmValue, millis_to_iso};
@@ -13,22 +13,26 @@ use crate::prompts::SECTION_AC;
 /// Shared status enum for Plan, Spec, and Phase records.
 /// Five-state machine: Draft -> Pending -> Active -> Complete | Abandoned.
 /// Pending is the "waiting for deps + parent" state introduced by the reactive execution model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum HierarchyStatus {
     #[serde(alias = "Draft")]
-    #[transitions(Pending(Coordinator), Active(Coordinator), Abandoned(Coordinator))]
     Draft,
     #[serde(alias = "Pending")]
-    #[transitions(Active(Coordinator), Abandoned(Coordinator))]
     Pending,
     #[serde(alias = "Active")]
-    #[transitions(Complete(Coordinator), Abandoned(Coordinator))]
     Active,
     #[serde(alias = "Complete")]
     Complete,
     #[serde(alias = "Abandoned")]
     Abandoned,
+}
+
+impl HierarchyStatus {
+    /// True if this state has no outgoing transitions (terminal).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, HierarchyStatus::Complete | HierarchyStatus::Abandoned)
+    }
 }
 
 impl fmt::Display for HierarchyStatus {
@@ -93,13 +97,20 @@ impl Plan {
         self.status
     }
 
-    /// Validated FSM transition. Returns Err if invalid.
+    /// Validated FSM transition via the runtime interpreter.
     pub fn transition(
         &mut self,
         target: PlanStatus,
         role: crate::domain::role::Role,
-    ) -> crate::error::Result<crate::domain::transition::Transition> {
-        let result = self.status.validate_transition(target, role)?;
+        fsm: &crate::fsm::runtime::FsmInterpreter,
+    ) -> eyre::Result<crate::domain::transition::Transition> {
+        use crate::fsm::status::FsmStatus;
+        let result = fsm.validate_transition(
+            HierarchyStatus::fsm_name(),
+            self.status.to_yaml_name(),
+            target.to_yaml_name(),
+            &role.to_string(),
+        )?;
         if result == crate::domain::transition::Transition::Changed {
             self.status = target;
             self.updated_at = id::now_millis();
@@ -191,8 +202,6 @@ impl Record for Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::role::Role;
-    use crate::domain::transition::Transition;
 
     // --- HierarchyStatus tests ---
 
@@ -267,99 +276,7 @@ mod tests {
         }
     }
 
-    // --- HierarchyStatus transition tests (derived via #[derive(Fsm)]) ---
-
-    #[test]
-    fn test_valid_transition_draft_to_pending() {
-        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Pending, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_valid_transition_draft_to_active() {
-        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Active, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_valid_transition_pending_to_active() {
-        let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Active, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_valid_transition_pending_to_abandoned() {
-        let r = HierarchyStatus::Pending.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_valid_transition_active_to_complete() {
-        let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Complete, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_valid_transition_draft_to_abandoned() {
-        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_valid_transition_active_to_abandoned() {
-        let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Abandoned, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_invalid_transition_complete_to_active() {
-        assert!(
-            HierarchyStatus::Complete
-                .validate_transition(HierarchyStatus::Active, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_transition_abandoned_to_active() {
-        assert!(
-            HierarchyStatus::Abandoned
-                .validate_transition(HierarchyStatus::Active, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_transition_pending_to_complete() {
-        assert!(
-            HierarchyStatus::Pending
-                .validate_transition(HierarchyStatus::Complete, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_transition_wrong_role() {
-        assert!(
-            HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Pending, Role::Implementer)
-                .is_err()
-        );
-        assert!(
-            HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Pending, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_transition_draft_to_complete() {
-        assert!(
-            HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Complete, Role::Coordinator)
-                .is_err()
-        );
-    }
+    // FSM transition validation tests are in src/fsm/tests.rs (runtime interpreter).
 
     #[test]
     fn test_is_terminal() {
@@ -368,12 +285,6 @@ mod tests {
         assert!(!HierarchyStatus::Active.is_terminal());
         assert!(HierarchyStatus::Complete.is_terminal());
         assert!(HierarchyStatus::Abandoned.is_terminal());
-    }
-
-    #[test]
-    fn test_idempotent_self_transition() {
-        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Draft, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Unchanged);
     }
 
     // --- Plan struct tests ---

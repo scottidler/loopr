@@ -32,13 +32,20 @@ impl Spec {
         self.status
     }
 
-    /// Validated FSM transition. Returns Err if invalid.
+    /// Validated FSM transition via the runtime interpreter.
     pub fn transition(
         &mut self,
         target: SpecStatus,
         role: crate::domain::role::Role,
-    ) -> crate::error::Result<crate::domain::transition::Transition> {
-        let result = self.status.validate_transition(target, role)?;
+        fsm: &crate::fsm::runtime::FsmInterpreter,
+    ) -> eyre::Result<crate::domain::transition::Transition> {
+        use crate::fsm::status::FsmStatus;
+        let result = fsm.validate_transition(
+            crate::domain::plan::HierarchyStatus::fsm_name(),
+            self.status.to_yaml_name(),
+            target.to_yaml_name(),
+            &role.to_string(),
+        )?;
         if result == crate::domain::transition::Transition::Changed {
             self.status = target;
             self.updated_at = crate::id::now_millis();
@@ -127,8 +134,6 @@ impl Record for Spec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::role::Role;
-    use crate::domain::transition::Transition;
     use taskstore::record::{IndexValue, Record};
 
     #[test]
@@ -169,66 +174,8 @@ mod tests {
         assert_eq!(spec.parent_id, parent_id);
     }
 
-    // Spec uses the same HierarchyStatus FSM as Plan - verify transitions work for Spec context
-
-    #[test]
-    fn test_spec_valid_transition_draft_to_active() {
-        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Active, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_spec_valid_transition_active_to_complete() {
-        let r = HierarchyStatus::Active.validate_transition(HierarchyStatus::Complete, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Changed);
-    }
-
-    #[test]
-    fn test_spec_valid_transition_to_abandoned() {
-        assert!(
-            HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Abandoned, Role::Coordinator)
-                .is_ok()
-        );
-        assert!(
-            HierarchyStatus::Active
-                .validate_transition(HierarchyStatus::Abandoned, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_spec_invalid_transition_wrong_role() {
-        assert!(
-            HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Active, Role::Implementer)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_spec_invalid_transition_reverse() {
-        assert!(
-            HierarchyStatus::Complete
-                .validate_transition(HierarchyStatus::Active, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_spec_invalid_transition_skip_state() {
-        assert!(
-            HierarchyStatus::Draft
-                .validate_transition(HierarchyStatus::Complete, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_spec_idempotent_self_transition() {
-        let r = HierarchyStatus::Draft.validate_transition(HierarchyStatus::Draft, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Unchanged);
-    }
+    // FSM transition validation tests are in src/fsm/tests.rs (runtime interpreter).
+    // Spec uses the same HierarchyStatus FSM as Plan.
 
     // Record trait tests
 

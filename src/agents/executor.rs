@@ -57,6 +57,7 @@ pub async fn run_single_work(
         event_tx.clone(),
         worktree_mgr.clone(),
         stores.config.clone(),
+        stores.fsm.clone(),
     );
 
     // Pre-flight acceptance-criteria check (Fix 6).

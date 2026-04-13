@@ -85,6 +85,7 @@ impl AgentContext {
                 stores.config.project.repo_path.join(".worktrees"),
             ),
             stores.config.clone(),
+            stores.fsm.clone(),
         );
 
         Ok(Self {
@@ -213,7 +214,13 @@ mod tests {
     ) -> (AgentContext, broadcast::Receiver<DaemonEvent>) {
         let (event_tx, event_rx) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx.clone(),
+            worktree_mgr,
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
         let session = AgentSession::new(agent_type, "test-model".into());
         let ctx = AgentContext {
             session,

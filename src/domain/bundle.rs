@@ -3,30 +3,30 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
-use loopr_derive::{FlexibleEnum, Fsm};
+use loopr_derive::FlexibleEnum;
 
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum, Fsm)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, FlexibleEnum)]
 pub enum BundleStatus {
-    #[transitions(Triaged(Coordinator), Rejected(Coordinator, Reviewer), Superseded(Coordinator))]
     Proposed,
-    #[transitions(
-        Reviewed(Coordinator, Reviewer),
-        Accepted(Coordinator),
-        Rejected(Coordinator, Reviewer),
-        Superseded(Coordinator)
-    )]
     Triaged,
-    #[transitions(Accepted(Coordinator), Rejected(Coordinator, Reviewer), Superseded(Coordinator))]
     Reviewed,
-    #[transitions(Integrating(Integrator), Rejected(Integrator), Superseded(Coordinator))]
     Accepted,
-    #[transitions(Merged(Integrator), Rejected(Integrator), Superseded(Coordinator))]
     Integrating,
     Merged,
     Rejected,
     Superseded,
+}
+
+impl BundleStatus {
+    /// True if this state has no outgoing transitions (terminal).
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            BundleStatus::Merged | BundleStatus::Rejected | BundleStatus::Superseded
+        )
+    }
 }
 
 impl std::fmt::Display for BundleStatus {
@@ -98,13 +98,20 @@ impl Bundle {
         self.status
     }
 
-    /// Validated FSM transition. Returns Err if invalid.
+    /// Validated FSM transition via the runtime interpreter.
     pub fn transition(
         &mut self,
         target: BundleStatus,
         role: crate::domain::role::Role,
-    ) -> crate::error::Result<crate::domain::transition::Transition> {
-        let result = self.status.validate_transition(target, role)?;
+        fsm: &crate::fsm::runtime::FsmInterpreter,
+    ) -> eyre::Result<crate::domain::transition::Transition> {
+        use crate::fsm::status::FsmStatus;
+        let result = fsm.validate_transition(
+            BundleStatus::fsm_name(),
+            self.status.to_yaml_name(),
+            target.to_yaml_name(),
+            &role.to_string(),
+        )?;
         if result == crate::domain::transition::Transition::Changed {
             self.status = target;
             self.updated_at = id::now_millis();
@@ -166,8 +173,6 @@ impl Record for Bundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::role::Role;
-    use crate::domain::transition::Transition;
 
     #[test]
     fn test_bundle_status_display() {
@@ -321,279 +326,7 @@ mod tests {
         assert_ne!(b1.id, b2.id);
     }
 
-    // --- Valid transitions: happy path ---
-
-    #[test]
-    fn test_valid_proposed_to_triaged() {
-        assert!(
-            BundleStatus::Proposed
-                .validate_transition(BundleStatus::Triaged, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_triaged_to_reviewed() {
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Reviewed, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_reviewed_to_accepted() {
-        assert!(
-            BundleStatus::Reviewed
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_accepted_to_integrating() {
-        assert!(
-            BundleStatus::Accepted
-                .validate_transition(BundleStatus::Integrating, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_integrating_to_merged() {
-        assert!(
-            BundleStatus::Integrating
-                .validate_transition(BundleStatus::Merged, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    // --- Valid transitions: advisory review (Triaged -> Accepted) ---
-
-    #[test]
-    fn test_valid_triaged_to_accepted_coordinator() {
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_invalid_triaged_to_accepted_wrong_role() {
-        // Only Coordinator can bypass review
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Implementer)
-                .is_err()
-        );
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Reviewer)
-                .is_err()
-        );
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Researcher)
-                .is_err()
-        );
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_advisory_bypass_does_not_break_normal_happy_path() {
-        assert!(
-            BundleStatus::Proposed
-                .validate_transition(BundleStatus::Triaged, Role::Coordinator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Reviewed, Role::Reviewer)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Reviewed
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Accepted
-                .validate_transition(BundleStatus::Integrating, Role::Integrator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Integrating
-                .validate_transition(BundleStatus::Merged, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_advisory_bypass_path_continues_to_integrating() {
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Accepted
-                .validate_transition(BundleStatus::Integrating, Role::Integrator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Integrating
-                .validate_transition(BundleStatus::Merged, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_advisory_accepted_can_still_be_rejected() {
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Accepted
-                .validate_transition(BundleStatus::Rejected, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_advisory_accepted_can_be_superseded() {
-        assert!(
-            BundleStatus::Triaged
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_ok()
-        );
-        assert!(
-            BundleStatus::Accepted
-                .validate_transition(BundleStatus::Superseded, Role::Coordinator)
-                .is_ok()
-        );
-    }
-
-    // --- Valid transitions: rejection ---
-
-    #[test]
-    fn test_valid_integrating_to_rejected() {
-        assert!(
-            BundleStatus::Integrating
-                .validate_transition(BundleStatus::Rejected, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_early_rejection() {
-        for from in [BundleStatus::Proposed, BundleStatus::Triaged, BundleStatus::Reviewed] {
-            assert!(
-                from.validate_transition(BundleStatus::Rejected, Role::Coordinator)
-                    .is_ok(),
-                "Expected {:?}->Rejected to succeed",
-                from
-            );
-        }
-    }
-
-    // --- Valid transitions: superseded ---
-
-    #[test]
-    fn test_valid_superseded_from_non_final() {
-        let non_final = [
-            BundleStatus::Proposed,
-            BundleStatus::Triaged,
-            BundleStatus::Reviewed,
-            BundleStatus::Accepted,
-            BundleStatus::Integrating,
-        ];
-        for from in non_final {
-            assert!(
-                from.validate_transition(BundleStatus::Superseded, Role::Coordinator)
-                    .is_ok(),
-                "Expected {:?}->Superseded to succeed",
-                from
-            );
-        }
-    }
-
-    // --- Invalid transitions ---
-
-    #[test]
-    fn test_invalid_proposed_to_triaged_wrong_role() {
-        assert!(
-            BundleStatus::Proposed
-                .validate_transition(BundleStatus::Triaged, Role::Implementer)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_skip_proposed_to_accepted() {
-        assert!(
-            BundleStatus::Proposed
-                .validate_transition(BundleStatus::Accepted, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_merged_to_anything() {
-        for target in [BundleStatus::Proposed, BundleStatus::Triaged, BundleStatus::Integrating] {
-            assert!(
-                BundleStatus::Merged
-                    .validate_transition(target, Role::Coordinator)
-                    .is_err(),
-                "Expected Merged->{:?} to fail",
-                target
-            );
-        }
-    }
-
-    #[test]
-    fn test_invalid_rejected_to_anything() {
-        assert!(
-            BundleStatus::Rejected
-                .validate_transition(BundleStatus::Proposed, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_superseded_to_anything() {
-        assert!(
-            BundleStatus::Superseded
-                .validate_transition(BundleStatus::Proposed, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_accepted_to_integrating_wrong_role() {
-        assert!(
-            BundleStatus::Accepted
-                .validate_transition(BundleStatus::Integrating, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_integrating_to_merged_wrong_role() {
-        assert!(
-            BundleStatus::Integrating
-                .validate_transition(BundleStatus::Merged, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    // --- Terminal state and idempotency tests ---
+    // FSM transition validation tests are in src/fsm/tests.rs (runtime interpreter).
 
     #[test]
     fn test_is_terminal() {
@@ -603,12 +336,6 @@ mod tests {
         assert!(BundleStatus::Merged.is_terminal());
         assert!(BundleStatus::Rejected.is_terminal());
         assert!(BundleStatus::Superseded.is_terminal());
-    }
-
-    #[test]
-    fn test_idempotent_self_transition() {
-        let r = BundleStatus::Proposed.validate_transition(BundleStatus::Proposed, Role::Coordinator);
-        assert_eq!(r.unwrap(), Transition::Unchanged);
     }
 
     // --- Record trait tests ---

@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::agents::{AgentEvent, AgentKind, AgentStatus};
 use crate::config::IntegratorConfig;
 use crate::daemon::context::Stores;
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::DaemonEvent;
 use crate::worktree::manager::WorktreeManager;
 
@@ -34,6 +35,7 @@ pub async fn run_supervisor(
     event_tx: broadcast::Sender<DaemonEvent>,
     worktree_mgr: WorktreeManager,
     integrator_config: IntegratorConfig,
+    fsm: Arc<FsmInterpreter>,
     config: SupervisorConfig,
 ) {
     let mut event_rx = event_tx.subscribe();
@@ -124,7 +126,8 @@ pub async fn run_supervisor(
         let start_req =
             crate::ipc::protocol::DaemonRequest::new(0, "agent.start", json!({ "agent_type": "coordinator" }));
         let response =
-            crate::daemon::handlers::dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, start_req).await;
+            crate::daemon::handlers::dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, &fsm, start_req)
+                .await;
 
         if response.error.is_some() {
             warn!("Supervisor failed to restart coordinator: {:?}", response.error);
@@ -152,6 +155,10 @@ mod tests {
             session_timeout_secs: None,
             ..Default::default()
         }
+    }
+
+    fn test_fsm() -> Arc<FsmInterpreter> {
+        Arc::new(FsmInterpreter::embedded().unwrap())
     }
 
     #[tokio::test]
@@ -190,7 +197,14 @@ mod tests {
         // (without attempting restart since it's not a coordinator)
         tokio::time::timeout(
             Duration::from_secs(2),
-            run_supervisor(stores, tx_clone, worktree_mgr, test_integrator_config(), config),
+            run_supervisor(
+                stores,
+                tx_clone,
+                worktree_mgr,
+                test_integrator_config(),
+                test_fsm(),
+                config,
+            ),
         )
         .await
         .ok();
@@ -229,7 +243,14 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_secs(2),
-            run_supervisor(stores, tx_clone, worktree_mgr, test_integrator_config(), config),
+            run_supervisor(
+                stores,
+                tx_clone,
+                worktree_mgr,
+                test_integrator_config(),
+                test_fsm(),
+                config,
+            ),
         )
         .await
         .ok();
@@ -261,6 +282,7 @@ mod tests {
                 tx_for_supervisor,
                 worktree_mgr,
                 test_integrator_config(),
+                test_fsm(),
                 config,
             )
             .await;
@@ -320,7 +342,14 @@ mod tests {
         // Should process event and exit when channel closes without restarting
         tokio::time::timeout(
             Duration::from_secs(2),
-            run_supervisor(stores, tx_clone, worktree_mgr, test_integrator_config(), config),
+            run_supervisor(
+                stores,
+                tx_clone,
+                worktree_mgr,
+                test_integrator_config(),
+                test_fsm(),
+                config,
+            ),
         )
         .await
         .ok();
@@ -360,7 +389,14 @@ mod tests {
         // Run supervisor — it should attempt one restart then exit when channel closes
         tokio::time::timeout(
             Duration::from_secs(5),
-            run_supervisor(stores.clone(), tx_clone, worktree_mgr, test_integrator_config(), config),
+            run_supervisor(
+                stores.clone(),
+                tx_clone,
+                worktree_mgr,
+                test_integrator_config(),
+                test_fsm(),
+                config,
+            ),
         )
         .await
         .ok();

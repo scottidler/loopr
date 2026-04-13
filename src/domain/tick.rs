@@ -3,20 +3,24 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use taskstore::{IndexValue, Record};
 
-use loopr_derive::{FlexibleEnum, Fsm};
+use loopr_derive::FlexibleEnum;
 
 use crate::id;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FlexibleEnum, Fsm)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, FlexibleEnum)]
 pub enum TickStatus {
-    #[transitions(Sealing(Integrator), Failed(Integrator))]
     Open,
-    #[transitions(Validating(Integrator), Failed(Integrator))]
     Sealing,
-    #[transitions(Published(Integrator), Failed(Integrator))]
     Validating,
     Published,
     Failed,
+}
+
+impl TickStatus {
+    /// True if this state has no outgoing transitions (terminal).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, TickStatus::Published | TickStatus::Failed)
+    }
 }
 
 impl std::fmt::Display for TickStatus {
@@ -53,13 +57,20 @@ impl Tick {
         self.status
     }
 
-    /// Validated FSM transition. Returns Err if invalid.
+    /// Validated FSM transition via the runtime interpreter.
     pub fn transition(
         &mut self,
         target: TickStatus,
         role: crate::domain::role::Role,
-    ) -> crate::error::Result<crate::domain::transition::Transition> {
-        let result = self.status.validate_transition(target, role)?;
+        fsm: &crate::fsm::runtime::FsmInterpreter,
+    ) -> eyre::Result<crate::domain::transition::Transition> {
+        use crate::fsm::status::FsmStatus;
+        let result = fsm.validate_transition(
+            TickStatus::fsm_name(),
+            self.status.to_yaml_name(),
+            target.to_yaml_name(),
+            &role.to_string(),
+        )?;
         if result == crate::domain::transition::Transition::Changed {
             self.status = target;
             self.updated_at = crate::id::now_millis();
@@ -124,8 +135,6 @@ impl Record for Tick {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::role::Role;
-    use crate::domain::transition::Transition;
 
     #[test]
     fn test_tick_status_is_terminal() {
@@ -246,212 +255,7 @@ mod tests {
         assert_eq!(t.number, 42);
     }
 
-    // --- Valid transitions ---
-
-    #[test]
-    fn test_valid_open_to_sealing() {
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Sealing, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_sealing_to_validating() {
-        assert!(
-            TickStatus::Sealing
-                .validate_transition(TickStatus::Validating, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_validating_to_published() {
-        assert!(
-            TickStatus::Validating
-                .validate_transition(TickStatus::Published, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_valid_validating_to_failed() {
-        assert!(
-            TickStatus::Validating
-                .validate_transition(TickStatus::Failed, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    // --- Invalid transitions: wrong role ---
-
-    #[test]
-    fn test_invalid_open_to_sealing_wrong_role() {
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Sealing, Role::Coordinator)
-                .is_err()
-        );
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Sealing, Role::Implementer)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_sealing_to_validating_wrong_role() {
-        assert!(
-            TickStatus::Sealing
-                .validate_transition(TickStatus::Validating, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_validating_to_published_wrong_role() {
-        assert!(
-            TickStatus::Validating
-                .validate_transition(TickStatus::Published, Role::Implementer)
-                .is_err()
-        );
-    }
-
-    // --- Invalid transitions: skip states ---
-
-    #[test]
-    fn test_invalid_open_to_validating() {
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Validating, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_open_to_published() {
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Published, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_sealing_to_published() {
-        assert!(
-            TickStatus::Sealing
-                .validate_transition(TickStatus::Published, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    // --- Invalid transitions: terminal states ---
-
-    #[test]
-    fn test_invalid_published_to_anything() {
-        for target in [
-            TickStatus::Open,
-            TickStatus::Sealing,
-            TickStatus::Validating,
-            TickStatus::Failed,
-        ] {
-            assert!(
-                TickStatus::Published
-                    .validate_transition(target, Role::Integrator)
-                    .is_err(),
-                "Expected Published->{:?} to fail",
-                target
-            );
-        }
-    }
-
-    #[test]
-    fn test_invalid_failed_to_anything() {
-        for target in [
-            TickStatus::Open,
-            TickStatus::Sealing,
-            TickStatus::Validating,
-            TickStatus::Published,
-        ] {
-            assert!(
-                TickStatus::Failed
-                    .validate_transition(target, Role::Integrator)
-                    .is_err(),
-                "Expected Failed->{:?} to fail",
-                target
-            );
-        }
-    }
-
-    // --- Invalid transitions: reverse direction ---
-
-    #[test]
-    fn test_invalid_sealing_to_open() {
-        assert!(
-            TickStatus::Sealing
-                .validate_transition(TickStatus::Open, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn test_invalid_validating_to_sealing() {
-        assert!(
-            TickStatus::Validating
-                .validate_transition(TickStatus::Sealing, Role::Integrator)
-                .is_err()
-        );
-    }
-
-    // --- B3: Sealing -> Failed transition (merge failure) ---
-
-    #[test]
-    fn test_valid_sealing_to_failed() {
-        assert!(
-            TickStatus::Sealing
-                .validate_transition(TickStatus::Failed, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_invalid_sealing_to_failed_wrong_role() {
-        assert!(
-            TickStatus::Sealing
-                .validate_transition(TickStatus::Failed, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    // --- Crash recovery: Open -> Failed ---
-
-    #[test]
-    fn test_valid_open_to_failed() {
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Failed, Role::Integrator)
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn test_invalid_open_to_failed_wrong_role() {
-        assert!(
-            TickStatus::Open
-                .validate_transition(TickStatus::Failed, Role::Coordinator)
-                .is_err()
-        );
-    }
-
-    // --- Idempotency ---
-
-    #[test]
-    fn test_idempotent_self_transition() {
-        let r = TickStatus::Open.validate_transition(TickStatus::Open, Role::Integrator);
-        assert_eq!(r.unwrap(), Transition::Unchanged);
-    }
+    // FSM transition validation tests are in src/fsm/tests.rs (runtime interpreter).
 
     // --- Record trait tests ---
 

@@ -68,6 +68,8 @@ pub struct Stores {
     pub tool_executor: StdRwLock<Arc<ToolExecutor>>,
     /// Full config, available to handlers for agent spawning.
     pub config: Config,
+    /// FSM interpreter for transition validation. Immutable after startup.
+    pub fsm: Arc<crate::fsm::runtime::FsmInterpreter>,
     /// Assembled guidance (schema docs + LOOPR.md files), loaded once at startup.
     pub guidance: AgentGuidance,
     /// JoinHandles for spawned agent tasks, keyed by session ID.
@@ -231,6 +233,9 @@ impl Stores {
             tool_runner: StdRwLock::new(Arc::new(ToolRunner::new(&[]))),
             tool_executor: StdRwLock::new(Arc::new(ToolExecutor::standard(&[]))),
             config: Config::default(),
+            fsm: Arc::new(
+                crate::fsm::runtime::FsmInterpreter::embedded().expect("embedded FSM definitions must be valid"),
+            ),
             agent_handles: StdMutex::new(HashMap::new()),
             agent_events: StdRwLock::new(HashMap::new()),
             git_lock: StdMutex::new(()),
@@ -276,6 +281,7 @@ pub struct DaemonContext {
     pub config: Config,
     pub stores: Arc<Stores>,
     pub worktree_manager: WorktreeManager,
+    pub fsm: Arc<crate::fsm::runtime::FsmInterpreter>,
     pub session_id: String,
     pub session_dir: std::path::PathBuf,
 }
@@ -433,11 +439,15 @@ impl DaemonContext {
 
         stores.session_id = session_id.clone();
 
+        let fsm = Arc::new(crate::fsm::runtime::FsmInterpreter::embedded()?);
+        stores.fsm = fsm.clone();
+
         Ok(Self {
             config,
             event_tx,
             stores: Arc::new(stores),
             worktree_manager,
+            fsm,
             session_id,
             session_dir,
         })

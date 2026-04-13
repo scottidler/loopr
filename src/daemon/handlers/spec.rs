@@ -9,6 +9,8 @@ use crate::domain::plan::HierarchyStatus;
 use crate::domain::role::Role;
 use crate::domain::spec::{Spec, SpecStatus};
 use crate::domain::transition::Transition;
+use crate::fsm::runtime::FsmInterpreter;
+use crate::fsm::status::FsmStatus;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 
 use taskstore::{Filter, FilterOp, IndexValue};
@@ -201,6 +203,7 @@ pub(super) fn handle_spec_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
 pub(super) fn handle_spec_transition(
     stores: &Arc<Stores>,
     event_tx: &broadcast::Sender<DaemonEvent>,
+    fsm: &FsmInterpreter,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_handler!(req.id, {
@@ -232,14 +235,20 @@ pub(super) fn handle_spec_transition(
         };
 
         let from = spec.status();
-        match from.validate_transition(target_status, role) {
+        let role_str = role.to_string();
+        match fsm.validate_transition(
+            HierarchyStatus::fsm_name(),
+            from.to_yaml_name(),
+            target_status.to_yaml_name(),
+            &role_str,
+        ) {
             Err(e) => {
                 let _ = event_tx.send(DaemonEvent::transition_rejected(
                     "specs",
                     &id,
                     &format!("{:?}", from),
                     &format!("{:?}", target_status),
-                    &role.to_string(),
+                    &role_str,
                     &e.to_string(),
                 ));
                 return Ok(DaemonResponse::err(
@@ -357,7 +366,7 @@ mod tests {
     use tokio::sync::broadcast;
 
     use crate::daemon::context::Stores;
-    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::test_dispatch as dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_stores_with_validator,
         test_worktree_mgr,

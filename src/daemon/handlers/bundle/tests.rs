@@ -4,7 +4,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::daemon::context::Stores;
-use crate::daemon::handlers::dispatch;
+use crate::daemon::handlers::tests::test_dispatch as dispatch;
 use crate::daemon::handlers::tests::{
     test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,
 };

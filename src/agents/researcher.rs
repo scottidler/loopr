@@ -507,7 +507,13 @@ mod tests {
     fn test_researcher_agent<L: LlmClient>(dir: &Path, stores: Arc<Stores>, llm: L) -> ResearcherAgent<L> {
         let (event_tx, _) = broadcast::channel(64);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx.clone(),
+            worktree_mgr,
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
         let config = AgentRoleConfig::default_researcher();
         let mut session = AgentSession::new(AgentKind::Researcher, "test".into());
         session.query = Some("test query".into());
@@ -796,7 +802,13 @@ mod tests {
         // Need custom config with max_iterations = 3
         let (event_tx, _) = broadcast::channel(64);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx.clone(),
+            worktree_mgr,
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
 
         let mut config = AgentRoleConfig::default_researcher();
         config.max_iterations = 3;

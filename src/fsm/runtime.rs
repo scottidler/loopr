@@ -6,12 +6,48 @@ use tracing::info;
 use super::schema::{self, FsmDefinition, TransitionRule};
 use crate::domain::transition::Transition;
 
+/// Embedded YAML sources, compiled into the binary.
+const EMBEDDED_YAMLS: &[(&str, &str)] = &[
+    ("work.yml", include_str!("../../strategies/fsm/work.yml")),
+    ("bundle.yml", include_str!("../../strategies/fsm/bundle.yml")),
+    ("hierarchy.yml", include_str!("../../strategies/fsm/hierarchy.yml")),
+    ("tick.yml", include_str!("../../strategies/fsm/tick.yml")),
+    ("agent.yml", include_str!("../../strategies/fsm/agent.yml")),
+];
+
 /// Holds all loaded FSM definitions. Immutable after startup.
 pub struct FsmInterpreter {
     definitions: HashMap<String, FsmDefinition>,
 }
 
 impl FsmInterpreter {
+    /// Build the interpreter from embedded YAML definitions (compile-time included).
+    /// This is the primary constructor for production use.
+    pub fn embedded() -> eyre::Result<Self> {
+        let mut definitions = HashMap::new();
+        let mut all_errors = Vec::new();
+
+        for (filename, content) in EMBEDDED_YAMLS {
+            let mut def: FsmDefinition = serde_yaml::from_str(content)
+                .map_err(|e| eyre::eyre!("failed to parse embedded {}: {}", filename, e))?;
+            schema::inject_transition_names(&mut def);
+            let errors = schema::validate(&def, Some(filename));
+            if !errors.is_empty() {
+                for e in &errors {
+                    all_errors.push(format!("{}: {}", def.name, e));
+                }
+            }
+            definitions.insert(def.name.clone(), def);
+        }
+
+        if !all_errors.is_empty() {
+            eyre::bail!("FSM validation failed:\n  {}", all_errors.join("\n  "));
+        }
+
+        info!("loaded {} embedded FSM definitions", definitions.len());
+        Ok(Self { definitions })
+    }
+
     /// Load all FSM definitions from a directory and validate them.
     pub fn load(dir: &Path) -> eyre::Result<Self> {
         let defs = schema::load_dir(dir)?;

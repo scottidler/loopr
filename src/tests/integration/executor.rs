@@ -18,7 +18,13 @@ async fn test_coordinator_creates_work_via_executor() {
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
-    let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        tx.clone(),
+        wm.clone(),
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
     let ctx = test_agent_context(&stores, bridge, tx.clone());
 
     let (plan_id, spec_id, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;
@@ -75,7 +81,13 @@ async fn test_coordinator_accept_bundle_via_executor() {
     let tx = test_event_tx();
     let wm = test_worktree_mgr();
     let ic = test_integrator_config();
-    let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), wm.clone(), stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        tx.clone(),
+        wm.clone(),
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     // Create hierarchy + work item (via dispatch for speed)
     let (_, _, phase_id) = create_test_hierarchy(&stores, &tx, &wm, &ic).await;

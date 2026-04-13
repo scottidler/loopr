@@ -6,6 +6,7 @@ use tracing::trace;
 
 use crate::agents::AgentKind;
 use crate::config::IntegratorConfig;
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::worktree::manager::WorktreeManager;
 
@@ -128,6 +129,7 @@ pub async fn dispatch(
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     req: DaemonRequest,
 ) -> DaemonResponse {
     trace!("dispatch(method={})", req.method);
@@ -142,32 +144,32 @@ pub async fn dispatch(
         "plan.create" => handle_plan_create(stores, event_tx, req),
         "plan.get" => handle_plan_get(stores, req),
         "plan.list" => handle_plan_list(stores, req),
-        "plan.transition" => handle_plan_transition(stores, event_tx, req),
+        "plan.transition" => handle_plan_transition(stores, event_tx, fsm, req),
         "plan.update" => handle_plan_update(stores, event_tx, req),
         "spec.create" => handle_spec_create(stores, event_tx, req),
         "spec.get" => handle_spec_get(stores, req),
         "spec.list" => handle_spec_list(stores, req),
-        "spec.transition" => handle_spec_transition(stores, event_tx, req),
+        "spec.transition" => handle_spec_transition(stores, event_tx, fsm, req),
         "spec.update" => handle_spec_update(stores, event_tx, req),
         "phase.create" => handle_phase_create(stores, event_tx, req),
         "phase.get" => handle_phase_get(stores, req),
         "phase.list" => handle_phase_list(stores, req),
-        "phase.transition" => handle_phase_transition(stores, event_tx, req),
+        "phase.transition" => handle_phase_transition(stores, event_tx, fsm, req),
         "phase.update" => handle_phase_update(stores, event_tx, req),
         "work.create" => handle_work_create(stores, event_tx, req),
         "work.get" => handle_work_get(stores, req),
         "work.list" => handle_work_list(stores, req),
-        "work.transition" => handle_work_transition(stores, event_tx, req),
+        "work.transition" => handle_work_transition(stores, event_tx, fsm, req),
         "work.update" => handle_work_update(stores, event_tx, req),
         "bundle.create" => handle_bundle_create(stores, event_tx, req),
         "bundle.get" => handle_bundle_get(stores, req),
         "bundle.list" => handle_bundle_list(stores, req),
-        "bundle.transition" => handle_bundle_transition(stores, event_tx, req),
+        "bundle.transition" => handle_bundle_transition(stores, event_tx, fsm, req),
         "bundle.update" => handle_bundle_update(stores, event_tx, req),
         "tick.create" => handle_tick_create(stores, event_tx, req),
         "tick.get" => handle_tick_get(stores, req),
         "tick.list" => handle_tick_list(stores, req),
-        "tick.transition" => handle_tick_transition(stores, event_tx, req),
+        "tick.transition" => handle_tick_transition(stores, event_tx, fsm, req),
         "tick.update" => handle_tick_update(stores, event_tx, req),
         "learning.create" => handle_learning_create(stores, event_tx, req),
         "learning.get" => handle_learning_get(stores, req),
@@ -198,8 +200,8 @@ pub async fn dispatch(
         "coordinator.get_state" => handle_coordinator_get_state(stores, req),
         "coordinator.reset_state" => handle_coordinator_reset_state(stores, event_tx, req),
         "coordinator.interview_respond" => handle_coordinator_interview_respond(stores, event_tx, req),
-        "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, req).await,
-        "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, req).await,
+        "doc.accept" => handle_doc_accept(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
+        "doc.inject" => handle_doc_inject(stores, event_tx, worktree_mgr, integrator_config, fsm, req).await,
         "coordinator.interview_question" => handle_coordinator_interview_question(stores, event_tx, req),
         "chat.submit" => handle_chat_submit(stores, event_tx, req),
         "chat.attach" => handle_chat_attach(stores, req),
@@ -221,6 +223,7 @@ pub async fn dispatch(
             event_tx,
             worktree_mgr,
             integrator_config,
+            fsm,
             &method,
             &params,
             &resp,
@@ -237,6 +240,7 @@ async fn auto_start_agents(
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     method: &str,
     params: &serde_json::Value,
     resp: &crate::ipc::protocol::DaemonResponse,
@@ -255,7 +259,15 @@ async fn auto_start_agents(
                 "agent_type": "implementer", "work_id": wi_id,
             }),
         );
-        let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, start_req)).await;
+        let _ = Box::pin(dispatch(
+            stores,
+            event_tx,
+            worktree_mgr,
+            integrator_config,
+            fsm,
+            start_req,
+        ))
+        .await;
     }
 
     // Fix 7: Auto-triage: when a bundle is created (starts in Proposed), immediately
@@ -275,7 +287,15 @@ async fn auto_start_agents(
                 "role": "coordinator",
             }),
         );
-        let _ = Box::pin(dispatch(stores, event_tx, worktree_mgr, integrator_config, triage_req)).await;
+        let _ = Box::pin(dispatch(
+            stores,
+            event_tx,
+            worktree_mgr,
+            integrator_config,
+            fsm,
+            triage_req,
+        ))
+        .await;
     }
 
     // Reviewer spawning is now pull-based: workers poll for Triaged bundles
@@ -451,6 +471,23 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn test_fsm() -> FsmInterpreter {
+        FsmInterpreter::embedded().unwrap()
+    }
+
+    /// Convenience wrapper around `dispatch()` that auto-provides an embedded FsmInterpreter.
+    /// Avoids changing 400+ test call sites that call dispatch with the old 5-param signature.
+    pub(crate) async fn test_dispatch(
+        stores: &Arc<Stores>,
+        event_tx: &broadcast::Sender<DaemonEvent>,
+        worktree_mgr: &WorktreeManager,
+        integrator_config: &IntegratorConfig,
+        req: DaemonRequest,
+    ) -> DaemonResponse {
+        let fsm = test_fsm();
+        dispatch(stores, event_tx, worktree_mgr, integrator_config, &fsm, req).await
+    }
+
     // --- dispatch tests ---
 
     #[tokio::test]
@@ -459,7 +496,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "unknown.method", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("unknown.method"));
     }
@@ -470,7 +507,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.handshake", json!({"client_version": "0.1.0"}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["protocol"], "ndjson/1");
     }
@@ -481,7 +518,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.status", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert!(result["version"].is_string());
@@ -505,7 +542,7 @@ pub(crate) mod tests {
         stores.works.write().unwrap().insert(wi.id.clone(), wi);
 
         let req = DaemonRequest::new(1, "system.status", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["counts"]["plans"], 1);
@@ -535,7 +572,7 @@ pub(crate) mod tests {
         stores.store.as_ref().unwrap().lock().unwrap().create(spec).unwrap();
 
         let req = DaemonRequest::new(1, "system.status", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
 
@@ -557,7 +594,7 @@ pub(crate) mod tests {
         let mut rx = tx.subscribe();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.shutdown", json!(null));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         assert_eq!(resp.result.unwrap()["status"], "shutting_down");
         // Verify event was broadcast
@@ -573,7 +610,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.init", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error(), "system.init failed: {:?}", resp.error);
         let result = resp.result.unwrap();
         let collections = result["collections"].as_array().unwrap();
@@ -600,7 +637,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "system.init", json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(resp.is_error());
         let err = resp.error.unwrap();
         assert!(err.message.contains("TaskStore not initialized"));
@@ -613,10 +650,10 @@ pub(crate) mod tests {
         let wm = test_worktree_mgr();
         // Call init twice - should succeed both times
         let req1 = DaemonRequest::new(1, "system.init", json!({}));
-        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req1).await;
+        let resp1 = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req1).await;
         assert!(!resp1.is_error());
         let req2 = DaemonRequest::new(2, "system.init", json!({}));
-        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), req2).await;
+        let resp2 = dispatch(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req2).await;
         assert!(!resp2.is_error());
     }
 
@@ -642,6 +679,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let ic = test_integrator_config();
+        let fsm = test_fsm();
 
         // Plan
         let plan_resp = dispatch(
@@ -649,6 +687,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(1, "plan.create", json!({"title": "Test Plan"})),
         )
         .await;
@@ -660,6 +699,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Test Spec"})),
         )
         .await;
@@ -671,6 +711,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(
                 3,
                 "phase.create",
@@ -686,6 +727,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(
                 4,
                 "work.create",
@@ -717,6 +759,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let ic = test_integrator_config();
+        let fsm = test_fsm();
 
         // Create a bundle - auto-triage should fire immediately
         let resp = dispatch(
@@ -724,6 +767,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(
                 10,
                 "bundle.create",
@@ -751,6 +795,7 @@ pub(crate) mod tests {
         let tx = test_event_tx();
         let wm = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
         let ic = test_integrator_config();
+        let fsm = test_fsm();
 
         // Create hierarchy
         let plan_resp = dispatch(
@@ -758,6 +803,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(1, "plan.create", json!({"title": "Plan"})),
         )
         .await;
@@ -767,6 +813,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(2, "spec.create", json!({"parent_id": plan_id, "title": "Spec"})),
         )
         .await;
@@ -776,6 +823,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(
                 3,
                 "phase.create",
@@ -789,6 +837,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(
                 4,
                 "work.create",
@@ -804,6 +853,7 @@ pub(crate) mod tests {
             &tx,
             &wm,
             &ic,
+            &fsm,
             DaemonRequest::new(
                 10,
                 "bundle.create",

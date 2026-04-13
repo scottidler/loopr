@@ -140,7 +140,13 @@ async fn test_coordinator_assigns_implementer_completes() {
 
     // Execute AssignAgent - should auto-transition Ready->InProgress
     let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-    let bridge = AgentIpcBridge::new(stores.clone(), tx.clone(), worktree_mgr, stores.config.clone());
+    let bridge = AgentIpcBridge::new(
+        stores.clone(),
+        tx.clone(),
+        worktree_mgr,
+        stores.config.clone(),
+        stores.fsm.clone(),
+    );
 
     let assign_action = crate::agents::AgentAction::AssignAgent {
         agent_type: "implementer".to_string(),
@@ -189,6 +195,7 @@ async fn test_coordinator_assigns_implementer_completes() {
         tx.clone(),
         WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees")),
         stores.config.clone(),
+        stores.fsm.clone(),
     );
     let ctx = crate::agents::AgentContext {
         session,

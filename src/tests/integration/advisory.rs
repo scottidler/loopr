@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::config::IntegratorConfig;
 use crate::daemon::handlers::dispatch;
 use crate::domain::learning::{Learning, LearningScope};
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::DaemonRequest;
 use crate::test_util::TestDir;
 
@@ -199,13 +200,15 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
     )
     .await;
 
+    let fsm = FsmInterpreter::embedded().unwrap();
+
     // Reviewer trying Triaged->Accepted should FAIL
     let req = DaemonRequest::new(
         1,
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "reviewer", "verification": "v"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
+    let resp = dispatch(&stores, &tx, &wm, &ic, &fsm, req).await;
     assert!(resp.is_error(), "Reviewer should not be able to use Triaged->Accepted");
 
     // Implementer trying Triaged->Accepted should FAIL
@@ -214,7 +217,7 @@ async fn test_advisory_bypass_rejected_for_non_coordinator_via_dispatch() {
         "bundle.transition",
         json!({"id": &bundle_id, "target_status": "Accepted", "role": "implementer", "verification": "v"}),
     );
-    let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
+    let resp = dispatch(&stores, &tx, &wm, &ic, &fsm, req).await;
     assert!(
         resp.is_error(),
         "Implementer should not be able to use Triaged->Accepted"

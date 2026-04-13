@@ -599,7 +599,7 @@ pub(super) fn handle_tool_list(stores: &Arc<Stores>, req: DaemonRequest) -> Daem
 mod tests {
     use crate::config::IntegratorConfig;
     use crate::daemon::context::Stores;
-    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::test_dispatch as dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores, test_stores_with_git, test_stores_with_taskstore,
         test_stores_with_validator, test_worktree_mgr,

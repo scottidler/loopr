@@ -10,6 +10,7 @@ use crate::agents::{AgentKind, AgentSession};
 use crate::config::{Config, IntegratorConfig};
 use crate::daemon::context::Stores;
 use crate::daemon::handlers::dispatch;
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest};
 use crate::worktree::manager::WorktreeManager;
 
@@ -68,6 +69,10 @@ pub(super) fn test_integrator_config() -> IntegratorConfig {
     }
 }
 
+pub(super) fn test_fsm() -> FsmInterpreter {
+    FsmInterpreter::embedded().unwrap()
+}
+
 /// Helper: dispatch a request and assert success, returning the result JSON.
 pub(super) async fn dispatch_ok(
     stores: &Arc<Stores>,
@@ -77,8 +82,9 @@ pub(super) async fn dispatch_ok(
     method: &str,
     params: serde_json::Value,
 ) -> serde_json::Value {
+    let fsm = test_fsm();
     let req = DaemonRequest::new(1, method, params);
-    let resp = dispatch(stores, tx, wm, ic, req).await;
+    let resp = dispatch(stores, tx, wm, ic, &fsm, req).await;
     assert!(!resp.is_error(), "{method} failed: {:?}", resp.error);
     resp.result.unwrap()
 }
@@ -92,8 +98,9 @@ pub(super) async fn dispatch_err(
     method: &str,
     params: serde_json::Value,
 ) -> i32 {
+    let fsm = test_fsm();
     let req = DaemonRequest::new(1, method, params);
-    let resp = dispatch(stores, tx, wm, ic, req).await;
+    let resp = dispatch(stores, tx, wm, ic, &fsm, req).await;
     assert!(resp.is_error(), "{method} expected error but got success");
     resp.error.unwrap().code
 }

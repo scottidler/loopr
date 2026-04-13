@@ -265,8 +265,8 @@ async fn run_reconciler(
                 let event_tx = c.event_tx.clone();
                 let worktree_mgr = c.worktree_manager.clone();
                 let integrator_config = c.config.integrator.clone();
-                drop(c);
-                for bundle_id in bundles_needing_review {
+                let fsm = &c.fsm;
+                for bundle_id in &bundles_needing_review {
                     warn!(
                         "Reconciler: Triaged bundle {} has no active reviewer, spawning",
                         bundle_id
@@ -276,7 +276,7 @@ async fn run_reconciler(
                         "agent.start",
                         serde_json::json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
                     );
-                    let resp = dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, start_req).await;
+                    let resp = dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, fsm, start_req).await;
                     if resp.is_error() {
                         warn!(
                             "Reconciler: failed to spawn reviewer for bundle {}: {:?}",
@@ -284,6 +284,7 @@ async fn run_reconciler(
                         );
                     }
                 }
+                drop(c);
             }
         }
     }
@@ -324,6 +325,7 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
                 &c.event_tx,
                 &c.worktree_manager,
                 &c.config.integrator,
+                &c.fsm,
                 start_req,
             )
             .await;
@@ -361,11 +363,13 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         let evt = event_tx.clone();
         let wm = c.worktree_manager.clone();
         let ic = c.config.integrator.clone();
+        let fsm = c.fsm.clone();
         tokio::spawn(supervisor::run_supervisor(
             stores,
             evt,
             wm,
             ic,
+            fsm,
             supervisor::SupervisorConfig::default(),
         ))
     };
@@ -522,10 +526,10 @@ async fn accept_loop(
                 match accept_result {
                     Ok((stream, _addr)) => {
                         let event_rx = event_tx.subscribe();
-                        // Extract stores, worktree_manager, and event_tx for the handler closure
-                        let (stores, worktree_mgr, integrator_config) = {
+                        // Extract stores, worktree_manager, fsm, and event_tx for the handler closure
+                        let (stores, worktree_mgr, integrator_config, fsm) = {
                             let c = ctx.read().await;
-                            (c.stores.clone(), c.worktree_manager.clone(), c.config.integrator.clone())
+                            (c.stores.clone(), c.worktree_manager.clone(), c.config.integrator.clone(), c.fsm.clone())
                         };
                         let handler_event_tx = event_tx.clone();
                         tokio::spawn(async move {
@@ -536,8 +540,9 @@ async fn accept_loop(
                                     let handler_event_tx = handler_event_tx.clone();
                                     let worktree_mgr = worktree_mgr.clone();
                                     let integrator_config = integrator_config.clone();
+                                    let fsm = fsm.clone();
                                     Box::pin(async move {
-                                        handlers::dispatch(&stores, &handler_event_tx, &worktree_mgr, &integrator_config, req).await
+                                        handlers::dispatch(&stores, &handler_event_tx, &worktree_mgr, &integrator_config, &fsm, req).await
                                     })
                                 },
                                 event_rx,

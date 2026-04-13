@@ -413,7 +413,13 @@ mod tests {
         let stores = test_stores(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx, worktree_mgr, stores.config.clone());
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx,
+            worktree_mgr,
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
         bridge.request(
             "lock.create",
             serde_json::json!({ "resource": "src/a.rs", "holder_id": "wi-rel", "granted_by": "wi-rel" }),

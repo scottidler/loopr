@@ -599,7 +599,13 @@ mod tests {
     fn test_reviewer<L: LlmClient>(dir: &Path, stores: Arc<Stores>, bundle_id: &str, llm: L) -> ReviewerAgent<L> {
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx.clone(),
+            worktree_mgr,
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
         let mut session = AgentSession::new(AgentKind::Reviewer, "test".into());
         session.bundle_id = Some(bundle_id.to_string());
         stores
@@ -829,7 +835,13 @@ mod tests {
         let (stores, _) = setup_stores_with_bundle(&dir);
         let (event_tx, _) = broadcast::channel(16);
         let worktree_mgr = WorktreeManager::new(dir.to_path_buf(), dir.join(".worktrees"));
-        let bridge = AgentIpcBridge::new(stores.clone(), event_tx.clone(), worktree_mgr, stores.config.clone());
+        let bridge = AgentIpcBridge::new(
+            stores.clone(),
+            event_tx.clone(),
+            worktree_mgr,
+            stores.config.clone(),
+            stores.fsm.clone(),
+        );
 
         let session = AgentSession::new(AgentKind::Reviewer, "test".into());
         // No bundle_id set

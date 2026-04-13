@@ -27,6 +27,7 @@ use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
 use crate::domain::markdown::{update_parent_children, write_doc_markdown, write_doc_markdown_body};
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::validator::client::{LlmClient, ReqwestClient};
 use crate::worktree::manager::WorktreeManager;
@@ -44,6 +45,7 @@ pub(super) async fn handle_doc_accept(
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_async_handler!(req.id, {
@@ -68,6 +70,7 @@ pub(super) async fn handle_doc_accept(
             event_tx,
             worktree_mgr,
             integrator_config,
+            fsm,
             req.id,
             markdown,
             skip_decompose,
@@ -89,6 +92,7 @@ pub(super) async fn handle_doc_inject(
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     req: DaemonRequest,
 ) -> DaemonResponse {
     try_async_handler!(req.id, {
@@ -131,6 +135,7 @@ pub(super) async fn handle_doc_inject(
             event_tx,
             worktree_mgr,
             integrator_config,
+            fsm,
             req.id,
             markdown,
             skip_decompose,
@@ -151,6 +156,7 @@ pub(super) async fn accept_plan_markdown(
     event_tx: &broadcast::Sender<DaemonEvent>,
     worktree_mgr: &WorktreeManager,
     integrator_config: &IntegratorConfig,
+    fsm: &FsmInterpreter,
     req_id: u64,
     markdown: String,
     skip_decompose: bool,
@@ -316,6 +322,7 @@ pub(super) async fn accept_plan_markdown(
         event_tx,
         worktree_mgr,
         integrator_config,
+        fsm,
         start_req,
     ))
     .await;
@@ -457,7 +464,9 @@ async fn classify_brief(stores: &Arc<Stores>, plan_content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::handlers::tests::{test_event_tx, test_integrator_config, test_stores, test_worktree_mgr};
+    use crate::daemon::handlers::tests::{
+        test_event_tx, test_fsm, test_integrator_config, test_stores, test_worktree_mgr,
+    };
     use crate::test_util::TestDir;
     use serde_json::json;
 
@@ -494,7 +503,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.accept", json!({}));
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("markdown"));
     }
@@ -505,7 +514,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": "   " }));
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("markdown"));
     }
@@ -521,7 +530,7 @@ mod tests {
 
         let markdown = "# Auth Refactor Plan\n\n## Summary\n\nRefactor the auth module.";
         let req = DaemonRequest::new(1, "doc.accept", json!({ "markdown": markdown, "skip_decompose": true }));
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
 
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
         let result = resp.result.unwrap();
@@ -552,7 +561,7 @@ mod tests {
             "doc.accept",
             json!({ "markdown": "# Test Plan\n\n## Summary\n\nDo a thing.", "skip_decompose": true }),
         );
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
 
         // CoordinatorGoal created
@@ -582,7 +591,7 @@ mod tests {
             "doc.accept",
             json!({ "markdown": "# Plan\n\n## Summary\n\nThing.", "skip_decompose": true }),
         );
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error());
         let result = resp.result.unwrap();
         assert_eq!(result["child_count"], 0);
@@ -605,7 +614,7 @@ mod tests {
             // skip_decompose not set → background task spawned, state starts Decomposing
             json!({ "markdown": "# Plan\n\n## Summary\n\nThing." }),
         );
-        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         // The handler returns immediately even though decomposition is running in background.
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
         let result = resp.result.unwrap();
@@ -634,7 +643,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.inject", json!({}));
-        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("path"));
     }
@@ -645,7 +654,7 @@ mod tests {
         let tx = test_event_tx();
         let wm = test_worktree_mgr();
         let req = DaemonRequest::new(1, "doc.inject", json!({ "path": "/nonexistent/plan.md" }));
-        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(resp.is_error());
         assert!(resp.error.unwrap().message.contains("not found"));
     }
@@ -671,7 +680,7 @@ mod tests {
                 "skip_decompose": true
             }),
         );
-        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), req).await;
+        let resp = handle_doc_inject(&stores, &tx, &wm, &test_integrator_config(), &test_fsm(), req).await;
         assert!(!resp.is_error(), "Expected success, got: {:?}", resp.error);
 
         let result = resp.result.unwrap();
@@ -704,14 +713,15 @@ mod tests {
 
         let md = "# Plan A\n\n## Summary\n\nFirst plan.";
         let req1 = DaemonRequest::new(1, "doc.accept", json!({ "markdown": md, "skip_decompose": true }));
-        let resp1 = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req1).await;
+        let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
+        let resp1 = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &fsm, req1).await;
         assert!(!resp1.is_error(), "first accept should succeed");
         let r1 = resp1.result.unwrap();
         assert!(!r1["coordinator_already_running"].as_bool().unwrap_or(true));
 
         let md2 = "# Plan B\n\n## Summary\n\nSecond plan.";
         let req2 = DaemonRequest::new(2, "doc.accept", json!({ "markdown": md2, "skip_decompose": true }));
-        let resp2 = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), req2).await;
+        let resp2 = handle_doc_accept(&stores, &tx, &wm, &test_integrator_config(), &fsm, req2).await;
         assert!(!resp2.is_error(), "second accept should also succeed");
         let r2 = resp2.result.unwrap();
         assert!(

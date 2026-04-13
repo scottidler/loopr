@@ -92,7 +92,7 @@ pub(super) fn check_validation_gate(
 #[cfg(test)]
 mod tests {
     use crate::config::ValidatorStrictness;
-    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::test_dispatch as dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores_with_validator, test_stores_with_validator_strictness,
         test_worktree_mgr,

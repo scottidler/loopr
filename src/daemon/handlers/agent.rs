@@ -571,7 +571,7 @@ pub(super) fn handle_agent_output(stores: &Arc<Stores>, req: DaemonRequest) -> D
 #[cfg(test)]
 mod tests {
     use crate::agents::{AgentKind, AgentSession, AgentStatus};
-    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::test_dispatch as dispatch;
     use crate::daemon::handlers::tests::{
         test_event_tx, test_integrator_config, test_stores, test_stores_with_taskstore, test_worktree_mgr,
     };

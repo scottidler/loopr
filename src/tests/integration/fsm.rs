@@ -45,17 +45,14 @@ async fn test_work_fsm_enforcement_via_dispatch() {
     drop(wis);
 
     // Verify at the FSM level that Ready -> Integrated is still invalid
-    use crate::domain::role::Role;
-    use crate::domain::work::WorkStatus;
+    let fsm = crate::fsm::runtime::FsmInterpreter::embedded().unwrap();
     assert!(
-        WorkStatus::Ready
-            .validate_transition(WorkStatus::Integrated, Role::Coordinator)
+        fsm.validate_transition("work", "ready", "integrated", "coordinator")
             .is_err(),
         "Ready->Integrated should still be an invalid skip state"
     );
     assert!(
-        WorkStatus::Ready
-            .validate_transition(WorkStatus::InReview, Role::Coordinator)
+        fsm.validate_transition("work", "ready", "in-review", "coordinator")
             .is_err(),
         "Ready->InReview should still be an invalid skip state"
     );

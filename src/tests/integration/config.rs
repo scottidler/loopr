@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::daemon::handlers::dispatch;
+use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::DaemonRequest;
 
 use super::fixtures::*;
@@ -57,9 +58,10 @@ async fn test_dispatch_routes_mvp4_methods() {
         "agent.list",
     ];
 
+    let fsm = FsmInterpreter::embedded().unwrap();
     for method in methods {
         let req = DaemonRequest::new(1, method, json!({}));
-        let resp = dispatch(&stores, &tx, &wm, &ic, req).await;
+        let resp = dispatch(&stores, &tx, &wm, &ic, &fsm, req).await;
         // May fail with invalid_params, but should NOT fail with method_not_found
         if let Some(err) = &resp.error {
             assert_ne!(err.code, -32601, "{method} returned method_not_found");

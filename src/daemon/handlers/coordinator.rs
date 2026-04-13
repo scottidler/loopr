@@ -182,7 +182,7 @@ pub(super) fn handle_coordinator_interview_question(
 #[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
-    use crate::daemon::handlers::dispatch;
+    use crate::daemon::handlers::tests::test_dispatch as dispatch;
     use crate::daemon::handlers::tests::{test_event_tx, test_integrator_config, test_stores, test_worktree_mgr};
     use crate::domain::coordinator_goal::CoordinatorGoal;
     use crate::ipc::protocol::DaemonRequest;
