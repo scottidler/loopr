@@ -216,6 +216,10 @@ pub async fn dispatch(
         "agent.list" => handle_agent_list(stores, req),
         "agent.output" => handle_agent_output(stores, req),
         "decomposer.decompose" => decomposer::handle_decomposer_decompose(stores, event_tx, req).await,
+        "decomposer.ratify" => decomposer::handle_decomposer_ratify(stores, req).await,
+        "decomposer.abandon_children" => decomposer::handle_decomposer_abandon_children(stores, event_tx, req),
+        "decomposer.re_decompose" => decomposer::handle_decomposer_re_decompose(stores, event_tx, req).await,
+        "decomposer.handle_failure" => decomposer::handle_decomposer_failure(stores, req),
         _ => DaemonResponse::err(req.id, RpcError::method_not_found(&req.method)),
     };
 

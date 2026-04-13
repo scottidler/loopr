@@ -80,6 +80,10 @@ pub struct Plan {
     status: PlanStatus,
     #[serde(default)]
     pub tier: Tier,
+    /// Number of times decomposition has been attempted for this plan.
+    /// Used by decomposition-attempt-limit threshold trigger to prevent infinite retry loops.
+    #[serde(default)]
+    pub decomposition_attempts: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -127,6 +131,7 @@ impl Plan {
             acceptance_criteria,
             status: HierarchyStatus::Draft,
             tier: Tier::default(),
+            decomposition_attempts: 0,
             created_at: now,
             updated_at: now,
         }

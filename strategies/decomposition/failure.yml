@@ -1,0 +1,24 @@
+# Failure coordination strategies.
+#
+# abandon-on-decomposition-limit: fires when decomposition_attempts reaches the
+# configured limit. Transitions the plan to Abandoned to stop the
+# plan-decomposable trigger from re-firing.
+#
+# Note: decomposition.failed event handling (incrementing attempts + updating
+# CoordinatorState.decomposition_error) is wired via the DecomposerAgent calling
+# bridge.request("decomposer.handle_failure", ...) directly before terminating,
+# rather than via a YAML strategy (no call-handler primitive exists in the registry).
+
+abandon-on-decomposition-limit:
+  description: Abandon a plan that has exhausted all decomposition retries
+  trigger: decomposition-attempt-limit
+  scope: plan
+  priority: 900
+  action:
+    - primitive: transition-record
+      params:
+        collection: plan
+        id: $trigger.scope-id
+        target-status: abandoned
+        role: decomposer
+        reason: decomposition-attempt-limit-reached

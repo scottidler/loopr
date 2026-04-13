@@ -202,6 +202,15 @@ impl<'a> DecomposerAgent<'a> {
     }
 
     fn emit_failed(&self, reason: &str) {
+        // Update CoordinatorState.decomposition_error and increment attempts counter
+        // before emitting the event, so the coordinator has context when it wakes.
+        let _ = self.bridge.request(
+            "decomposer.handle_failure",
+            serde_json::json!({
+                "parent_id": self.target_id,
+                "reason": reason,
+            }),
+        );
         let _ = self.bridge.request(
             "event.emit",
             serde_json::json!({

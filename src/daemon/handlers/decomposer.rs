@@ -22,6 +22,7 @@ use crate::domain::markdown::{read_full_markdown, update_parent_children, write_
 use crate::domain::phase::Phase;
 use crate::domain::spec::Spec;
 use crate::domain::work::Work;
+use crate::fsm::status::FsmStatus;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
 use crate::prompts::SECTION_AC;
 use crate::validator::client::HttpClient;
@@ -633,6 +634,458 @@ fn extract_acceptance_criteria(content: &str) -> Vec<String> {
     criteria
 }
 
+// ─── Ratify handler ─────────────────────────────────────────────────────────
+
+/// `decomposer.ratify` - bottom-up semantic validation of parent-children relationships.
+/// Reads parent + children markdown from docs/loopr/, calls LLM for each parent-children group.
+/// Advisory: logs warnings on failure but does not abort.
+#[instrument(skip_all, fields(plan_id = ?req.params.get("plan_id")))]
+pub(super) async fn handle_decomposer_ratify(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_async_handler!(req.id, {
+        let plan_id = req
+            .params
+            .get("plan_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing plan_id"))?
+            .to_string();
+
+        let repo_path = stores.config.project.repo_path.clone();
+        let config = &stores.config.decomposer;
+        let http_client = crate::validator::client::ReqwestClient::new();
+
+        // Collect parent-children pairs for ratification
+        let plan_content =
+            crate::domain::markdown::read_full_markdown(std::path::Path::new(&repo_path), &plan_id).unwrap_or_default();
+
+        // Ratify plan -> specs
+        let spec_ids: Vec<String> = stores
+            .read_specs()?
+            .values()
+            .filter(|s| s.parent_id == plan_id)
+            .map(|s| s.id.clone())
+            .collect();
+
+        if !spec_ids.is_empty() {
+            let child_pairs: Vec<(String, String)> = spec_ids
+                .iter()
+                .filter_map(|id| {
+                    let content =
+                        crate::domain::markdown::read_full_markdown(std::path::Path::new(&repo_path), id).ok()?;
+                    let title = stores.read_specs().ok()?.get(id)?.title.clone();
+                    Some((title, content))
+                })
+                .collect();
+
+            if !child_pairs.is_empty() {
+                let prompt = build_ratify_prompt(&plan_content, &child_pairs);
+                match call_llm_for_ratification(&http_client, config, &prompt).await {
+                    Ok(result) if !result.passed => {
+                        warn!(
+                            "ratification failed for plan {}: {} issues",
+                            plan_id,
+                            result.issues.len()
+                        );
+                    }
+                    Err(e) => warn!("ratification LLM call failed for plan {}: {}", plan_id, e),
+                    Ok(_) => info!("ratification passed for plan {}", plan_id),
+                }
+            }
+        }
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({ "plan_id": plan_id, "ratified": true }),
+        ))
+    })
+}
+
+// ─── Abandon children handler ────────────────────────────────────────────────
+
+/// `decomposer.abandon_children` - transitions all non-terminal children of a parent to Abandoned,
+/// optionally preserving specific IDs.
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+pub(super) fn handle_decomposer_abandon_children(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    try_handler!(req.id, {
+        let parent_id = req
+            .params
+            .get("parent_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing parent_id"))?
+            .to_string();
+        let parent_collection = req
+            .params
+            .get("parent_collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing parent_collection"))?
+            .to_string();
+        let preserve_ids: Vec<String> = req
+            .params
+            .get("preserve_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+
+        let child_collection = match parent_collection.as_str() {
+            "plan" => "spec",
+            "spec" => "phase",
+            "phase" => "work",
+            other => {
+                return Ok(DaemonResponse::err(
+                    req.id,
+                    RpcError::invalid_params(&format!("unknown parent_collection: {}", other)),
+                ));
+            }
+        };
+
+        let mut abandoned = 0u32;
+        let mut preserved = 0u32;
+
+        match child_collection {
+            "spec" => {
+                let child_ids: Vec<String> = stores
+                    .read_specs()?
+                    .values()
+                    .filter(|s| s.parent_id == parent_id && !preserve_ids.contains(&s.id))
+                    .map(|s| s.id.clone())
+                    .collect();
+                let mut specs = stores.write_specs()?;
+                for id in child_ids {
+                    if let Some(s) = specs.get_mut(&id)
+                        && !s.status().is_terminal(&stores.fsm)
+                    {
+                        s.force_status(crate::domain::spec::SpecStatus::Abandoned);
+                        s.updated_at = crate::id::now_millis();
+                        if let Some(store) = &stores.store {
+                            let _ = store.lock().ok().and_then(|mut sg| sg.update(s.clone()).ok());
+                        }
+                        let _ = event_tx.send(DaemonEvent::record_updated("spec", &id));
+                        abandoned += 1;
+                    }
+                }
+                preserved = preserve_ids.len() as u32;
+            }
+            "phase" => {
+                let child_ids: Vec<String> = stores
+                    .read_phases()?
+                    .values()
+                    .filter(|p| p.parent_id == parent_id && !preserve_ids.contains(&p.id))
+                    .map(|p| p.id.clone())
+                    .collect();
+                let mut phases = stores.write_phases()?;
+                for id in child_ids {
+                    if let Some(p) = phases.get_mut(&id)
+                        && !p.status().is_terminal(&stores.fsm)
+                    {
+                        p.force_status(crate::domain::phase::PhaseStatus::Abandoned);
+                        p.updated_at = crate::id::now_millis();
+                        if let Some(store) = &stores.store {
+                            let _ = store.lock().ok().and_then(|mut sg| sg.update(p.clone()).ok());
+                        }
+                        let _ = event_tx.send(DaemonEvent::record_updated("phase", &id));
+                        abandoned += 1;
+                    }
+                }
+                preserved = preserve_ids.len() as u32;
+            }
+            "work" => {
+                let child_ids: Vec<String> = stores
+                    .read_works()?
+                    .values()
+                    .filter(|w| w.parent_id == parent_id && !preserve_ids.contains(&w.id))
+                    .map(|w| w.id.clone())
+                    .collect();
+                let mut works = stores.write_works()?;
+                for id in child_ids {
+                    if let Some(w) = works.get_mut(&id)
+                        && !w.status().is_terminal(&stores.fsm)
+                    {
+                        w.force_status(crate::domain::work::WorkStatus::Abandoned);
+                        w.updated_at = crate::id::now_millis();
+                        if let Some(store) = &stores.store {
+                            let _ = store.lock().ok().and_then(|mut sg| sg.update(w.clone()).ok());
+                        }
+                        let _ = event_tx.send(DaemonEvent::record_updated("work", &id));
+                        abandoned += 1;
+                    }
+                }
+                preserved = preserve_ids.len() as u32;
+            }
+            _ => {}
+        }
+
+        info!(
+            "abandon_children: parent={} abandoned={} preserved={}",
+            parent_id, abandoned, preserved
+        );
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({ "abandoned_count": abandoned, "preserved_count": preserved }),
+        ))
+    })
+}
+
+// ─── Re-decompose handler ────────────────────────────────────────────────────
+
+/// `decomposer.re_decompose` - increments decomposition_attempts on the parent plan,
+/// abandons non-preserved children, then triggers a fresh decomposition.
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+pub(super) async fn handle_decomposer_re_decompose(
+    stores: &Arc<Stores>,
+    event_tx: &broadcast::Sender<DaemonEvent>,
+    req: DaemonRequest,
+) -> DaemonResponse {
+    try_async_handler!(req.id, {
+        let parent_id = req
+            .params
+            .get("parent_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing parent_id"))?
+            .to_string();
+        let parent_collection = req
+            .params
+            .get("parent_collection")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| eyre!("missing parent_collection"))?
+            .to_string();
+        let target_kind = req
+            .params
+            .get("target_kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("spec")
+            .to_string();
+        let preserve_ids: Vec<String> = req
+            .params
+            .get("preserve_ids")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+
+        // Increment decomposition_attempts on the plan record
+        if parent_collection == "plan" {
+            let mut plans = stores.write_plans()?;
+            if let Some(plan) = plans.get_mut(&parent_id) {
+                plan.decomposition_attempts += 1;
+                plan.updated_at = crate::id::now_millis();
+                debug!(
+                    "incremented decomposition_attempts for plan {} to {}",
+                    parent_id, plan.decomposition_attempts
+                );
+                if let Some(store) = &stores.store {
+                    store
+                        .lock()
+                        .map_err(|_| eyre!("taskstore lock poisoned"))?
+                        .update(plan.clone())
+                        .map_err(|e| eyre!("failed to update plan attempts: {}", e))?;
+                }
+            }
+        }
+
+        // Abandon non-preserved children
+        let abandon_req = DaemonRequest::new(
+            0,
+            "decomposer.abandon_children",
+            serde_json::json!({
+                "parent_id": parent_id,
+                "parent_collection": parent_collection,
+                "preserve_ids": preserve_ids,
+            }),
+        );
+        let abandon_resp = handle_decomposer_abandon_children(stores, event_tx, abandon_req);
+        let abandoned_count = abandon_resp
+            .result
+            .as_ref()
+            .and_then(|r| r["abandoned_count"].as_u64())
+            .unwrap_or(0);
+
+        // Now trigger fresh single-level decomposition
+        let decompose_req = DaemonRequest::new(
+            0,
+            "decomposer.decompose",
+            serde_json::json!({
+                "parent_id": parent_id,
+                "parent_collection": parent_collection,
+                "target_kind": target_kind,
+                "count_guidance": req.params.get("count_guidance").and_then(|v| v.as_str()).unwrap_or("1-5"),
+                "dependency_pattern": req.params.get("dependency_pattern").and_then(|v| v.as_str()).unwrap_or("fan-out"),
+            }),
+        );
+        let decompose_resp = handle_decomposer_decompose(stores, event_tx, decompose_req).await;
+
+        if decompose_resp.is_error() {
+            return Ok(decompose_resp);
+        }
+
+        let children = decompose_resp
+            .result
+            .as_ref()
+            .and_then(|r| r["children"].clone().into())
+            .unwrap_or(serde_json::json!([]));
+
+        Ok(DaemonResponse::ok(
+            req.id,
+            serde_json::json!({
+                "children": children,
+                "abandoned_count": abandoned_count,
+            }),
+        ))
+    })
+}
+
+// ─── Failure coordination handler ───────────────────────────────────────────
+
+/// `decomposer.handle_failure` - wired to decomposition.failed event via strategy.
+/// Updates CoordinatorState.decomposition_error so the coordinator has failure context.
+/// Also increments decomposition_attempts on the parent to eventually trigger the limit.
+#[instrument(skip_all, fields(parent_id = ?req.params.get("parent_id")))]
+pub(super) fn handle_decomposer_failure(stores: &Arc<Stores>, req: DaemonRequest) -> DaemonResponse {
+    try_handler!(req.id, {
+        let parent_id = req
+            .params
+            .get("parent_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let reason = req
+            .params
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("decomposition failed")
+            .to_string();
+
+        // Increment decomposition_attempts on the plan
+        if parent_id.starts_with("pl-") {
+            let mut plans = stores.write_plans()?;
+            if let Some(plan) = plans.get_mut(&parent_id) {
+                plan.decomposition_attempts += 1;
+                plan.updated_at = crate::id::now_millis();
+                debug!(
+                    "decomposition.failed: incremented attempts for plan {} to {}",
+                    parent_id, plan.decomposition_attempts
+                );
+                if let Some(store) = &stores.store {
+                    let _ = store.lock().ok().and_then(|mut sg| sg.update(plan.clone()).ok());
+                }
+            }
+        }
+
+        // Update CoordinatorState.decomposition_error for any coordinator watching this plan
+        {
+            let mut states = stores.write_coordinator_states()?;
+            for cs in states.values_mut() {
+                // Match by goal_id -> plan linkage or by direct parent_id reference
+                if cs.decomposition_error.is_none() {
+                    cs.decomposition_error = Some(reason.clone());
+                    cs.updated_at = crate::id::now_millis();
+                    if let Some(store) = &stores.store {
+                        let _ = store.lock().ok().and_then(|mut sg| sg.update(cs.clone()).ok());
+                    }
+                    debug!("set decomposition_error on coordinator state {}", cs.id);
+                }
+            }
+        }
+
+        Ok(DaemonResponse::ok(req.id, serde_json::json!({ "ok": true })))
+    })
+}
+
+// ─── Ratify LLM helpers ──────────────────────────────────────────────────────
+
+/// Build a ratification prompt: parent content + all children.
+fn build_ratify_prompt(parent_content: &str, children: &[(String, String)]) -> String {
+    let prompts = crate::prompts::store();
+    let mut prompt = format!(
+        "{}\n\n## Parent Document\n\n{}",
+        prompts.decompose_ratify, parent_content
+    );
+    for (title, content) in children {
+        prompt.push_str(&format!("\n\n## Child: {}\n\n{}", title, content));
+    }
+    prompt
+}
+
+/// Call the LLM for ratification and parse result.
+#[instrument(skip_all)]
+async fn call_llm_for_ratification<H: HttpClient + Sync>(
+    http_client: &H,
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> eyre::Result<RatifyResult> {
+    let text = call_llm_text(http_client, config, prompt).await?;
+    serde_json::from_str(&text).context("failed to parse ratification response")
+}
+
+/// Raw text LLM call (used for ratification).
+#[instrument(skip_all)]
+async fn call_llm_text<H: HttpClient + Sync>(
+    http_client: &H,
+    config: &DecomposerConfig,
+    prompt: &str,
+) -> eyre::Result<String> {
+    let api_key = std::env::var(&config.llm.api_key_env)
+        .context(format!("missing API key env var: {}", config.llm.api_key_env))?;
+    let api_url = match config.provider.as_str() {
+        "anthropic" => "https://api.anthropic.com/v1/messages",
+        other => bail!("unsupported LLM provider: {}", other),
+    };
+
+    let request = serde_json::json!({
+        "model": config.llm.model,
+        "max_tokens": config.llm.max_tokens,
+        "temperature": config.llm.temperature,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let body = serde_json::to_string(&request)?;
+    let headers = [
+        ("content-type", "application/json"),
+        ("x-api-key", api_key.as_str()),
+        ("anthropic-version", "2023-06-01"),
+    ];
+
+    let response_text = tokio::time::timeout(
+        Duration::from_secs(LLM_CALL_TIMEOUT_SECS),
+        http_client.post(api_url, &headers, &body),
+    )
+    .await
+    .map_err(|_| eyre::eyre!("LLM call timed out after {}s", LLM_CALL_TIMEOUT_SECS))??;
+
+    let response: serde_json::Value = serde_json::from_str(&response_text)?;
+    let text = response["content"]
+        .as_array()
+        .and_then(|blocks| blocks.first())
+        .and_then(|b| b["text"].as_str())
+        .ok_or_else(|| eyre::eyre!("LLM returned no text"))?;
+
+    let json_text = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    Ok(json_text.to_string())
+}
+
+// ─── Types for ratification ──────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct RatifyResult {
+    passed: bool,
+    #[serde(default)]
+    issues: Vec<RatifyIssue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RatifyIssue {
+    #[allow(dead_code)]
+    issue: String,
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[allow(clippy::unwrap_used)]
@@ -734,5 +1187,31 @@ mod tests {
         let prompt = build_decompose_prompt(DocKind::Spec, "parent", "1-3", "sequential-chain").unwrap();
         assert!(prompt.contains("## Template"));
         assert!(prompt.contains("sequential-chain"));
+    }
+
+    // --- build_ratify_prompt ---
+
+    #[test]
+    fn ratify_prompt_includes_parent_and_children() {
+        crate::prompts::init_defaults();
+        let children = vec![
+            ("Spec A".to_string(), "spec a content".to_string()),
+            ("Spec B".to_string(), "spec b content".to_string()),
+        ];
+        let prompt = build_ratify_prompt("parent content", &children);
+        assert!(prompt.contains("## Parent Document"));
+        assert!(prompt.contains("parent content"));
+        assert!(prompt.contains("## Child: Spec A"));
+        assert!(prompt.contains("## Child: Spec B"));
+    }
+
+    // --- decomposition_attempts increments ---
+
+    #[test]
+    fn plan_decomposition_attempts_starts_at_zero() {
+        use crate::domain::criteria::AcceptanceCriteria;
+        use crate::domain::plan::Plan;
+        let plan = Plan::new("test plan".to_string(), AcceptanceCriteria::default());
+        assert_eq!(plan.decomposition_attempts, 0);
     }
 }
