@@ -5,7 +5,14 @@ use serde::Deserialize;
 use tracing::info;
 
 /// Known valid roles - validated at startup.
-const VALID_ROLES: &[&str] = &["coordinator", "integrator", "implementer", "reviewer", "researcher"];
+const VALID_ROLES: &[&str] = &[
+    "coordinator",
+    "integrator",
+    "implementer",
+    "reviewer",
+    "researcher",
+    "decomposer",
+];
 
 /// Authorization rule for a transition to a target state.
 /// The `name` field holds the target state name, populated from the YAML

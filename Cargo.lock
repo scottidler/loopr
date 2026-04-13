@@ -2667,8 +2667,8 @@ dependencies = [
 
 [[package]]
 name = "taskstore"
-version = "0.2.1"
-source = "git+https://github.com/scottidler/taskstore.git#930cdc3a679c5cd4c641af606196ef427d123724"
+version = "0.2.3"
+source = "git+https://github.com/scottidler/taskstore.git#499aa2ae2b8dae654504f8a48d0bb2565f48f3bd"
 dependencies = [
  "chrono",
  "clap",

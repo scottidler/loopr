@@ -21,7 +21,7 @@ transitions:
     active: { by: [coordinator] }
     abandoned: { by: [coordinator] }
   active:
-    complete: { by: [coordinator] }
+    complete: { by: [coordinator, decomposer] }
     abandoned: { by: [coordinator] }
 
 overrides: {}
