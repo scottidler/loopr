@@ -1,0 +1,20 @@
+# SLA and timeout triggers for work items and goals.
+
+work-sla-breach:
+  type: timer
+  scope: work
+  start-field: first-assignment-at
+  max-duration-secs: 1800
+
+goal-timeout:
+  type: timer
+  scope: plan
+  start-field: created-at
+  max-duration-secs: 7200
+
+work-sla-full-breach:
+  type: composite
+  operator: and
+  triggers:
+    - work-retry-exhaustion
+    - work-sla-breach

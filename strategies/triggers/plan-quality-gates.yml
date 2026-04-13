@@ -1,0 +1,15 @@
+# Plan-level quality gate triggers.
+
+abandon-ratio-exceeded:
+  type: ratio
+  scope: plan
+  numerator:
+    collection: work
+    filter:
+      status: abandoned
+  denominator:
+    collection: work
+    filter:
+      terminal: true
+  operator: ">"
+  value: 0.4

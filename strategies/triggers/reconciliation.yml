@@ -1,0 +1,72 @@
+# State-query triggers for reconciliation and lifecycle promotion.
+
+phase-children-terminal:
+  type: state-query
+  scope: phase
+  query: all-children-terminal
+  params:
+    child-collection: work
+    terminal-statuses:
+      - done
+      - abandoned
+
+spec-children-terminal:
+  type: state-query
+  scope: spec
+  query: all-children-terminal
+  params:
+    child-collection: phase
+    terminal-statuses:
+      - complete
+      - abandoned
+
+hierarchy-deps-terminal:
+  type: state-query
+  scope: plan
+  query: all-deps-terminal
+  params:
+    dep-field: dependencies
+    terminal-statuses:
+      - complete
+      - abandoned
+
+work-deps-done:
+  type: state-query
+  scope: work
+  query: all-deps-done
+  params:
+    dep-field: dependencies
+
+parent-active:
+  type: state-query
+  scope: work
+  query: parent-active
+
+plan-approved:
+  type: state-query
+  scope: plan
+  query: field-is-true
+  params:
+    field: plan-approved
+
+hierarchy-exists:
+  type: state-query
+  scope: plan
+  query: has-children
+  params:
+    child-collection: spec
+
+goal-complete:
+  type: state-query
+  scope: plan
+  query: field-is-true
+  params:
+    field: goal-complete
+
+coverage-incomplete:
+  type: state-query
+  scope: plan
+  query: field-equals
+  params:
+    field: coverage-verdict
+    value: incomplete

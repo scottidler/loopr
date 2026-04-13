@@ -22,6 +22,7 @@ pub mod prompts;
 pub mod scorer;
 pub mod session_summary;
 pub mod tools;
+pub mod trigger;
 pub mod tui;
 pub mod validator;
 pub mod worktree;

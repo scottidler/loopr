@@ -1,0 +1,26 @@
+# Event-based triggers that fire in response to daemon events.
+
+session-failure:
+  type: event
+  event: agent.status-changed
+  match:
+    status: failed
+  scope: work
+  throttle-secs: 5
+
+transition-completed:
+  type: event
+  event: transition.completed
+
+record-created:
+  type: event
+  event: record.created
+
+decomposition-completed:
+  type: event
+  event: decomposition.completed
+
+decomposition-failed:
+  type: event
+  event: decomposition.failed
+  cooldown-secs: 30

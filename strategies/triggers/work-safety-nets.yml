@@ -1,0 +1,59 @@
+# Work-level safety net triggers - threshold-based guards against infinite loops.
+
+work-retry-exhaustion:
+  type: threshold
+  scope: work
+  field: attempt-count
+  operator: ">="
+  value: 3
+  cooldown-secs: 60
+
+session-failure-limit:
+  type: threshold
+  scope: work
+  field: session-failure-count
+  operator: ">="
+  value: 3
+  cooldown-secs: 60
+
+action-repetition-loop:
+  type: threshold
+  scope: session
+  field: consecutive-action-count
+  operator: ">="
+  value: 5
+
+error-repetition-loop:
+  type: threshold
+  scope: session
+  field: same-error-count
+  operator: ">="
+  value: 3
+
+parse-failure-limit:
+  type: threshold
+  scope: session
+  field: consecutive-parse-failures
+  operator: ">"
+  value: 3
+
+researcher-spawn-limit:
+  type: threshold
+  scope: session
+  field: researcher-spawn-count
+  operator: ">="
+  value: 3
+
+self-correction-limit:
+  type: threshold
+  scope: session
+  field: requery-count
+  operator: ">"
+  value: 5
+
+restart-limit:
+  type: threshold
+  scope: session
+  field: restart-count
+  operator: ">="
+  value: 3
