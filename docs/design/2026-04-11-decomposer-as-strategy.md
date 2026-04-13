@@ -441,6 +441,7 @@ Pattern is specified per parent kind in the role config. No new primitive code n
 3. Crash-resume test: kill daemon after Specs created, restart, verify Phases created on next ticks
 4. Confirm `decompose_hierarchy` in `src/decomposer.rs` is no longer called from any live code path
 5. Delete `src/decomposer.rs` once dead-code gate passes; delete disabled test wrappers
+6. Resolve tier classification pipeline: the `classify-and-configure` strategy writes `decomposer-config` via `update-record`, but `plan.update` only persists `title` and `acceptance_criteria`. Either wire `update-record` to support arbitrary Plan fields, or remove the strategy and have the decomposer agent read `plan.tier` directly (the field already exists on the Plan struct and is set by `classify-tier`)
 
 ## Alternatives Considered
 

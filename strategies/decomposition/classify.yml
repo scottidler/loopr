@@ -1,5 +1,18 @@
 # Tier classification: fires when a plan is approved, classifies it as full or
 # brief and stores the result on the plan record for the decomposer agent to read.
+#
+# IMPORTANT (Phase 4 TODO): The Plan struct already has a native `tier` field
+# (Tier::Full / Tier::Brief) set by classify-tier. The decomposer agent
+# currently reads plan.tier directly via the classify-tier primitive output.
+# This update-record step writes a REDUNDANT decomposer-config field that the
+# plan.update IPC handler does not currently persist (it only extracts title
+# and acceptance_criteria). This strategy is scaffolding for the future
+# update-record primitive which will support arbitrary field writes. Until
+# then, the agent falls back to plan.tier via the classify-tier primitive,
+# which already works. Phase 4 should either:
+#   (a) wire update-record to support arbitrary fields on Plan, or
+#   (b) remove this strategy entirely and have the agent read plan.tier directly
+# See design doc Section "Tier Classification" for context.
 
 classify-and-configure:
   description: Classify plan tier and store decomposer config for agent lookup

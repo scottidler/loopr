@@ -139,3 +139,26 @@ phase-active-no-works:
   query: has-no-children
   params:
     child-collection: work
+
+# ─── Re-decomposition safety cap ──────────────────────────────────────────────
+# Caps re-decomposition iterations to prevent infinite cycling when
+# coverage-incomplete persists. Defined here per Doc 6 (Decomposer as Strategy).
+# v3 incremented the counter but never enforced the limit; this is the first
+# enforced definition.
+
+plan-specs-terminal:
+  type: state-query
+  scope: plan
+  query: all-children-terminal
+  params:
+    child-collection: spec
+    terminal-statuses:
+      - complete
+      - abandoned
+
+decomposition-attempt-limit:
+  type: threshold
+  scope: plan
+  field: decomposition-attempts
+  operator: ">="
+  value: 3

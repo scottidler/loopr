@@ -14,9 +14,9 @@ validate-after-decomposition:
         id: $trigger.event.child-id
 
 ratify-spec-level:
-  description: Ratify hierarchy when all specs are validated
-  trigger: spec-children-terminal
-  scope: spec
+  description: Ratify hierarchy when all specs under a plan are terminal
+  trigger: plan-specs-terminal
+  scope: plan
   priority: 790
   action:
     - primitive: ratify-hierarchy

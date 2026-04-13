@@ -115,15 +115,18 @@ impl<'a> DecomposerAgent<'a> {
         ))
     }
 
-    /// Walk up from the current record to the plan to read decomposer-config.
+    /// Walk up from the current record to the plan and read its `tier` field.
+    /// The Plan struct has a native `tier` field (Tier::Full / Tier::Brief) set
+    /// by the classify-tier primitive. Kebab-case in YAML/JSON -> snake_case in
+    /// Rust struct -> serialized as lowercase string ("full" or "brief").
     fn resolve_decomposer_config(&self, collection: &str, record: &serde_json::Value) -> String {
-        // If the record IS a plan, check directly.
+        // If the record IS a plan, read tier directly.
         if collection == "plan" {
             return record
-                .get("decomposer_config")
+                .get("tier")
                 .and_then(|v| v.as_str())
                 .unwrap_or("full")
-                .to_string();
+                .to_lowercase();
         }
 
         // Walk up via parent_id chain.
