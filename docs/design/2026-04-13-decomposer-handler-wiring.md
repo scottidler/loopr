@@ -145,7 +145,7 @@ Changes to `accept_plan_markdown`:
 
 ### Implementation Plan
 
-#### Phase 1: Wire `decomposer.decompose` handler and switch entry path
+#### Phase 1: Wire `decomposer.decompose` handler
 **Model:** opus
 
 1. Create `src/daemon/handlers/decomposer.rs` with `handle_decomposer_decompose` (async handler using `try_async_handler!` macro)
@@ -154,22 +154,35 @@ Changes to `accept_plan_markdown`:
 4. Replace generic `HttpClient` trait bound with concrete `ReqwestClient` instantiation from config
 5. Persist children atomically via `TaskStore::create_many`; insert into in-memory stores; write `docs/loopr/<id>.md` files; emit `record_created` events
 6. Add `"decomposer.decompose"` to dispatch table in `src/daemon/handlers.rs`
-7. Modify `accept_plan_markdown` in doc.rs: create Plan record, transition to Active, remove background `decompose_hierarchy` task. Keep `Decomposing` coordinator state - the engine's `decomposition.completed` event transitions to `Planning`.
-8. Remove `persist_hierarchy` function from doc.rs; remove `use crate::decomposer::*` imports
-9. Unit tests: mock LLM, verify child creation, cycle detection, dependency resolution, create_many usage, coordinator state transition on decomposition.completed
+7. Unit tests: mock LLM, verify child creation, cycle detection, dependency resolution, create_many usage
 
-#### Phase 2: Wire remaining handlers, enable E2E tests, delete legacy
+#### Phase 2: Switch entry path
+**Model:** opus
+
+1. Modify `accept_plan_markdown` in doc.rs: create Plan record, transition to Active, remove background `decompose_hierarchy` task
+2. Keep `Decomposing` coordinator state - the engine's `decomposition.completed` event transitions to `Planning`
+3. Remove `persist_hierarchy` function from doc.rs
+4. Remove `use crate::decomposer::*` imports from doc.rs
+5. Verify coordinator agent starts correctly with the decomposition gate still intact
+6. Unit tests: coordinator state transition on decomposition.completed
+
+#### Phase 3: Wire remaining handlers
 **Model:** sonnet
 
 1. Add `handle_decomposer_ratify` (extract `ratify_hierarchy`, `call_llm_for_ratification`, `build_ratify_prompt`)
 2. Add `handle_decomposer_abandon_children` (transition children to Abandoned, preserve IDs)
 3. Add `handle_decomposer_re_decompose` (abandon + increment `decomposition_attempts` + re-invoke decompose)
-4. Add all three to dispatch table; unit tests for each handler
-5. Remove `#[ignore]` from 3 E2E decomposition tests in `src/tests/integration/decomposition.rs`
-6. Run tests, fix any assertion failures
-7. Verify `decompose_hierarchy` has zero live callers (`grep -rn decompose_hierarchy src/ --include="*.rs" | grep -v decomposer.rs | grep -v test`)
-8. Delete `src/decomposer.rs`; remove `pub mod decomposer;` from `src/lib.rs`
-9. Run `otto ci` - verify no dead code, all tests pass
+4. Add all three to dispatch table
+5. Unit tests for each handler
+
+#### Phase 4: Enable E2E tests and delete legacy
+**Model:** sonnet
+
+1. Remove `#[ignore]` from 3 E2E decomposition tests in `src/tests/integration/decomposition.rs`
+2. Run tests, fix any assertion failures
+3. Verify `decompose_hierarchy` has zero live callers (`grep -rn decompose_hierarchy src/ --include="*.rs" | grep -v decomposer.rs | grep -v test`)
+4. Delete `src/decomposer.rs`; remove `pub mod decomposer;` from `src/lib.rs`
+5. Run `otto ci` - verify no dead code, all tests pass
 
 ## Alternatives Considered
 
