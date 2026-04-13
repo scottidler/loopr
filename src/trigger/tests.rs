@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::observe::{GuardConditionRegistry, ObservationCtx, StateQueryRegistry};
 use super::schema::{self, CompositeOperator, CountQuery, Operator, TriggerDefinition, TriggerKind};
+use crate::daemon::context::Stores;
+use crate::domain::phase::Phase;
+use crate::domain::work::{Work, WorkStatus};
+use crate::ipc::protocol::DaemonEvent;
 
 fn strategies_triggers_dir() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -428,4 +433,340 @@ fn scope_returns_none_for_composite() {
 fn scope_returns_some_for_threshold() {
     let t = minimal_threshold();
     assert_eq!(t.kind.scope(), Some("work"));
+}
+
+// ─── Phase 2: Observation API tests ──────────────────────────────────────────
+
+fn make_stores() -> Stores {
+    Stores::new()
+}
+
+fn make_ctx(stores: &Stores) -> ObservationCtx<'_> {
+    ObservationCtx::new(stores, &[], 0)
+}
+
+fn insert_work(stores: &Stores, parent_id: &str, title: &str) -> Work {
+    let work = Work::new(parent_id.to_owned(), title.to_owned());
+    stores.write_works().unwrap().insert(work.id.clone(), work.clone());
+    work
+}
+
+fn insert_phase(stores: &Stores, parent_id: &str, title: &str) -> Phase {
+    let phase = Phase::new(parent_id.to_owned(), title.to_owned());
+    stores.write_phases().unwrap().insert(phase.id.clone(), phase.clone());
+    phase
+}
+
+// --- get_record ---
+
+#[test]
+fn get_record_returns_some_for_existing_work() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "phase-1", "task");
+    let ctx = make_ctx(&stores);
+    assert!(ctx.get_record("work", &work.id).is_some());
+}
+
+#[test]
+fn get_record_returns_none_for_missing_id() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    assert!(ctx.get_record("work", "no-such-id").is_none());
+}
+
+#[test]
+fn get_record_returns_none_for_unknown_collection() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    assert!(ctx.get_record("unicorn", "anything").is_none());
+}
+
+#[test]
+fn get_record_includes_parent_id_in_json() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "phase-42", "task");
+    let ctx = make_ctx(&stores);
+    let json = ctx.get_record("work", &work.id).unwrap();
+    assert_eq!(json["parent_id"], "phase-42");
+}
+
+// --- count ---
+
+#[test]
+fn count_empty_collection_returns_zero() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    assert_eq!(ctx.count("work", &HashMap::new()), 0);
+}
+
+#[test]
+fn count_with_empty_filter_returns_all() {
+    let stores = make_stores();
+    insert_work(&stores, "p1", "a");
+    insert_work(&stores, "p1", "b");
+    let ctx = make_ctx(&stores);
+    assert_eq!(ctx.count("work", &HashMap::new()), 2);
+}
+
+#[test]
+fn count_with_status_filter_case_insensitive() {
+    let stores = make_stores();
+    insert_work(&stores, "p1", "done-work");
+    insert_work(&stores, "p1", "draft-work");
+    let ctx = make_ctx(&stores);
+    // Newly created works are Draft status
+    let filter: HashMap<String, serde_json::Value> = [("status".to_string(), serde_json::json!("draft"))].into();
+    assert_eq!(ctx.count("work", &filter), 2);
+}
+
+#[test]
+fn count_terminal_filter_matches_terminal_records() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    // Force work status to Done via direct mutation in the store
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&work.id)
+        .unwrap()
+        .force_status(WorkStatus::Done);
+    insert_work(&stores, "p1", "other"); // this is Draft (non-terminal)
+    let ctx = make_ctx(&stores);
+    let filter: HashMap<String, serde_json::Value> = [("terminal".to_string(), serde_json::json!(true))].into();
+    assert_eq!(ctx.count("work", &filter), 1);
+}
+
+// --- get_field_u32 ---
+
+#[test]
+fn get_field_u32_kebab_case_field_name() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    // attempt_count defaults to 0
+    let ctx = make_ctx(&stores);
+    assert_eq!(ctx.get_field_u32("work", &work.id, "attempt-count"), Some(0));
+}
+
+#[test]
+fn get_field_u32_returns_none_for_missing_record() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    assert_eq!(ctx.get_field_u32("work", "no-such-id", "attempt-count"), None);
+}
+
+// --- get_field_timestamp ---
+
+#[test]
+fn get_field_timestamp_returns_created_at() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let ts = ctx.get_field_timestamp("work", &work.id, "created-at");
+    assert!(ts.is_some());
+    assert!(ts.unwrap() > 0);
+}
+
+// --- has_event ---
+
+#[test]
+fn has_event_returns_false_when_bus_empty() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    assert!(!ctx.has_event("record.created", &HashMap::new()));
+}
+
+#[test]
+fn has_event_matches_event_type_and_filter() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 0);
+    let filter: HashMap<String, serde_json::Value> = [("status".to_string(), serde_json::json!("failed"))].into();
+    assert!(ctx.has_event("agent.status-changed", &filter));
+}
+
+#[test]
+fn has_event_does_not_match_wrong_type() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new("record.created", serde_json::json!({}))];
+    let ctx = ObservationCtx::new(&stores, &events, 0);
+    assert!(!ctx.has_event("transition.completed", &HashMap::new()));
+}
+
+#[test]
+fn has_event_does_not_match_wrong_filter_value() {
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "running"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 0);
+    let filter: HashMap<String, serde_json::Value> = [("status".to_string(), serde_json::json!("failed"))].into();
+    assert!(!ctx.has_event("agent.status-changed", &filter));
+}
+
+// --- children ---
+
+#[test]
+fn children_returns_works_with_matching_parent_id() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    insert_work(&stores, &phase.id, "work-a");
+    insert_work(&stores, &phase.id, "work-b");
+    insert_work(&stores, "other-phase", "work-c");
+    let ctx = make_ctx(&stores);
+    let children = ctx.children(&phase.id, "work");
+    assert_eq!(children.len(), 2);
+}
+
+#[test]
+fn children_returns_empty_when_no_match() {
+    let stores = make_stores();
+    insert_work(&stores, "phase-x", "work");
+    let ctx = make_ctx(&stores);
+    assert!(ctx.children("phase-y", "work").is_empty());
+}
+
+// --- StateQueryRegistry ---
+
+#[test]
+fn state_query_registry_has_all_9_builtins() {
+    let reg = StateQueryRegistry::with_builtins();
+    let names = reg.names();
+    for required in &[
+        "all-children-terminal",
+        "all-children-done",
+        "all-deps-terminal",
+        "all-deps-done",
+        "parent-active",
+        "has-children",
+        "no-active-sessions",
+        "field-equals",
+        "field-is-true",
+    ] {
+        assert!(names.contains(required), "missing built-in query: {}", required);
+    }
+}
+
+#[test]
+fn state_query_has_children_returns_true_when_children_exist() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    insert_work(&stores, &phase.id, "work");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> =
+        [("child-collection".to_string(), serde_json::json!("work"))].into();
+    assert!(reg.evaluate("has-children", &ctx, "phase", &phase.id, &params));
+}
+
+#[test]
+fn state_query_has_children_returns_false_when_empty() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> =
+        [("child-collection".to_string(), serde_json::json!("work"))].into();
+    assert!(!reg.evaluate("has-children", &ctx, "phase", &phase.id, &params));
+}
+
+#[test]
+fn state_query_field_equals_matches_string_case_insensitively() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> = [
+        ("field".to_string(), serde_json::json!("status")),
+        ("value".to_string(), serde_json::json!("draft")),
+    ]
+    .into();
+    assert!(reg.evaluate("field-equals", &ctx, "work", &work.id, &params));
+}
+
+#[test]
+fn state_query_all_children_terminal_false_when_some_non_terminal() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    let work = insert_work(&stores, &phase.id, "task");
+    // work is Draft (non-terminal)
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> = [
+        ("child-collection".to_string(), serde_json::json!("work")),
+        (
+            "terminal-statuses".to_string(),
+            serde_json::json!(["done", "abandoned"]),
+        ),
+    ]
+    .into();
+    assert!(!reg.evaluate("all-children-terminal", &ctx, "phase", &phase.id, &params));
+    // Silence unused variable warning from the work binding
+    let _ = work;
+}
+
+#[test]
+fn state_query_all_deps_done_true_when_no_deps() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> =
+        [("dep-field".to_string(), serde_json::json!("dependencies"))].into();
+    // Work has empty dependencies - vacuously true.
+    assert!(reg.evaluate("all-deps-done", &ctx, "work", &work.id, &params));
+}
+
+#[test]
+fn state_query_unknown_returns_false() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    assert!(!reg.evaluate("no-such-query", &ctx, "work", "any-id", &HashMap::new()));
+}
+
+// --- GuardConditionRegistry ---
+
+#[test]
+fn guard_registry_has_all_4_builtins() {
+    let reg = GuardConditionRegistry::with_builtins();
+    let names = reg.names();
+    for required in &[
+        "no-active-sessions",
+        "deps-satisfied",
+        "validation-passed",
+        "all-ac-passing",
+    ] {
+        assert!(names.contains(required), "missing built-in guard: {}", required);
+    }
+}
+
+#[test]
+fn guard_no_active_sessions_true_when_no_sessions() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(reg.evaluate("no-active-sessions", &ctx, "work", &work.id));
+}
+
+#[test]
+fn guard_deps_satisfied_true_when_no_deps() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    // Work has empty dependencies - vacuously satisfied.
+    assert!(reg.evaluate("deps-satisfied", &ctx, "work", &work.id));
+}
+
+#[test]
+fn guard_unknown_condition_returns_false() {
+    let stores = make_stores();
+    let ctx = make_ctx(&stores);
+    let reg = GuardConditionRegistry::with_builtins();
+    assert!(!reg.evaluate("ghost-condition", &ctx, "work", "any-id"));
 }
