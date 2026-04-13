@@ -24,6 +24,9 @@ pub struct Phase {
     pub activated_at: Option<i64>,
     #[serde(default)]
     pub acceptance_criteria: AcceptanceCriteria,
+    /// Number of decomposition attempts on this phase (for phase-decomposition-attempt-limit trigger).
+    #[serde(default)]
+    pub decomposition_attempts: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -72,6 +75,7 @@ impl Phase {
             dependencies: Vec::new(),
             activated_at: None,
             acceptance_criteria: AcceptanceCriteria::default(),
+            decomposition_attempts: 0,
             created_at: now,
             updated_at: now,
         }

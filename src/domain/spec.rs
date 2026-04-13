@@ -22,6 +22,9 @@ pub struct Spec {
     status: SpecStatus,
     #[serde(default)]
     pub dependencies: Vec<String>,
+    /// Number of decomposition attempts on this spec (for spec-decomposition-attempt-limit trigger).
+    #[serde(default)]
+    pub decomposition_attempts: u32,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -69,6 +72,7 @@ impl Spec {
             acceptance_criteria: AcceptanceCriteria::default(),
             status: HierarchyStatus::Draft,
             dependencies: Vec::new(),
+            decomposition_attempts: 0,
             created_at: now,
             updated_at: now,
         }

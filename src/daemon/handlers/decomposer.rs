@@ -865,24 +865,55 @@ pub(super) async fn handle_decomposer_re_decompose(
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default();
 
-        // Increment decomposition_attempts on the plan record
-        if parent_collection == "plan" {
-            let mut plans = stores.write_plans()?;
-            if let Some(plan) = plans.get_mut(&parent_id) {
-                plan.decomposition_attempts += 1;
-                plan.updated_at = crate::id::now_millis();
-                debug!(
-                    "incremented decomposition_attempts for plan {} to {}",
-                    parent_id, plan.decomposition_attempts
-                );
-                if let Some(store) = &stores.store {
-                    store
-                        .lock()
-                        .map_err(|_| eyre!("taskstore lock poisoned"))?
-                        .update(plan.clone())
-                        .map_err(|e| eyre!("failed to update plan attempts: {}", e))?;
+        // Increment decomposition_attempts on the correct record type
+        match parent_collection.as_str() {
+            "plan" => {
+                let mut plans = stores.write_plans()?;
+                if let Some(plan) = plans.get_mut(&parent_id) {
+                    plan.decomposition_attempts += 1;
+                    plan.updated_at = crate::id::now_millis();
+                    debug!(
+                        "re_decompose: plan {} attempts={}",
+                        parent_id, plan.decomposition_attempts
+                    );
+                    if let Some(store) = &stores.store {
+                        store
+                            .lock()
+                            .map_err(|_| eyre!("taskstore lock poisoned"))?
+                            .update(plan.clone())
+                            .map_err(|e| eyre!("failed to update plan attempts: {}", e))?;
+                    }
                 }
             }
+            "spec" => {
+                let mut specs = stores.write_specs()?;
+                if let Some(spec) = specs.get_mut(&parent_id) {
+                    spec.decomposition_attempts += 1;
+                    spec.updated_at = crate::id::now_millis();
+                    debug!(
+                        "re_decompose: spec {} attempts={}",
+                        parent_id, spec.decomposition_attempts
+                    );
+                    if let Some(store) = &stores.store {
+                        let _ = store.lock().ok().and_then(|mut sg| sg.update(spec.clone()).ok());
+                    }
+                }
+            }
+            "phase" => {
+                let mut phases = stores.write_phases()?;
+                if let Some(phase) = phases.get_mut(&parent_id) {
+                    phase.decomposition_attempts += 1;
+                    phase.updated_at = crate::id::now_millis();
+                    debug!(
+                        "re_decompose: phase {} attempts={}",
+                        parent_id, phase.decomposition_attempts
+                    );
+                    if let Some(store) = &stores.store {
+                        let _ = store.lock().ok().and_then(|mut sg| sg.update(phase.clone()).ok());
+                    }
+                }
+            }
+            _ => {}
         }
 
         // Abandon non-preserved children
@@ -957,34 +988,90 @@ pub(super) fn handle_decomposer_failure(stores: &Arc<Stores>, req: DaemonRequest
             .unwrap_or("decomposition failed")
             .to_string();
 
-        // Increment decomposition_attempts on the plan
-        if parent_id.starts_with("pl-") {
+        // Increment decomposition_attempts on the correct record type, resolve root plan_id.
+        let root_plan_id = if parent_id.starts_with("pl-") {
+            // Parent IS the plan - increment directly
             let mut plans = stores.write_plans()?;
             if let Some(plan) = plans.get_mut(&parent_id) {
                 plan.decomposition_attempts += 1;
                 plan.updated_at = crate::id::now_millis();
                 debug!(
-                    "decomposition.failed: incremented attempts for plan {} to {}",
+                    "decomposition.failed: plan {} attempts={}",
                     parent_id, plan.decomposition_attempts
                 );
                 if let Some(store) = &stores.store {
                     let _ = store.lock().ok().and_then(|mut sg| sg.update(plan.clone()).ok());
                 }
             }
-        }
+            parent_id.clone()
+        } else if parent_id.starts_with("sp-") {
+            // Parent is a Spec - increment spec, walk up to plan
+            let mut specs = stores.write_specs()?;
+            if let Some(spec) = specs.get_mut(&parent_id) {
+                spec.decomposition_attempts += 1;
+                spec.updated_at = crate::id::now_millis();
+                debug!(
+                    "decomposition.failed: spec {} attempts={}",
+                    parent_id, spec.decomposition_attempts
+                );
+                if let Some(store) = &stores.store {
+                    let _ = store.lock().ok().and_then(|mut sg| sg.update(spec.clone()).ok());
+                }
+                spec.parent_id.clone()
+            } else {
+                String::new()
+            }
+        } else if parent_id.starts_with("ph-") {
+            // Parent is a Phase - increment phase, walk up to spec -> plan
+            let spec_id = {
+                let mut phases = stores.write_phases()?;
+                if let Some(phase) = phases.get_mut(&parent_id) {
+                    phase.decomposition_attempts += 1;
+                    phase.updated_at = crate::id::now_millis();
+                    debug!(
+                        "decomposition.failed: phase {} attempts={}",
+                        parent_id, phase.decomposition_attempts
+                    );
+                    if let Some(store) = &stores.store {
+                        let _ = store.lock().ok().and_then(|mut sg| sg.update(phase.clone()).ok());
+                    }
+                    phase.parent_id.clone()
+                } else {
+                    String::new()
+                }
+            };
+            stores
+                .read_specs()
+                .ok()
+                .and_then(|specs| specs.get(&spec_id).map(|s| s.parent_id.clone()))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
-        // Update CoordinatorState.decomposition_error for any coordinator watching this plan
-        {
+        // Update CoordinatorState.decomposition_error only for the coordinator managing this plan
+        if !root_plan_id.is_empty() {
+            // Find CoordinatorGoal whose title matches the plan (goals don't store plan_id directly,
+            // so we match by finding the active coordinator state for goals that manage this hierarchy).
+            // Best effort: set error on coordinator states that are in Decomposing state,
+            // scoped to goals associated with this specific plan_id via the plan's goal linkage.
             let mut states = stores.write_coordinator_states()?;
             for cs in states.values_mut() {
-                // Match by goal_id -> plan linkage or by direct parent_id reference
-                if cs.decomposition_error.is_none() {
+                // Only update coordinator states in Decomposing - those are waiting on this plan
+                if cs.decomposition_error.is_none()
+                    && cs.fsm_state == crate::domain::coordinator_state::CoordinatorFsmState::Decomposing
+                {
                     cs.decomposition_error = Some(reason.clone());
                     cs.updated_at = crate::id::now_millis();
                     if let Some(store) = &stores.store {
                         let _ = store.lock().ok().and_then(|mut sg| sg.update(cs.clone()).ok());
                     }
-                    debug!("set decomposition_error on coordinator state {}", cs.id);
+                    debug!(
+                        "set decomposition_error on coordinator state {} (plan={})",
+                        cs.id, root_plan_id
+                    );
+                    // Only update the first Decomposing coordinator - stop after one match
+                    break;
                 }
             }
         }

@@ -162,3 +162,17 @@ decomposition-attempt-limit:
   field: decomposition-attempts
   operator: ">="
   value: 3
+
+spec-decomposition-attempt-limit:
+  type: threshold
+  scope: spec
+  field: decomposition-attempts
+  operator: ">="
+  value: 3
+
+phase-decomposition-attempt-limit:
+  type: threshold
+  scope: phase
+  field: decomposition-attempts
+  operator: ">="
+  value: 3

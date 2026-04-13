@@ -22,3 +22,31 @@ abandon-on-decomposition-limit:
         target-status: abandoned
         role: decomposer
         reason: decomposition-attempt-limit-reached
+
+abandon-spec-on-decomposition-limit:
+  description: Abandon a spec that has exhausted all decomposition retries
+  trigger: spec-decomposition-attempt-limit
+  scope: spec
+  priority: 900
+  action:
+    - primitive: transition-record
+      params:
+        collection: spec
+        id: $trigger.scope-id
+        target-status: abandoned
+        role: decomposer
+        reason: decomposition-attempt-limit-reached
+
+abandon-phase-on-decomposition-limit:
+  description: Abandon a phase that has exhausted all decomposition retries
+  trigger: phase-decomposition-attempt-limit
+  scope: phase
+  priority: 900
+  action:
+    - primitive: transition-record
+      params:
+        collection: phase
+        id: $trigger.scope-id
+        target-status: abandoned
+        role: decomposer
+        reason: decomposition-attempt-limit-reached
