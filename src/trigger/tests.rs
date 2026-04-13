@@ -636,7 +636,7 @@ fn children_returns_empty_when_no_match() {
 // --- StateQueryRegistry ---
 
 #[test]
-fn state_query_registry_has_all_9_builtins() {
+fn state_query_registry_has_all_10_builtins() {
     let reg = StateQueryRegistry::with_builtins();
     let names = reg.names();
     for required in &[
@@ -646,6 +646,7 @@ fn state_query_registry_has_all_9_builtins() {
         "all-deps-done",
         "parent-active",
         "has-children",
+        "has-no-children",
         "no-active-sessions",
         "field-equals",
         "field-is-true",
@@ -675,6 +676,91 @@ fn state_query_has_children_returns_false_when_empty() {
     let params: HashMap<String, serde_json::Value> =
         [("child-collection".to_string(), serde_json::json!("work"))].into();
     assert!(!reg.evaluate("has-children", &ctx, "phase", &phase.id, &params));
+}
+
+#[test]
+fn state_query_has_no_children_returns_true_when_empty() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> =
+        [("child-collection".to_string(), serde_json::json!("work"))].into();
+    assert!(reg.evaluate("has-no-children", &ctx, "phase", &phase.id, &params));
+}
+
+#[test]
+fn state_query_has_no_children_returns_false_when_children_exist() {
+    let stores = make_stores();
+    let phase = insert_phase(&stores, "spec-1", "phase");
+    insert_work(&stores, &phase.id, "work");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> =
+        [("child-collection".to_string(), serde_json::json!("work"))].into();
+    assert!(!reg.evaluate("has-no-children", &ctx, "phase", &phase.id, &params));
+}
+
+#[test]
+fn state_query_has_no_children_only_counts_matching_parent() {
+    let stores = make_stores();
+    let phase_a = insert_phase(&stores, "spec-1", "phase-a");
+    let phase_b = insert_phase(&stores, "spec-1", "phase-b");
+    insert_work(&stores, &phase_a.id, "work-for-a");
+    let ctx = make_ctx(&stores);
+    let reg = StateQueryRegistry::with_builtins();
+    let params: HashMap<String, serde_json::Value> =
+        [("child-collection".to_string(), serde_json::json!("work"))].into();
+    // phase_a has a child, phase_b does not
+    assert!(!reg.evaluate("has-no-children", &ctx, "phase", &phase_a.id, &params));
+    assert!(reg.evaluate("has-no-children", &ctx, "phase", &phase_b.id, &params));
+}
+
+#[test]
+fn decomposition_state_query_triggers_are_loaded() {
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    for required in &[
+        "plan-is-active",
+        "spec-is-active",
+        "phase-is-active",
+        "plan-active-no-specs",
+        "spec-active-no-phases",
+        "phase-active-no-works",
+    ] {
+        assert!(names.contains(required), "missing decomposition trigger: {}", required);
+    }
+}
+
+#[test]
+fn decomposition_composite_triggers_are_loaded() {
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    for required in &["plan-decomposable", "spec-decomposable", "phase-decomposable"] {
+        assert!(
+            names.contains(required),
+            "missing decomposition composite: {}",
+            required
+        );
+    }
+}
+
+#[test]
+fn decomposable_composites_are_and_operators() {
+    let defs = schema::load_dir(&strategies_triggers_dir()).unwrap();
+    for name in &["plan-decomposable", "spec-decomposable", "phase-decomposable"] {
+        let def = defs
+            .iter()
+            .find(|d| &d.name == name)
+            .unwrap_or_else(|| panic!("missing {}", name));
+        match &def.kind {
+            TriggerKind::Composite { operator, triggers } => {
+                assert_eq!(operator, &CompositeOperator::And, "{} should be AND", name);
+                assert_eq!(triggers.len(), 2, "{} should have exactly 2 sub-triggers", name);
+            }
+            other => panic!("{}: expected Composite, got {:?}", name, other),
+        }
+    }
 }
 
 #[test]

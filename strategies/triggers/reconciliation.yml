@@ -88,3 +88,54 @@ phase-deps-terminal:
     terminal-statuses:
       - complete
       - abandoned
+
+# ─── Decomposition triggers ───────────────────────────────────────────────────
+# Self-active checks: each scope checks its own status field.
+# Plans have no parent and cannot use parent-active; they must check themselves.
+
+plan-is-active:
+  type: state-query
+  scope: plan
+  query: field-equals
+  params:
+    field: status
+    value: Active
+
+spec-is-active:
+  type: state-query
+  scope: spec
+  query: field-equals
+  params:
+    field: status
+    value: Active
+
+phase-is-active:
+  type: state-query
+  scope: phase
+  query: field-equals
+  params:
+    field: status
+    value: Active
+
+# No-children checks: fire when a record has no children at the expected next level.
+
+plan-active-no-specs:
+  type: state-query
+  scope: plan
+  query: has-no-children
+  params:
+    child-collection: spec
+
+spec-active-no-phases:
+  type: state-query
+  scope: spec
+  query: has-no-children
+  params:
+    child-collection: phase
+
+phase-active-no-works:
+  type: state-query
+  scope: phase
+  query: has-no-children
+  params:
+    child-collection: work

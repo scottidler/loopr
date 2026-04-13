@@ -15,3 +15,32 @@ work-promotable:
   triggers:
     - parent-active
     - work-deps-done
+
+# ─── Decomposition composites ─────────────────────────────────────────────────
+# Each fires only when the record is itself Active AND has no children yet at
+# the expected next level. Pair of checks prevents re-spawning a decomposer
+# once children exist.
+
+# Fires for plans ready to decompose: plan is Active AND has no spec children yet
+plan-decomposable:
+  type: composite
+  operator: and
+  triggers:
+    - plan-is-active
+    - plan-active-no-specs
+
+# Fires for specs ready to decompose: spec is Active AND has no phase children yet
+spec-decomposable:
+  type: composite
+  operator: and
+  triggers:
+    - spec-is-active
+    - spec-active-no-phases
+
+# Fires for phases ready to decompose: phase is Active AND has no work children yet
+phase-decomposable:
+  type: composite
+  operator: and
+  triggers:
+    - phase-is-active
+    - phase-active-no-works

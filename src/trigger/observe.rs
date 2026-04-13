@@ -167,7 +167,7 @@ pub struct StateQueryRegistry {
 }
 
 impl StateQueryRegistry {
-    /// Build a registry populated with all 9 built-in state queries.
+    /// Build a registry populated with all 10 built-in state queries.
     pub fn with_builtins() -> Self {
         let mut r = Self {
             queries: HashMap::new(),
@@ -289,6 +289,15 @@ impl StateQueryRegistry {
             Box::new(|ctx, _collection, id, params| {
                 let child_col = str_param(params, "child-collection");
                 !ctx.children(id, child_col).is_empty()
+            }),
+        );
+
+        // has-no-children: zero child records exist in child-collection. Complement of has-children.
+        r.register(
+            "has-no-children",
+            Box::new(|ctx, _collection, id, params| {
+                let child_col = str_param(params, "child-collection");
+                ctx.children(id, child_col).is_empty()
             }),
         );
 
