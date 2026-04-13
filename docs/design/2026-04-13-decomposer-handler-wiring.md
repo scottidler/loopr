@@ -135,7 +135,7 @@ Changes to `accept_plan_markdown`:
 2. Classify tier (brief/full) and set on plan record
 3. Transition Plan to Active via `plan.transition` IPC
 4. Remove the `decompose_hierarchy` background task spawn (lines 224-280 of doc.rs)
-5. The `Decomposing` coordinator state is no longer set - the coordinator starts in `Planning` or directly in `Executing` since decomposition is engine-driven
+5. The `Decomposing` coordinator state is KEPT - the coordinator starts in `Decomposing` as before. The engine's `decomposition.completed` event (emitted by the DecomposerAgent) transitions the coordinator state from `Decomposing` to `Planning`. This prevents the Coordinator from spin-looping on a false "all planning artifacts have been decomposed" premise while the engine is still creating children.
 6. Start Coordinator agent as before
 7. The engine's `plan-decomposable` trigger fires on the next tick (plan is Active with no spec children)
 
@@ -145,43 +145,31 @@ Changes to `accept_plan_markdown`:
 
 ### Implementation Plan
 
-#### Phase 1: Wire `decomposer.decompose` handler
+#### Phase 1: Wire `decomposer.decompose` handler and switch entry path
 **Model:** opus
 
 1. Create `src/daemon/handlers/decomposer.rs` with `handle_decomposer_decompose` (async handler using `try_async_handler!` macro)
 2. Extract `decompose_into`, `call_llm_for_children`, `call_llm_for_children_raw`, `build_decompose_prompt`, `decomposition_tool_schema`, `detect_cycles`, `extract_acceptance_criteria`, `expected_dep_prefix` from `src/decomposer.rs`
-3. Replace generic `HttpClient` trait bound with concrete `ReqwestClient` instantiation from config
-4. Persist children atomically via `TaskStore::create_many`; insert into in-memory stores; write `docs/loopr/<id>.md` files; emit `record_created` events
-5. Add `"decomposer.decompose"` to dispatch table in `src/daemon/handlers.rs`
-6. Unit tests: mock LLM, verify child creation, cycle detection, dependency resolution, create_many usage
+3. Parameterize `build_decompose_prompt` to inject `count_guidance` and `dependency_pattern` into the LLM prompt (currently hardcoded in `.pmt` templates). Without this, the role config YAML values are ignored.
+4. Replace generic `HttpClient` trait bound with concrete `ReqwestClient` instantiation from config
+5. Persist children atomically via `TaskStore::create_many`; insert into in-memory stores; write `docs/loopr/<id>.md` files; emit `record_created` events
+6. Add `"decomposer.decompose"` to dispatch table in `src/daemon/handlers.rs`
+7. Modify `accept_plan_markdown` in doc.rs: create Plan record, transition to Active, remove background `decompose_hierarchy` task. Keep `Decomposing` coordinator state - the engine's `decomposition.completed` event transitions to `Planning`.
+8. Remove `persist_hierarchy` function from doc.rs; remove `use crate::decomposer::*` imports
+9. Unit tests: mock LLM, verify child creation, cycle detection, dependency resolution, create_many usage, coordinator state transition on decomposition.completed
 
-#### Phase 2: Wire remaining handlers
+#### Phase 2: Wire remaining handlers, enable E2E tests, delete legacy
 **Model:** sonnet
 
-1. Add `handle_decomposer_ratify` (extract `ratify_hierarchy`)
+1. Add `handle_decomposer_ratify` (extract `ratify_hierarchy`, `call_llm_for_ratification`, `build_ratify_prompt`)
 2. Add `handle_decomposer_abandon_children` (transition children to Abandoned, preserve IDs)
-3. Add `handle_decomposer_re_decompose` (abandon + re-invoke decompose)
-4. Add all three to dispatch table
-5. Unit tests for each handler
-
-#### Phase 3: Switch entry path
-**Model:** opus
-
-1. Modify `accept_plan_markdown` in doc.rs: create Plan record, transition to Active, remove background decompose task
-2. Remove `Decomposing` state from CoordinatorState if no longer needed
-3. Remove `persist_hierarchy` function from doc.rs
-4. Remove `use crate::decomposer::*` imports from doc.rs
-5. Verify coordinator agent starts correctly without the decomposition gate
-
-#### Phase 4: Enable E2E tests and delete legacy
-**Model:** sonnet
-
-1. Remove `#[ignore]` from 3 E2E decomposition tests in `src/tests/integration/decomposition.rs`
-2. Run tests, fix any assertion failures
-3. Verify `decompose_hierarchy` has zero live callers (`grep -rn decompose_hierarchy src/ --include="*.rs" | grep -v decomposer.rs | grep -v test`)
-4. Delete `src/decomposer.rs`
-5. Remove `pub mod decomposer;` from `src/lib.rs`
-6. Run `otto ci` - verify no dead code, all tests pass
+3. Add `handle_decomposer_re_decompose` (abandon + increment `decomposition_attempts` + re-invoke decompose)
+4. Add all three to dispatch table; unit tests for each handler
+5. Remove `#[ignore]` from 3 E2E decomposition tests in `src/tests/integration/decomposition.rs`
+6. Run tests, fix any assertion failures
+7. Verify `decompose_hierarchy` has zero live callers (`grep -rn decompose_hierarchy src/ --include="*.rs" | grep -v decomposer.rs | grep -v test`)
+8. Delete `src/decomposer.rs`; remove `pub mod decomposer;` from `src/lib.rs`
+9. Run `otto ci` - verify no dead code, all tests pass
 
 ## Alternatives Considered
 
@@ -244,13 +232,14 @@ Changes to `accept_plan_markdown`:
 
 - **Handler is async (LLM call) - does the dispatch table support this?** Yes. `try_async_handler!` macro exists (handlers.rs:63) and the dispatch function is already `async fn`. Several existing handlers use it.
 - **Should the handler do inline validation or leave it to the engine?** Leave it to the engine. The current `decompose_into` calls `call_llm_for_validation` inline, but Doc 6's `validate-after-decomposition` strategy handles this as an optional engine concern. The handler should NOT validate - it decomposes and persists only. The DecomposerAgent applies validation based on role config (Doc 6, step 8).
-- **What about `docs/loopr/<id>.md` markdown files?** The handler writes them after persistence, same as `persist_hierarchy` does today. This is advisory (log-and-continue on failure).
+- **What about `docs/loopr/<id>.md` markdown files?** The handler writes them after persistence, same as `persist_hierarchy` does today. This is advisory (log-and-continue on failure). The LLM context builder reads from stores, not from disk files. Missing markdown files don't break the engine.
+- **Should the `Decomposing` coordinator state be removed?** No. Keep it. The coordinator needs a gate to avoid spin-looping on "all planning artifacts have been decomposed" while the engine is still creating children. The engine's `decomposition.completed` event transitions the coordinator from `Decomposing` to `Planning`.
+- **Should `CoordinatorFsmState::Decomposing` enum variant be deleted?** No. Existing TaskStore records may contain `Decomposing` state. Deleting the variant would cause serde deserialization panics on daemon restart.
+- **count_guidance/dependency_pattern in prompts:** Phase 1 must parameterize `build_decompose_prompt` to inject these values. The current `.pmt` templates hardcode them. Without this fix, the YAML role config values are ignored.
 
 ## Open Questions
 
 - [ ] Should `detect_cycles` move to a shared utility module (used by both handler and potential future validation), or stay private in the handler?
-- [ ] Does removing the `Decomposing` coordinator state require an FSM YAML change, or is it just unused code?
-- [ ] The `Decompose` primitive's `input_schema` lacks `count_guidance` and `dependency_pattern` fields (flagged by Architect in Doc 6 review). Should Phase 1 add them, or does the handler just read them from the params blob?
 
 ## References
 
