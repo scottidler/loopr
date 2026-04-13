@@ -1650,3 +1650,129 @@ fn v3_work_sla_breach_fires_after_timeout() {
     assert_eq!(results.len(), 1);
     let _ = defs; // loaded to verify YAML parses
 }
+
+// ─── Architect review fixes (round 1) ────────────────────────────────────────
+
+// Fix 1: NOT set-difference - fires for records NOT matched by sub-trigger
+
+#[test]
+fn composite_not_fires_for_unmatched_records_only() {
+    // Two works: w1 has attempt_count=5 (matches sub-trigger), w2 has 0 (does not).
+    // NOT should fire for w2 only.
+    let stores = make_stores();
+    let w1 = insert_work(&stores, "p1", "over-threshold");
+    let w2 = insert_work(&stores, "p1", "under-threshold");
+    stores.write_works().unwrap().get_mut(&w1.id).unwrap().attempt_count = 5;
+    let ctx = make_ctx(&stores);
+    let t1 = TriggerDefinition {
+        name: "attempt-check".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Threshold {
+            scope: "work".into(),
+            field: "attempt-count".into(),
+            operator: Operator::Gte,
+            value: 3.0,
+        },
+    };
+    let comp = TriggerDefinition {
+        name: "not-failing".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Composite {
+            operator: CompositeOperator::Not,
+            triggers: vec!["attempt-check".into()],
+        },
+    };
+    let mut eval = make_evaluator(vec![t1, comp]);
+    let results = eval.evaluate_pull(&ctx);
+    let comp_result = results.iter().find(|(name, _)| name == "not-failing");
+    assert!(comp_result.is_some(), "NOT should fire for w2");
+    if let TriggerResult::Fired { scope_ids, .. } = &comp_result.unwrap().1 {
+        assert!(scope_ids.contains(&w2.id), "NOT scope_ids should include unmatched w2");
+        assert!(!scope_ids.contains(&w1.id), "NOT scope_ids should exclude matched w1");
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+// Fix 2: Event ID precedence - scope-keyed field beats generic `id`
+
+#[test]
+fn event_prefers_scope_keyed_id_over_generic_id() {
+    // Event has both `id` (session ID) and `work_id` (work ID).
+    // A work-scoped trigger must pick work_id, not id.
+    let stores = make_stores();
+    let events = vec![DaemonEvent::new(
+        "agent.status-changed",
+        serde_json::json!({"status": "failed", "id": "sess-999", "work_id": "wk-42"}),
+    )];
+    let ctx = ObservationCtx::new(&stores, &events, 1000);
+    let def = TriggerDefinition {
+        name: "session-failure-test".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "agent.status-changed".into(),
+            scope: Some("work".into()),
+            match_filter: [("status".to_string(), serde_json::json!("failed"))].into(),
+            throttle_secs: None,
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1);
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(
+            scope_ids.contains(&"wk-42".to_string()),
+            "should use work_id, not id: got {:?}",
+            scope_ids
+        );
+        assert!(
+            !scope_ids.contains(&"sess-999".to_string()),
+            "should not use generic id field"
+        );
+    } else {
+        panic!("expected Fired");
+    }
+}
+
+// Fix 3: Global event throttle - scope-less event trigger with throttle_secs
+
+#[test]
+fn global_event_trigger_throttle_suppresses_refire() {
+    // scope: None means global (no scope_ids). Throttle must still work.
+    let stores = make_stores();
+    let def = TriggerDefinition {
+        name: "global-event".into(),
+        cooldown_secs: None,
+        kind: TriggerKind::Event {
+            event: "tick.published".into(),
+            scope: None,
+            match_filter: HashMap::new(),
+            throttle_secs: Some(10),
+        },
+    };
+    let mut eval = make_evaluator(vec![def]);
+    let events = vec![DaemonEvent::new("tick.published", serde_json::json!({}))];
+
+    // Timestamps are in milliseconds. throttle_secs=10 -> 10_000ms window.
+
+    // First fire at t=0ms.
+    let ctx = ObservationCtx::new(&stores, &events, 0);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1, "first global event should fire");
+    if let TriggerResult::Fired { scope_ids, .. } = &results[0].1 {
+        assert!(scope_ids.is_empty(), "global trigger scope_ids should be empty");
+    }
+
+    // Within throttle window at t=5_000ms: should be suppressed.
+    let ctx = ObservationCtx::new(&stores, &events, 5_000);
+    let results = eval.evaluate_push(&ctx);
+    assert!(
+        results.is_empty(),
+        "global event within throttle window should be suppressed"
+    );
+
+    // After throttle window at t=11_000ms: should fire again.
+    let ctx = ObservationCtx::new(&stores, &events, 11_000);
+    let results = eval.evaluate_push(&ctx);
+    assert_eq!(results.len(), 1, "global event after throttle window should fire again");
+}

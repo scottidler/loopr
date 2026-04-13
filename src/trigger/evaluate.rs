@@ -91,9 +91,12 @@ impl TriggerEvaluator {
     }
 
     /// Sweep expired cooldown entries to prevent memory leaks.
-    /// Deterministic TTL: remove entries older than 1 hour.
+    /// Deterministic TTL: remove entries older than 24 hours. 24 hours covers any
+    /// realistic cooldown-secs value (the longest in the v3 inventory is ~1 hour).
+    /// A 1-hour TTL would prematurely GC long-interval cooldowns and cause spurious
+    /// re-fires for strategies that need day-scale suppression.
     pub fn sweep_cooldowns(&mut self, now: i64) {
-        const MAX_AGE_MS: i64 = 3_600_000;
+        const MAX_AGE_MS: i64 = 86_400_000;
         self.cooldowns.retain(|_, last_fired| now - *last_fired < MAX_AGE_MS);
     }
 
@@ -238,16 +241,18 @@ impl TriggerEvaluator {
             return TriggerResult::Idle;
         }
 
-        // Extract scope_ids from event data. Convention: events include either
-        // an `id` field (transition/record events) or a `{scope}_id` field.
+        // Extract scope_ids from event data. Prefer the scope-keyed field
+        // (e.g. `work_id` for scope "work") over the generic `id` field. This
+        // prevents grabbing the wrong entity ID when an event payload contains
+        // both (e.g. `agent.status-changed` has session `id` AND `work_id`).
         let scope_ids: Vec<String> = if let Some(scope) = scope {
             let scope_key = format!("{scope}_id");
             matching
                 .iter()
                 .filter_map(|e| {
                     e.data
-                        .get("id")
-                        .or_else(|| e.data.get(&scope_key))
+                        .get(&scope_key)
+                        .or_else(|| e.data.get("id"))
                         .and_then(|v| v.as_str())
                         .map(str::to_owned)
                 })
@@ -308,6 +313,22 @@ impl TriggerEvaluator {
     }
 
     /// Composite: combines sub-triggers with boolean logic.
+    ///
+    /// # Design notes: payload and denominator-zero semantics
+    ///
+    /// **Composite payload (finding 6):** All composite arms return `payload: None`.
+    /// The design doc specifies payload as "event payload (for event triggers) or
+    /// computed values (for ratio triggers)" - it does not define payload semantics
+    /// for composites. When the composition engine (Doc 5) defines how strategies
+    /// consume `$trigger.event.{field}`, this decision can be revisited. For now
+    /// `None` is safe: no strategy can reference a composite's payload fields.
+    ///
+    /// **Ratio denominator-zero (finding 5):** `eval_ratio` returns `false` (Idle)
+    /// when the denominator count is zero. This is the safe default: a ratio over
+    /// an empty collection has no meaningful value to compare. Operators like `Eq`
+    /// or `Lt` could theoretically intend to fire on an empty collection, but no v3
+    /// condition uses those operators on ratios. If that use case arises, a
+    /// dedicated `empty-collection` state-query trigger is the right primitive.
     fn eval_composite(
         &self,
         ctx: &ObservationCtx<'_>,
@@ -364,12 +385,40 @@ impl TriggerEvaluator {
             }
             CompositeOperator::Not => {
                 let name = &triggers[0];
+                // Compute set difference: NOT fires for records in scope NOT matched by
+                // the sub-trigger. Scope is resolved from the sub-trigger definition.
+                // Startup validation guarantees all sub-triggers share the same scope.
+                let scope = self
+                    .index
+                    .get(name.as_str())
+                    .and_then(|&i| self.triggers[i].kind.scope())
+                    .unwrap_or("");
+                let all_ids: HashSet<String> = ctx.record_ids(scope).into_iter().collect();
                 match self.evaluate_raw(name, ctx) {
-                    TriggerResult::Idle => TriggerResult::Fired {
-                        scope_ids: Vec::new(),
-                        payload: None,
-                    },
-                    TriggerResult::Fired { .. } => TriggerResult::Idle,
+                    TriggerResult::Idle => {
+                        // Sub-trigger idle for all records: NOT fires for every record in scope.
+                        if all_ids.is_empty() {
+                            TriggerResult::Idle
+                        } else {
+                            TriggerResult::Fired {
+                                scope_ids: all_ids.into_iter().collect(),
+                                payload: None,
+                            }
+                        }
+                    }
+                    TriggerResult::Fired { scope_ids, .. } => {
+                        // Sub-trigger fired for some records: NOT fires for the complement.
+                        let matched: HashSet<String> = scope_ids.into_iter().collect();
+                        let remaining: Vec<String> = all_ids.difference(&matched).cloned().collect();
+                        if remaining.is_empty() {
+                            TriggerResult::Idle
+                        } else {
+                            TriggerResult::Fired {
+                                scope_ids: remaining,
+                                payload: None,
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -391,12 +440,29 @@ impl TriggerEvaluator {
                     Some(secs) if secs > 0 => secs as i64 * 1000,
                     _ => {
                         // No cooldown: record fire time and return as-is.
-                        for sid in &scope_ids {
+                        // Global triggers (scope_ids empty) use sentinel key "".
+                        let keys: Vec<String> =
+                            if scope_ids.is_empty() { vec![String::new()] } else { scope_ids.clone() };
+                        for sid in &keys {
                             self.cooldowns.insert((trigger_name.to_owned(), sid.clone()), now);
                         }
                         return TriggerResult::Fired { scope_ids, payload };
                     }
                 };
+                // Global triggers (scope: None) produce empty scope_ids. Track their
+                // cooldown under a sentinel key "" so throttle can suppress re-fires.
+                if scope_ids.is_empty() {
+                    let key = (trigger_name.to_owned(), String::new());
+                    let suppressed = match self.cooldowns.get(&key) {
+                        Some(&last_fired) => now - last_fired < cooldown_ms,
+                        None => false,
+                    };
+                    if suppressed {
+                        return TriggerResult::Idle;
+                    }
+                    self.cooldowns.insert(key, now);
+                    return TriggerResult::Fired { scope_ids, payload };
+                }
                 // Filter out scope_ids still within cooldown window.
                 let active: Vec<String> = scope_ids
                     .into_iter()
