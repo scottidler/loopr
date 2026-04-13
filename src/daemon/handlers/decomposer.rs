@@ -604,6 +604,11 @@ pub(crate) fn detect_cycles(nodes: &HashMap<String, Vec<String>>) -> eyre::Resul
 }
 
 /// Extract acceptance criteria lines from a markdown `## Acceptance Criteria` section.
+/// Public wrapper for use by doc.rs entry path.
+pub(crate) fn extract_acceptance_criteria_pub(content: &str) -> Vec<String> {
+    extract_acceptance_criteria(content)
+}
+
 fn extract_acceptance_criteria(content: &str) -> Vec<String> {
     let mut in_section = false;
     let mut criteria = Vec::new();

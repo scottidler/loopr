@@ -23,13 +23,14 @@ use tokio::sync::broadcast;
 
 use crate::config::{IntegratorConfig, InterviewMode, ValidatorConfig};
 use crate::daemon::context::Stores;
-use crate::decomposer::{DecomposedHierarchy, decompose_hierarchy};
 use crate::domain::coordinator_goal::CoordinatorGoal;
 use crate::domain::coordinator_state::{CoordinatorFsmState, CoordinatorState};
-use crate::domain::markdown::{update_parent_children, write_doc_markdown, write_doc_markdown_body};
+use crate::domain::criteria::AcceptanceCriteria;
+use crate::domain::markdown::write_doc_markdown_body;
+use crate::domain::plan::{Plan, PlanStatus};
 use crate::fsm::runtime::FsmInterpreter;
 use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse, RpcError};
-use crate::validator::client::{LlmClient, ReqwestClient};
+use crate::validator::client::LlmClient;
 use crate::worktree::manager::WorktreeManager;
 
 /// Handle `doc.accept`: accept plan markdown as a string and run the full entry pipeline.
@@ -214,7 +215,9 @@ pub(super) async fn accept_plan_markdown(
         child_count_for_response = None;
 
         // Pre-create CoordinatorState in Decomposing: the coordinator must not advance to
-        // Planning until the background decomposition task has persisted all child docs.
+        // Planning until decomposition completes. The engine's plan-decomposable trigger
+        // will fire on the next tick and spawn a DecomposerAgent. The agent emits
+        // decomposition.completed when done, which transitions the coordinator state.
         let mut coord_state = CoordinatorState::new(goal_id.clone(), InterviewMode::Skip);
         coord_state.fsm_state = CoordinatorFsmState::Decomposing;
         let cs_id = coord_state.id.clone();
@@ -226,93 +229,43 @@ pub(super) async fn accept_plan_markdown(
         }
         stores.write_coordinator_states()?.insert(cs_id, coord_state);
 
-        // Spawn background decomposition task
-        let stores_bg = Arc::clone(stores);
-        let event_tx_bg = event_tx.clone();
-        let markdown_bg = markdown.clone();
-        let goal_id_bg = goal_id.clone();
-        let dc = stores.config.decomposer.clone();
+        // Create the Plan record directly from markdown (per Architect guidance:
+        // instantiate natively, don't route through plan.create IPC).
+        let plan_ac = AcceptanceCriteria(crate::daemon::handlers::decomposer::extract_acceptance_criteria_pub(
+            &markdown,
+        ));
+        let mut plan = Plan::new(title.clone(), plan_ac);
+        plan.force_status(PlanStatus::Active);
+        let plan_id = plan.id.clone();
 
-        tokio::spawn(async move {
-            let decomposer_prefix = format!("[decomposer:{}]", goal_id_bg);
-            let brief = classify_brief(&stores_bg, &markdown_bg).await;
-            info!("{} starting decomposition (brief={})", decomposer_prefix, brief);
-            let client = ReqwestClient::new();
-            match decompose_hierarchy(&markdown_bg, &dc, &client, brief).await {
-                Ok((hierarchy, partial_err)) => {
-                    let child_count = hierarchy.specs.len() + hierarchy.phases.len() + hierarchy.works.len();
-                    info!(
-                        "{} decomposition produced {} domain records",
-                        decomposer_prefix, child_count
-                    );
-                    match persist_hierarchy(&stores_bg, &event_tx_bg, hierarchy) {
-                        Ok(()) => {
-                            if let Some(err) = partial_err {
-                                // Partial success: some spec branches failed. Persist completed
-                                // records (done above) but signal failure so coordinator surfaces
-                                // NeedsHelp instead of busy-polling.
-                                if let Ok(mut states) = stores_bg.write_coordinator_states()
-                                    && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
-                                {
-                                    cs.decomposition_error = Some(err.clone());
-                                    cs.updated_at = crate::id::now_millis();
-                                    if let Some(store_arc) = &stores_bg.store
-                                        && let Ok(mut store) = store_arc.lock()
-                                    {
-                                        let _ = store.update(cs.clone());
-                                    }
-                                }
-                                let _ = event_tx_bg.send(DaemonEvent::new(
-                                    "decomposition.failed",
-                                    json!({ "goal_id": goal_id_bg, "error": err }),
-                                ));
-                            } else {
-                                let _ = event_tx_bg.send(DaemonEvent::new(
-                                    "decomposition.completed",
-                                    json!({ "goal_id": goal_id_bg, "child_count": child_count }),
-                                ));
-                            }
-                        }
-                        Err(e) => {
-                            warn!("{} persist failed: {}", decomposer_prefix, e);
-                            if let Ok(mut states) = stores_bg.write_coordinator_states()
-                                && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
-                            {
-                                cs.decomposition_error = Some(e.to_string());
-                                cs.updated_at = crate::id::now_millis();
-                                if let Some(store_arc) = &stores_bg.store
-                                    && let Ok(mut store) = store_arc.lock()
-                                {
-                                    let _ = store.update(cs.clone());
-                                }
-                            }
-                            let _ = event_tx_bg.send(DaemonEvent::new(
-                                "decomposition.failed",
-                                json!({ "goal_id": goal_id_bg, "error": e.to_string() }),
-                            ));
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("{} decomposition failed: {}", decomposer_prefix, e);
-                    if let Ok(mut states) = stores_bg.write_coordinator_states()
-                        && let Some(cs) = states.values_mut().find(|cs| cs.goal_id == *goal_id_bg)
-                    {
-                        cs.decomposition_error = Some(e.to_string());
-                        cs.updated_at = crate::id::now_millis();
-                        if let Some(store_arc) = &stores_bg.store
-                            && let Ok(mut store) = store_arc.lock()
-                        {
-                            let _ = store.update(cs.clone());
-                        }
-                    }
-                    let _ = event_tx_bg.send(DaemonEvent::new(
-                        "decomposition.failed",
-                        json!({ "goal_id": goal_id_bg, "error": e.to_string() }),
-                    ));
-                }
-            }
-        });
+        // Classify tier and set on plan
+        let brief = classify_brief(stores, &markdown).await;
+        if brief {
+            plan.tier = crate::domain::plan::Tier::Brief;
+        }
+
+        // Persist plan to TaskStore + in-memory
+        if let Some(store_arc) = &stores.store {
+            store_arc
+                .lock()
+                .map_err(|_| eyre!("taskstore lock poisoned"))?
+                .create(plan.clone())
+                .map_err(|e| eyre!("failed to persist plan: {}", e))?;
+        }
+        stores.write_plans()?.insert(plan_id.clone(), plan.clone());
+
+        // Write plan markdown to docs/loopr/<plan_id>.md
+        if let Err(e) =
+            write_doc_markdown_body(std::path::Path::new(&stores.config.project.repo_path), &plan, &markdown)
+        {
+            warn!("docs/loopr write failed for plan {}: {}", plan_id, e);
+        }
+
+        let _ = event_tx.send(DaemonEvent::record_created("plan", &plan_id));
+        info!(
+            "doc entry: created Active plan {} (tier={:?}), engine will decompose",
+            plan_id, plan.tier
+        );
     }
 
     // Start the Coordinator agent
@@ -349,69 +302,6 @@ pub(super) async fn accept_plan_markdown(
             "coordinator_already_running": coordinator_already_running,
         }),
     ))
-}
-
-/// Persist a `DecomposedHierarchy` to the TaskStore, in-memory maps, docs/loopr/, and events.
-///
-/// Inserts records in dependency order: Plan -> Specs -> Phases -> Works.
-/// Each record goes through the same pattern as the IPC handlers:
-///   1. TaskStore write (under lock)
-///   2. In-memory insert
-///   3. write_doc_markdown (advisory: log-and-continue on failure)
-///   4. DaemonEvent broadcast
-///
-/// The `files.is_empty()` guard from `handle_work_create` is intentionally
-/// NOT applied here - works from decomposition always have empty files.
-fn persist_hierarchy(
-    stores: &Arc<Stores>,
-    event_tx: &broadcast::Sender<DaemonEvent>,
-    hierarchy: DecomposedHierarchy,
-) -> eyre::Result<()> {
-    let repo_path = stores.config.project.repo_path.clone();
-
-    macro_rules! persist_one {
-        ($writer:expr, $coll:literal, $r:expr, $content:expr) => {{
-            let r = $r;
-            if let Some(store) = &stores.store {
-                store
-                    .lock()
-                    .map_err(|_| eyre!("taskstore lock poisoned"))?
-                    .create(r.clone())
-                    .map_err(|e| eyre!("failed to persist {}: {}", $coll, e))?;
-            }
-            $writer?.insert(r.id.clone(), r.clone());
-            let write_result = if let Some(body) = $content {
-                write_doc_markdown_body(&repo_path, &r, body)
-            } else {
-                write_doc_markdown(&repo_path, &r)
-            };
-            if let Err(e) = write_result {
-                tracing::warn!("docs/loopr write failed for {}: {}", r.id, e);
-            }
-            let _ = event_tx.send(DaemonEvent::record_created($coll, &r.id));
-        }};
-    }
-
-    let plan_id = hierarchy.plan.id.clone();
-    let plan_content = hierarchy.content.get(&plan_id).cloned();
-    persist_one!(stores.write_plans(), "plan", hierarchy.plan, plan_content.as_deref());
-    for r in hierarchy.specs {
-        let content = hierarchy.content.get(&r.id).cloned();
-        update_parent_children(&repo_path, &plan_id, &r.id, &r.title);
-        persist_one!(stores.write_specs(), "spec", r, content.as_deref());
-    }
-    for r in hierarchy.phases {
-        let content = hierarchy.content.get(&r.id).cloned();
-        update_parent_children(&repo_path, &r.parent_id, &r.id, &r.title);
-        persist_one!(stores.write_phases(), "phase", r, content.as_deref());
-    }
-    for r in hierarchy.works {
-        let content = hierarchy.content.get(&r.id).cloned();
-        update_parent_children(&repo_path, &r.parent_id, &r.id, &r.title);
-        persist_one!(stores.write_works(), "work", r, content.as_deref());
-    }
-
-    Ok(())
 }
 
 /// Extract the plan title from the first `# ` heading line in the markdown.
