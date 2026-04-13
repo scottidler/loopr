@@ -1,4 +1,5 @@
 pub mod evaluate;
+pub mod guard;
 pub mod observe;
 pub mod schema;
 

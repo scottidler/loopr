@@ -51,4 +51,16 @@ overrides:
   in-review:
     ready: { by: [coordinator] }
 
-guards: {}
+guards:
+  deps-ready:
+    from: pending
+    to: ready
+    condition: deps-satisfied
+    on-failure: reject
+    message: "all dependencies must be satisfied before work can become ready"
+  no-sessions-on-done:
+    from: integrated
+    to: done
+    condition: no-active-sessions
+    on-failure: reject
+    message: "no active agent sessions may be running when marking work done"

@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::evaluate::{TriggerEvaluator, TriggerResult};
+use super::guard::GuardEvaluator;
 use super::observe::{GuardConditionRegistry, ObservationCtx, StateQueryRegistry};
 use super::schema::{self, CompositeOperator, CountQuery, Operator, TriggerDefinition, TriggerKind};
 use crate::daemon::context::Stores;
 use crate::domain::phase::Phase;
 use crate::domain::plan::Plan;
 use crate::domain::work::{Work, WorkStatus};
+use crate::fsm::schema::{FsmDefinition, GuardDef, OnFailure, TransitionRule};
 use crate::ipc::protocol::DaemonEvent;
 
 fn strategies_triggers_dir() -> PathBuf {
@@ -1775,4 +1777,323 @@ fn global_event_trigger_throttle_suppresses_refire() {
     let ctx = ObservationCtx::new(&stores, &events, 11_000);
     let results = eval.evaluate_push(&ctx);
     assert_eq!(results.len(), 1, "global event after throttle window should fire again");
+}
+
+// ─── Phase 4: Guard Evaluator tests ──────────────────────────────────────────
+
+/// Build a minimal FsmDefinition with one transition and an optional guard.
+fn minimal_fsm_with_guard(guard_name: Option<&str>, condition: &str, from: &str, to: &str) -> FsmDefinition {
+    let mut transitions = HashMap::new();
+    let mut targets = HashMap::new();
+    targets.insert(to.to_owned(), TransitionRule::default());
+    transitions.insert(from.to_owned(), targets);
+    // Add terminal state reachable from `to`
+    let mut to_targets = HashMap::new();
+    to_targets.insert("done".to_owned(), TransitionRule::default());
+    transitions.insert(to.to_owned(), to_targets);
+
+    let mut guards = HashMap::new();
+    if let Some(name) = guard_name {
+        guards.insert(
+            name.to_owned(),
+            GuardDef {
+                from: from.to_owned(),
+                to: to.to_owned(),
+                condition: condition.to_owned(),
+                on_failure: OnFailure::Reject,
+                message: format!("{} required for {}->{}", condition, from, to),
+            },
+        );
+    }
+
+    FsmDefinition {
+        name: "test-fsm".to_owned(),
+        description: String::new(),
+        states: vec![from.to_owned(), to.to_owned(), "done".to_owned()],
+        terminal: vec!["done".to_owned()],
+        transitions,
+        overrides: HashMap::new(),
+        guards,
+    }
+}
+
+// --- Guard passes ---
+
+#[test]
+fn guard_passes_when_condition_true() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    // no-active-sessions is true when no sessions exist
+    let ctx = make_ctx(&stores);
+    let def = minimal_fsm_with_guard(Some("session-check"), "no-active-sessions", "in-progress", "done");
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    assert!(
+        eval.check_transition(&def, "in-progress", "done", "work", &work.id, &ctx)
+            .is_ok(),
+        "guard should pass when no active sessions"
+    );
+}
+
+#[test]
+fn guard_passes_when_no_guards_on_transition() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    // Guard is on "a->b" but we're checking "x->y" - no guards should fire
+    let def = minimal_fsm_with_guard(Some("some-guard"), "no-active-sessions", "a", "b");
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    assert!(
+        eval.check_transition(&def, "x", "y", "work", &work.id, &ctx).is_ok(),
+        "no guard on this edge - should pass unconditionally"
+    );
+}
+
+#[test]
+fn guard_passes_with_empty_guards_map() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    let ctx = make_ctx(&stores);
+    let def = minimal_fsm_with_guard(None, "", "draft", "active");
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    assert!(
+        eval.check_transition(&def, "draft", "active", "work", &work.id, &ctx)
+            .is_ok(),
+        "empty guards map - should always pass"
+    );
+}
+
+// --- Guard rejects ---
+
+#[test]
+fn guard_rejects_when_condition_false() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    // deps-satisfied is false when dep IDs listed but don't exist
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&work.id)
+        .unwrap()
+        .dependencies
+        .push("nonexistent-dep".to_owned());
+    let ctx = make_ctx(&stores);
+    let def = minimal_fsm_with_guard(Some("dep-check"), "deps-satisfied", "pending", "ready");
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    let result = eval.check_transition(&def, "pending", "ready", "work", &work.id, &ctx);
+    assert!(result.is_err(), "guard should reject when deps not satisfied");
+}
+
+#[test]
+fn guard_rejection_contains_message() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&work.id)
+        .unwrap()
+        .dependencies
+        .push("missing-dep".to_owned());
+    let ctx = make_ctx(&stores);
+    let def = minimal_fsm_with_guard(Some("dep-check"), "deps-satisfied", "pending", "ready");
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    let err = eval
+        .check_transition(&def, "pending", "ready", "work", &work.id, &ctx)
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("dep-check"), "error should name the guard: {}", msg);
+    assert!(
+        msg.contains("deps-satisfied"),
+        "error should include condition: {}",
+        msg
+    );
+    // Guard message field is also included
+    assert!(
+        msg.contains("deps-satisfied required for pending->ready"),
+        "error should include guard message: {}",
+        msg
+    );
+}
+
+#[test]
+fn guard_rejection_includes_guard_name_and_edge() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&work.id)
+        .unwrap()
+        .dependencies
+        .push("missing".to_owned());
+    let ctx = make_ctx(&stores);
+    let def = minimal_fsm_with_guard(Some("my-guard"), "deps-satisfied", "a", "b");
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    let err = eval
+        .check_transition(&def, "a", "b", "work", &work.id, &ctx)
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("my-guard"), "should include guard name");
+    assert!(msg.contains("a->b"), "should include transition edge");
+}
+
+// --- Multiple guards on same edge ---
+
+#[test]
+fn multiple_guards_all_must_pass() {
+    let stores = make_stores();
+    let work = insert_work(&stores, "p1", "task");
+    // Both no-active-sessions (passes) and deps-satisfied (fails - dep listed but missing)
+    stores
+        .write_works()
+        .unwrap()
+        .get_mut(&work.id)
+        .unwrap()
+        .dependencies
+        .push("missing".to_owned());
+    let ctx = make_ctx(&stores);
+
+    let mut guards = HashMap::new();
+    guards.insert(
+        "session-check".to_owned(),
+        GuardDef {
+            from: "ready".to_owned(),
+            to: "done".to_owned(),
+            condition: "no-active-sessions".to_owned(),
+            on_failure: OnFailure::Reject,
+            message: "no sessions".to_owned(),
+        },
+    );
+    guards.insert(
+        "dep-check".to_owned(),
+        GuardDef {
+            from: "ready".to_owned(),
+            to: "done".to_owned(),
+            condition: "deps-satisfied".to_owned(),
+            on_failure: OnFailure::Reject,
+            message: "deps required".to_owned(),
+        },
+    );
+
+    let mut transitions = HashMap::new();
+    let mut targets = HashMap::new();
+    targets.insert("done".to_owned(), TransitionRule::default());
+    transitions.insert("ready".to_owned(), targets);
+
+    let def = FsmDefinition {
+        name: "multi-guard-test".to_owned(),
+        description: String::new(),
+        states: vec!["ready".to_owned(), "done".to_owned()],
+        terminal: vec!["done".to_owned()],
+        transitions,
+        overrides: HashMap::new(),
+        guards,
+    };
+    let eval = GuardEvaluator::new(GuardConditionRegistry::with_builtins());
+    let result = eval.check_transition(&def, "ready", "done", "work", &work.id, &ctx);
+    assert!(result.is_err(), "should reject when any guard fails");
+}
+
+// --- validate_conditions ---
+
+#[test]
+fn validate_conditions_passes_for_known_conditions() {
+    let registry = GuardConditionRegistry::with_builtins();
+    let def = minimal_fsm_with_guard(Some("g"), "no-active-sessions", "a", "b");
+    let errors = GuardEvaluator::validate_conditions(&[def], &registry);
+    assert!(errors.is_empty(), "known condition should pass: {:?}", errors);
+}
+
+#[test]
+fn validate_conditions_rejects_unknown_condition() {
+    let registry = GuardConditionRegistry::with_builtins();
+    let def = minimal_fsm_with_guard(Some("g"), "nonexistent-condition", "a", "b");
+    let errors = GuardEvaluator::validate_conditions(&[def], &registry);
+    assert!(
+        errors.iter().any(|e| e.contains("nonexistent-condition")),
+        "should flag unknown condition: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn validate_conditions_empty_guards_passes() {
+    let registry = GuardConditionRegistry::with_builtins();
+    let def = minimal_fsm_with_guard(None, "", "a", "b");
+    let errors = GuardEvaluator::validate_conditions(&[def], &registry);
+    assert!(errors.is_empty(), "no guards = no errors");
+}
+
+// --- Schema validation: guard state and edge checks ---
+
+#[test]
+fn schema_validate_catches_guard_with_unknown_from_state() {
+    use crate::fsm::schema as fsm_schema;
+    let mut def = minimal_fsm_with_guard(Some("bad"), "no-active-sessions", "a", "b");
+    // Replace guard with one referencing a nonexistent from-state
+    def.guards.clear();
+    def.guards.insert(
+        "bad-guard".to_owned(),
+        GuardDef {
+            from: "nonexistent".to_owned(),
+            to: "b".to_owned(),
+            condition: "no-active-sessions".to_owned(),
+            on_failure: OnFailure::Reject,
+            message: String::new(),
+        },
+    );
+    let errors = fsm_schema::validate(&def, None);
+    assert!(
+        errors.iter().any(|e| e.contains("unknown from-state")),
+        "should catch unknown from-state: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn schema_validate_catches_guard_on_nonexistent_transition() {
+    use crate::fsm::schema as fsm_schema;
+    let mut def = minimal_fsm_with_guard(None, "", "a", "b");
+    // Guard on states that exist but transition a->done doesn't exist
+    def.guards.insert(
+        "bad-edge".to_owned(),
+        GuardDef {
+            from: "a".to_owned(),
+            to: "done".to_owned(), // "a" only transitions to "b", not "done"
+            condition: "no-active-sessions".to_owned(),
+            on_failure: OnFailure::Reject,
+            message: String::new(),
+        },
+    );
+    let errors = fsm_schema::validate(&def, None);
+    assert!(
+        errors.iter().any(|e| e.contains("no transition exists")),
+        "should catch guard on impossible edge: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn schema_validate_work_yml_guards_are_valid() {
+    // The embedded work.yml guards (deps-ready, no-sessions-on-done) must pass validation.
+    use crate::fsm::schema as fsm_schema;
+    let content = include_str!("../../strategies/fsm/work.yml");
+    let mut def: FsmDefinition = serde_yaml::from_str(content).unwrap();
+    fsm_schema::inject_transition_names(&mut def);
+    let errors = fsm_schema::validate(&def, Some("work.yml"));
+    assert!(errors.is_empty(), "work.yml guards should be valid: {:?}", errors);
+}
+
+#[test]
+fn work_yml_guards_have_expected_conditions() {
+    let content = include_str!("../../strategies/fsm/work.yml");
+    let def: FsmDefinition = serde_yaml::from_str(content).unwrap();
+    assert!(
+        def.guards.values().any(|g| g.condition == "deps-satisfied"),
+        "work.yml should have a deps-satisfied guard"
+    );
+    assert!(
+        def.guards.values().any(|g| g.condition == "no-active-sessions"),
+        "work.yml should have a no-active-sessions guard"
+    );
 }

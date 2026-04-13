@@ -21,12 +21,30 @@ pub struct TransitionRule {
     pub by: Vec<String>,
 }
 
-/// A guard condition on a transition (placeholder for Doc 4).
+/// What the engine does when a guard condition fails.
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OnFailure {
+    /// Reject the transition with an error message. Default.
+    #[default]
+    Reject,
+    /// Allow the transition but emit a warning.
+    Warn,
+}
+
+/// A guard condition on a transition.
+/// Guards are evaluated synchronously during transition validation; if the
+/// condition returns false the transition is rejected (or warned, per on-failure).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct GuardDef {
     pub from: String,
     pub to: String,
     pub condition: String,
+    #[serde(default)]
+    pub on_failure: OnFailure,
+    #[serde(default)]
+    pub message: String,
 }
 
 /// Complete FSM definition loaded from YAML.
@@ -185,6 +203,35 @@ pub fn validate(def: &FsmDefinition, filename: Option<&str>) -> Vec<String> {
                 if !VALID_ROLES.contains(&role.as_str()) {
                     errors.push(format!("unknown role '{}' in override {} -> {}", role, from, to));
                 }
+            }
+        }
+    }
+
+    // Guard from/to states must exist, and the transition/override edge must exist
+    for (guard_name, guard) in &def.guards {
+        if !states.contains(guard.from.as_str()) {
+            errors.push(format!("guard '{}': unknown from-state '{}'", guard_name, guard.from));
+        }
+        if !states.contains(guard.to.as_str()) {
+            errors.push(format!("guard '{}': unknown to-state '{}'", guard_name, guard.to));
+        }
+        // Only check edge existence when both states are valid (avoid redundant errors)
+        if states.contains(guard.from.as_str()) && states.contains(guard.to.as_str()) {
+            let edge_exists = def
+                .transitions
+                .get(&guard.from)
+                .map(|targets| targets.contains_key(&guard.to))
+                .unwrap_or(false)
+                || def
+                    .overrides
+                    .get(&guard.from)
+                    .map(|targets| targets.contains_key(&guard.to))
+                    .unwrap_or(false);
+            if !edge_exists {
+                errors.push(format!(
+                    "guard '{}': no transition exists from '{}' to '{}' in FSM '{}'",
+                    guard_name, guard.from, guard.to, def.name
+                ));
             }
         }
     }
