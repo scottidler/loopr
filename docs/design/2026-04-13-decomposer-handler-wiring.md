@@ -166,14 +166,16 @@ Changes to `accept_plan_markdown`:
 5. Verify coordinator agent starts correctly with the decomposition gate still intact
 6. Unit tests: coordinator state transition on decomposition.completed
 
-#### Phase 3: Wire remaining handlers
+#### Phase 3: Wire remaining handlers and failure coordination
 **Model:** sonnet
 
 1. Add `handle_decomposer_ratify` (extract `ratify_hierarchy`, `call_llm_for_ratification`, `build_ratify_prompt`)
 2. Add `handle_decomposer_abandon_children` (transition children to Abandoned, preserve IDs)
 3. Add `handle_decomposer_re_decompose` (abandon + increment `decomposition_attempts` + re-invoke decompose)
 4. Add all three to dispatch table
-5. Unit tests for each handler
+5. Wire `decomposition.failed` event -> `CoordinatorState.decomposition_error` write (Architect finding: without this, the coordinator hangs in Decomposing with no error context on agent failure)
+6. Ensure DecomposerAgent LLM failures result in a terminal agent session (Failed), not a silent retry loop. The `no-active-sessions` guard prevents re-spawn while the session is active; when it terminates as Failed, `plan-decomposable` would re-fire. The `decomposition-attempt-limit` trigger (already in reconciliation.yml) must be wired to a strategy that transitions the plan to Abandoned on repeated failures.
+7. Unit tests for each handler + failure coordination path
 
 #### Phase 4: Enable E2E tests and delete legacy
 **Model:** sonnet
