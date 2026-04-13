@@ -18,7 +18,6 @@ use crate::ipc::protocol::{DaemonEvent, DaemonRequest, DaemonResponse};
 use crate::ipc::server::{self, IpcServer};
 
 use self::context::{DaemonContext, Stores};
-use self::handlers::dispatch;
 
 const DAEMON_START_POLL_MS: u64 = 100;
 const GRACEFUL_SHUTDOWN_SECS: u64 = 10;
@@ -236,59 +235,161 @@ fn remove_pid_file(ctx: &DaemonContext) {
     info!("Removed PID file: {}", ctx.config.daemon.pid_path.display());
 }
 
-/// Periodic reconciliation sweep task.
-/// Runs `ctx.reconcile()` every `interval_secs` seconds until `shutting_down` is set.
-async fn run_reconciler(
-    stores: std::sync::Arc<context::Stores>,
-    ctx: std::sync::Arc<tokio::sync::RwLock<DaemonContext>>,
-    interval_secs: u64,
-) {
+/// Composition engine runner: builds the strategy engine and drives it in a tick loop.
+/// Replaces the coordinator loop, integrator cycle, and supervisor restart logic.
+async fn run_engine(ctx: Arc<RwLock<DaemonContext>>) {
+    use crate::engine::tick::{CompositionEngine, EngineContext};
+    use crate::primitive::catalog;
+    use crate::trigger::evaluate::TriggerEvaluator;
+    use crate::trigger::observe::{GuardConditionRegistry, StateQueryRegistry};
+    use crate::trigger::schema as trigger_schema;
     use std::sync::atomic::Ordering;
-    let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    ticker.tick().await; // skip the immediate first tick (startup reconcile already ran)
+
+    const ACTIVE_INTERVAL_MS: u64 = 5_000;
+    const IDLE_INTERVAL_MS: u64 = 30_000;
+
+    // Load engine components from config
+    let (repo_path, stores, event_tx, worktree_mgr, fsm) = {
+        let c = ctx.read().await;
+        (
+            c.config.project.repo_path.clone(),
+            c.stores.clone(),
+            c.event_tx.clone(),
+            c.worktree_manager.clone(),
+            c.fsm.clone(),
+        )
+    };
+
+    // Build primitive registry
+    let mut registry = crate::primitive::registry::PrimitiveRegistry::new();
+    if let Err(e) = catalog::register_all(&mut registry) {
+        warn!("run_engine: failed to register primitives: {}", e);
+        return;
+    }
+
+    // Load trigger definitions
+    let triggers_dir = repo_path.join("strategies/triggers");
+    let triggers = match trigger_schema::load_dir(&triggers_dir) {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(
+                "run_engine: failed to load triggers from {}: {}",
+                triggers_dir.display(),
+                e
+            );
+            return;
+        }
+    };
+
+    // Build trigger evaluator
+    let state_queries = StateQueryRegistry::with_builtins();
+    let trigger_evaluator = TriggerEvaluator::new(triggers, state_queries);
+
+    // Load strategy definitions
+    let strategies_dir = repo_path.join("strategies");
+    let strategies = match crate::engine::schema::load_dir(&strategies_dir) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                "run_engine: failed to load strategies from {}: {}",
+                strategies_dir.display(),
+                e
+            );
+            return;
+        }
+    };
+    info!("run_engine: loaded {} strategies", strategies.len());
+
+    // Validate strategies against registries
+    let errors = crate::engine::schema::validate(&strategies);
+    if !errors.is_empty() {
+        warn!("run_engine: {} strategy validation errors:", errors.len());
+        for err in &errors {
+            warn!("  {}", err);
+        }
+    }
+
+    let guard_conditions = GuardConditionRegistry::with_builtins();
+    let bridge = crate::agents::bridge::AgentIpcBridge::new(
+        stores.clone(),
+        event_tx.clone(),
+        worktree_mgr.clone(),
+        ctx.read().await.config.clone(),
+        fsm,
+    );
+
+    let mut engine = CompositionEngine::new(strategies, registry, trigger_evaluator);
+    let mut event_rx = event_tx.subscribe();
+
+    info!("run_engine: engine started");
+
     loop {
-        ticker.tick().await;
         if stores.shutting_down.load(Ordering::Relaxed) {
             break;
         }
-        let c = ctx.read().await;
-        let fixed = c.reconcile();
-        if fixed > 0 {
-            info!("Reconciler: {} record(s) fixed in periodic sweep", fixed);
+
+        // Drain events since last tick
+        let mut events: Vec<DaemonEvent> = Vec::new();
+        loop {
+            match event_rx.try_recv() {
+                Ok(ev) => events.push(ev),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                    warn!("run_engine: lagged {} events", n);
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    info!("run_engine: event channel closed, exiting");
+                    return;
+                }
+            }
         }
-        // Reviewer replenishment: Triaged bundles with no active reviewer
-        if c.config.agents.auto_start_reviewer {
-            let bundles_needing_review = c.triaged_bundles_needing_reviewer();
-            if !bundles_needing_review.is_empty() {
-                let stores = c.stores.clone();
-                let event_tx = c.event_tx.clone();
-                let worktree_mgr = c.worktree_manager.clone();
-                let integrator_config = c.config.integrator.clone();
-                let fsm = &c.fsm;
-                for bundle_id in &bundles_needing_review {
-                    warn!(
-                        "Reconciler: Triaged bundle {} has no active reviewer, spawning",
-                        bundle_id
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut engine_ctx = EngineContext {
+            stores: &stores,
+            events: &events,
+            event_tx: &event_tx,
+            bridge: &bridge,
+            repo_path: &repo_path,
+            worktree_mgr: &worktree_mgr,
+            now,
+            guard_conditions: Some(&guard_conditions),
+        };
+
+        match engine.tick(&mut engine_ctx).await {
+            Ok(outcome) => {
+                if outcome.strategies_fired > 0 {
+                    debug!(
+                        "run_engine: tick fired {} strategies in {} convergence iterations",
+                        outcome.strategies_fired, outcome.convergence_iterations
                     );
-                    let start_req = DaemonRequest::new(
-                        0,
-                        "agent.start",
-                        serde_json::json!({ "agent_type": "reviewer", "bundle_id": bundle_id }),
-                    );
-                    let resp = dispatch(&stores, &event_tx, &worktree_mgr, &integrator_config, fsm, start_req).await;
-                    if resp.is_error() {
-                        warn!(
-                            "Reconciler: failed to spawn reviewer for bundle {}: {:?}",
-                            bundle_id, resp.error
-                        );
+                }
+                // Sweep stale cooldowns periodically (every tick is fine given low frequency)
+                engine.sweep_cooldowns();
+
+                let interval_ms = if outcome.strategies_fired > 0 || !events.is_empty() {
+                    ACTIVE_INTERVAL_MS
+                } else {
+                    IDLE_INTERVAL_MS
+                };
+
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(interval_ms)) => {}
+                    _ = event_rx.recv() => {
+                        // Woken by an event - re-drain on next iteration
+                        // (the event is already consumed; we'll get new ones)
                     }
                 }
-                drop(c);
+            }
+            Err(e) => {
+                warn!("run_engine: tick error: {}", e);
+                tokio::time::sleep(Duration::from_millis(ACTIVE_INTERVAL_MS)).await;
             }
         }
     }
-    debug!("run_reconciler: exiting");
+
+    info!("run_engine: exiting");
 }
 
 /// Main daemon entry point.
@@ -310,28 +411,6 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
     let listener = ipc_server.bind().await?;
     info!("Daemon listening on {}", ipc_server.socket_path().display());
     let event_tx = ctx.read().await.event_tx.clone();
-
-    // Auto-start Integrator when enabled
-    {
-        let c = ctx.read().await;
-        if c.config.integrator.enabled {
-            let start_req = crate::ipc::protocol::DaemonRequest::new(
-                0,
-                "agent.start",
-                serde_json::json!({ "agent_type": "integrator" }),
-            );
-            let _ = crate::daemon::handlers::dispatch(
-                &c.stores,
-                &c.event_tx,
-                &c.worktree_manager,
-                &c.config.integrator,
-                &c.fsm,
-                start_req,
-            )
-            .await;
-            info!("Auto-started Integrator");
-        }
-    }
 
     // Spawn pull-based worker pool when enabled
     let mut worker_handles = Vec::new();
@@ -356,48 +435,13 @@ pub async fn daemon_main(ctx: Arc<RwLock<DaemonContext>>) -> eyre::Result<()> {
         }
     }
 
-    // Spawn coordinator supervisor — watches for coordinator failures and restarts with backoff
-    let supervisor_handle = {
-        let c = ctx.read().await;
-        let stores = c.stores.clone();
-        let evt = event_tx.clone();
-        let wm = c.worktree_manager.clone();
-        let ic = c.config.integrator.clone();
-        let fsm = c.fsm.clone();
-        tokio::spawn(supervisor::run_supervisor(
-            stores,
-            evt,
-            wm,
-            ic,
-            fsm,
-            supervisor::SupervisorConfig::default(),
-        ))
-    };
-
-    // Spawn periodic reconciliation sweep
-    let reconciler_handle = {
-        let c = ctx.read().await;
-        if c.config.reconciler.enabled {
-            let interval = c.config.reconciler.interval_secs;
-            let s = c.stores.clone();
-            let ctx_clone = ctx.clone();
-            info!("Spawning reconciler with {}s interval", interval);
-            Some(tokio::spawn(run_reconciler(s, ctx_clone, interval)))
-        } else {
-            info!("Reconciler disabled by config");
-            None
-        }
-    };
+    // Spawn the composition engine — replaces coordinator, integrator, and supervisor
+    let engine_handle = tokio::spawn(run_engine(ctx.clone()));
 
     let result = accept_loop(listener, ctx.clone(), event_tx.clone()).await;
 
-    // Abort the supervisor task on shutdown
-    supervisor_handle.abort();
-
-    // Abort the reconciler task on shutdown
-    if let Some(h) = reconciler_handle {
-        h.abort();
-    }
+    // Abort the engine task on shutdown
+    engine_handle.abort();
 
     // Signal workers to shut down
     {
