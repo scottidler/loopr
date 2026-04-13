@@ -88,7 +88,7 @@ impl Primitive for IntegrateTick {
             InputField {
                 name: "bundle-ids".to_string(),
                 field_type: OutputType::StringArray,
-                required: true,
+                required: false, // Optional: discovers accepted bundles from plan-id at runtime
             },
         ]
     }

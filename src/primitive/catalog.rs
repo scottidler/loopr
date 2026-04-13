@@ -74,6 +74,8 @@ pub fn register_all(registry: &mut PrimitiveRegistry) -> eyre::Result<()> {
     registry.register(Box::new(decompose::ReDecompose))?;
     registry.register(Box::new(work::ClaimNextWork))?;
     registry.register(Box::new(work::ResetWork))?;
+    registry.register(Box::new(work::RetryWork))?;
+    registry.register(Box::new(work::AbandonWork))?;
     registry.register(Box::new(work::IncrementFailureCount))?;
     registry.register(Box::new(work::IncrementAttemptCount))?;
     registry.register(Box::new(bundle::RejectBundle))?;

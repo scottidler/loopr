@@ -63,7 +63,7 @@ impl Primitive for SpawnAgent {
             InputField {
                 name: "target-id".to_string(),
                 field_type: OutputType::String,
-                required: true,
+                required: false, // Optional: coordinators are spawned without a target
             },
             InputField {
                 name: "model".to_string(),

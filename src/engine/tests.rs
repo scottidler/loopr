@@ -1118,3 +1118,173 @@ async fn tick_context_passes_between_steps() {
     assert_eq!(outcome.strategies_fired, 1);
     assert!(!outcome.had_failures);
 }
+
+// ─── Phase 3: Registry validation tests ──────────────────────────────────────
+
+fn full_primitive_registry() -> crate::primitive::registry::PrimitiveRegistry {
+    let mut reg = crate::primitive::registry::PrimitiveRegistry::new();
+    crate::primitive::catalog::register_all(&mut reg).unwrap();
+    reg
+}
+
+fn triggers_dir() -> PathBuf {
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    dir.push("strategies/triggers");
+    dir
+}
+
+#[test]
+fn all_strategy_primitives_exist_in_registry() {
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let registry = full_primitive_registry();
+
+    let mut missing = Vec::new();
+    for strategy in &strategies {
+        for step in strategy
+            .action
+            .iter()
+            .chain(strategy.on_success.iter())
+            .chain(strategy.on_failure.iter())
+        {
+            if registry.get(&step.primitive).is_none() {
+                missing.push(format!(
+                    "strategy '{}': primitive '{}' not in registry",
+                    strategy.name, step.primitive
+                ));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "primitives missing from registry:\n{}",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn all_strategy_triggers_exist_in_trigger_definitions() {
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let triggers = crate::trigger::schema::load_dir(&triggers_dir()).unwrap();
+    let trigger_names: std::collections::HashSet<&str> = triggers.iter().map(|t| t.name.as_str()).collect();
+
+    let mut missing = Vec::new();
+    for strategy in &strategies {
+        if !trigger_names.contains(strategy.trigger.as_str()) {
+            missing.push(format!(
+                "strategy '{}': trigger '{}' not defined",
+                strategy.name, strategy.trigger
+            ));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "triggers missing from definitions:\n{}",
+        missing.join("\n")
+    );
+}
+
+#[test]
+fn all_strategy_params_pass_primitive_validation() {
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let registry = full_primitive_registry();
+
+    let mut errors = Vec::new();
+    for strategy in &strategies {
+        for step in strategy
+            .action
+            .iter()
+            .chain(strategy.on_success.iter())
+            .chain(strategy.on_failure.iter())
+        {
+            if let Some(prim) = registry.get(&step.primitive) {
+                let params = resolve_for_validation(&step.params);
+                if let Err(e) = prim.validate_params(&params) {
+                    errors.push(format!(
+                        "strategy '{}' primitive '{}': {}",
+                        strategy.name, step.primitive, e
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(errors.is_empty(), "param validation errors:\n{}", errors.join("\n"));
+}
+
+/// Build a params Value suitable for validate_params() by replacing
+/// `$trigger.*` and `$context.*` references with placeholder strings.
+fn resolve_for_validation(params: &HashMap<String, serde_json::Value>) -> serde_json::Value {
+    let mut resolved = serde_json::Map::new();
+    for (k, v) in params {
+        resolved.insert(k.clone(), resolve_value_for_validation(v));
+    }
+    serde_json::Value::Object(resolved)
+}
+
+fn resolve_value_for_validation(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::String(s) if s.starts_with('$') => serde_json::Value::String("placeholder".to_owned()),
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(resolve_value_for_validation).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let resolved: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), resolve_value_for_validation(v)))
+                .collect();
+            serde_json::Value::Object(resolved)
+        }
+        other => other.clone(),
+    }
+}
+
+#[test]
+fn v3_reconciliation_strategies_use_correct_priority_ordering() {
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let by_name: HashMap<&str, &StrategyDefinition> = strategies.iter().map(|d| (d.name.as_str(), d)).collect();
+
+    let promote_specs = by_name["promote-pending-specs"].priority;
+    let promote_phases = by_name["promote-pending-phases"].priority;
+    let promote_works = by_name["promote-pending-works"].priority;
+    let complete_phases = by_name["complete-phases"].priority;
+    let complete_specs = by_name["complete-specs"].priority;
+
+    assert!(promote_specs > promote_phases, "specs should promote before phases");
+    assert!(promote_phases > promote_works, "phases should promote before works");
+    assert!(complete_phases > complete_specs, "phases should complete before specs");
+}
+
+#[test]
+fn v3_safety_nets_have_highest_priority() {
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let by_name: HashMap<&str, &StrategyDefinition> = strategies.iter().map(|d| (d.name.as_str(), d)).collect();
+
+    let hard_cap = by_name["work-attempt-hard-cap"].priority;
+    let ratio_escalation = by_name["abandon-ratio-escalation"].priority;
+    let supervisor = by_name["restart-coordinator-on-event"].priority;
+
+    assert!(hard_cap >= 1000, "hard cap priority {} < 1000", hard_cap);
+    assert!(
+        ratio_escalation >= 1000,
+        "ratio escalation priority {} < 1000",
+        ratio_escalation
+    );
+    assert!(supervisor >= 1000, "supervisor priority {} < 1000", supervisor);
+
+    let retry = by_name["work-retry-on-failure"].priority;
+    assert!(hard_cap > retry, "hard cap must fire before retry");
+}
+
+#[test]
+fn engine_constructs_with_real_registries() {
+    let strategies = schema::load_dir(&strategies_dir()).unwrap();
+    let triggers = crate::trigger::schema::load_dir(&triggers_dir()).unwrap();
+    let registry = full_primitive_registry();
+    let sq = crate::trigger::observe::StateQueryRegistry::with_builtins();
+    let te = crate::trigger::evaluate::TriggerEvaluator::new(triggers, sq);
+
+    let engine = super::tick::CompositionEngine::new(strategies, registry, te);
+    drop(engine);
+}
